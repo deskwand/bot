@@ -6,7 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "upload_source_maps": true,
   "vars": {
-    "PUBLIC_BASE_URL": "https://example.com"
+    "PUBLIC_BASE_URL": "https://your-worker.workers.dev"
   },
   "r2_buckets": [
     {
