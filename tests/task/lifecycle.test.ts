@@ -1,9 +1,11 @@
 import { PiHarness } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import type { TaskSpec } from "../../src/protocol";
 import { scriptedModel } from "../helpers/scripted-model";
+import { fakeChannel } from "../helpers/fake-channel";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -11,6 +13,7 @@ declare module "cloudflare:test" {
 
 afterEach(() => {
   setModelOverride(null);
+  setChannelOverride(null);
   vi.restoreAllMocks();
 });
 
@@ -214,16 +217,25 @@ describe("TaskDO lifecycle", () => {
   });
 
   it("still accepts gateway message events", async () => {
+    const channel = fakeChannel();
+    setChannelOverride(channel.adapter);
+
+    // Non-text input exercises the RPC entry without opening pi, which this
+    // file's Butler already set up with a different model catalog.
     await expect(
       butler().handleMessage({
         type: "message",
         channel: "telegram",
         chatId: "1",
         userId: "1",
-        text: "hello",
+        text: null,
         updateId: 1,
       }),
     ).resolves.toBeUndefined();
+
+    expect(channel.sent).toEqual([
+      { chatId: "1", text: "目前只支持文字消息" },
+    ]);
   });
 
   it("dedupes task events by seq", async () => {
