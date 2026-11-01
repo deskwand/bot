@@ -45,6 +45,13 @@ describe("parseTextAction", () => {
     expect(parseTextAction("approve t3 ap1")).toBeNull();
   });
 
+  it("refuses ids that are not a task or approval number", () => {
+    // "取消 明天" is chat, not an instruction to cancel a task called 明天.
+    expect(parseTextAction("取消 明天")).toBeNull();
+    expect(parseTextAction("批准 t3 审批")).toBeNull();
+    expect(parseTextAction("批准 task3 ap1")).toBeNull();
+  });
+
   it("accepts surrounding whitespace only", () => {
     expect(parseTextAction("  批准 t3 ap1 ")).toEqual({
       action: "approve",

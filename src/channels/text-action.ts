@@ -20,7 +20,11 @@ const COMMANDS: Record<string, ActionKind> = {
  * the task, because `TaskDO.handleAction` resolves it without an approval id.
  */
 export function parseTextAction(text: string): TextAction | null {
-  const match = /^(批准|拒绝|取消)\s+(\S+)(?:\s+(\S+))?$/.exec(text.trim());
+  // Task ids are `t<number>` and approval ids `ap<number>`; anything else is
+  // ordinary chat, never an implicit approval target.
+  const match = /^(批准|拒绝|取消)\s+(t\d+)(?:\s+(ap\d+))?$/.exec(
+    text.trim(),
+  );
   if (!match) return null;
 
   const action = COMMANDS[match[1]!];

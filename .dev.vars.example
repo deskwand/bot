@@ -1,13 +1,12 @@
-# Copy to .dev.vars (git-ignored) for `npm run dev`.
-# Production uses `wrangler secret put` for the secret values.
-OPENCODE_API_KEY=replace-me
-TELEGRAM_BOT_TOKEN=123456:replace-me
-TELEGRAM_WEBHOOK_SECRET=replace-me
+# 复制为 .dev.vars 后填写本地开发用的值（.dev.vars 已在 .gitignore 中）。
+# 生产环境通过 `wrangler secret put` 写入 secret。
+OPENCODE_API_KEY=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=
+PUBLIC_BASE_URL=http://localhost:8787
 
-# Optional WeChat iLink credentials written by `npm run wechat-login`
-# (single-line JSON). Contains a bearer token: never commit or log it.
-# WECHAT_CREDENTIALS={"token":"...","baseUrl":"https://...","accountId":"...","userId":"..."}
+# 可选：微信本地开发凭据（单行 JSON）。生产环境由 npm run wechat-login 写入 secret。
+# WECHAT_CREDENTIALS={"token":"...","baseUrl":"https://ilinkai.weixin.qq.com","accountId":"...","userId":"..."}
 
-# Local-only channel selection. Production selection is managed by the
-# publishing client and is intentionally absent from wrangler.jsonc.
+# 仅本地开发使用；生产选择由发布配置管理，不写进 wrangler.jsonc。
 ACTIVE_CHANNEL=telegram
