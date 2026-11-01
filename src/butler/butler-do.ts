@@ -48,6 +48,15 @@ const DECISION_LABELS = {
 } as const;
 
 /**
+ * What an edit attempt achieved for a saved message reference.
+ *
+ * `unsupported` means the reference can never be edited (the channel has no
+ * message ids, or another deployment owns it); `failed` is transient, so the
+ * old message stays valid and a retry may still succeed.
+ */
+type EditOutcome = "edited" | "unsupported" | "failed";
+
+/**
  * Control-plane object: the Butler agent lives here. It converses with the
  * owner, dispatches background tasks and keeps their index.
  */
@@ -465,11 +474,16 @@ export class ButlerDO extends Agent<Env> {
     };
 
     if (row.progressMessageRef !== null) {
-      const edited = await this.editBestEffort(row.progressMessageRef, message);
-      if (edited) return;
-      // The message is gone or the reference is stale: send it anew.
+      const outcome = await this.editBestEffort(row.progressMessageRef, message);
+      if (outcome === "edited") return;
+
+      // The reference is useless to us either way. A transient failure keeps
+      // the old message in place, so the next update re-sends instead of
+      // duplicating this one; a reference that can never be edited (WeChat
+      // has no message ids, an older deployment owns it) must not swallow the
+      // update, so fall through and send it as a new message.
       this.repo.update(taskId, { progressMessageRef: null });
-      return;
+      if (outcome === "failed") return;
     }
 
     const ref = await this.sendBestEffort(message);
@@ -484,8 +498,8 @@ export class ButlerDO extends Agent<Env> {
 
     const message: OutboundMessage = { text: clampMessage(text) };
     if (row.progressMessageRef !== null) {
-      const edited = await this.editBestEffort(row.progressMessageRef, message);
-      if (edited) return;
+      const outcome = await this.editBestEffort(row.progressMessageRef, message);
+      if (outcome === "edited") return;
       this.repo.update(taskId, { progressMessageRef: null });
     }
 
@@ -692,13 +706,13 @@ export class ButlerDO extends Agent<Env> {
   private async editBestEffort(
     ref: ChannelMessageRef | null,
     message: OutboundMessage,
-  ): Promise<boolean> {
-    if (ref === null) return false;
+  ): Promise<EditOutcome> {
+    if (ref === null) return "unsupported";
     try {
       const edited = await this.channels().editCurrent(ref, message);
-      if (edited) return true;
+      if (edited) return "edited";
       console.error("butler channel edit failed: unsupported or stale reference");
-      return false;
+      return "unsupported";
     } catch (error) {
       // Telegram answers 400 when an edit would not change the message. That
       // is success for us: the message already shows the wanted text. The
@@ -709,10 +723,10 @@ export class ButlerDO extends Agent<Env> {
           .toLowerCase()
           .includes("message is not modified")
       ) {
-        return true;
+        return "edited";
       }
       console.error("butler channel edit failed:", error);
-      return false;
+      return "failed";
     }
   }
 

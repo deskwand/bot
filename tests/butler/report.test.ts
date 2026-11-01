@@ -15,6 +15,25 @@ declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
+const ENV = env as unknown as Record<string, unknown>;
+const savedEnv = new Map<string, unknown>();
+
+/** Builds an independent env fixture for the next ChannelDO instance. */
+function setEnv(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
+    ENV[key] = value;
+  }
+}
+
+function restoreEnv(): void {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete ENV[key];
+    else ENV[key] = value;
+  }
+  savedEnv.clear();
+}
+
 beforeEach(async () => {
   await seedOwnerAddress("42");
 });
@@ -22,8 +41,13 @@ beforeEach(async () => {
 afterEach(() => {
   setClockOverride(null);
   setChannelOverride("telegram", null);
+  setChannelOverride("wechat", null);
   setModelOverride(null);
   vi.restoreAllMocks();
+  // A ChannelDO caches its route for the life of the instance and cannot be
+  // evicted while reports still run, so a test that needs another selection
+  // points the Butler at its own hub instead of mutating the shared one.
+  restoreEnv();
 });
 
 /** A Telegram Bot API stand-in that records bodies and hands out message ids. */
@@ -211,6 +235,61 @@ describe("ButlerDO.report", () => {
     });
     expect(channel.edits[1]?.text).toBe("⏳ t1 查天气：c");
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "running" });
+  });
+
+  it("keeps every progress update on a channel that cannot edit messages", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("wechat", channel.adapter);
+    setEnv({
+      ACTIVE_CHANNEL: "wechat",
+      WECHAT_CREDENTIALS: JSON.stringify({
+        token: "token-a",
+        baseUrl: "https://ilink.example",
+        accountId: "account-a",
+        userId: "wx-owner",
+      }),
+    });
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+
+    // A WeChat-selected hub of its own: the shared one resolved Telegram
+    // earlier in this file and keeps that route.
+    const hubName = "report-wechat-channel";
+    await runInDurableObject(
+      env.CHANNELS.get(env.CHANNELS.idFromName(hubName)),
+      (_instance, state) => {
+        state.storage.sql.exec(
+          `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+           VALUES ('wechat', 'wx-owner', ?)
+           ON CONFLICT(channel) DO UPDATE SET
+             conversation_id = excluded.conversation_id`,
+          Date.now(),
+        );
+      },
+    );
+
+    const stub = butler("report-wechat-progress");
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { channels(): unknown }).channels = () =>
+        env.CHANNELS.get(env.CHANNELS.idFromName(hubName));
+    });
+    await seedTask(stub, { progressMessageId: null });
+
+    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
+    expect(channel.sent).toEqual([
+      { chatId: "wx-owner", text: '⏳ t1 查天气：a\n回复"取消 t1"' },
+    ]);
+
+    // WeChat sends carry no message id, so the saved reference can never be
+    // edited: the next update must be a new message, not dropped.
+    fake.advance(3001);
+    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
+
+    expect(channel.sent.map((msg) => msg.text)).toEqual([
+      '⏳ t1 查天气：a\n回复"取消 t1"',
+      '⏳ t1 查天气：b\n回复"取消 t1"',
+    ]);
+    expect(channel.edits).toEqual([]);
   });
 
   it("re-arms a progress flush that fires before the window closes", async () => {
@@ -688,7 +767,7 @@ describe("ButlerDO.report", () => {
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
   });
 
-  it("sends a new message when ChannelDO reports the edit unsupported", async () => {
+  it("re-sends a progress update whose message cannot be edited", async () => {
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -700,6 +779,10 @@ describe("ButlerDO.report", () => {
       (
         instance as unknown as {
           channels(): {
+            currentRoute(): Promise<{
+              channel: "telegram";
+              routeKey: string;
+            }>;
             editCurrent(): Promise<boolean>;
             sendCurrent(msg: { text: string }): Promise<{
               channel: "telegram";
@@ -710,6 +793,10 @@ describe("ButlerDO.report", () => {
           };
         }
       ).channels = () => ({
+        currentRoute: async () => ({
+          channel: "telegram",
+          routeKey: "test-route",
+        }),
         editCurrent: async () => false,
         sendCurrent: async (msg) => {
           sent.push({ text: msg.text });
@@ -724,12 +811,17 @@ describe("ButlerDO.report", () => {
     });
 
     await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-    expect(sent).toEqual([]);
-    expect(await progressMessageId(stub, "t1")).toBeNull();
+    // The saved reference cannot be edited, so this update is delivered as a
+    // new message instead of being dropped until the next event.
+    expect(sent).toEqual([{ text: "⏳ t1 查天气：a" }]);
+    expect(await progressMessageId(stub, "t1")).toBe("99");
 
     fake.advance(3001);
     await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
-    expect(sent).toEqual([{ text: "⏳ t1 查天气：b" }]);
+    expect(sent).toEqual([
+      { text: "⏳ t1 查天气：a" },
+      { text: "⏳ t1 查天气：b" },
+    ]);
     expect(await progressMessageId(stub, "t1")).toBe("99");
   });
 
