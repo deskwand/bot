@@ -21,7 +21,7 @@ function task(taskId: string) {
   return env.TASK.get(env.TASK.idFromName(taskId));
 }
 
-function message(evt: { text: string; updateId: number }): MessageEvent {
+function message(evt: { text: string; eventId: string }): MessageEvent {
   return {
     type: "message",
     channel: "telegram",
@@ -76,7 +76,7 @@ describe("butler control tools", () => {
     setModelOverride(unknownIdsModel);
 
     await butler("tools-201").handleMessage(
-      message({ text: "处理 t99", updateId: 201 }),
+      message({ text: "处理 t99", eventId: "tg:201" }),
     );
 
     expect(channel.sent.at(-1)).toEqual({ chatId: "42", text: "ok" });
@@ -297,7 +297,7 @@ describe("butler control tools", () => {
     setModelOverride(cancelModel);
 
     await butler("owner").handleMessage(
-      message({ text: "取消 t-done", updateId: 202 }),
+      message({ text: "取消 t-done", eventId: "tg:202" }),
     );
 
     expect(channel.sent).toEqual([{ chatId: "42", text: "ok" }]);

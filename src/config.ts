@@ -1,4 +1,5 @@
 import type { ModelRef, Role } from "./llm/models";
+import type { ChannelId } from "./protocol";
 
 export type McpServerConfig = {
   name: string;
@@ -8,12 +9,14 @@ export type McpServerConfig = {
 };
 
 export type AppConfig = {
+  notifyChannel: ChannelId;
   owner: { telegramUserIds: number[] };
   models: Record<Role, ModelRef>;
   mcpServers: McpServerConfig[];
 };
 
 export const config: AppConfig = {
+  notifyChannel: "telegram",
   owner: {
     // Fill in the Telegram user IDs allowed to use the bot.
     telegramUserIds: [1764662370],

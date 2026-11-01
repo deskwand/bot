@@ -45,7 +45,7 @@ function task(taskId: string) {
   return env.TASK.get(env.TASK.idFromName(taskId));
 }
 
-function message(evt: { text: string | null; updateId: number }): MessageEvent {
+function message(evt: { text: string | null; eventId: string }): MessageEvent {
   return {
     type: "message",
     channel: "telegram",
@@ -151,18 +151,18 @@ describe("butler chat", () => {
     setModelOverride(scriptedModel([{ text: "你好！" }]));
 
     await butler("chat-101").handleMessage(
-      message({ text: "你好", updateId: 101 }),
+      message({ text: "你好", eventId: "tg:101" }),
     );
 
     expect(channel.sent).toEqual([{ chatId: "42", text: "你好！" }]);
   });
 
-  it("does not answer a redelivered update twice", async () => {
+  it("does not answer a redelivered event twice", async () => {
     const channel = fakeChannel();
     setChannelOverride(channel.adapter);
     setModelOverride(scriptedModel([{ text: "只回一次" }]));
 
-    const evt = message({ text: "你好", updateId: 102 });
+    const evt = message({ text: "你好", eventId: "tg:102" });
     await butler("chat-102").handleMessage(evt);
     await butler("chat-102").handleMessage(evt);
 
@@ -185,7 +185,7 @@ describe("butler chat", () => {
     );
 
     await butler("chat-103").handleMessage(
-      message({ text: null, updateId: 103 }),
+      message({ text: null, eventId: "tg:103" }),
     );
 
     expect(channel.sent).toEqual([
@@ -219,7 +219,9 @@ describe("butler chat", () => {
     await installSlowWait(stub);
 
     const butlerStub = butler("chat-104");
-    await butlerStub.handleMessage(message({ text: "帮我查天气", updateId: 104 }));
+    await butlerStub.handleMessage(
+      message({ text: "帮我查天气", eventId: "tg:104" }),
+    );
 
     const progress = channel.sent[0];
     expect(progress).toMatchObject({

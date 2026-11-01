@@ -130,7 +130,7 @@ export function createTelegramAdapter(
           chatId: String(message.chat.id),
           userId: String(message.from.id),
           text: message.text ?? null,
-          updateId: update.update_id,
+          eventId: `tg:${update.update_id}`,
         };
         return event;
       }
@@ -151,7 +151,7 @@ export function createTelegramAdapter(
           messageId: String(query.message.message_id),
           action: decoded.action,
           taskId: decoded.taskId,
-          updateId: update.update_id,
+          eventId: `tg:${update.update_id}`,
           ...(decoded.approvalId === undefined
             ? {}
             : { approvalId: decoded.approvalId }),

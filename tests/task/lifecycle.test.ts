@@ -259,7 +259,7 @@ describe("TaskDO lifecycle", () => {
         chatId: "1",
         userId: "1",
         text: null,
-        updateId: 1,
+        eventId: "tg:1",
       }),
     ).resolves.toBeUndefined();
 

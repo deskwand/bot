@@ -22,7 +22,7 @@ function butler(name: string) {
   return env.BUTLER.get(env.BUTLER.idFromName(name));
 }
 
-function message(evt: { text: string; updateId: number }): MessageEvent {
+function message(evt: { text: string; eventId: string }): MessageEvent {
   return {
     type: "message",
     channel: "telegram",
@@ -215,7 +215,7 @@ describe("ButlerDO.runSchedule", () => {
 
     // A cron registered through Agent.schedule shares the Lifecycle alarm with
     // the Pi harness: the Butler still answers messages.
-    await stub.handleMessage(message({ text: "你好", updateId: 501 }));
+    await stub.handleMessage(message({ text: "你好", eventId: "tg:501" }));
     expect(channel.sent.at(-1)).toEqual({ chatId: "42", text: "管家在" });
 
     setModelOverride(

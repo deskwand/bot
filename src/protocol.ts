@@ -1,21 +1,23 @@
 import type { ModelRef } from "./llm/models";
 
-export type Channel = "telegram";
+export type ChannelId = "telegram" | "wechat";
+
+export type Address = { channel: ChannelId; conversationId: string };
 
 export type MessageEvent = {
   type: "message";
-  channel: Channel;
+  channel: ChannelId;
   chatId: string;
   userId: string;
   text: string | null;
-  updateId: number;
+  eventId: string;
 };
 
 export type ActionKind = "approve" | "reject" | "cancel";
 
 export type ActionEvent = {
   type: "action";
-  channel: Channel;
+  channel: ChannelId;
   chatId: string;
   userId: string;
   actionId: string;
@@ -23,7 +25,7 @@ export type ActionEvent = {
   action: ActionKind;
   taskId: string;
   approvalId?: string;
-  updateId: number;
+  eventId: string;
 };
 
 export type InboundEvent = MessageEvent | ActionEvent;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { config, isOwner, needsApproval, type AppConfig } from "../src/config";
 
 const cfg: AppConfig = {
+  notifyChannel: "telegram",
   owner: { telegramUserIds: [111, 222] },
   models: {
     butler: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
@@ -41,6 +42,10 @@ describe("default config", () => {
   it("configures both roles with the default model", () => {
     expect(config.models.butler).toEqual({ provider: "opencode-go", id: "deepseek-v4.1-flash" });
     expect(config.models.task).toEqual({ provider: "opencode-go", id: "deepseek-v4.1-flash" });
+  });
+
+  it("notifies on Telegram by default", () => {
+    expect(config.notifyChannel).toBe("telegram");
   });
 
   it("whitelists numeric owner ids and starts with no MCP servers", () => {

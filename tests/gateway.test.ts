@@ -16,10 +16,10 @@ const MESSAGE: MessageEvent = {
   chatId: "42",
   userId: String(OWNER_ID),
   text: "hi",
-  updateId: 1,
+  eventId: "tg:1",
 };
 
-const NON_TEXT_MESSAGE: MessageEvent = { ...MESSAGE, text: null, updateId: 2 };
+const NON_TEXT_MESSAGE: MessageEvent = { ...MESSAGE, text: null, eventId: "tg:2" };
 
 const ACTION: ActionEvent = {
   type: "action",
@@ -30,7 +30,7 @@ const ACTION: ActionEvent = {
   messageId: "9",
   action: "cancel",
   taskId: "t1",
-  updateId: 3,
+  eventId: "tg:3",
 };
 
 function fakeAdapter(inbound: InboundEvent | null) {

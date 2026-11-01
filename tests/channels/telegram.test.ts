@@ -96,8 +96,9 @@ describe("parseInbound", () => {
       chatId: "42",
       userId: "7",
       text: "hi",
-      updateId: 1,
+      eventId: "tg:1",
     });
+    expect(event).not.toHaveProperty("updateId");
   });
 
   it("parses non-text message with text null", async () => {
@@ -122,7 +123,7 @@ describe("parseInbound", () => {
       chatId: "42",
       userId: "7",
       text: null,
-      updateId: 2,
+      eventId: "tg:2",
     });
   });
 
@@ -151,7 +152,7 @@ describe("parseInbound", () => {
       messageId: "11",
       action: "cancel",
       taskId: "t1",
-      updateId: 3,
+      eventId: "tg:3",
     });
   });
 

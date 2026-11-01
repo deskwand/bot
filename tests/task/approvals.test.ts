@@ -422,7 +422,7 @@ function actionEvent(
     action,
     taskId,
     approvalId,
-    updateId: 1,
+    eventId: "tg:1",
   };
 }
 

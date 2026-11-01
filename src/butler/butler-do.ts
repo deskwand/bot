@@ -682,7 +682,7 @@ export class ButlerDO extends Agent<Env> {
     // the first message of an object instance.
     await this.ensureModel();
 
-    const operationId = `tg:${evt.updateId}`;
+    const operationId = evt.eventId;
     const receipt = await this.harness.submit(evt.text, { operationId });
     // Telegram redelivered an update we already accepted: never answer twice.
     if (!receipt.accepted) return;
