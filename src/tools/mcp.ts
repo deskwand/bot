@@ -112,7 +112,7 @@ function toToolResult(result: McpCallToolResult): ToolExecutionResult {
  */
 export function resolveMcpHeaders(
   server: McpServerConfig,
-  env: Record<string, unknown>,
+  env: object,
 ): Record<string, string> | undefined {
   if (!server.headers) return undefined;
 
@@ -124,7 +124,7 @@ export function resolveMcpHeaders(
     }
 
     const name = value.slice("env:".length);
-    const secret = env[name];
+    const secret = (env as Record<string, unknown>)[name];
     if (typeof secret !== "string") {
       throw new Error(
         `MCP server ${server.name} is missing environment variable ${name}`,
@@ -142,7 +142,7 @@ export function resolveMcpHeaders(
  */
 export function mcpConnector(
   manager: MCPClientManager,
-  env: Record<string, unknown> = {},
+  env: object = {},
 ): McpConnector {
   return async (server) => {
     const id = normalizeServerId(server.name);

@@ -102,6 +102,7 @@ describe("butler control tools", () => {
           },
           memory: new MemoryStore(state.storage.sql),
           createSchedule: async () => "s1",
+          listSchedules: () => [],
           removeSchedule: async () => false,
         });
 
