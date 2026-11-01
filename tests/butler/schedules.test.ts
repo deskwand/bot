@@ -15,6 +15,25 @@ declare module "cloudflare:test" {
 
 let route: RouteSnapshot;
 
+const ENV = env as unknown as Record<string, unknown>;
+const savedEnv = new Map<string, unknown>();
+
+/** Builds an independent env fixture for the next ChannelDO instance. */
+function setEnv(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
+    ENV[key] = value;
+  }
+}
+
+function restoreEnv(): void {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete ENV[key];
+    else ENV[key] = value;
+  }
+  savedEnv.clear();
+}
+
 beforeEach(async () => {
   await seedOwnerAddress("42");
   route = await channels().currentRoute();
@@ -24,6 +43,7 @@ afterEach(() => {
   setChannelOverride("telegram", null);
   setModelOverride(null);
   vi.restoreAllMocks();
+  restoreEnv();
 });
 
 function butler(name: string) {
@@ -255,6 +275,54 @@ describe("ButlerDO.runSchedule", () => {
       title: "每日早报",
       chat_id: null,
     });
+  }, 20_000);
+
+  it("does not spawn a task while the channel selection is disabled", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const stub = butler("schedules-run-disabled");
+    await runInDurableObject(stub, (_instance, state) => {
+      new ScheduleStore(state.storage.sql).add(
+        "0 1 * * *",
+        "每日早报",
+        "汇总新闻",
+        null,
+      );
+    });
+
+    // A typo in ACTIVE_CHANNEL disables I/O. Results would be swallowed, so a
+    // cron must not burn model tokens by spawning a task nobody hears about.
+    setEnv({ ACTIVE_CHANNEL: "wechat " });
+    await runInDurableObject(stub, (instance) => {
+      // A fresh ChannelDO resolves the route from the mutated environment;
+      // the shared one cached its route earlier in the run.
+      (instance as unknown as { channels(): unknown }).channels = () =>
+        env.CHANNELS.get(
+          env.CHANNELS.idFromName("schedules-run-disabled-hub"),
+        );
+    });
+
+    await stub.runSchedule({ scheduleId: "s1" });
+
+    expect(await taskRow(stub, "t1")).toBeUndefined();
+    const counts = await runInDurableObject(stub, (_instance, state) => ({
+      tasks: state.storage.sql
+        .exec<{ count: number }>(`SELECT COUNT(*) AS count FROM tasks`)
+        .toArray()[0]?.count,
+      events: state.storage.sql
+        .exec<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM task_events`,
+        )
+        .toArray()[0]?.count,
+    }));
+    expect(counts).toEqual({ tasks: 0, events: 0 });
+
+    // The owner is told once why the schedule did nothing.
+    expect(
+      error.mock.calls.some(([message]) =>
+        String(message).includes("s1"),
+      ),
+    ).toBe(true);
   }, 20_000);
 
   it("does nothing when the schedule row is gone", async () => {

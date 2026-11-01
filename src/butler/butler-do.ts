@@ -86,6 +86,9 @@ export class ButlerDO extends Agent<Env> {
   /** Single-flight guard for reconciling pending approvals on this instance. */
   private reconcilePromise: Promise<void> | null = null;
 
+  /** The disabled-selection notice is logged once per instance, not per cron. */
+  private disabledScheduleLogged = false;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
@@ -271,6 +274,21 @@ export class ButlerDO extends Agent<Env> {
   async runSchedule(payload: { scheduleId: string }): Promise<void> {
     const row = this.schedules.get(payload.scheduleId);
     if (!row) return;
+
+    // With a disabled selection (for example a typo in ACTIVE_CHANNEL) every
+    // notification would be swallowed: do not burn model tokens on a run
+    // nobody hears about.
+    const route = await this.channels().currentRoute();
+    if (route.channel === null) {
+      if (!this.disabledScheduleLogged) {
+        this.disabledScheduleLogged = true;
+        console.error(
+          `butler schedule ${row.id} skipped: channel selection disabled`,
+        );
+      }
+      return;
+    }
+
     try {
       await this.spawn(row.title, row.instructions, null);
     } catch (error) {
