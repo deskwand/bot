@@ -93,6 +93,7 @@ export class ChannelDO extends Agent<Env> {
   private readonly db: SqlStorage;
 
   private telegramInstance: ChannelAdapter | undefined;
+  private activeWeChatRun: { hash: string; raw: string } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -215,6 +216,7 @@ export class ChannelDO extends Agent<Env> {
     const hash = await credentialsHash(raw);
     let state = this.readWeChatState();
     if (state.credentials_hash !== hash) {
+      this.activeWeChatRun = null;
       this.db.exec("DELETE FROM wechat_contexts");
       this.updateWeChatState({
         credentials_hash: hash,
@@ -254,53 +256,70 @@ export class ChannelDO extends Agent<Env> {
     _payload?: unknown,
     _schedule?: Schedule<unknown>,
   ): Promise<void> {
-    const credentials = this.parseWeChatCredentials();
-    if (!credentials) return;
-    if (this.readWeChatState().status !== "running") return;
-
-    const timing = getPollTimingOverride() ?? {
-      runMs: WECHAT_POLL_RUN_MS,
-      baseBackoffMs: WECHAT_POLL_BACKOFF_MS,
+    const raw = this.weChatCredentialsJson();
+    const credentials = raw ? parseCredentials(raw) : null;
+    const state = this.readWeChatState();
+    if (!credentials || !raw || state.status !== "running" || !state.credentials_hash) return;
+    if (this.activeWeChatRun) return;
+    const run = { hash: state.credentials_hash, raw };
+    this.activeWeChatRun = run;
+    const ownsRun = () => {
+      const current = this.readWeChatState();
+      return this.activeWeChatRun === run &&
+        this.weChatCredentialsJson() === run.raw &&
+        current.credentials_hash === run.hash && current.status === "running";
     };
-    const client = createILinkClient({
-      fetch: getILinkFetchOverride() ?? undefined,
-    });
-    const startedAt = Date.now();
-    let backoffMs = timing.baseBackoffMs;
 
-    do {
-      const cursor = this.readWeChatState().cursor ?? "";
-      // Refresh the heartbeat before the long poll so ensurePolling does not
-      // start a second chain while getupdates is still waiting.
-      this.updateWeChatState({ last_poll_at: Date.now() });
+    try {
+      const timing = getPollTimingOverride() ?? {
+        runMs: WECHAT_POLL_RUN_MS,
+        baseBackoffMs: WECHAT_POLL_BACKOFF_MS,
+      };
+      const client = createILinkClient({
+        fetch: getILinkFetchOverride() ?? undefined,
+      });
+      const startedAt = Date.now();
+      let backoffMs = timing.baseBackoffMs;
 
-      try {
-        const batch = await client.getUpdates(
-          credentials,
-          cursor,
-          AbortSignal.timeout(WECHAT_GET_UPDATES_TIMEOUT_MS),
-        );
-        this.updateWeChatState({
-          cursor: batch.cursor,
-          last_poll_at: Date.now(),
-        });
-        this.dispatchWeChatUpdates(batch.updates, batch.cursor, credentials);
-        backoffMs = timing.baseBackoffMs;
-      } catch (error) {
-        if (isSessionExpired(error)) {
-          await this.expireWeChat();
-          return;
+      do {
+        if (!ownsRun()) return;
+        const cursor = this.readWeChatState().cursor ?? "";
+        // Refresh the heartbeat before the long poll so ensurePolling does not
+        // start a second chain while getupdates is still waiting.
+        this.updateWeChatState({ last_poll_at: Date.now() });
+
+        try {
+          const batch = await client.getUpdates(
+            credentials,
+            cursor,
+            AbortSignal.timeout(WECHAT_GET_UPDATES_TIMEOUT_MS),
+          );
+          if (!ownsRun()) return;
+          this.updateWeChatState({
+            cursor: batch.cursor,
+            last_poll_at: Date.now(),
+          });
+          this.dispatchWeChatUpdates(batch.updates, batch.cursor, credentials);
+          backoffMs = timing.baseBackoffMs;
+        } catch (error) {
+          if (!ownsRun()) return;
+          if (isSessionExpired(error)) {
+            await this.expireWeChat();
+            return;
+          }
+          console.error(
+            `channel: wechat poll failed: ${errorMessage(error)}`,
+          );
+          await sleep(backoffMs);
+          backoffMs = Math.min(backoffMs * 2, WECHAT_POLL_MAX_BACKOFF_MS);
         }
-        console.error(
-          `channel: wechat poll failed: ${errorMessage(error)}`,
-        );
-        await sleep(backoffMs);
-        backoffMs = Math.min(backoffMs * 2, WECHAT_POLL_MAX_BACKOFF_MS);
-      }
-    } while (Date.now() - startedAt < timing.runMs);
+      } while (Date.now() - startedAt < timing.runMs);
 
-    if (this.readWeChatState().status !== "running") return;
-    await this.schedule(0, "pollWeChat");
+      if (!ownsRun()) return;
+      await this.schedule(0, "pollWeChat");
+    } finally {
+      if (this.activeWeChatRun === run) this.activeWeChatRun = null;
+    }
   }
 
   private async expireWeChat(): Promise<void> {

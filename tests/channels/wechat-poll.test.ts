@@ -423,3 +423,52 @@ describe("WeChat sending", () => {
     });
   });
 });
+
+describe("poll ownership", () => {
+  it("ignores overlapping callback invocations while a poll is awaiting updates", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    await runInDurableObject(channels(), async (instance) => {
+      let release!: (response: Response) => void;
+      let calls = 0;
+      setILinkFetchOverride((async () => {
+        calls++;
+        if (calls > 1) return new Response(JSON.stringify({ errcode: -14 }));
+        return new Promise<Response>((resolve) => { release = resolve; });
+      }) as typeof fetch);
+      const first = instance.pollWeChat();
+      await vi.waitFor(() => expect(calls).toBe(1));
+      await instance.pollWeChat();
+      release(new Response(JSON.stringify({ get_updates_buf: "new-cursor" })));
+      await first;
+      for (const schedule of await instance.listSchedules()) await instance.cancelSchedule(schedule.id);
+      expect(calls).toBe(1);
+    });
+    expect(await readState()).toMatchObject({ status: "running", cursor: "new-cursor" });
+  });
+
+  it.each(["success", "expired"])("discards an old credential response after rotation: %s", async (outcome) => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    const tg = fakeChannel();
+    setChannelOverride("telegram", tg.adapter);
+    await runInDurableObject(channels(), async (instance) => {
+      let release!: (response: Response) => void;
+      setILinkFetchOverride((async () => new Promise<Response>((resolve) => { release = resolve; })) as typeof fetch);
+      const first = instance.pollWeChat();
+      await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+      setWeChatCredentialsOverride(JSON.stringify(CREDS_B));
+      await instance.ensurePolling();
+      release(new Response(JSON.stringify(outcome === "expired" ? { errcode: -14 } : {
+        get_updates_buf: "stale-cursor", msgs: [{ message_id: "stale", message_type: 1, from_user_id: OWNER, context_token: "stale-context" }],
+      })));
+      await first;
+      for (const schedule of await instance.listSchedules()) await instance.cancelSchedule(schedule.id);
+    });
+    expect(await readState()).toMatchObject({ status: "running", cursor: null, expiry_notified: 0 });
+    expect(await readContexts()).toEqual([]);
+    expect(tg.sent).toEqual([]);
+  });
+});
