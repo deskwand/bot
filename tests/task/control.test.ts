@@ -213,7 +213,7 @@ describe("TaskDO control", () => {
     );
     expect((await stub.status()).state).toBe("failed");
 
-    const result = await stub.retry();
+    const result = await stub.retryTask();
     expect(result.ok).toBe(true);
 
     await vi.waitFor(
@@ -260,7 +260,7 @@ describe("TaskDO control", () => {
       { timeout: 10_000 },
     );
 
-    const result = await stub.retry();
+    const result = await stub.retryTask();
     expect(result.ok).toBe(false);
     expect(result.message).toContain("不可重试");
   });

@@ -1,4 +1,4 @@
-import { Agent, type RetryOptions } from "agents";
+import { Agent } from "agents";
 import { PiHarness } from "agents/harness/pi";
 import { Type } from "@earendil-works/pi-ai";
 import {
@@ -39,10 +39,6 @@ const STATE_LABELS: Record<TaskState, string> = {
 };
 
 type ControlResult = { ok: boolean; message: string };
-
-type AgentRetryOptions = RetryOptions & {
-  shouldRetry?: (error: unknown, nextAttempt: number) => boolean;
-};
 
 /** How long `cancel()` waits for pi to become idle before returning anyway. */
 const ABORT_TIMEOUT_MS = 10_000;
@@ -290,20 +286,7 @@ export class TaskDO extends Agent<Env> {
     return { ok: true, message: `任务 ${taskId} 已取消` };
   }
 
-  // `Agent` names its generic backoff helper `retry`, and the task-control
-  // RPC shares the name: a call with no callback resumes the failed task.
-  // (The no-argument overload must stay last: workerd's RPC typing picks it.)
-  override retry<T>(
-    fn: (attempt: number) => Promise<T>,
-    options?: AgentRetryOptions,
-  ): Promise<T>;
-  override retry(): Promise<ControlResult>;
-  override async retry<T>(
-    fn?: (attempt: number) => Promise<T>,
-    options?: AgentRetryOptions,
-  ): Promise<ControlResult | T> {
-    if (fn) return super.retry(fn, options);
-
+  async retryTask(): Promise<ControlResult> {
     await this.flushOutbox();
     const taskId = this.currentTaskId();
     const state = this.currentState();
