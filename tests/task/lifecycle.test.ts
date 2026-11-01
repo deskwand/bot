@@ -1,4 +1,5 @@
-import { env } from "cloudflare:test";
+import { PiHarness } from "agents/harness/pi";
+import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setModelOverride } from "../../src/llm/models";
 import type { TaskSpec } from "../../src/protocol";
@@ -10,6 +11,7 @@ declare module "cloudflare:test" {
 
 afterEach(() => {
   setModelOverride(null);
+  vi.restoreAllMocks();
 });
 
 function butler() {
@@ -43,6 +45,7 @@ describe("TaskDO lifecycle", () => {
           "started",
           "completed",
         ]);
+        expect(events[0]!.seq).toBeLessThan(events[1]!.seq);
         expect(events[1]?.payload).toMatchObject({
           type: "completed",
           summary: "ok",
@@ -57,6 +60,100 @@ describe("TaskDO lifecycle", () => {
     // Starting the same task again is a no-op: same operation, no new events.
     await stub.start(spec(taskId));
     expect(await butler().debugEvents(taskId)).toHaveLength(2);
+  });
+
+  it("uses spec.model on the first run", async () => {
+    const chosen = scriptedModel([
+      { toolCalls: [{ name: "finish_task", args: { summary: "chosen" } }] },
+    ]);
+    const taskId = "t-model";
+    const stub = task(taskId);
+
+    await stub.start({
+      ...spec(taskId),
+      // Scripted providers use their own ids, outside the anthropic union.
+      model: chosen as unknown as TaskSpec["model"],
+    });
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual([
+          "started",
+          "completed",
+        ]);
+        expect(events[1]?.payload).toMatchObject({
+          type: "completed",
+          summary: "chosen",
+        });
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  it("resubmits a start that was left queued", async () => {
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "finish_task", args: { summary: "retried" } }] },
+      ]),
+    );
+    const taskId = "t-retry";
+    const stub = task(taskId);
+
+    // Simulate a previous start that stored its spec but died before submit.
+    await runInDurableObject(stub, (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec(
+        `INSERT INTO meta (key, value) VALUES ('task_id', ?), ('title', ?), ('spec', ?), ('state', 'queued')`,
+        taskId,
+        "Task t-retry",
+        JSON.stringify(spec(taskId)),
+      );
+    });
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual([
+          "started",
+          "completed",
+        ]);
+        expect(events[1]?.payload).toMatchObject({ summary: "retried" });
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  it("reports failed when the run rejects", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(PiHarness.prototype, "wait").mockRejectedValue(
+      new Error("model exploded"),
+    );
+    setModelOverride(scriptedModel([{ text: "never read" }]));
+    const taskId = "t-fail";
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual([
+          "started",
+          "failed",
+        ]);
+        expect(events[1]?.payload).toMatchObject({
+          type: "failed",
+          reason: "model exploded",
+          retryable: false,
+        });
+      },
+      { timeout: 10_000 },
+    );
+
+    expect((await stub.status()).state).toBe("failed");
   });
 
   it("reports the last assistant text when finish_task was not called", async () => {

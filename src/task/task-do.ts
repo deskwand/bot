@@ -141,21 +141,48 @@ export class TaskDO extends Agent<Env> {
 
   async start(spec: TaskSpec): Promise<void> {
     await this.flushOutbox();
-    // One task per instance: a repeated start must not spawn another run.
-    if (this.readMeta("spec") !== undefined) return;
+    // One task per instance. A `queued` state means a previous start did not
+    // finish (submit throws or the object was evicted): retry it. The
+    // operation id is deterministic, so resubmitting is idempotent in Pi.
+    const storedSpec = this.readMeta("spec");
+    const storedState = this.readMeta("state");
+    if (
+      storedSpec !== undefined &&
+      storedState !== undefined &&
+      storedState !== "queued"
+    ) {
+      return;
+    }
+    this.setMeta("state", "queued");
+    if (this.readMeta("spec") === undefined) {
+      this.spec = spec;
+      this.setMeta("task_id", spec.taskId);
+      this.setMeta("title", spec.title);
+      this.setMeta("spec", JSON.stringify(spec));
+    }
 
-    this.spec = spec;
-    this.setMeta("task_id", spec.taskId);
-    this.setMeta("title", spec.title);
-    this.setMeta("spec", JSON.stringify(spec));
-    this.setMeta("state", "running");
-
-    const operationId = `task:${spec.taskId}`;
+    const effective = this.spec ?? spec;
+    const operationId = `task:${effective.taskId}`;
     this.setMeta("operation_id", operationId);
 
-    const outbox = this.outboxFor(spec.taskId);
-    await this.harness.submit(spec.instructions, { operationId });
-    await outbox.emit({ type: "started" });
+    const outbox = this.outboxFor(effective.taskId);
+
+    // The harness defaults are built in the constructor, before a fresh DO
+    // knows its spec, so the model is chosen per session here.
+    await this.harness
+      .session()
+      .setModel(
+        resolveModel(effective.model ?? config.models.task, this.env),
+      );
+
+    // Durable before submit and only once: retries and very fast runs must not
+    // let `completed` get a lower seq than `started`.
+    if (!this.hasEvent("started")) {
+      await outbox.emit({ type: "started" });
+    }
+
+    await this.harness.submit(effective.instructions, { operationId });
+    this.setMeta("state", "running");
 
     this.ctx.waitUntil(this.watchRun(operationId));
   }
@@ -178,8 +205,8 @@ export class TaskDO extends Agent<Env> {
     try {
       const result = await this.harness.wait(operationId);
       summary = result.text ?? "";
-    } catch {
-      // Leave the task running; a later wake re-arms the watch.
+    } catch (error) {
+      await this.fail(error);
       return;
     }
 
@@ -213,10 +240,45 @@ export class TaskDO extends Agent<Env> {
     await delivery;
   }
 
+  private async fail(error: unknown): Promise<void> {
+    const state = this.readMeta("state");
+    if (
+      state === "completed" ||
+      state === "cancelled" ||
+      this.hasCompletedEvent()
+    ) {
+      return;
+    }
+
+    const taskId = this.currentTaskId();
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(`task ${taskId ?? "unknown"} run failed: ${reason}`);
+    if (!taskId) return;
+
+    if (this.hasEvent("failed")) {
+      this.setMeta("state", "failed");
+      return;
+    }
+
+    // Same crash-safe order as `finish`: the event row exists before state.
+    const delivery = this.outboxFor(taskId).emit({
+      type: "failed",
+      reason,
+      retryable: false,
+    });
+    this.setMeta("state", "failed");
+    await delivery;
+  }
+
   private hasCompletedEvent(): boolean {
+    return this.hasEvent("completed");
+  }
+
+  private hasEvent(type: string): boolean {
     const row = this.db
       .exec<{ count: number }>(
-        `SELECT COUNT(*) AS count FROM events WHERE type = 'completed'`,
+        `SELECT COUNT(*) AS count FROM events WHERE type = ?`,
+        type,
       )
       .toArray()[0];
     return (row?.count ?? 0) > 0;
