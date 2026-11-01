@@ -1,0 +1,12 @@
+{
+  "name": "DeskWand Bot",
+  "slug": "deskwand-bot",
+  "identifier": "com.deskwand.bot",
+  "version": "0.1.0",
+  "devUrl": "http://localhost:5173",
+  "devCommand": "npm --prefix frontend run dev",
+  "buildCommand": "npm --prefix frontend run build",
+  "frontendDist": "frontend/dist",
+  "bindings": "frontend/src/mygo.ts",
+  "out": "build"
+}
