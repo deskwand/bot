@@ -232,16 +232,24 @@ export class ButlerDO extends Agent<Env> {
 
     const handle = getClock().setTimeout(() => {
       this.progressTimers.delete(taskId);
-      void this.flushProgress();
-    }, dueAt - now);
+      void this.flushProgress(taskId).catch((error) => {
+        console.error("butler progress flush failed:", error);
+      });
+    }, dueAt - now + 1);
     this.progressTimers.set(taskId, handle);
   }
 
   /** Delivers buffered progress once the throttle interval has elapsed. */
-  private async flushProgress(): Promise<void> {
+  private async flushProgress(taskId: string): Promise<void> {
     const now = getClock().now();
     for (const item of this.throttle.takeDue(now)) {
       await this.showProgress(item.taskId, item.text);
+    }
+
+    // A timer can fire before the throttle window closes. Keep this task's
+    // buffered update armed instead of stranding it until another event.
+    if (this.throttle.dueAt(taskId) !== null) {
+      this.scheduleProgressFlush(taskId, now);
     }
   }
 
@@ -254,7 +262,7 @@ export class ButlerDO extends Agent<Env> {
 
   private async showProgress(taskId: string, text: string): Promise<void> {
     const row = this.repo.get(taskId);
-    if (!row) return;
+    if (!row || isTerminal(row.status)) return;
     const chatId = this.targetChat(row);
     if (chatId === null) return;
 
@@ -366,8 +374,9 @@ export class ButlerDO extends Agent<Env> {
     const chatId = this.targetChat(row);
     if (chatId === null) return;
 
+    const suffix = `\n→ ${DECISION_LABELS[decision]}`;
     await this.editBestEffort(chatId, approval.message_id, {
-      text: clampMessage(`${approval.text}\n→ ${DECISION_LABELS[decision]}`),
+      text: `${clamp(approval.text, MESSAGE_MAX - suffix.length)}${suffix}`,
     });
   }
 
@@ -411,13 +420,16 @@ export class ButlerDO extends Agent<Env> {
     lines.push("请向用户简要汇报结果。");
 
     try {
-      await this.harness.submit(lines.join("\n"), {
+      const receipt = await this.harness.submit(lines.join("\n"), {
         operationId,
         entry: {
           kind: "task.completed",
           data: { id: row.id, summary, artifacts },
         },
       });
+      // Same task completion already accepted (for example a redelivered
+      // event with a higher seq): do not send the report twice.
+      if (!receipt.accepted) return;
       const result = await this.harness.wait(operationId);
       if (result.status === "done" && result.text) {
         await this.sendBestEffort(chatId, { text: result.text });
@@ -440,7 +452,11 @@ export class ButlerDO extends Agent<Env> {
     const row = this.repo.get(taskId);
     if (!row) return;
     const hint = retryable ? `\n回复"重试 ${taskId}"可继续` : "";
-    await this.showTerminal(taskId, `❌ ${taskId} ${row.title}：${reason}${hint}`);
+    const body = `❌ ${taskId} ${row.title}：${reason}`;
+    await this.showTerminal(
+      taskId,
+      `${clamp(body, MESSAGE_MAX - hint.length)}${hint}`,
+    );
   }
 
   private async handleCancelled(taskId: string, now: number): Promise<void> {
@@ -592,6 +608,10 @@ function progressText(row: TaskRow, detail: string): string {
   return clampMessage(
     `⏳ ${row.id} ${row.title}：${clamp(detail, PROGRESS_DETAIL_MAX)}`,
   );
+}
+
+function isTerminal(status: TaskRow["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 function clamp(text: string, max: number): string {
