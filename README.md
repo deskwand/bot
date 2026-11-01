@@ -12,7 +12,7 @@
 
 出站文本按 **Markdown** 书写（模型直接写 Markdown，不改），渲染由各渠道适配器自己负责：
 
-- Telegram：`src/channels/telegram-render.ts` 把 Markdown 转成 Bot API 的 `{ text, entities }`（不设 `parse_mode`）；渲染异常时按原文分块，带实体请求遇到 400 时去掉实体重试一次（消息未修改除外）。网络、限流、重试失败继续交给上层处理。
+- Telegram：`src/channels/telegram-render.ts` 把 Markdown 转成 Bot API 的 `{ text, entities }`（不设 `parse_mode`）；渲染异常时按原文分块，带实体请求遇到 400 时去掉实体重试一次（消息未修改除外）。网络、限流、重试失败继续交给上层处理。一次编辑无法覆盖的长消息会退回完整原文纯文本，因此偶尔会看到字面的 `**` 标记——优先保证内容不丢。
 - 微信（iLink）：协议只有纯文本 item，但微信客户端会就地渲染一部分 Markdown（粗体、代码块、行内代码、表格、H1-H4、水平线）；`src/channels/wechat/markdown.ts` 在代码范围以外只剥掉客户端不渲染的三类（中文斜体、H5/H6、图片），代码和转义标记保持原文。客户端能力依据社区结论，仍需真实客户端冒烟确认。
 - 将来接入飞书 / 企业微信：在 adapter 内新增各自的渲染层，`src/protocol.ts`、`src/butler/*`、`src/channels/channel-do.ts` 都不需要改动。
 

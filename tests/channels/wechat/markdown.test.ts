@@ -87,6 +87,15 @@ describe("toWeChatText", () => {
     expect(toWeChatText(markdown)).toBe(markdown);
   });
 
+  it("keeps a fence that sits inside a blockquote", () => {
+    const quoted = '> ```js\n> const a = "*中文*";\n> ```';
+
+    expect(toWeChatText(quoted)).toBe(quoted);
+    expect(toWeChatText("> > ```\n> > ##### x\n> > ```")).toBe(
+      "> > ```\n> > ##### x\n> > ```",
+    );
+  });
+
   it("keeps an unfinished fence verbatim to the end", () => {
     const markdown = "```js\nconst a = '*中文*';\n![图](url)\n##### 五级";
 

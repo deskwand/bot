@@ -258,6 +258,22 @@ describe("send", () => {
     expect(result.messageId).toBe("101");
   });
 
+  it("does not retry a 400 that carried no entities", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      {
+        status: 400,
+        body: { ok: false, description: "Bad Request: chat not found" },
+      },
+    ]);
+    const adapter = makeAdapter(fetchImpl);
+
+    const error = await adapter.send("42", { text: "hello" }).catch((e) => e);
+
+    expect(calls).toHaveLength(1);
+    expect(error).toBeInstanceOf(ChannelError);
+    expect(error.status).toBe(400);
+  });
+
   it("throws ChannelError with status on ok:false", async () => {
     const { fetchImpl } = fakeFetch([
       {

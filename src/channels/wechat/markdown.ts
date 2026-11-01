@@ -23,6 +23,8 @@ const H5_H6_MARKER = /^ {0,3}#{5,6}(?:[ \t]+|$)/;
 const OPENING_FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 const CLOSING_FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const INDENTED_CODE_LINE = /^(?: {4}|\t)/;
+/** Blockquote markers in front of a line; fences may sit inside a quote. */
+const QUOTE_PREFIX = /^ {0,3}(?:> ?)*/;
 
 /** Turn outbound Markdown into the text WeChat can actually display. */
 export function toWeChatText(markdown: string): string {
@@ -79,8 +81,14 @@ function splitLines(text: string): Line[] {
   return lines;
 }
 
+/** Drop leading blockquote markers so quoted fences are recognised too. */
+function afterQuote(body: string): string {
+  const prefix = QUOTE_PREFIX.exec(body);
+  return prefix ? body.slice(prefix[0].length) : body;
+}
+
 function openingFence(body: string): Fence | null {
-  const match = OPENING_FENCE.exec(body);
+  const match = OPENING_FENCE.exec(afterQuote(body));
   if (!match) return null;
 
   const run = match[1]!;
@@ -92,7 +100,7 @@ function openingFence(body: string): Fence | null {
 }
 
 function isClosingFence(body: string, fence: Fence): boolean {
-  const match = CLOSING_FENCE.exec(body);
+  const match = CLOSING_FENCE.exec(afterQuote(body));
   if (!match) return false;
 
   const run = match[1]!;
