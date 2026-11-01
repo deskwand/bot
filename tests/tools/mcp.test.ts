@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/chord";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import type { McpServerConfig } from "../../src/config";
+import type { TaskEventBody } from "../../src/protocol";
 import type { ApprovalGateLike } from "../../src/task/approvals";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -72,8 +73,21 @@ function gate(decision: "approved" | "rejected"): ApprovalGateLike & {
       requests.push({ tool, args });
       return decision;
     },
-    resolve() {
+    async resolve() {
       return { ok: true, message: "" };
+    },
+  };
+}
+
+function recorder(): {
+  emit: (body: TaskEventBody) => Promise<void>;
+  events: TaskEventBody[];
+} {
+  const events: TaskEventBody[] = [];
+  return {
+    events,
+    async emit(body) {
+      events.push(body);
     },
   };
 }
@@ -84,8 +98,9 @@ describe("loadMcpTools", () => {
     const client = fakeClient(calls);
     const approval = gate("rejected");
     const connect: McpConnector = async () => client;
+    const progress = recorder();
 
-    const tools = await loadMcpTools([server()], approval, connect);
+    const tools = await loadMcpTools([server()], approval, connect, progress.emit);
 
     expect(tools.map((tool) => tool.name)).toEqual([
       "notion__create_page",
@@ -117,6 +132,10 @@ describe("loadMcpTools", () => {
     expect(textOf(searched)).toBe("ran search");
     expect(approval.requests).toHaveLength(1);
     expect(calls).toEqual(['search:{"query":"notes"}']);
+    expect(progress.events).toEqual([
+      { type: "progress", text: "MCP notion：create_page" },
+      { type: "progress", text: "MCP notion：search" },
+    ]);
   });
 
   it("runs the approved tool and forwards the abort signal", async () => {
@@ -132,7 +151,12 @@ describe("loadMcpTools", () => {
     };
     const controller = new AbortController();
 
-    const tools = await loadMcpTools([server()], gate("approved"), async () => client);
+    const tools = await loadMcpTools(
+      [server()],
+      gate("approved"),
+      async () => client,
+      recorder().emit,
+    );
     const result = await tools[0]!.execute(
       { title: "Hello" },
       {} as never,
@@ -160,6 +184,7 @@ describe("loadMcpTools", () => {
       [server({ requireApproval: [] })],
       gate("approved"),
       async () => client,
+      recorder().emit,
     );
     const result = await tools[0]!.execute({}, {} as never, context());
 
@@ -179,6 +204,7 @@ describe("loadMcpTools", () => {
       [server(), server({ name: "broken", url: "https://broken.test" })],
       gate("approved"),
       connect,
+      recorder().emit,
     );
 
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -190,12 +216,39 @@ describe("loadMcpTools", () => {
     error.mockRestore();
   });
 
+  it("skips a server that never answers within the timeout", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const calls: string[] = [];
+    const connect: McpConnector = (server) =>
+      server.name === "slow"
+        ? new Promise<McpClientLike>(() => {})
+        : Promise.resolve(fakeClient(calls));
+
+    const started = Date.now();
+    const tools = await loadMcpTools(
+      [server({ name: "slow", url: "https://slow.test" }), server()],
+      gate("approved"),
+      connect,
+      recorder().emit,
+      50,
+    );
+    const elapsed = Date.now() - started;
+
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "notion__create_page",
+      "notion__search",
+    ]);
+    expect(elapsed).toBeLessThan(2000);
+    expect(error.mock.calls[0]?.[0]).toContain("slow");
+    error.mockRestore();
+  });
+
   it("returns no tools without a server or a connection attempt", async () => {
     const connect = vi.fn<McpConnector>();
 
-    await expect(loadMcpTools([], gate("approved"), connect)).resolves.toEqual(
-      [],
-    );
+    await expect(
+      loadMcpTools([], gate("approved"), connect, recorder().emit),
+    ).resolves.toEqual([]);
     expect(connect).not.toHaveBeenCalled();
   });
 });

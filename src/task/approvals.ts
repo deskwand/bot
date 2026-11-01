@@ -27,7 +27,7 @@ export interface ApprovalGateLike {
   resolve(
     approvalId: string,
     decision: "approved" | "rejected",
-  ): { ok: boolean; message: string };
+  ): Promise<{ ok: boolean; message: string }>;
 }
 
 function errorMessage(error: unknown): string {
@@ -115,10 +115,10 @@ export class ApprovalGate implements ApprovalGateLike {
     return decision;
   }
 
-  resolve(
+  async resolve(
     approvalId: string,
     decision: "approved" | "rejected",
-  ): { ok: boolean; message: string } {
+  ): Promise<{ ok: boolean; message: string }> {
     const status = this.statusOf(approvalId);
     if (status !== "pending") {
       return { ok: false, message: "该审批已处理或已失效" };
@@ -127,8 +127,10 @@ export class ApprovalGate implements ApprovalGateLike {
     const waiter = this.waiters.get(approvalId);
     if (!waiter) {
       // Pending in storage but nobody is waiting: the task object restarted
-      // while the tool was waiting, and pi interrupted that generation.
+      // while the tool was waiting, and pi interrupted that generation. Close
+      // the approval message so its buttons do not stay live.
       this.setStatus(approvalId, "expired");
+      await this.emitResolved(approvalId, "expired");
       return { ok: false, message: "该审批已失效" };
     }
 

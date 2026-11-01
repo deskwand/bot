@@ -115,7 +115,7 @@ describe("ApprovalGate", () => {
       const id = await waitForPendingId(sql);
       // Let the request register its waiter and emit `approval_requested`.
       await tick();
-      const resolved = gate.resolve(id, "approved");
+      const resolved = await gate.resolve(id, "approved");
       const decision = await pending;
       return { id, decision, resolved, events: [...events] };
     });
@@ -152,7 +152,7 @@ describe("ApprovalGate", () => {
       );
       const id = await waitForPendingId(sql);
       await tick();
-      gate.resolve(id, "rejected");
+      await gate.resolve(id, "rejected");
       const result = await pending;
       return {
         text: textOf(result),
@@ -178,7 +178,7 @@ describe("ApprovalGate", () => {
       );
       const id = await waitForPendingId(sql);
       await tick();
-      gate.resolve(id, "approved");
+      await gate.resolve(id, "approved");
       const result = await pending;
       expect(textOf(result)).toBe("created");
       expect(counter.calls).toBe(1);
@@ -251,9 +251,9 @@ describe("ApprovalGate", () => {
       );
       const id = await waitForPendingId(sql);
       await tick();
-      const first = gate.resolve(id, "approved");
+      const first = await gate.resolve(id, "approved");
       await pending;
-      const second = gate.resolve(id, "approved");
+      const second = await gate.resolve(id, "approved");
       return { first, second, calls: counter.calls };
     });
 
@@ -266,19 +266,22 @@ describe("ApprovalGate", () => {
   });
 
   it("expires a pending row left behind by a restart", async () => {
-    const outcome = await withGate("t-restart", async (gate, sql) => {
+    const outcome = await withGate("t-restart", async (gate, sql, events) => {
       const now = Date.now();
       sql.exec(
         `INSERT INTO approvals (id, tool, args_json, status, created_at)
          VALUES ('ap9', 'notion__create_page', '{}', 'pending', ?)`,
         now,
       );
-      const resolved = gate.resolve("ap9", "approved");
-      return { resolved, status: statusOf(sql, "ap9") };
+      const resolved = await gate.resolve("ap9", "approved");
+      return { resolved, status: statusOf(sql, "ap9"), events: [...events] };
     });
 
     expect(outcome.resolved).toEqual({ ok: false, message: "该审批已失效" });
     expect(outcome.status).toBe("expired");
+    expect(outcome.events).toEqual([
+      { type: "approval_resolved", approvalId: "ap9", decision: "expired" },
+    ]);
   });
 
   it("shows progress before asking for approval", async () => {
@@ -298,7 +301,7 @@ describe("ApprovalGate", () => {
       );
       const id = await waitForPendingId(sql);
       await tick();
-      gate.resolve(id, "approved");
+      await gate.resolve(id, "approved");
       await pending;
       return events.map((event) => event.type);
     });

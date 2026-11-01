@@ -8,7 +8,12 @@ import type {
   ToolRegistration,
 } from "@earendil-works/pi-durable";
 import type { McpServerConfig } from "../config";
+import type { TaskEventBody } from "../protocol";
 import { withApproval, type ApprovalGateLike } from "../task/approvals";
+import { withProgress } from "./wrap";
+
+/** How long one MCP server may take to connect and list its tools. */
+const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 
 /** The subset of an MCP tool definition this module needs. */
 export type McpToolInfo = {
@@ -47,6 +52,27 @@ type McpContentItem = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Reject instead of hanging when a server never answers. */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** Convert an MCP result's content into pi tool output. */
@@ -133,23 +159,37 @@ export function mcpConnector(manager: MCPClientManager): McpConnector {
  * Connect to every configured MCP server and expose its tools to pi.
  *
  * Tool names are `<server>__<tool>`; tools listed in the server's
- * `requireApproval` run through the approval gate. A server that cannot be
- * reached is logged and skipped so one broken integration cannot block the
- * task. MCP tools have unknown side effects, so none is marked replay-safe.
+ * `requireApproval` run through the approval gate, and every tool reports
+ * progress first like the builtin tools. A server that cannot be reached (or
+ * does not answer within `timeoutMs`) is logged and skipped so one broken
+ * integration cannot block the task. MCP tools have unknown side effects, so
+ * none is marked replay-safe.
  */
 export async function loadMcpTools(
   servers: McpServerConfig[],
   gate: ApprovalGateLike,
   connect: McpConnector,
+  emit: (body: TaskEventBody) => Promise<void>,
+  timeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
 ): Promise<ToolRegistration[]> {
   const tools: ToolRegistration[] = [];
 
   for (const server of servers) {
     try {
-      const client = await connect(server);
-      for (const info of await client.listTools()) {
+      const client = await withTimeout(
+        connect(server),
+        timeoutMs,
+        `mcp server ${server.name} connect`,
+      );
+      const listed = await withTimeout(
+        client.listTools(),
+        timeoutMs,
+        `mcp server ${server.name} listTools`,
+      );
+      for (const info of listed) {
+        const toolName = `${server.name}__${info.name}`;
         let tool: ToolRegistration = {
-          name: `${server.name}__${info.name}`,
+          name: toolName,
           description:
             info.description ?? `${server.name} MCP tool: ${info.name}`,
           parameters: Type.Unsafe<Record<string, unknown>>(
@@ -168,7 +208,9 @@ export async function loadMcpTools(
         if (server.requireApproval?.includes(info.name)) {
           tool = withApproval(tool, gate);
         }
-        tools.push(tool);
+        tools.push(
+          withProgress(tool, emit, () => `MCP ${server.name}：${info.name}`),
+        );
       }
     } catch (error) {
       console.error(

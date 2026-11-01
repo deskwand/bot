@@ -335,9 +335,11 @@ export class TaskDO extends Agent<Env> {
     await this.flushOutbox();
     if (evt.action === "cancel") return (await this.cancel()).message;
     if (evt.approvalId === undefined) return "缺少审批编号";
-    return this.approvals.resolve(
-      evt.approvalId,
-      evt.action === "approve" ? "approved" : "rejected",
+    return (
+      await this.approvals.resolve(
+        evt.approvalId,
+        evt.action === "approve" ? "approved" : "rejected",
+      )
     ).message;
   }
 
@@ -360,6 +362,7 @@ export class TaskDO extends Agent<Env> {
         servers,
         this.approvals,
         mcpConnector(this.mcp),
+        (body) => this.emitProgress(body),
       );
       if (tools.length > 0) this.registry.install({ name: "mcp", tools });
     } catch (error) {
@@ -371,7 +374,7 @@ export class TaskDO extends Agent<Env> {
   /**
    * Pi's `onReport` sink. A parked task means pi gave up restarting it after
    * `settings.restartLimit` crashes; report it retryable so the user can
-   * resume it with `retry()`.
+   * resume it with `retryTask()`.
    */
   private async handleReport(
     _error: unknown,
