@@ -4,6 +4,11 @@ OPENCODE_API_KEY=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
 PUBLIC_BASE_URL=http://localhost:8787
+# 可选：使用 Anthropic 模型时填写。
+# ANTHROPIC_API_KEY=
+
+# 必填：可管理配置（单行 JSON）。缺失时业务处理以 CONFIG_MISSING 拒绝。把 owner 换成你的 Telegram 用户 ID。
+DESKWAND_CONFIG={"schemaVersion":1,"owner":{"telegramUserIds":[100000001]},"models":{"butler":{"provider":"opencode-go","id":"deepseek-v4.1-flash"},"task":{"provider":"opencode-go","id":"deepseek-v4.1-flash"}},"mcpServers":[]}
 
 # 可选：微信本地开发凭据（单行 JSON）。生产环境由 npm run wechat-login 写入 secret。
 # WECHAT_CREDENTIALS={"token":"...","baseUrl":"https://ilinkai.weixin.qq.com","accountId":"...","userId":"..."}

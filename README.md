@@ -56,7 +56,7 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 openssl rand -hex 32
 ```
 
-本地开发时，把 `.dev.vars.example` 复制为 `.dev.vars` 并填入同样的值（`.dev.vars` 已被 git 忽略）：
+本地开发时，把 `.dev.vars.example` 复制为 `.dev.vars` 并填入同样的值（`.dev.vars` 已被 git 忽略）。其中 `DESKWAND_CONFIG` 必填，否则本地业务处理同样以 `CONFIG_MISSING` 拒绝：
 
 ```bash
 cp .dev.vars.example .dev.vars
@@ -189,7 +189,7 @@ Telegram 需要公网 HTTPS 地址，所以本地调试需用隧道地址执行 
 迁移顺序：
 
 1. 在 Cloudflare Dashboard 的 Worker 设置中新增普通变量（不是 secret）`DESKWAND_CONFIG`。值取自迁移前的源码常量：`owner.telegramUserIds`、`models.butler`、`models.task`、`mcpServers`，并补上 `"schemaVersion": 1`。只填实际值，不要用示例占位 ID。
-2. 保存后重新打开变量页面或通过只读设置接口核对：`schemaVersion`、owner 列表、两个模型和 MCP 名称/URL 与旧值一致。核对时不要把 secret 或带凭据的 header 输出到终端。
+2. 保存后在 Dashboard 重新打开该 Worker 的 Settings → Variables and Secrets 页面核对（变量类型选 Text 或 JSON 均可，解析器两种都接受）：`schemaVersion`、owner 列表、两个模型和 MCP 名称/URL 与旧值一致。核对时不要把 secret 或带凭据的 header 输出到终端。
 3. 确认远端值可读且正确后，再部署新代码。首次部署后发送一条测试消息，确认业务未因配置缺失而拒绝。
 4. 之后 CLI 与桌面客户端可以共存，但远端 `DESKWAND_CONFIG` 是唯一权威；在任一侧修改后都要重新发布才会生效。不要把同一份配置再写回 `src/config.ts`，也不要在两处各维护一份草稿。
 
