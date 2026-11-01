@@ -1,0 +1,150 @@
+import type { Context } from "@earendil-works/chord";
+import type { ToolExecutionResult } from "@earendil-works/pi-durable";
+import { describe, expect, it } from "vitest";
+import { webFetchTool } from "../../src/tools/web-fetch";
+
+function context(signal?: AbortSignal): Context {
+  return { abortSignal: signal } as unknown as Context;
+}
+
+function textOf(result: ToolExecutionResult): string {
+  return (result.output ?? [])
+    .map((item) => (item.type === "text" ? item.text : ""))
+    .join("");
+}
+
+describe("webFetchTool", () => {
+  it("rejects non-http(s) URLs without making a request", async () => {
+    let called = false;
+    const fakeFetch = (async () => {
+      called = true;
+      return new Response("should not happen");
+    }) as typeof fetch;
+
+    const tool = webFetchTool(fakeFetch);
+    const result = await tool.execute(
+      { url: "file:///etc/passwd" },
+      {} as never,
+      context(),
+    );
+
+    expect(called).toBe(false);
+    expect(textOf(result)).toContain("http(s)");
+  });
+
+  it("strips script, style, nav and footer content from HTML", async () => {
+    const html = `<!doctype html>
+      <html>
+        <head><title>Page title</title><style>.hidden { color: red }</style></head>
+        <body>
+          <nav>navigation menu</nav>
+          <h1>Hello</h1>
+          <script>alert("secret script")</script>
+          <p>World</p>
+          <footer>footer text</footer>
+        </body>
+      </html>`;
+
+    const fakeFetch = (async () =>
+      new Response(html, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      })) as typeof fetch;
+
+    const tool = webFetchTool(fakeFetch);
+    const result = await tool.execute(
+      { url: "https://example.test/page" },
+      {} as never,
+      context(),
+    );
+    const text = textOf(result);
+
+    expect(text).toContain("Hello");
+    expect(text).toContain("World");
+    expect(text).not.toContain("secret script");
+    expect(text).not.toContain("navigation menu");
+    expect(text).not.toContain("footer text");
+    expect(text).not.toContain("color: red");
+    expect(tool.replay).toBe("safe");
+  });
+
+  it("returns JSON and plain text bodies", async () => {
+    const jsonFetch = (async () =>
+      new Response(JSON.stringify({ answer: 42 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    const textFetch = (async () =>
+      new Response("plain body", {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      })) as typeof fetch;
+
+    const json = await webFetchTool(jsonFetch).execute(
+      { url: "https://example.test/data" },
+      {} as never,
+      context(),
+    );
+    const text = await webFetchTool(textFetch).execute(
+      { url: "https://example.test/text" },
+      {} as never,
+      context(),
+    );
+
+    expect(textOf(json)).toBe('{"answer":42}');
+    expect(textOf(text)).toBe("plain body");
+  });
+
+  it("reports unsupported content types", async () => {
+    const fakeFetch = (async () =>
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      })) as typeof fetch;
+
+    const result = await webFetchTool(fakeFetch).execute(
+      { url: "https://example.test/image.png" },
+      {} as never,
+      context(),
+    );
+
+    expect(textOf(result)).toContain("image/png");
+  });
+
+  it("truncates long content to 20000 characters and marks it", async () => {
+    const fakeFetch = (async () =>
+      new Response("a".repeat(25_000), {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      })) as typeof fetch;
+
+    const result = await webFetchTool(fakeFetch).execute(
+      { url: "https://example.test/long" },
+      {} as never,
+      context(),
+    );
+    const text = textOf(result);
+
+    expect(text).toContain("已截断");
+    expect(text.startsWith("a".repeat(20_000))).toBe(true);
+    expect(text.length).toBeLessThan(20_000 + 50);
+  });
+
+  it("ends quickly when the caller aborts, even if fetch never settles", async () => {
+    const fakeFetch = (() => new Promise<Response>(() => {})) as typeof fetch;
+    const controller = new AbortController();
+    const tool = webFetchTool(fakeFetch);
+
+    const started = Date.now();
+    setTimeout(() => controller.abort(), 10);
+
+    const result = await tool.execute(
+      { url: "https://example.test/hang" },
+      {} as never,
+      context(controller.signal),
+    );
+
+    expect(Date.now() - started).toBeLessThan(100);
+    expect(textOf(result)).toContain("已取消");
+  });
+});

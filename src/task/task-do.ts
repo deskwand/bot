@@ -12,8 +12,13 @@ import type {
   ActionEvent,
   Artifact,
   TaskEvent,
+  TaskEventBody,
   TaskSpec,
 } from "../protocol";
+import { saveArtifactTool } from "../tools/artifacts";
+import { webFetchTool } from "../tools/web-fetch";
+import { webSearchTool } from "../tools/web-search";
+import { withProgress } from "../tools/wrap";
 import { Outbox } from "./outbox";
 import { taskSystemPrompt } from "./prompt";
 
@@ -91,6 +96,28 @@ export class TaskDO extends Agent<Env> {
           key: "task",
           render: () => (this.spec ? taskSystemPrompt(this.spec) : undefined),
         },
+      ],
+    });
+
+    const emitProgress = (body: TaskEventBody) => this.emitProgress(body);
+    this.registry.install({
+      name: "execution",
+      tools: [
+        withProgress(
+          webSearchTool(this.env.TAVILY_API_KEY),
+          emitProgress,
+          (args) => `搜索：${args.query}`,
+        ),
+        withProgress(webFetchTool(), emitProgress, (args) => `读取：${args.url}`),
+        withProgress(
+          saveArtifactTool(
+            this.env.ARTIFACTS,
+            () => this.currentTaskId() ?? "",
+            this.env.PUBLIC_BASE_URL,
+          ),
+          emitProgress,
+          (args) => `保存：${args.filename}`,
+        ),
       ],
     });
 
@@ -288,6 +315,12 @@ export class TaskDO extends Agent<Env> {
       )
       .toArray()[0];
     return (row?.count ?? 0) > 0;
+  }
+
+  private async emitProgress(body: TaskEventBody): Promise<void> {
+    const taskId = this.currentTaskId();
+    if (!taskId) return;
+    await this.outboxFor(taskId).emit(body);
   }
 
   private async flushOutbox(): Promise<void> {
