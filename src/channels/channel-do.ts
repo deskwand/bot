@@ -17,6 +17,7 @@ import {
 } from "./override";
 import { createTelegramAdapter } from "./telegram";
 import { ChannelError, type ChannelAdapter } from "./types";
+import { toWeChatText } from "./wechat/markdown";
 import {
   createILinkClient,
   isSessionExpired,
@@ -67,7 +68,8 @@ function errorMessage(error: unknown): string {
 
 /** Drop buttons and turn each one into an instruction the owner can type. */
 function forWechat(msg: OutboundMessage): OutboundMessage {
-  if (!msg.buttons || msg.buttons.length === 0) return { text: msg.text };
+  const text = toWeChatText(msg.text);
+  if (!msg.buttons || msg.buttons.length === 0) return { text };
 
   const hints: string[] = [];
   for (const row of msg.buttons) {
@@ -81,8 +83,8 @@ function forWechat(msg: OutboundMessage): OutboundMessage {
   }
 
   return hints.length === 0
-    ? { text: msg.text }
-    : { text: `${msg.text}\n${hints.join("\n")}` };
+    ? { text }
+    : { text: `${text}\n${hints.join("\n")}` };
 }
 
 /**

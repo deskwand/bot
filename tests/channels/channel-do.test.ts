@@ -336,6 +336,34 @@ describe("send", () => {
     expect(tg.sent).toEqual([{ to: "777", msg: { text: "n" } }]);
   });
 
+  it("filters unsupported markdown for WeChat and keeps the hints", async () => {
+    const wx = fakeAdapter(async () => null);
+    setChannelOverride("wechat", wx.adapter);
+
+    await channels().send(
+      { channel: "wechat", conversationId: "u1" },
+      {
+        text: "**粗体** *中文斜体* ![图](https://example.com/a.png) 完毕",
+        buttons: [[{ label: "取消", data: "a:cancel:t3" }]],
+      },
+    );
+
+    expect(wx.sent).toEqual([
+      { to: "u1", msg: { text: '**粗体** 中文斜体  完毕\n回复"取消 t3"' } },
+    ]);
+  });
+
+  it("sends Telegram markdown through unfiltered", async () => {
+    const tg = fakeTelegram(null);
+    setChannelOverride("telegram", tg.adapter);
+    const markdown =
+      "**粗体** *中文斜体* ![图](https://example.com/a.png)";
+
+    await channels().send("notify", { text: markdown });
+
+    expect(tg.sent).toEqual([{ to: String(OWNER_ID), msg: { text: markdown } }]);
+  });
+
   it("downgrades buttons to text for WeChat", async () => {
     const wx = fakeAdapter(async () => null);
     setChannelOverride("wechat", wx.adapter);
