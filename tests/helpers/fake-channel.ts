@@ -11,6 +11,7 @@ export type EditedMessage = {
   chatId: string;
   messageId: string;
   text: string;
+  buttons?: Button[][];
 };
 
 /** A ChannelAdapter that records what the Butler sends, for assertions. */
@@ -33,7 +34,12 @@ export function fakeChannel(): {
       return { messageId: String(sent.length) };
     },
     async edit(chatId, messageId, msg) {
-      edits.push({ chatId, messageId, text: msg.text });
+      edits.push({
+        chatId,
+        messageId,
+        text: msg.text,
+        ...(msg.buttons === undefined ? {} : { buttons: msg.buttons }),
+      });
     },
     async answerAction() {},
   };

@@ -6,9 +6,17 @@ import { createTelegramAdapter } from "../channels/telegram";
 import type { ChannelAdapter } from "../channels/types";
 import { config } from "../config";
 import { createModelsForEnv, resolveModel } from "../llm/models";
-import type { MessageEvent, TaskEvent, TaskEventBody } from "../protocol";
+import {
+  encodeAction,
+  type Artifact,
+  type MessageEvent,
+  type OutboundMessage,
+  type TaskEvent,
+  type TaskEventBody,
+} from "../protocol";
+import { getClock, ProgressThrottle } from "./notifier";
 import { butlerSystemPrompt } from "./prompt";
-import { TasksRepo } from "./tasks-repo";
+import { TasksRepo, type TaskRow } from "./tasks-repo";
 import { createButlerTools } from "./tools";
 
 type TaskEventRow = {
@@ -16,6 +24,23 @@ type TaskEventRow = {
   type: string;
   payload_json: string;
 };
+
+type ApprovalMessageRow = {
+  approval_id: string;
+  task_id: string;
+  message_id: string;
+  text: string;
+};
+
+const PROGRESS_INTERVAL_MS = 3000;
+const PROGRESS_DETAIL_MAX = 200;
+const MESSAGE_MAX = 4096;
+
+const DECISION_LABELS = {
+  approved: "已批准",
+  rejected: "已拒绝",
+  expired: "已过期",
+} as const;
 
 /**
  * Control-plane object: the Butler agent lives here. It converses with the
@@ -34,6 +59,10 @@ export class ButlerDO extends Agent<Env> {
   private appliedModel: PiModel | undefined;
 
   private channelInstance: ChannelAdapter | undefined;
+
+  private readonly throttle = new ProgressThrottle(PROGRESS_INTERVAL_MS);
+
+  private readonly progressTimers = new Map<string, unknown>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -66,6 +95,14 @@ export class ButlerDO extends Agent<Env> {
       `CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
+      )`,
+    );
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS approval_messages (
+        approval_id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        text TEXT NOT NULL
       )`,
     );
 
@@ -114,12 +151,12 @@ export class ButlerDO extends Agent<Env> {
       await this.handleInboundMessage(evt);
     } catch (error) {
       console.error("butler message failed:", error);
-      await this.sendBestEffort(evt.chatId, "出错了，稍后再试");
+      await this.sendErrorReply(evt.chatId, "出错了，稍后再试");
     }
   }
 
   async report(event: TaskEvent): Promise<void> {
-    const now = Date.now();
+    const now = getClock().now();
 
     // Events can arrive before the Butler has spawned/indexed the task.
     if (!this.repo.get(event.taskId)) {
@@ -144,6 +181,317 @@ export class ButlerDO extends Agent<Env> {
         JSON.stringify(body),
       );
     });
+
+    switch (body.type) {
+      case "started":
+        this.repo.update(taskId, { status: "running", updatedAt: now });
+        return;
+      case "progress":
+        await this.handleProgress(taskId, body.text, now);
+        return;
+      case "approval_requested":
+        await this.handleApprovalRequested(taskId, body);
+        return;
+      case "approval_resolved":
+        await this.handleApprovalResolved(taskId, body.approvalId, body.decision);
+        return;
+      case "completed":
+        await this.handleCompleted(taskId, body.summary, body.artifacts, now);
+        return;
+      case "failed":
+        await this.handleFailed(taskId, body.reason, body.retryable, now);
+        return;
+      case "cancelled":
+        await this.handleCancelled(taskId, now);
+        return;
+    }
+  }
+
+  private async handleProgress(
+    taskId: string,
+    detail: string,
+    now: number,
+  ): Promise<void> {
+    const row = this.repo.get(taskId);
+    if (!row) return;
+
+    const text = progressText(row, detail);
+    const allowed = this.throttle.offer(taskId, text, now);
+    if (allowed !== null) {
+      await this.showProgress(taskId, allowed);
+      return;
+    }
+
+    this.scheduleProgressFlush(taskId, now);
+  }
+
+  private scheduleProgressFlush(taskId: string, now: number): void {
+    if (this.progressTimers.has(taskId)) return;
+    const dueAt = this.throttle.dueAt(taskId);
+    if (dueAt === null) return;
+
+    const handle = getClock().setTimeout(() => {
+      this.progressTimers.delete(taskId);
+      void this.flushProgress();
+    }, dueAt - now);
+    this.progressTimers.set(taskId, handle);
+  }
+
+  /** Delivers buffered progress once the throttle interval has elapsed. */
+  private async flushProgress(): Promise<void> {
+    const now = getClock().now();
+    for (const item of this.throttle.takeDue(now)) {
+      await this.showProgress(item.taskId, item.text);
+    }
+  }
+
+  private cancelProgressTimer(taskId: string): void {
+    const handle = this.progressTimers.get(taskId);
+    if (handle === undefined) return;
+    this.progressTimers.delete(taskId);
+    getClock().clearTimeout(handle);
+  }
+
+  private async showProgress(taskId: string, text: string): Promise<void> {
+    const row = this.repo.get(taskId);
+    if (!row) return;
+    const chatId = this.targetChat(row);
+    if (chatId === null) return;
+
+    const message: OutboundMessage = {
+      text: clampMessage(text),
+      buttons: [
+        [
+          {
+            label: "取消",
+            data: encodeAction({ action: "cancel", taskId }),
+          },
+        ],
+      ],
+    };
+
+    if (row.progressMessageId !== null) {
+      const edited = await this.editBestEffort(chatId, row.progressMessageId, message);
+      if (edited) return;
+      // The message is gone or the edit failed: send the next update anew.
+      this.repo.update(taskId, { progressMessageId: null });
+      return;
+    }
+
+    const messageId = await this.sendBestEffort(chatId, message);
+    if (messageId !== null) {
+      this.repo.update(taskId, { progressMessageId: messageId });
+    }
+  }
+
+  private async showTerminal(taskId: string, text: string): Promise<void> {
+    const row = this.repo.get(taskId);
+    if (!row) return;
+    const chatId = this.targetChat(row);
+    if (chatId === null) return;
+
+    const message: OutboundMessage = { text: clampMessage(text) };
+    if (row.progressMessageId !== null) {
+      const edited = await this.editBestEffort(chatId, row.progressMessageId, message);
+      if (edited) return;
+      this.repo.update(taskId, { progressMessageId: null });
+    }
+
+    const messageId = await this.sendBestEffort(chatId, message);
+    if (messageId !== null) {
+      this.repo.update(taskId, { progressMessageId: messageId });
+    }
+  }
+
+  private async handleApprovalRequested(
+    taskId: string,
+    body: Extract<TaskEventBody, { type: "approval_requested" }>,
+  ): Promise<void> {
+    const row = this.repo.get(taskId);
+    if (!row) return;
+    const chatId = this.targetChat(row);
+    if (chatId === null) return;
+
+    const text = clampMessage(
+      `🔐 ${taskId} 请求执行 ${body.tool}\n${body.argsSummary}`,
+    );
+    const messageId = await this.sendBestEffort(chatId, {
+      text,
+      buttons: [
+        [
+          {
+            label: "✅ 批准",
+            data: encodeAction({
+              action: "approve",
+              taskId,
+              approvalId: body.approvalId,
+            }),
+          },
+          {
+            label: "❌ 拒绝",
+            data: encodeAction({
+              action: "reject",
+              taskId,
+              approvalId: body.approvalId,
+            }),
+          },
+        ],
+      ],
+    });
+    if (messageId === null) return;
+
+    this.db.exec(
+      `INSERT INTO approval_messages (approval_id, task_id, message_id, text)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(approval_id) DO UPDATE SET
+         task_id = excluded.task_id,
+         message_id = excluded.message_id,
+         text = excluded.text`,
+      body.approvalId,
+      taskId,
+      messageId,
+      text,
+    );
+  }
+
+  private async handleApprovalResolved(
+    taskId: string,
+    approvalId: string,
+    decision: "approved" | "rejected" | "expired",
+  ): Promise<void> {
+    const approval = this.approvalMessage(approvalId);
+    if (!approval || approval.task_id !== taskId) return;
+    const row = this.repo.get(taskId);
+    if (!row) return;
+    const chatId = this.targetChat(row);
+    if (chatId === null) return;
+
+    await this.editBestEffort(chatId, approval.message_id, {
+      text: clampMessage(`${approval.text}\n→ ${DECISION_LABELS[decision]}`),
+    });
+  }
+
+  private async handleCompleted(
+    taskId: string,
+    summary: string,
+    artifacts: Artifact[],
+    now: number,
+  ): Promise<void> {
+    this.throttle.drop(taskId);
+    this.cancelProgressTimer(taskId);
+    this.repo.update(taskId, {
+      status: "completed",
+      summary,
+      artifacts,
+      updatedAt: now,
+    });
+
+    const row = this.repo.get(taskId);
+    if (!row) return;
+    await this.showTerminal(taskId, `✅ ${taskId} ${row.title}：已完成`);
+    await this.reportCompletion(row, summary, artifacts);
+  }
+
+  private async reportCompletion(
+    row: TaskRow,
+    summary: string,
+    artifacts: Artifact[],
+  ): Promise<void> {
+    const chatId = this.targetChat(row);
+    if (chatId === null) return;
+
+    const operationId = `task-completed:${row.id}`;
+    const lines = [`任务 ${row.id} ${row.title} 已完成。`, `摘要：${summary}`];
+    if (artifacts.length > 0) {
+      lines.push("产物：");
+      for (const artifact of artifacts) {
+        lines.push(`- ${artifact.name}: ${artifact.url}`);
+      }
+    }
+    lines.push("请向用户简要汇报结果。");
+
+    try {
+      await this.harness.submit(lines.join("\n"), {
+        operationId,
+        entry: {
+          kind: "task.completed",
+          data: { id: row.id, summary, artifacts },
+        },
+      });
+      const result = await this.harness.wait(operationId);
+      if (result.status === "done" && result.text) {
+        await this.sendBestEffort(chatId, { text: result.text });
+      }
+    } catch (error) {
+      console.error("butler completion report failed:", error);
+    }
+  }
+
+  private async handleFailed(
+    taskId: string,
+    reason: string,
+    retryable: boolean,
+    now: number,
+  ): Promise<void> {
+    this.throttle.drop(taskId);
+    this.cancelProgressTimer(taskId);
+    this.repo.update(taskId, { status: "failed", updatedAt: now });
+
+    const row = this.repo.get(taskId);
+    if (!row) return;
+    const hint = retryable ? `\n回复"重试 ${taskId}"可继续` : "";
+    await this.showTerminal(taskId, `❌ ${taskId} ${row.title}：${reason}${hint}`);
+  }
+
+  private async handleCancelled(taskId: string, now: number): Promise<void> {
+    this.throttle.drop(taskId);
+    this.cancelProgressTimer(taskId);
+    this.repo.update(taskId, { status: "cancelled", updatedAt: now });
+
+    const row = this.repo.get(taskId);
+    if (!row) return;
+    await this.showTerminal(taskId, `🚫 ${taskId} ${row.title}：已取消`);
+  }
+
+  private approvalMessage(approvalId: string): ApprovalMessageRow | undefined {
+    return this.db
+      .exec<ApprovalMessageRow>(
+        `SELECT approval_id, task_id, message_id, text
+         FROM approval_messages WHERE approval_id = ?`,
+        approvalId,
+      )
+      .toArray()[0];
+  }
+
+  private targetChat(row: TaskRow): string | null {
+    return row.chatId;
+  }
+
+  private async sendBestEffort(
+    chatId: string,
+    message: OutboundMessage,
+  ): Promise<string | null> {
+    try {
+      const sent = await this.channel().send(chatId, message);
+      return sent.messageId;
+    } catch (error) {
+      console.error("butler channel send failed:", error);
+      return null;
+    }
+  }
+
+  private async editBestEffort(
+    chatId: string,
+    messageId: string,
+    message: OutboundMessage,
+  ): Promise<boolean> {
+    try {
+      await this.channel().edit(chatId, messageId, message);
+      return true;
+    } catch (error) {
+      console.error("butler channel edit failed:", error);
+      return false;
+    }
   }
 
   /** Test-only seam: list the events recorded for a task, in seq order. */
@@ -204,7 +552,7 @@ export class ButlerDO extends Agent<Env> {
     this.appliedModel = model;
   }
 
-  private async sendBestEffort(chatId: string, text: string): Promise<void> {
+  private async sendErrorReply(chatId: string, text: string): Promise<void> {
     try {
       await this.channel().send(chatId, { text });
     } catch (error) {
@@ -238,4 +586,18 @@ export class ButlerDO extends Agent<Env> {
       value,
     );
   }
+}
+
+function progressText(row: TaskRow, detail: string): string {
+  return clampMessage(
+    `⏳ ${row.id} ${row.title}：${clamp(detail, PROGRESS_DETAIL_MAX)}`,
+  );
+}
+
+function clamp(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+function clampMessage(text: string): string {
+  return clamp(text, MESSAGE_MAX);
 }
