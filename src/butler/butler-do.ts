@@ -1,13 +1,11 @@
 import { Agent } from "agents";
 import { PiHarness, type PiModel } from "agents/harness/pi";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
-import { getChannelOverride } from "../channels/override";
-import { createTelegramAdapter } from "../channels/telegram";
-import { ChannelError, type ChannelAdapter } from "../channels/types";
 import { config } from "../config";
 import { createModelsForEnv, resolveModel } from "../llm/models";
 import {
   encodeAction,
+  type Address,
   type Artifact,
   type MessageEvent,
   type OutboundMessage,
@@ -68,7 +66,8 @@ export class ButlerDO extends Agent<Env> {
   /** The model last applied to the Butler session (see `ensureModel`). */
   private appliedModel: PiModel | undefined;
 
-  private channelInstance: ChannelAdapter | undefined;
+  /** The address of the message being answered (source of spawned tasks). */
+  private origin: Address | null = null;
 
   private readonly throttle = new ProgressThrottle(PROGRESS_INTERVAL_MS);
 
@@ -170,33 +169,32 @@ export class ButlerDO extends Agent<Env> {
   async spawn(
     title: string,
     instructions: string,
-    chatId: string | null = this.readMeta("chat_id"),
+    origin: Address | null = this.origin,
   ): Promise<string> {
     const id = this.repo.nextId();
-    this.repo.insert({ id, title, chatId });
+    this.repo.insert({
+      id,
+      title,
+      chatId: origin === null ? null : JSON.stringify(origin),
+    });
 
     // Send the start message before the run begins: the first progress event
     // can arrive while `start()` is still in flight, and it must edit this
-    // message rather than create a second one.
-    let progressMessageId: string | null = null;
-    if (chatId !== null) {
-      try {
-        const sent = await this.channel().send(chatId, {
-          text: `⏳ ${id} ${title}：已开始`,
-          buttons: [
-            [
-              {
-                label: "取消",
-                data: encodeAction({ action: "cancel", taskId: id }),
-              },
-            ],
-          ],
-        });
-        progressMessageId = sent.messageId;
-        this.repo.update(id, { progressMessageId });
-      } catch (error) {
-        console.error(`butler progress message failed: ${errorText(error)}`);
-      }
+    // message rather than create a second one. Task output always goes to the
+    // notify channel, whichever channel the task was spawned from.
+    const progressMessageId = await this.sendBestEffort({
+      text: `⏳ ${id} ${title}：已开始`,
+      buttons: [
+        [
+          {
+            label: "取消",
+            data: encodeAction({ action: "cancel", taskId: id }),
+          },
+        ],
+      ],
+    });
+    if (progressMessageId !== null) {
+      this.repo.update(id, { progressMessageId });
     }
 
     try {
@@ -206,8 +204,8 @@ export class ButlerDO extends Agent<Env> {
       // forever and look like an active task.
       const message = errorText(error);
       this.repo.update(id, { status: "failed", summary: message });
-      if (chatId !== null && progressMessageId !== null) {
-        await this.editBestEffort(chatId, progressMessageId, {
+      if (progressMessageId !== null) {
+        await this.editBestEffort(progressMessageId, {
           text: clampMessage(`❌ ${id} ${title}：${message}`),
         });
       }
@@ -223,12 +221,7 @@ export class ButlerDO extends Agent<Env> {
     title: string,
     instructions: string,
   ): Promise<string> {
-    const id = this.schedules.add(
-      cron,
-      instructions,
-      title,
-      this.readMeta("chat_id"),
-    );
+    const id = this.schedules.add(cron, instructions, title, null);
 
     try {
       const schedule = await this.schedule<{ scheduleId: string }>(
@@ -260,7 +253,7 @@ export class ButlerDO extends Agent<Env> {
     const row = this.schedules.get(payload.scheduleId);
     if (!row) return;
     try {
-      await this.spawn(row.title, row.instructions, row.chatId);
+      await this.spawn(row.title, row.instructions, null);
     } catch (error) {
       // The task row was already marked failed; retrying the cron would only
       // create another task, so log and wait for the next occurrence.
@@ -278,7 +271,7 @@ export class ButlerDO extends Agent<Env> {
       await this.handleInboundMessage(evt);
     } catch (error) {
       console.error("butler message failed:", error);
-      await this.sendErrorReply(evt.chatId, "出错了，稍后再试");
+      await this.sendErrorReply(addressOf(evt), "出错了，稍后再试");
     }
   }
 
@@ -390,8 +383,6 @@ export class ButlerDO extends Agent<Env> {
   private async showProgress(taskId: string, text: string): Promise<void> {
     const row = this.repo.get(taskId);
     if (!row || isTerminal(row.status)) return;
-    const chatId = this.targetChat(row);
-    if (chatId === null) return;
 
     const message: OutboundMessage = {
       text: clampMessage(text),
@@ -406,14 +397,14 @@ export class ButlerDO extends Agent<Env> {
     };
 
     if (row.progressMessageId !== null) {
-      const edited = await this.editBestEffort(chatId, row.progressMessageId, message);
+      const edited = await this.editBestEffort(row.progressMessageId, message);
       if (edited) return;
       // The message is gone or the edit failed: send the next update anew.
       this.repo.update(taskId, { progressMessageId: null });
       return;
     }
 
-    const messageId = await this.sendBestEffort(chatId, message);
+    const messageId = await this.sendBestEffort(message);
     if (messageId !== null) {
       this.repo.update(taskId, { progressMessageId: messageId });
     }
@@ -422,17 +413,15 @@ export class ButlerDO extends Agent<Env> {
   private async showTerminal(taskId: string, text: string): Promise<void> {
     const row = this.repo.get(taskId);
     if (!row) return;
-    const chatId = this.targetChat(row);
-    if (chatId === null) return;
 
     const message: OutboundMessage = { text: clampMessage(text) };
     if (row.progressMessageId !== null) {
-      const edited = await this.editBestEffort(chatId, row.progressMessageId, message);
+      const edited = await this.editBestEffort(row.progressMessageId, message);
       if (edited) return;
       this.repo.update(taskId, { progressMessageId: null });
     }
 
-    const messageId = await this.sendBestEffort(chatId, message);
+    const messageId = await this.sendBestEffort(message);
     if (messageId !== null) {
       this.repo.update(taskId, { progressMessageId: messageId });
     }
@@ -444,13 +433,11 @@ export class ButlerDO extends Agent<Env> {
   ): Promise<void> {
     const row = this.repo.get(taskId);
     if (!row) return;
-    const chatId = this.targetChat(row);
-    if (chatId === null) return;
 
     const text = clampMessage(
       `🔐 ${taskId} 请求执行 ${body.tool}\n${body.argsSummary}`,
     );
-    const messageId = await this.sendBestEffort(chatId, {
+    const messageId = await this.sendBestEffort({
       text,
       buttons: [
         [
@@ -496,13 +483,10 @@ export class ButlerDO extends Agent<Env> {
   ): Promise<void> {
     const approval = this.approvalMessage(approvalId);
     if (!approval || approval.task_id !== taskId) return;
-    const row = this.repo.get(taskId);
-    if (!row) return;
-    const chatId = this.targetChat(row);
-    if (chatId === null) return;
+    if (!this.repo.get(taskId)) return;
 
     const suffix = `\n→ ${DECISION_LABELS[decision]}`;
-    await this.editBestEffort(chatId, approval.message_id, {
+    await this.editBestEffort(approval.message_id, {
       text: `${clamp(approval.text, MESSAGE_MAX - suffix.length)}${suffix}`,
     });
   }
@@ -533,9 +517,6 @@ export class ButlerDO extends Agent<Env> {
     summary: string,
     artifacts: Artifact[],
   ): Promise<void> {
-    const chatId = this.targetChat(row);
-    if (chatId === null) return;
-
     const operationId = `task-completed:${row.id}`;
     const lines = [
       `任务 ${row.id} ${row.title} 已完成。`,
@@ -565,7 +546,7 @@ export class ButlerDO extends Agent<Env> {
       if (!receipt.accepted) return;
       const result = await this.harness.wait(operationId);
       if (result.status === "done" && result.text) {
-        await this.sendBestEffort(chatId, { text: result.text });
+        await this.sendBestEffort({ text: result.text });
       }
     } catch (error) {
       console.error("butler completion report failed:", error);
@@ -612,16 +593,11 @@ export class ButlerDO extends Agent<Env> {
       .toArray()[0];
   }
 
-  private targetChat(row: TaskRow): string | null {
-    return row.chatId ?? this.readMeta("chat_id");
-  }
-
   private async sendBestEffort(
-    chatId: string,
     message: OutboundMessage,
   ): Promise<string | null> {
     try {
-      const sent = await this.channel().send(chatId, message);
+      const sent = await this.channels().send("notify", message);
       return sent.messageId;
     } catch (error) {
       console.error("butler channel send failed:", error);
@@ -630,19 +606,23 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private async editBestEffort(
-    chatId: string,
     messageId: string,
     message: OutboundMessage,
   ): Promise<boolean> {
     try {
-      await this.channel().edit(chatId, messageId, message);
-      return true;
+      const edited = await this.channels().edit("notify", messageId, message);
+      if (edited) return true;
+      console.error("butler channel edit failed: unsupported channel");
+      return false;
     } catch (error) {
       // Telegram answers 400 when an edit would not change the message. That
-      // is success for us: the message already shows the wanted text.
+      // is success for us: the message already shows the wanted text. The
+      // error crosses a DO boundary, so identify it by its text rather than
+      // by class.
       if (
-        error instanceof ChannelError &&
-        error.message.toLowerCase().includes("message is not modified")
+        errorText(error)
+          .toLowerCase()
+          .includes("message is not modified")
       ) {
         return true;
       }
@@ -670,11 +650,13 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private async handleInboundMessage(evt: MessageEvent): Promise<void> {
-    // Single-owner setup: remember where notifications go.
-    this.setMeta("chat_id", evt.chatId);
+    const origin = addressOf(evt);
+    // Remember where a task spawned during this turn came from; task output
+    // itself always goes to "notify".
+    this.origin = origin;
 
     if (evt.text === null) {
-      await this.channel().send(evt.chatId, { text: "目前只支持文字消息" });
+      await this.channels().send(origin, { text: "目前只支持文字消息" });
       return;
     }
 
@@ -689,11 +671,11 @@ export class ButlerDO extends Agent<Env> {
 
     const result = await this.harness.wait(operationId);
     if (result.status === "unanswered") {
-      await this.channel().send(evt.chatId, { text: "出错了，稍后再试" });
+      await this.channels().send(origin, { text: "出错了，稍后再试" });
       return;
     }
     if (result.text) {
-      await this.channel().send(evt.chatId, { text: result.text });
+      await this.channels().send(origin, { text: result.text });
     }
   }
 
@@ -709,43 +691,20 @@ export class ButlerDO extends Agent<Env> {
     this.appliedModel = model;
   }
 
-  private async sendErrorReply(chatId: string, text: string): Promise<void> {
+  private async sendErrorReply(address: Address, text: string): Promise<void> {
     try {
-      await this.channel().send(chatId, { text });
+      await this.channels().send(address, { text });
     } catch (error) {
       console.error("butler error reply failed:", error);
     }
   }
 
-  private channel(): ChannelAdapter {
-    const override = getChannelOverride("telegram");
-    if (override) return override;
-    this.channelInstance ??= createTelegramAdapter({
-      token: this.env.TELEGRAM_BOT_TOKEN,
-      webhookSecret: this.env.TELEGRAM_WEBHOOK_SECRET,
-    });
-    return this.channelInstance;
+  private channels() {
+    return this.env.CHANNELS.get(this.env.CHANNELS.idFromName("channels"));
   }
 
   private taskFor(id: string): TaskControl {
     return this.env.TASK.get(this.env.TASK.idFromName(id));
-  }
-
-  private readMeta(key: string): string | null {
-    return (
-      this.db
-        .exec<{ value: string }>(`SELECT value FROM meta WHERE key = ?`, key)
-        .toArray()[0]?.value ?? null
-    );
-  }
-
-  private setMeta(key: string, value: string): void {
-    this.db.exec(
-      `INSERT INTO meta (key, value) VALUES (?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      key,
-      value,
-    );
   }
 }
 
@@ -753,6 +712,10 @@ function progressText(row: TaskRow, detail: string): string {
   return clampMessage(
     `⏳ ${row.id} ${row.title}：${clamp(detail, PROGRESS_DETAIL_MAX)}`,
   );
+}
+
+function addressOf(evt: MessageEvent): Address {
+  return { channel: evt.channel, conversationId: evt.chatId };
 }
 
 function errorText(error: unknown): string {

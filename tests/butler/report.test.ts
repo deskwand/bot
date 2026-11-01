@@ -1,17 +1,21 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
 import type { ChannelAdapter } from "../../src/channels/types";
 import { ChannelError } from "../../src/channels/types";
 import { setClockOverride, type Clock } from "../../src/butler/notifier";
 import { setModelOverride } from "../../src/llm/models";
-import type { TaskEvent } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
+import { seedNotifyAddress } from "../helpers/owner-address";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
+
+beforeEach(async () => {
+  await seedNotifyAddress("42");
+});
 
 afterEach(() => {
   setClockOverride(null);
@@ -548,22 +552,16 @@ describe("ButlerDO.report", () => {
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
   });
 
-  it("falls back to the owner's chat when the task row has no chat", async () => {
+  it("sends task updates to notify even when the task has no source chat", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
-    const stub = butler("report-meta-chat");
+    const stub = butler("report-no-source");
     await seedTask(stub, { chatId: null, progressMessageId: null });
-    await runInDurableObject(stub, (_instance, state) => {
-      state.storage.sql.exec(
-        `INSERT INTO meta (key, value) VALUES ('chat_id', '42')`,
-      );
-    });
 
     await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-
     expect(channel.sent).toEqual([
       {
         chatId: "42",
@@ -571,25 +569,48 @@ describe("ButlerDO.report", () => {
         buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
       },
     ]);
+
+    await stub.report({ taskId: "t1", seq: 2, type: "cancelled" });
+    expect(channel.edits).toEqual([
+      { chatId: "42", messageId: "1", text: "🚫 t1 查天气：已取消" },
+    ]);
+    expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
   });
 
-  it("updates state without channel output when the chat is unknown", async () => {
-    const channel = fakeChannel();
-    setChannelOverride("telegram", channel.adapter);
+  it("sends a new message when ChannelDO reports the edit unsupported", async () => {
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
-    const stub = butler("report-no-chat");
-    await seedTask(stub, { chatId: null, progressMessageId: null });
+    const stub = butler("report-edit-unsupported");
+    await seedTask(stub);
 
-    const events: TaskEvent[] = [
-      { taskId: "t1", seq: 1, type: "progress", text: "a" },
-      { taskId: "t1", seq: 2, type: "cancelled" },
-    ];
-    for (const event of events) await stub.report(event);
+    const sent: { to: unknown; text: string }[] = [];
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as {
+          channels(): {
+            edit(): Promise<boolean>;
+            send(to: unknown, msg: { text: string }): Promise<{
+              messageId: string;
+            }>;
+          };
+        }
+      ).channels = () => ({
+        edit: async () => false,
+        send: async (to, msg) => {
+          sent.push({ to, text: msg.text });
+          return { messageId: "99" };
+        },
+      });
+    });
 
-    expect(channel.sent).toHaveLength(0);
-    expect(channel.edits).toHaveLength(0);
-    expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
+    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
+    expect(sent).toEqual([]);
+    expect(await progressMessageId(stub, "t1")).toBeNull();
+
+    fake.advance(3001);
+    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
+    expect(sent).toEqual([{ to: "notify", text: "⏳ t1 查天气：b" }]);
+    expect(await progressMessageId(stub, "t1")).toBe("99");
   });
 });

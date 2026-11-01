@@ -1,16 +1,21 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ButlerDO } from "../../src/butler/butler-do";
 import { InvalidCronError, ScheduleStore } from "../../src/butler/schedules";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import type { MessageEvent } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
+import { seedNotifyAddress } from "../helpers/owner-address";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
+
+beforeEach(async () => {
+  await seedNotifyAddress("42");
+});
 
 afterEach(() => {
   setChannelOverride("telegram", null);
@@ -53,13 +58,18 @@ async function runTool(
 async function taskRow(
   stub: ReturnType<typeof butler>,
   id: string,
-): Promise<{ id: string; title: string; status: string } | undefined> {
+): Promise<
+  { id: string; title: string; status: string; chat_id: string | null }
+  | undefined
+> {
   return runInDurableObject(stub, (_instance, state) =>
     state.storage.sql
-      .exec<{ id: string; title: string; status: string }>(
-        `SELECT id, title, status FROM tasks WHERE id = ?`,
-        id,
-      )
+      .exec<{
+        id: string;
+        title: string;
+        status: string;
+        chat_id: string | null;
+      }>(`SELECT id, title, status, chat_id FROM tasks WHERE id = ?`, id)
       .toArray()[0],
   );
 }
@@ -235,6 +245,7 @@ describe("ButlerDO.runSchedule", () => {
     expect(await taskRow(stub, "t1")).toMatchObject({
       id: "t1",
       title: "每日早报",
+      chat_id: null,
     });
   }, 20_000);
 

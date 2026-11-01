@@ -12,11 +12,12 @@ import type { Provider } from "@earendil-works/pi-ai/models";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { PiModel } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
 import { registerTestProvider, setModelOverride } from "../../src/llm/models";
 import type { MessageEvent } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
+import { seedNotifyAddress } from "../helpers/owner-address";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
@@ -45,13 +46,19 @@ function task(taskId: string) {
   return env.TASK.get(env.TASK.idFromName(taskId));
 }
 
-function message(evt: { text: string | null; eventId: string }): MessageEvent {
+function message(evt: {
+  text: string | null;
+  eventId: string;
+  channel?: MessageEvent["channel"];
+  chatId?: string;
+}): MessageEvent {
   return {
     type: "message",
-    channel: "telegram",
-    chatId: "42",
+    channel: evt.channel ?? "telegram",
+    chatId: evt.chatId ?? "42",
     userId: "1",
-    ...evt,
+    text: evt.text,
+    eventId: evt.eventId,
   };
 }
 
@@ -139,9 +146,14 @@ async function releaseSlowTask(stub: ReturnType<typeof task>): Promise<void> {
   });
 }
 
+beforeEach(async () => {
+  await seedNotifyAddress("42");
+});
+
 afterEach(() => {
   setModelOverride(null);
   setChannelOverride("telegram", null);
+  setChannelOverride("wechat", null);
 });
 
 describe("butler chat", () => {
@@ -246,7 +258,14 @@ describe("butler chat", () => {
         )
         .toArray()[0],
     );
-    expect(row).toMatchObject({ id: "t1", title: "查天气", chat_id: "42" });
+    expect(row).toMatchObject({
+      id: "t1",
+      title: "查天气",
+      chat_id: JSON.stringify({
+        channel: "telegram",
+        conversationId: "42",
+      }),
+    });
 
     await releaseSlowTask(stub);
     await vi.waitFor(
@@ -255,5 +274,102 @@ describe("butler chat", () => {
       },
       { timeout: 10_000 },
     );
+  });
+
+  it("replies to a WeChat message on WeChat and sends task progress to Telegram", async () => {
+    const tg = fakeChannel();
+    const wx = fakeChannel();
+    setChannelOverride("telegram", tg.adapter);
+    setChannelOverride("wechat", wx.adapter);
+    setModelOverride(
+      routedModel(
+        [
+          {
+            toolCalls: [
+              {
+                name: "spawn_task",
+                args: { title: "查天气", instructions: "查询北京今天的天气" },
+              },
+            ],
+          },
+          { text: "已安排" },
+        ],
+        [{ toolCalls: [{ name: "slow_wait", args: {} }] }],
+      ),
+    );
+
+    const taskId = "t1";
+    const stub = task(taskId);
+    await installSlowWait(stub);
+
+    const butlerStub = butler("chat-105");
+    await butlerStub.handleMessage(
+      message({
+        text: "帮我查天气",
+        eventId: "wx:105",
+        channel: "wechat",
+        chatId: "wx-user",
+      }),
+    );
+
+    expect(wx.sent).toEqual([{ chatId: "wx-user", text: "已安排" }]);
+    expect(tg.sent).toEqual([
+      {
+        chatId: "42",
+        text: "⏳ t1 查天气：已开始",
+        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
+      },
+    ]);
+
+    const row = await runInDurableObject(butlerStub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ chat_id: string }>(
+          `SELECT chat_id FROM tasks WHERE id = ?`,
+          taskId,
+        )
+        .toArray()[0],
+    );
+    expect(row).toMatchObject({
+      chat_id: JSON.stringify({
+        channel: "wechat",
+        conversationId: "wx-user",
+      }),
+    });
+
+    await releaseSlowTask(stub);
+    await vi.waitFor(
+      async () => {
+        expect((await stub.status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  it("routes each reply back to the channel it came from", async () => {
+    const tg = fakeChannel();
+    const wx = fakeChannel();
+    setChannelOverride("telegram", tg.adapter);
+    setChannelOverride("wechat", wx.adapter);
+    setModelOverride(
+      scriptedModel([{ text: "来自 Telegram 的回复" }, { text: "来自微信的回复" }]),
+    );
+
+    const stub = butler("chat-106");
+    await stub.handleMessage(message({ text: "你好", eventId: "tg:106" }));
+    await stub.handleMessage(
+      message({
+        text: "你好",
+        eventId: "wx:106",
+        channel: "wechat",
+        chatId: "wx-user",
+      }),
+    );
+
+    expect(tg.sent).toEqual([
+      { chatId: "42", text: "来自 Telegram 的回复" },
+    ]);
+    expect(wx.sent).toEqual([
+      { chatId: "wx-user", text: "来自微信的回复" },
+    ]);
   });
 });

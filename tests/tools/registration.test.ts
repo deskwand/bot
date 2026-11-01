@@ -1,14 +1,21 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
+import { fakeChannel } from "../helpers/fake-channel";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
+beforeEach(() => {
+  setChannelOverride("telegram", fakeChannel().adapter);
+});
+
 afterEach(() => {
   setModelOverride(null);
+  setChannelOverride("telegram", null);
 });
 
 function butler() {

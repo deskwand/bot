@@ -1,6 +1,6 @@
 import { PiHarness } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import type { TaskSpec } from "../../src/protocol";
@@ -10,6 +10,10 @@ import { fakeChannel } from "../helpers/fake-channel";
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
+
+beforeEach(() => {
+  setChannelOverride("telegram", fakeChannel().adapter);
+});
 
 afterEach(() => {
   setModelOverride(null);

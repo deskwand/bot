@@ -3,13 +3,20 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setChannelOverride } from "../../src/channels/override";
+import { fakeChannel } from "../helpers/fake-channel";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
+beforeEach(() => {
+  setChannelOverride("telegram", fakeChannel().adapter);
+});
+
 afterEach(() => {
+  setChannelOverride("telegram", null);
   vi.useRealTimers();
   vi.restoreAllMocks();
 });

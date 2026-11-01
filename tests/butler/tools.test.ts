@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryStore } from "../../src/butler/memory";
 import { TasksRepo } from "../../src/butler/tasks-repo";
 import { createButlerTools, SpawnFailedError } from "../../src/butler/tools";
@@ -7,6 +7,7 @@ import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import type { MessageEvent, TaskSpec } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
+import { seedNotifyAddress } from "../helpers/owner-address";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
@@ -62,6 +63,10 @@ const cancelModel = scriptedModel([
       cancelTranscript.push(JSON.stringify(context.messages)),
   },
 ]);
+
+beforeEach(async () => {
+  await seedNotifyAddress("42");
+});
 
 afterEach(() => {
   setModelOverride(null);
@@ -176,7 +181,10 @@ describe("butler control tools", () => {
           },
         });
 
-        await instance.spawn("查天气", "查询北京天气", "42");
+        await instance.spawn("查天气", "查询北京天气", {
+          channel: "telegram",
+          conversationId: "42",
+        });
         return new TasksRepo(state.storage.sql).get("t1");
       },
     );
@@ -220,7 +228,10 @@ describe("butler control tools", () => {
         });
 
         try {
-          await instance.spawn("坏任务", "BOOM", "42");
+          await instance.spawn("坏任务", "BOOM", {
+            channel: "telegram",
+            conversationId: "42",
+          });
         } catch (error) {
           return {
             message: (error as Error).message,
@@ -240,6 +251,8 @@ describe("butler control tools", () => {
 
   it("marks a task failed when its Task DO cannot start", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
     const result = await runInDurableObject(
       butler("tools-204"),
       async (instance, state) => {
@@ -300,7 +313,7 @@ describe("butler control tools", () => {
       message({ text: "取消 t-done", eventId: "tg:202" }),
     );
 
-    expect(channel.sent).toEqual([{ chatId: "42", text: "ok" }]);
+    expect(channel.sent.at(-1)).toEqual({ chatId: "42", text: "ok" });
     expect(cancelTranscript[0]).toContain(`任务 ${taskId} 已完成，无法取消`);
     expect(await stub.status()).toMatchObject({ state: "completed" });
   });
