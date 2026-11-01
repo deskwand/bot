@@ -106,18 +106,51 @@ function toToolResult(result: McpCallToolResult): ToolExecutionResult {
 }
 
 /**
+ * Resolve `env:NAME` header values from the Worker environment so secrets do
+ * not have to live in the committed config. A missing variable fails the
+ * server's connection attempt, which `loadMcpTools` reports and skips.
+ */
+export function resolveMcpHeaders(
+  server: McpServerConfig,
+  env: Record<string, unknown>,
+): Record<string, string> | undefined {
+  if (!server.headers) return undefined;
+
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(server.headers)) {
+    if (!value.startsWith("env:")) {
+      headers[key] = value;
+      continue;
+    }
+
+    const name = value.slice("env:".length);
+    const secret = env[name];
+    if (typeof secret !== "string") {
+      throw new Error(
+        `MCP server ${server.name} is missing environment variable ${name}`,
+      );
+    }
+    headers[key] = secret;
+  }
+  return headers;
+}
+
+/**
  * Build a connector backed by an `Agent`'s MCP client manager. Servers are
  * registered under a stable, normalized id so tools can be scoped to them.
+ * Header values of the form `env:NAME` are read from `env` at connect time.
  */
-export function mcpConnector(manager: MCPClientManager): McpConnector {
+export function mcpConnector(
+  manager: MCPClientManager,
+  env: Record<string, unknown> = {},
+): McpConnector {
   return async (server) => {
     const id = normalizeServerId(server.name);
+    const headers = resolveMcpHeaders(server, env);
     await manager.registerServer(id, {
       url: server.url,
       name: server.name,
-      transport: server.headers
-        ? { requestInit: { headers: server.headers } }
-        : undefined,
+      transport: headers ? { requestInit: { headers } } : undefined,
     });
 
     const connection = await manager.connectToServer(id);

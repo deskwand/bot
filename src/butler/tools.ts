@@ -2,6 +2,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { TaskSpec } from "../protocol";
 import type { MemoryStore } from "./memory";
+import type { ScheduleRow } from "./schedules";
 import type { TasksRepo } from "./tasks-repo";
 
 const SpawnTask = Type.Object({
@@ -31,6 +32,8 @@ const CreateSchedule = Type.Object({
 
 const ScheduleId = Type.Object({ id: Type.String() });
 
+const ListSchedules = Type.Object({});
+
 /** The Task DO operations the control tools call. */
 export type TaskControl = {
   start(spec: TaskSpec): Promise<void>;
@@ -52,6 +55,7 @@ export type ButlerToolDeps = {
     title: string,
     instructions: string,
   ): Promise<string>;
+  listSchedules(): ScheduleRow[];
   removeSchedule(id: string): Promise<boolean>;
 };
 
@@ -254,6 +258,24 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     },
   };
 
+  const listSchedules: ToolRegistration<typeof ListSchedules> = {
+    name: "list_schedules",
+    description: "List recurring scheduled tasks with their ids and cron expressions.",
+    parameters: ListSchedules,
+    replay: "safe",
+    async execute() {
+      try {
+        const rows = deps.listSchedules();
+        if (rows.length === 0) return output("没有定时任务");
+        return output(
+          rows.map((row) => `${row.id} ${row.cron} ${row.title}`).join("\n"),
+        );
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+
   const unschedule: ToolRegistration<typeof ScheduleId> = {
     name: "unschedule",
     description: "Delete a scheduled recurring task by its s<number> id.",
@@ -282,6 +304,7 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     recall,
     forget,
     createSchedule,
+    listSchedules,
     unschedule,
   ];
 }

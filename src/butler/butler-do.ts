@@ -131,6 +131,7 @@ export class ButlerDO extends Agent<Env> {
         memory: this.memory,
         createSchedule: (cron, title, instructions) =>
           this.createSchedule(cron, title, instructions),
+        listSchedules: () => this.schedules.list(),
         removeSchedule: (id) => this.removeSchedule(id),
       }),
       sections: [

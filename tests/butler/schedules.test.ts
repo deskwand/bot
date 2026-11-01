@@ -138,6 +138,25 @@ describe("butler schedule tools", () => {
     expect(result.missing).toBe("没有定时任务 s1");
   });
 
+  it("lists schedules as id, cron and title", async () => {
+    const result = await runInDurableObject(
+      butler("schedules-list"),
+      async (instance) => {
+        const empty = await runTool(instance, "list_schedules", {});
+        await runTool(instance, "schedule", {
+          cron: "0 1 * * *",
+          title: "每日早报",
+          instructions: "汇总新闻",
+        });
+        const listed = await runTool(instance, "list_schedules", {});
+        return { empty, listed };
+      },
+    );
+
+    expect(result.empty).toBe("没有定时任务");
+    expect(result.listed).toBe("s1 0 1 * * * 每日早报");
+  });
+
   it("returns 没有定时任务 for unknown schedule ids", async () => {
     const text = await runInDurableObject(
       butler("schedules-unschedule-unknown"),

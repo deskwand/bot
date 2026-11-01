@@ -175,11 +175,15 @@ export class TaskDO extends Agent<Env> {
   override async onStart(_props?: object): Promise<void> {
     await super.onStart(_props);
     await this.flushOutbox();
-    await this.ensureMcpTools();
+
+    const state = this.readMeta("state");
+    if (state === "queued" || state === "running") {
+      await this.ensureMcpTools();
+    }
 
     // `wait` reads storage, so this survives restarts: re-attach to a run
     // that was still going when the object was evicted.
-    if (this.readMeta("state") === "running") {
+    if (state === "running") {
       if (this.hasCompletedEvent()) {
         // Crashed after recording `completed` but before storing the state.
         this.setMeta("state", "completed");
@@ -361,7 +365,7 @@ export class TaskDO extends Agent<Env> {
       const tools = await loadMcpTools(
         servers,
         this.approvals,
-        mcpConnector(this.mcp),
+        mcpConnector(this.mcp, this.env),
         (body) => this.emitProgress(body),
       );
       if (tools.length > 0) this.registry.install({ name: "mcp", tools });

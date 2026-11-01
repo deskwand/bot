@@ -6,6 +6,7 @@ import type { ApprovalGateLike } from "../../src/task/approvals";
 import { describe, expect, it, vi } from "vitest";
 import {
   loadMcpTools,
+  mcpConnector,
   type McpCallToolResult,
   type McpClientLike,
   type McpConnector,
@@ -91,6 +92,94 @@ function recorder(): {
     },
   };
 }
+
+function fakeManager() {
+  const registered: Array<{
+    id: string;
+    config: {
+      transport?: { requestInit?: { headers?: Record<string, string> } };
+    };
+  }> = [];
+  const manager = {
+    async registerServer(
+      id: string,
+      config: {
+        transport?: { requestInit?: { headers?: Record<string, string> } };
+      },
+    ) {
+      registered.push({ id, config });
+    },
+    async connectToServer() {
+      return { state: "connected" };
+    },
+    async discoverIfConnected() {
+      return { success: true };
+    },
+    async listTools() {
+      return [];
+    },
+    async callTool() {
+      return { content: [] };
+    },
+  } as unknown as Parameters<typeof mcpConnector>[0];
+  return { manager, registered };
+}
+
+describe("mcpConnector", () => {
+  it("resolves env: header values from the environment at connect time", async () => {
+    const { manager, registered } = fakeManager();
+    const connect = mcpConnector(manager, { NOTION_TOKEN: "secret" });
+
+    await connect(
+      server({
+        headers: {
+          Authorization: "env:NOTION_TOKEN",
+          "X-Static": "yes",
+        },
+      }),
+    );
+
+    expect(registered).toHaveLength(1);
+    expect(
+      registered[0]?.config.transport?.requestInit?.headers,
+    ).toEqual({ Authorization: "secret", "X-Static": "yes" });
+  });
+
+  it("skips a server whose header env var is missing", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { manager, registered } = fakeManager();
+    const connect = mcpConnector(manager, {});
+
+    try {
+      await expect(
+        connect(server({ headers: { Authorization: "env:MISSING_TOKEN" } })),
+      ).rejects.toThrow("MISSING_TOKEN");
+      expect(registered).toHaveLength(0);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("skips the server through loadMcpTools when its secret is missing", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { manager } = fakeManager();
+    const connect = mcpConnector(manager, {});
+
+    try {
+      const tools = await loadMcpTools(
+        [server({ headers: { Authorization: "env:MISSING_TOKEN" } })],
+        gate("approved"),
+        connect,
+        recorder().emit,
+      );
+      expect(tools).toEqual([]);
+      expect(error.mock.calls[0]?.[0]).toContain("MISSING_TOKEN");
+    } finally {
+      error.mockRestore();
+    }
+  });
+});
 
 describe("loadMcpTools", () => {
   it("namespaces tools per server and wraps the approval-listed ones", async () => {

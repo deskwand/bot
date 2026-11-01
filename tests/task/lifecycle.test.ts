@@ -216,6 +216,36 @@ describe("TaskDO lifecycle", () => {
     expect((await stub.status()).state).toBe("completed");
   });
 
+  it("only connects MCP tools when the task is queued or running", async () => {
+    const taskId = `t-mcp-${crypto.randomUUID()}`;
+    const stub = task(taskId);
+
+    const result = await runInDurableObject(stub, async (instance) => {
+      const target = instance as unknown as {
+        setMeta(key: string, value: string): void;
+        ensureMcpTools(): Promise<void>;
+      };
+      let calls = 0;
+      target.ensureMcpTools = async () => {
+        calls += 1;
+      };
+
+      target.setMeta("state", "completed");
+      await instance.onStart();
+      const completedCalls = calls;
+
+      target.setMeta("state", "queued");
+      await instance.onStart();
+      target.setMeta("state", "running");
+      await instance.onStart();
+
+      return { completedCalls, calls };
+    });
+
+    expect(result.completedCalls).toBe(0);
+    expect(result.calls).toBe(2);
+  });
+
   it("still accepts gateway message events", async () => {
     const channel = fakeChannel();
     setChannelOverride(channel.adapter);
