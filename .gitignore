@@ -3,5 +3,8 @@ node_modules
 .wrangler/
 .dev.vars
 dist/
+*.pem
+release-key*
+!contracts/fixtures/release/TEST-ONLY-*.pem
 .DS_Store
 .superpowers/

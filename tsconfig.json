@@ -14,5 +14,13 @@
     "forceConsistentCasingInFileNames": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts", "worker-configuration.d.ts", "scripts/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "tests-node/**/*.ts",
+    "vitest.config.ts",
+    "vitest.node.config.ts",
+    "worker-configuration.d.ts",
+    "scripts/**/*.ts"
+  ]
 }
