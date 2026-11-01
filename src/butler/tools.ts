@@ -41,6 +41,9 @@ export type TaskControl = {
   steer(text: string): Promise<{ ok: boolean; message: string }>;
   cancel(): Promise<{ ok: boolean; message: string }>;
   retryTask(): Promise<{ ok: boolean; message: string }>;
+  pendingApprovals(): Promise<
+    { approvalId: string; tool: string; argsSummary: string }[]
+  >;
 };
 
 export type ButlerToolDeps = {

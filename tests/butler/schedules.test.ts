@@ -4,7 +4,7 @@ import type { ButlerDO } from "../../src/butler/butler-do";
 import { InvalidCronError, ScheduleStore } from "../../src/butler/schedules";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
-import type { MessageEvent } from "../../src/protocol";
+import type { AdmittedMessage, RouteSnapshot } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
 import { seedOwnerAddress } from "../helpers/owner-address";
 import { scriptedModel } from "../helpers/scripted-model";
@@ -13,8 +13,11 @@ declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
+let route: RouteSnapshot;
+
 beforeEach(async () => {
   await seedOwnerAddress("42");
+  route = await channels().currentRoute();
 });
 
 afterEach(() => {
@@ -27,13 +30,18 @@ function butler(name: string) {
   return env.BUTLER.get(env.BUTLER.idFromName(name));
 }
 
-function message(evt: { text: string; eventId: string }): MessageEvent {
+function channels() {
+  return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
+}
+
+function message(evt: { text: string; eventId: string }): AdmittedMessage {
   return {
     type: "message",
     channel: "telegram",
     chatId: "42",
     userId: "1",
     ...evt,
+    routeKey: route.routeKey,
   };
 }
 

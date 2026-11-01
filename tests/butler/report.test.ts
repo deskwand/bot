@@ -1,6 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
+import type { OutboundMessage, RouteSnapshot } from "../../src/protocol";
 import { createTelegramAdapter } from "../../src/channels/telegram";
 import type { ChannelAdapter } from "../../src/channels/types";
 import { ChannelError } from "../../src/channels/types";
@@ -753,5 +754,151 @@ describe("ButlerDO.report", () => {
       },
     ]);
     expect(await progressMessageId(stub, "t1")).toBe("1");
+  });
+});
+
+describe("ButlerDO.reconcileChannel", () => {
+  type Boundary = {
+    currentRoute: RouteSnapshot;
+    sends: OutboundMessage[];
+    failSend: boolean;
+    explicitTargets: string[];
+  };
+
+  function boundary(routeKey = "k1"): Boundary {
+    return {
+      currentRoute: { channel: "telegram", routeKey },
+      sends: [],
+      failSend: false,
+      explicitTargets: [],
+    };
+  }
+
+  async function stubBoundary(
+    stub: ButlerStub,
+    state: Boundary,
+  ): Promise<void> {
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as { channels(): unknown }
+      ).channels = () => ({
+        currentRoute: async () => state.currentRoute,
+        isAdmissionCurrent: async (
+          channel: string,
+          routeKey: string,
+        ) =>
+          state.currentRoute.channel === channel &&
+          state.currentRoute.routeKey === routeKey,
+        sendCurrent: async (msg: OutboundMessage) => {
+          if (state.failSend) throw new Error("wechat context missing");
+          state.sends.push(msg);
+          const route = state.currentRoute;
+          return {
+            channel: route.channel!,
+            conversationId: "42",
+            routeKey: route.routeKey,
+            messageId: String(state.sends.length),
+          };
+        },
+        editCurrent: async () => true,
+        send: async () => {
+          state.explicitTargets.push("send");
+        },
+        edit: async () => {
+          state.explicitTargets.push("edit");
+        },
+      });
+    });
+  }
+
+  async function stubPending(
+    stub: ButlerStub,
+    pending: { approvalId: string; tool: string; argsSummary: string }[],
+  ): Promise<void> {
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { taskFor(id: string): unknown }).taskFor = () => ({
+        start: async () => {},
+        status: async () => ({ state: "running", title: "" }),
+        steer: async () => ({ ok: false, message: "" }),
+        cancel: async () => ({ ok: false, message: "" }),
+        retryTask: async () => ({ ok: false, message: "" }),
+        pendingApprovals: async () => pending,
+      });
+    });
+  }
+
+  const AP1 = {
+    approvalId: "ap1",
+    tool: "web_fetch",
+    argsSummary: "https://example.com",
+  };
+
+  it("retries a failed send, presents once per route, and re-presents after a redeploy", async () => {
+    const stub = butler("reconcile-routes");
+    await seedTask(stub, { status: "running", progressMessageId: null });
+    const state = boundary("k1");
+    state.failSend = true;
+    await stubBoundary(stub, state);
+    await stubPending(stub, [AP1]);
+
+    await stub.reconcileChannel("k1");
+    expect(state.sends).toEqual([]);
+
+    state.failSend = false;
+    await stub.reconcileChannel("k1");
+    expect(state.sends).toHaveLength(1);
+    expect(state.sends[0]?.text).toContain("请求执行 web_fetch");
+
+    // Same deployment and route: the saved reference suppresses duplicates.
+    await stub.reconcileChannel("k1");
+    expect(state.sends).toHaveLength(1);
+
+    // A new deployment owns new references, so the approval is re-presented.
+    state.currentRoute = { channel: "telegram", routeKey: "k2" };
+    await stub.reconcileChannel("k2");
+    expect(state.sends).toHaveLength(2);
+
+    // A stale key from another deployment is ignored.
+    await stub.reconcileChannel("k1");
+    expect(state.sends).toHaveLength(2);
+    expect(state.explicitTargets).toEqual([]);
+  });
+
+  it("presents nothing when the task has no live pending approval", async () => {
+    const stub = butler("reconcile-none");
+    await seedTask(stub, { status: "running", progressMessageId: null });
+    const state = boundary();
+    await stubBoundary(stub, state);
+    await stubPending(stub, []);
+
+    await stub.reconcileChannel("k1");
+
+    expect(state.sends).toEqual([]);
+  });
+
+  it("presents nothing for a task that is already terminal", async () => {
+    const stub = butler("reconcile-terminal");
+    await seedTask(stub, { status: "completed", progressMessageId: null });
+    const state = boundary();
+    await stubBoundary(stub, state);
+    await stubPending(stub, [AP1]);
+
+    await stub.reconcileChannel("k1");
+
+    expect(state.sends).toEqual([]);
+  });
+
+  it("reconciles after a task report", async () => {
+    const stub = butler("reconcile-report");
+    await seedTask(stub, { status: "running", progressMessageId: null });
+    const state = boundary();
+    await stubBoundary(stub, state);
+    await stubPending(stub, [AP1]);
+
+    await stub.report({ taskId: "t1", seq: 1, type: "started" });
+
+    await vi.waitFor(() => {
+      expect(state.sends).toHaveLength(1);
+    });
   });
 });

@@ -491,6 +491,41 @@ describe("sendCurrent", () => {
     setWeChatCredentialsOverride(null);
   });
 
+  it("keeps the approval id in the WeChat button hint", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("send-wechat-approval");
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'u1', ?)`,
+        Date.now(),
+      );
+    });
+    const sent: OutboundMessage[] = [];
+    setChannelOverride("wechat", {
+      parseInbound: async () => null,
+      async send(_to, msg) {
+        sent.push(msg);
+        return { messageId: "" };
+      },
+      async edit() {},
+      async answerAction() {},
+    });
+
+    await hub.sendCurrent({
+      text: "🔐 t3 请求执行 web_fetch",
+      buttons: [
+        [
+          { label: "✅ 批准", data: "a:approve:t3:ap1" },
+          { label: "❌ 拒绝", data: "a:reject:t3:ap1" },
+        ],
+      ],
+    });
+
+    expect(sent[0]?.text).toContain('回复"批准 t3 ap1"');
+    expect(sent[0]?.text).toContain('回复"拒绝 t3 ap1"');
+  });
+
   it("refuses to send when the selection is invalid", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     setEnv({ ACTIVE_CHANNEL: "slack" });

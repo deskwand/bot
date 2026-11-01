@@ -9,6 +9,10 @@ function channels(env: Env): DurableObjectStub<ChannelDO> {
   return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
 }
 
+function butler(env: Env) {
+  return env.BUTLER.get(env.BUTLER.idFromName("owner"));
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const gateway = createGateway({
@@ -20,10 +24,22 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    const hub = channels(env);
     try {
-      await channels(env).ensurePolling();
+      await hub.ensurePolling();
     } catch (error) {
       console.error("channel polling failed:", error);
+    }
+
+    // ChannelDO never calls back into the Butler: the Cron reconciles after
+    // channel keepalive, using the route this instance now executes.
+    try {
+      const route = await hub.currentRoute();
+      if (route.channel !== null) {
+        await butler(env).reconcileChannel(route.routeKey);
+      }
+    } catch (error) {
+      console.error("butler approval reconcile failed:", error);
     }
   },
 } satisfies ExportedHandler<Env>;

@@ -15,7 +15,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
 import { registerTestProvider, setModelOverride } from "../../src/llm/models";
-import type { MessageEvent } from "../../src/protocol";
+import type { AdmittedMessage, OutboundMessage, RouteSnapshot } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
 import { seedOwnerAddress } from "../helpers/owner-address";
 import { scriptedModel } from "../helpers/scripted-model";
@@ -46,12 +46,18 @@ function task(taskId: string) {
   return env.TASK.get(env.TASK.idFromName(taskId));
 }
 
+function channels() {
+  return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
+}
+
+let route: RouteSnapshot;
+
 function message(evt: {
   text: string | null;
   eventId: string;
-  channel?: MessageEvent["channel"];
+  channel?: AdmittedMessage["channel"];
   chatId?: string;
-}): MessageEvent {
+}): AdmittedMessage {
   return {
     type: "message",
     channel: evt.channel ?? "telegram",
@@ -59,6 +65,7 @@ function message(evt: {
     userId: "1",
     text: evt.text,
     eventId: evt.eventId,
+    routeKey: route.routeKey,
   };
 }
 
@@ -148,6 +155,7 @@ async function releaseSlowTask(stub: ReturnType<typeof task>): Promise<void> {
 
 beforeEach(async () => {
   await seedOwnerAddress("42");
+  route = await channels().currentRoute();
 });
 
 afterEach(() => {
@@ -276,102 +284,156 @@ describe("butler chat", () => {
     );
   });
 
-  it("answers and reports a WeChat-origin task on the selected Telegram channel", async () => {
-    const tg = fakeChannel();
-    const wx = fakeChannel();
-    setChannelOverride("telegram", tg.adapter);
-    setChannelOverride("wechat", wx.adapter);
+  it("drops an input whose admitted route is no longer current", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let calls = 0;
     setModelOverride(
-      routedModel(
-        [
-          {
-            toolCalls: [
-              {
-                name: "spawn_task",
-                args: { title: "查天气", instructions: "查询北京今天的天气" },
-              },
-            ],
+      scriptedModel([
+        {
+          text: "不应出现",
+          observe: () => {
+            calls += 1;
           },
-          { text: "已安排" },
-        ],
-        [{ toolCalls: [{ name: "slow_wait", args: {} }] }],
-      ),
+        },
+      ]),
     );
 
-    const taskId = "t1";
-    const stub = task(taskId);
-    await installSlowWait(stub);
-
-    const butlerStub = butler("chat-105");
-    await butlerStub.handleMessage(
-      message({
-        text: "帮我查天气",
-        eventId: "wx:105",
-        channel: "wechat",
-        chatId: "wx-user",
-      }),
-    );
-
-    // Output follows the selected channel; WeChat never receives it.
-    expect(wx.sent).toEqual([]);
-    expect(tg.sent).toEqual([
-      {
-        chatId: "42",
-        text: "⏳ t1 查天气：已开始",
-        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
-      },
-      { chatId: "42", text: "已安排" },
-    ]);
-
-    const row = await runInDurableObject(butlerStub, (_instance, state) =>
-      state.storage.sql
-        .exec<{ chat_id: string }>(
-          `SELECT chat_id FROM tasks WHERE id = ?`,
-          taskId,
-        )
-        .toArray()[0],
-    );
-    // The source stays a record only, never an output target.
-    expect(row).toMatchObject({
-      chat_id: JSON.stringify({
-        channel: "wechat",
-        conversationId: "wx-user",
-      }),
+    await butler("chat-107").handleMessage({
+      ...message({ text: "你好", eventId: "tg:107" }),
+      routeKey: "stale-route",
     });
 
-    await releaseSlowTask(stub);
-    await vi.waitFor(
-      async () => {
-        expect((await stub.status()).state).toBe("completed");
-      },
-      { timeout: 10_000 },
-    );
+    expect(channel.sent).toEqual([]);
+    expect(calls).toBe(0);
   });
 
-  it("answers two source channels on the selected channel only", async () => {
-    const tg = fakeChannel();
-    const wx = fakeChannel();
-    setChannelOverride("telegram", tg.adapter);
-    setChannelOverride("wechat", wx.adapter);
+  it("answers through sendCurrent after the selection changes mid-run", async () => {
+    const stub = butler("chat-108");
+    const sends: OutboundMessage[] = [];
+    const explicitTargets: string[] = [];
+    const routes: RouteSnapshot[] = [
+      { channel: "telegram", routeKey: "k1" },
+      { channel: "wechat", routeKey: "k2" },
+    ];
+    let index = 0;
+
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as { channels(): unknown }
+      ).channels = () => ({
+        currentRoute: async () => routes[Math.min(index, 1)],
+        // The input was admitted before the flip; the model is still running.
+        isAdmissionCurrent: async () => true,
+        sendCurrent: async (msg: OutboundMessage) => {
+          sends.push(msg);
+          const current = routes[Math.min(index, 1)]!;
+          return {
+            channel: current.channel!,
+            conversationId: "42",
+            routeKey: current.routeKey,
+            messageId: "1",
+          };
+        },
+        editCurrent: async () => true,
+        send: async () => {
+          explicitTargets.push("send");
+        },
+        edit: async () => {
+          explicitTargets.push("edit");
+        },
+      });
+    });
+
     setModelOverride(
-      scriptedModel([{ text: "第一条" }, { text: "第二条" }]),
+      scriptedModel([
+        {
+          text: "done",
+          observe: () => {
+            index = 1;
+          },
+        },
+      ]),
     );
 
-    const stub = butler("chat-106");
-    await stub.handleMessage(message({ text: "你好", eventId: "tg:106" }));
     await stub.handleMessage(
-      message({
-        text: "你好",
-        eventId: "wx:106",
-        channel: "wechat",
-        chatId: "wx-user",
-      }),
+      message({ text: "你好", eventId: "tg:108" }),
     );
 
-    expect(tg.sent).toEqual([
-      { chatId: "42", text: "第一条" },
-      { chatId: "42", text: "第二条" },
-    ]);
-    expect(wx.sent).toEqual([]);
+    expect(sends.at(-1)).toEqual({ text: "done" });
+    // The Butler never caches or names an output channel itself.
+    expect(explicitTargets).toEqual([]);
+  });
+
+  it("re-presents a pending approval after the owner's next admitted message", async () => {
+    const stub = butler("chat-109");
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO tasks
+          (id, title, status, created_at, updated_at, chat_id, artifacts_json, last_seq)
+         VALUES ('t1', '查天气', 'running', 0, 0, NULL, '[]', 0)`,
+      );
+    });
+
+    const sends: OutboundMessage[] = [];
+    let failSend = true;
+    const route: RouteSnapshot = { channel: "wechat", routeKey: "wx-route" };
+
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as { channels(): unknown }
+      ).channels = () => ({
+        currentRoute: async () => route,
+        isAdmissionCurrent: async (channel: string, key: string) =>
+          channel === "wechat" && key === "wx-route",
+        sendCurrent: async (msg: OutboundMessage) => {
+          if (failSend) throw new Error("wechat context missing");
+          sends.push(msg);
+          return {
+            channel: "wechat",
+            conversationId: "u1",
+            routeKey: "wx-route",
+            messageId: null,
+          };
+        },
+        editCurrent: async () => false,
+      });
+      (
+        instance as unknown as { taskFor(id: string): unknown }
+      ).taskFor = () => ({
+        start: async () => {},
+        status: async () => ({ state: "running", title: "" }),
+        steer: async () => ({ ok: false, message: "" }),
+        cancel: async () => ({ ok: false, message: "" }),
+        retryTask: async () => ({ ok: false, message: "" }),
+        pendingApprovals: async () => [
+          { approvalId: "ap1", tool: "web_fetch", argsSummary: "https://x" },
+        ],
+      });
+    });
+
+    setModelOverride(scriptedModel([{ text: "收到" }]));
+
+    // No WeChat context yet: the approval stays pending for a later try.
+    await stub.reconcileChannel("wx-route");
+    expect(sends).toEqual([]);
+
+    // The owner's first message creates the context; the reply is sent and
+    // the approval is presented through the same channel.
+    failSend = false;
+    await stub.handleMessage({
+      type: "message",
+      channel: "wechat",
+      chatId: "u1",
+      userId: "1",
+      text: "你好",
+      eventId: "wx:109",
+      routeKey: "wx-route",
+    });
+
+    await vi.waitFor(() => {
+      expect(sends.filter((msg) => msg.text.includes("请求执行"))).toHaveLength(1);
+    });
+    expect(sends.some((msg) => msg.text === "收到")).toBe(true);
   });
 });

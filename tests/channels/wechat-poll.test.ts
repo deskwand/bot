@@ -6,7 +6,7 @@ import {
   setPollTimingOverride,
   setWeChatCredentialsOverride,
 } from "../../src/channels/override";
-import type { MessageEvent } from "../../src/protocol";
+import type { ActionEvent, MessageEvent } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
 
 declare module "cloudflare:test" {
@@ -194,6 +194,50 @@ async function captureButler(): Promise<MessageEvent[]> {
   });
 
   return events;
+}
+
+/** Records the ActionEvent a WeChat text command forwards to the Task DO. */
+async function captureTaskAction(taskId: string): Promise<ActionEvent[]> {
+  const events: ActionEvent[] = [];
+  const stub = env.TASK.get(env.TASK.idFromName(taskId));
+  await runInDurableObject(stub, (instance) => {
+    const proto = Object.getPrototypeOf(instance) as {
+      handleAction(evt: ActionEvent): Promise<string>;
+    };
+    const original = proto.handleAction;
+    proto.handleAction = async (evt) => {
+      events.push(evt);
+      return "已批准";
+    };
+    restores.push(async () => {
+      await runInDurableObject(stub, (restored) => {
+        (
+          Object.getPrototypeOf(restored) as {
+            handleAction(evt: ActionEvent): Promise<string>;
+          }
+        ).handleAction = original;
+      });
+    });
+  });
+  return events;
+}
+
+let textActionCounter = 0;
+
+function textActionUpdate(text: string, from = OWNER) {
+  textActionCounter += 1;
+  return {
+    get_updates_buf: `cursor-${textActionCounter}`,
+    msgs: [
+      {
+        message_id: `m-${textActionCounter}`,
+        from_user_id: from,
+        context_token: "ctx-1",
+        message_type: 1,
+        item_list: [{ type: 1, text_item: { text } }],
+      },
+    ],
+  };
 }
 
 beforeEach(async () => {
@@ -529,6 +573,83 @@ describe("WeChat sending", () => {
         item_list: [{ type: 1, text_item: { text: "reply" } }],
       },
     });
+  });
+});
+
+describe("WeChat text actions", () => {
+  it("executes an owner's approval command and replies on WeChat", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+
+    const actions = await captureTaskAction("t3");
+    const butlerEvents = await captureButler();
+    const { calls, fetchImpl } = scriptedILink([
+      jsonResponse(textActionUpdate("批准 t3 ap1")),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+
+    await pollThroughDO();
+
+    await vi.waitFor(() => expect(actions).toHaveLength(1));
+    expect(actions[0]).toMatchObject({
+      type: "action",
+      channel: "wechat",
+      action: "approve",
+      taskId: "t3",
+      approvalId: "ap1",
+    });
+    // The command is executed, not handed to the model.
+    expect(butlerEvents).toEqual([]);
+
+    await vi.waitFor(() => {
+      expect(calls.some((call) => call.url.endsWith("/sendmessage"))).toBe(
+        true,
+      );
+    });
+    const sent = calls.find((call) => call.url.endsWith("/sendmessage"));
+    expect(sent?.body).toMatchObject({
+      msg: {
+        to_user_id: OWNER,
+        item_list: [{ type: 1, text_item: { text: "已批准" } }],
+      },
+    });
+  });
+
+  it("executes a cancel command without an approval id", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+
+    const actions = await captureTaskAction("t4");
+    const { fetchImpl } = scriptedILink([
+      jsonResponse(textActionUpdate("取消 t4")),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+
+    await pollThroughDO();
+
+    await vi.waitFor(() => expect(actions).toHaveLength(1));
+    expect(actions[0]).toMatchObject({ action: "cancel", taskId: "t4" });
+    expect(actions[0]?.approvalId).toBeUndefined();
+  });
+
+  it("ignores a command from a stranger", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+
+    const actions = await captureTaskAction("t5");
+    const butlerEvents = await captureButler();
+    const { fetchImpl } = scriptedILink([
+      jsonResponse(textActionUpdate("批准 t5 ap1", "stranger")),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+
+    await pollThroughDO();
+
+    expect(actions).toEqual([]);
+    expect(butlerEvents).toEqual([]);
   });
 });
 

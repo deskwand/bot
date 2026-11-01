@@ -255,6 +255,9 @@ describe("TaskDO lifecycle", () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
     await seedOwnerAddress("1");
+    const route = await env.CHANNELS.get(
+      env.CHANNELS.idFromName("channels"),
+    ).currentRoute();
 
     // Non-text input exercises the RPC entry without opening pi, which this
     // file's Butler already set up with a different model catalog.
@@ -266,6 +269,7 @@ describe("TaskDO lifecycle", () => {
         userId: "1",
         text: null,
         eventId: "tg:1",
+        routeKey: route.routeKey,
       }),
     ).resolves.toBeUndefined();
 

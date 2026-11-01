@@ -115,6 +115,38 @@ export class ApprovalGate implements ApprovalGateLike {
     return decision;
   }
 
+  /**
+   * Pending approvals that are still actionable on this instance: persisted
+   * rows alone are not enough, because a restart loses the waiting tool call.
+   */
+  pending(): { approvalId: string; tool: string; argsSummary: string }[] {
+    const now = Date.now();
+    return this.sql
+      .exec<{
+        id: string;
+        tool: string;
+        args_json: string;
+        created_at: number;
+      }>(
+        `SELECT id, tool, args_json, created_at FROM approvals
+         WHERE status = 'pending' ORDER BY created_at ASC, id ASC`,
+      )
+      .toArray()
+      .filter((row) => {
+        const waiter = this.waiters.get(row.id);
+        return (
+          waiter !== undefined &&
+          !waiter.signal.aborted &&
+          row.created_at + this.timeoutMs > now
+        );
+      })
+      .map((row) => ({
+        approvalId: row.id,
+        tool: row.tool,
+        argsSummary: row.args_json.slice(0, ARGS_SUMMARY_LIMIT),
+      }));
+  }
+
   async resolve(
     approvalId: string,
     decision: "approved" | "rejected",

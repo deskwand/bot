@@ -6,9 +6,9 @@ import { createModelsForEnv, resolveModel } from "../llm/models";
 import {
   encodeAction,
   type Address,
+  type AdmittedMessage,
   type Artifact,
   type ChannelMessageRef,
-  type MessageEvent,
   type OutboundMessage,
   type TaskEvent,
   type TaskEventBody,
@@ -73,6 +73,9 @@ export class ButlerDO extends Agent<Env> {
   private readonly throttle = new ProgressThrottle(PROGRESS_INTERVAL_MS);
 
   private readonly progressTimers = new Map<string, unknown>();
+
+  /** Single-flight guard for reconciling pending approvals on this instance. */
+  private reconcilePromise: Promise<void> | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -273,7 +276,7 @@ export class ButlerDO extends Agent<Env> {
    * `onMessage` for its hibernating-WebSocket handler (and hide it from RPC),
    * so the gateway's `onMessage` is mapped here in `src/index.ts`.
    */
-  async handleMessage(evt: MessageEvent): Promise<void> {
+  async handleMessage(evt: AdmittedMessage): Promise<void> {
     try {
       await this.handleInboundMessage(evt);
     } catch (error) {
@@ -312,26 +315,84 @@ export class ButlerDO extends Agent<Env> {
     switch (body.type) {
       case "started":
         this.repo.update(taskId, { status: "running", updatedAt: now });
-        return;
+        break;
       case "progress":
         await this.handleProgress(taskId, body.text, now);
-        return;
+        break;
       case "approval_requested":
         await this.handleApprovalRequested(taskId, body);
-        return;
+        break;
       case "approval_resolved":
         await this.handleApprovalResolved(taskId, body.approvalId, body.decision);
-        return;
+        break;
       case "completed":
         await this.handleCompleted(taskId, body.summary, body.artifacts, now);
-        return;
+        break;
       case "failed":
         await this.handleFailed(taskId, body.reason, body.retryable, now);
-        return;
+        break;
       case "cancelled":
         await this.handleCancelled(taskId, now);
-        return;
+        break;
     }
+
+    // A report is an activity point: re-present approvals this route owns.
+    this.kickReconcile();
+  }
+
+  /**
+   * Re-presents live approvals after the selection changed or an earlier
+   * presentation failed. The Worker's Cron calls this after channel keepalive.
+   */
+  async reconcileChannel(routeKey: string): Promise<void> {
+    const route = await this.channels().currentRoute();
+    if (route.channel === null || route.routeKey !== routeKey) return;
+    await this.reconcileOnce(route.routeKey);
+  }
+
+  private reconcileOnce(routeKey: string): Promise<void> {
+    this.reconcilePromise ??= this.reconcileNow(routeKey).finally(() => {
+      this.reconcilePromise = null;
+    });
+    return this.reconcilePromise;
+  }
+
+  /** Fire-and-forget trigger used by inbound handling and task reports. */
+  private kickReconcile(): void {
+    this.ctx.waitUntil(
+      (async () => {
+        const route = await this.channels().currentRoute();
+        if (route.channel === null) return;
+        await this.reconcileOnce(route.routeKey);
+      })().catch((error) => {
+        console.error("butler reconcile failed:", error);
+      }),
+    );
+  }
+
+  private async reconcileNow(routeKey: string): Promise<void> {
+    for (const task of this.repo.list({ active: true })) {
+      let pending: { approvalId: string; tool: string; argsSummary: string }[];
+      try {
+        pending = await this.taskFor(task.id).pendingApprovals();
+      } catch (error) {
+        console.error(
+          `butler reconcile skipped task ${task.id}: ${errorText(error)}`,
+        );
+        continue;
+      }
+
+      for (const approval of pending) {
+        if (this.presentedUnder(approval.approvalId, routeKey)) continue;
+        await this.presentApproval(task.id, approval);
+      }
+    }
+  }
+
+  private presentedUnder(approvalId: string, routeKey: string): boolean {
+    const approval = this.approvalMessage(approvalId);
+    if (!approval) return false;
+    return parseMessageRef(approval.message_ref_json)?.routeKey === routeKey;
   }
 
   private async handleProgress(
@@ -438,11 +499,23 @@ export class ButlerDO extends Agent<Env> {
     taskId: string,
     body: Extract<TaskEventBody, { type: "approval_requested" }>,
   ): Promise<void> {
-    const row = this.repo.get(taskId);
-    if (!row) return;
+    if (!this.repo.get(taskId)) return;
+    await this.presentApproval(taskId, body);
+  }
+
+  /** Sends one approval request and records the reference that owns it. */
+  private async presentApproval(
+    taskId: string,
+    approval: {
+      approvalId: string;
+      tool: string;
+      argsSummary: string;
+    },
+  ): Promise<boolean> {
+    if (!this.repo.get(taskId)) return false;
 
     const text = clampMessage(
-      `🔐 ${taskId} 请求执行 ${body.tool}\n${body.argsSummary}`,
+      `🔐 ${taskId} 请求执行 ${approval.tool}\n${approval.argsSummary}`,
     );
     const ref = await this.sendBestEffort({
       text,
@@ -453,7 +526,7 @@ export class ButlerDO extends Agent<Env> {
             data: encodeAction({
               action: "approve",
               taskId,
-              approvalId: body.approvalId,
+              approvalId: approval.approvalId,
             }),
           },
           {
@@ -461,13 +534,14 @@ export class ButlerDO extends Agent<Env> {
             data: encodeAction({
               action: "reject",
               taskId,
-              approvalId: body.approvalId,
+              approvalId: approval.approvalId,
             }),
           },
         ],
       ],
     });
-    if (ref === null) return;
+    // A failed send leaves no reference, so the next reconcile retries.
+    if (ref === null) return false;
 
     this.db.exec(
       `INSERT INTO approval_messages
@@ -478,12 +552,13 @@ export class ButlerDO extends Agent<Env> {
          message_id = excluded.message_id,
          text = excluded.text,
          message_ref_json = excluded.message_ref_json`,
-      body.approvalId,
+      approval.approvalId,
       taskId,
       ref.messageId ?? "",
       text,
       JSON.stringify(ref),
     );
+    return true;
   }
 
   private async handleApprovalResolved(
@@ -659,19 +734,25 @@ export class ButlerDO extends Agent<Env> {
       }));
   }
 
-  private async handleInboundMessage(evt: MessageEvent): Promise<void> {
+  private async handleInboundMessage(evt: AdmittedMessage): Promise<void> {
     // Remember where a task spawned during this turn came from; task output
     // itself always goes to the selected channel.
     this.origin = addressOf(evt);
 
+    if (!(await this.admissionHolds(evt))) return;
+
     if (evt.text === null) {
       await this.sendBestEffort({ text: "目前只支持文字消息" });
+      this.kickReconcile();
       return;
     }
 
     // Tests replace the model per message; in production this is a no-op after
     // the first message of an object instance.
     await this.ensureModel();
+
+    // Processing starts at `submit`; a stale input never reaches it.
+    if (!(await this.admissionHolds(evt))) return;
 
     const operationId = evt.eventId;
     const receipt = await this.harness.submit(evt.text, { operationId });
@@ -681,11 +762,23 @@ export class ButlerDO extends Agent<Env> {
     const result = await this.harness.wait(operationId);
     if (result.status === "unanswered") {
       await this.sendBestEffort({ text: "出错了，稍后再试" });
+      this.kickReconcile();
       return;
     }
     if (result.text) {
       await this.sendBestEffort({ text: result.text });
     }
+    this.kickReconcile();
+  }
+
+  private async admissionHolds(evt: AdmittedMessage): Promise<boolean> {
+    if (
+      await this.channels().isAdmissionCurrent(evt.channel, evt.routeKey)
+    ) {
+      return true;
+    }
+    console.warn("butler: dropped input from an old channel route");
+    return false;
   }
 
   private async ensureModel(): Promise<void> {
@@ -737,7 +830,7 @@ function parseMessageRef(json: string | null): ChannelMessageRef | null {
   }
 }
 
-function addressOf(evt: MessageEvent): Address {
+function addressOf(evt: AdmittedMessage): Address {
   return { channel: evt.channel, conversationId: evt.chatId };
 }
 

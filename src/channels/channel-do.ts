@@ -25,6 +25,7 @@ import {
   versionIdOf,
 } from "./route-identity";
 import { createTelegramAdapter } from "./telegram";
+import { parseTextAction, type TextAction } from "./text-action";
 import { ChannelError, type ChannelAdapter } from "./types";
 import {
   createILinkClient,
@@ -74,8 +75,9 @@ function forWechat(msg: OutboundMessage): OutboundMessage {
     for (const button of row) {
       const decoded = decodeAction(button.data);
       if (!decoded) continue;
+      const approval = decoded.approvalId ? ` ${decoded.approvalId}` : "";
       hints.push(
-        `回复"${ACTION_LABELS[decoded.action]} ${decoded.taskId}"`,
+        `回复"${ACTION_LABELS[decoded.action]} ${decoded.taskId}${approval}"`,
       );
     }
   }
@@ -526,17 +528,75 @@ export class ChannelDO extends Agent<Env> {
         );
       }
 
+      const eventId = `wx:${update.messageId ?? `${cursor}:${index}`}`;
       const event: MessageEvent = {
         type: "message",
         channel: "wechat",
         chatId: update.fromUserId,
         userId: update.fromUserId,
         text: update.text,
-        eventId: `wx:${update.messageId ?? `${cursor}:${index}`}`,
+        eventId,
       };
       this.rememberOwner(event);
+
+      // Deterministic owner commands replace the missing WeChat buttons.
+      const textAction =
+        update.text === null ? null : parseTextAction(update.text);
+      if (textAction !== null) {
+        this.dispatchWeChatAction(event, eventId, routeKey, textAction);
+        return;
+      }
+
       this.dispatchMessage(event, routeKey);
     });
+  }
+
+  private dispatchWeChatAction(
+    event: MessageEvent,
+    eventId: string,
+    routeKey: string,
+    parsed: TextAction,
+  ): void {
+    const action: ActionEvent = {
+      type: "action",
+      channel: "wechat",
+      chatId: event.chatId,
+      userId: event.userId,
+      actionId: eventId,
+      messageId: eventId,
+      action: parsed.action,
+      taskId: parsed.taskId,
+      ...(parsed.approvalId === undefined
+        ? {}
+        : { approvalId: parsed.approvalId }),
+      eventId,
+    };
+
+    this.ctx.waitUntil(
+      this.handleWeChatAction(action, routeKey).catch((error: unknown) => {
+        console.error(`channel: action failed: ${errorMessage(error)}`);
+      }),
+    );
+  }
+
+  private async handleWeChatAction(
+    event: ActionEvent,
+    routeKey: string,
+  ): Promise<void> {
+    if (!(await this.isAdmissionCurrent("wechat", routeKey))) return;
+
+    let text = "出错了，稍后再试";
+    try {
+      const task = this.env.TASK.get(
+        this.env.TASK.idFromName(event.taskId),
+      );
+      text = await task.handleAction(event);
+    } catch (error) {
+      console.error(`channel: action failed: ${errorMessage(error)}`);
+    }
+
+    if (!(await this.isAdmissionCurrent("wechat", routeKey))) return;
+    await this.sendCurrent({ text });
   }
 
   private weChatCredentialsJson(): string | null {
