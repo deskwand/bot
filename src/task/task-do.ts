@@ -204,6 +204,12 @@ export class TaskDO extends Agent<Env> {
     let summary = "";
     try {
       const result = await this.harness.wait(operationId);
+      if (result.status === "unanswered") {
+        // Pi resolves `wait` for failed/aborted/withdrawn runs; they are not
+        // completions, even when they carry no text.
+        await this.fail(result.reason ?? "任务未完成");
+        return;
+      }
       summary = result.text ?? "";
     } catch (error) {
       await this.fail(error);

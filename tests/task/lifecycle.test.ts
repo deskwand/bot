@@ -156,6 +156,37 @@ describe("TaskDO lifecycle", () => {
     expect((await stub.status()).state).toBe("failed");
   });
 
+  it("reports an unanswered run as failed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(PiHarness.prototype, "wait").mockResolvedValue({
+      operationId: "task:t-unanswered",
+      session: "1",
+      status: "unanswered",
+      reason: "boom",
+    });
+    setModelOverride(scriptedModel([{ text: "never read" }]));
+    const taskId = "t-unanswered";
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual(["started", "failed"]);
+        expect(events[1]?.payload).toMatchObject({
+          type: "failed",
+          reason: "boom",
+          retryable: false,
+        });
+        expect(events.some((event) => event.type === "completed")).toBe(false);
+      },
+      { timeout: 10_000 },
+    );
+
+    expect((await stub.status()).state).toBe("failed");
+  });
+
   it("reports the last assistant text when finish_task was not called", async () => {
     setModelOverride(scriptedModel([{ text: "plain answer" }]));
     const taskId = "t2";
