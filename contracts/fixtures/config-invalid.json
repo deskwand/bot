@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "owner": {
+    "telegramUserIds": [-1]
+  },
+  "models": {
+    "butler": {
+      "provider": "unknown-provider",
+      "id": ""
+    },
+    "task": {
+      "provider": "opencode-go",
+      "id": ""
+    }
+  },
+  "mcpServers": []
+}

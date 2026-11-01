@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { config } from "../../src/config";
+import validConfig from "../../contracts/fixtures/config-valid.json";
 import { createModelsForEnv } from "../../src/llm/models";
+import { readRuntimeConfig } from "../../src/runtime-config";
+
+const cfg = readRuntimeConfig({
+  DESKWAND_CONFIG: validConfig,
+} as unknown as Env);
 
 function envWith(overrides: Record<string, string>): Env {
   return overrides as unknown as Env;
@@ -12,7 +17,7 @@ describe("createModelsForEnv", () => {
       envWith({ OPENCODE_API_KEY: "oc-test-key" }),
     );
 
-    for (const ref of Object.values(config.models)) {
+    for (const ref of Object.values(cfg.models)) {
       const model = models.getModel(ref.provider, ref.id);
       expect(model).toBeDefined();
       expect(model).toMatchObject({

@@ -325,6 +325,37 @@ describe("resolveRoute wiring (independent env snapshots)", () => {
     expect(wxTwo.routeKey).not.toBe(wxOne.routeKey);
   });
 
+  it("ignores owner order and duplicates in the Telegram identity", async () => {
+    const model = { provider: "opencode-go", id: "deepseek-v4.1-flash" };
+    const config = (telegramUserIds: number[]) => ({
+      schemaVersion: 1,
+      owner: { telegramUserIds },
+      models: { butler: model, task: model },
+      mcpServers: [],
+    });
+    const base = {
+      ACTIVE_CHANNEL: "telegram",
+      TELEGRAM_BOT_TOKEN: "t1",
+      CF_VERSION_METADATA: { id: "v1" },
+    };
+
+    const first = await routeWith("wiring-owner-order-a", {
+      ...base,
+      DESKWAND_CONFIG: config([2, 1, 1]),
+    });
+    const reordered = await routeWith("wiring-owner-order-b", {
+      ...base,
+      DESKWAND_CONFIG: config([1, 2]),
+    });
+    const changed = await routeWith("wiring-owner-order-c", {
+      ...base,
+      DESKWAND_CONFIG: config([1, 3]),
+    });
+
+    expect(reordered.routeKey).toBe(first.routeKey);
+    expect(changed.routeKey).not.toBe(first.routeKey);
+  });
+
   it("keeps an existing instance on its own snapshot when a newer fixture exists", async () => {
     const hub = env.CHANNELS.get(env.CHANNELS.idFromName("wiring-stable"));
     const result = await runInDurableObject(hub, async (_instance, state) => {

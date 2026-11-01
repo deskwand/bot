@@ -1,0 +1,206 @@
+[
+  {
+    "name": "object form",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": true
+  },
+  {
+    "name": "JSON string form",
+    "input": "{\"schemaVersion\":1,\"owner\":{\"telegramUserIds\":[100000001]},\"models\":{\"butler\":{\"provider\":\"opencode-go\",\"id\":\"deepseek-v4.1-flash\"},\"task\":{\"provider\":\"anthropic\",\"id\":\"claude-sonnet-4-5\"}},\"mcpServers\":[]}",
+    "valid": true
+  },
+  {
+    "name": "null",
+    "input": null,
+    "valid": false
+  },
+  {
+    "name": "array",
+    "input": [],
+    "valid": false
+  },
+  {
+    "name": "wrong schemaVersion",
+    "input": {
+      "schemaVersion": 2,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "malformed JSON string",
+    "input": "{\"schemaVersion\":1,",
+    "valid": false
+  },
+  {
+    "name": "non-integer ID",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": [100000001.5]
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "negative ID",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": [-7]
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "too-large ID",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": [9007199254740992]
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown provider",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "gemini",
+          "id": "gemini-2.5-pro"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "MCP env:NAME header preserved",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": [100000001]
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": [
+        {
+          "name": "notion",
+          "url": "https://mcp.example.com/notion",
+          "headers": {
+            "Authorization": "env:MCP_TOKEN",
+            "X-Trace": "abc-123"
+          },
+          "requireApproval": ["create_page"]
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "extra advanced field",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash",
+          "thinking": {
+            "effort": "low"
+          }
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": [],
+      "advanced": {
+        "retryLimit": 3
+      }
+    },
+    "valid": true
+  }
+]

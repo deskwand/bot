@@ -38,8 +38,8 @@ type TelegramResponse = {
 };
 
 export type TelegramAdapterOptions = {
-  token: string;
-  webhookSecret: string;
+  token?: string;
+  webhookSecret?: string;
   fetch?: typeof fetch;
 };
 
@@ -63,6 +63,10 @@ export function createTelegramAdapter(
     method: string,
     body: Record<string, unknown>,
   ): Promise<TelegramResponse> {
+    if (!opts.token) {
+      throw new ChannelError("telegram not configured", 0);
+    }
+
     const response = await fetchImpl(
       `${API_BASE}/bot${opts.token}/${method}`,
       {
@@ -119,7 +123,7 @@ export function createTelegramAdapter(
   return {
     async parseInbound(req: Request): Promise<InboundEvent | null> {
       const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
-      if (secret !== opts.webhookSecret) return null;
+      if (!opts.webhookSecret || secret !== opts.webhookSecret) return null;
 
       let update: TelegramUpdate;
       try {

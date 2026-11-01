@@ -1,7 +1,7 @@
 import { Agent } from "agents";
 import { PiHarness, type PiModel } from "agents/harness/pi";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
-import { config } from "../config";
+import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import { createModelsForEnv, resolveModel } from "../llm/models";
 import {
   encodeAction,
@@ -164,6 +164,26 @@ export class ButlerDO extends Agent<Env> {
       ],
     });
 
+    // The default is a getter: pi only evaluates it when it opens the session,
+    // so a missing DESKWAND_CONFIG does not make this object unconstructable.
+    // A failure leaves the session without a model until `ensureModel` runs.
+    const butler = this;
+    const defaults = {
+      get model(): PiModel | undefined {
+        try {
+          const model = resolveModel(
+            readRuntimeConfig(butler.env).models.butler,
+            butler.env,
+          );
+          butler.appliedModel = model;
+          return model;
+        } catch (error) {
+          if (error instanceof RuntimeConfigError) return undefined;
+          throw error;
+        }
+      },
+    };
+
     this.harness = new PiHarness({
       harness: ({ storage, context, onWake }) =>
         Harness.open(
@@ -175,9 +195,7 @@ export class ButlerDO extends Agent<Env> {
           },
           context,
         ),
-      defaults: {
-        model: resolveModel(config.models.butler, this.env),
-      },
+      defaults,
     });
 
     // `Agent` already installed the lifecycle; adding to it is required.
@@ -651,6 +669,9 @@ export class ButlerDO extends Agent<Env> {
     lines.push("请向用户简要汇报结果。");
 
     try {
+      // A session default already covers this; when config was missing the
+      // getter left no model and this raises the fixed configuration error.
+      if (!this.appliedModel) await this.ensureModel();
       const receipt = await this.harness.submit(lines.join("\n"), {
         operationId,
         entry: {
@@ -814,7 +835,10 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private async ensureModel(): Promise<void> {
-    const model = resolveModel(config.models.butler, this.env);
+    const model = resolveModel(
+      readRuntimeConfig(this.env).models.butler,
+      this.env,
+    );
     if (
       this.appliedModel?.provider === model.provider &&
       this.appliedModel.id === model.id

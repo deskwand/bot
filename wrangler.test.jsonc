@@ -7,7 +7,16 @@
   "upload_source_maps": true,
   "vars": {
     "PUBLIC_BASE_URL": "https://example.com",
-    "ACTIVE_CHANNEL": "telegram"
+    "ACTIVE_CHANNEL": "telegram",
+    "DESKWAND_CONFIG": {
+      "schemaVersion": 1,
+      "owner": { "telegramUserIds": [100000001] },
+      "models": {
+        "butler": { "provider": "opencode-go", "id": "deepseek-v4.1-flash" },
+        "task": { "provider": "opencode-go", "id": "deepseek-v4.1-flash" }
+      },
+      "mcpServers": []
+    }
   },
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "r2_buckets": [

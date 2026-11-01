@@ -1,5 +1,6 @@
 import { Agent, type Schedule } from "agents";
-import { config, isOwner } from "../config";
+import { isOwner } from "../config";
+import { readRuntimeConfig } from "../runtime-config";
 import {
   decodeAction,
   type ActionEvent,
@@ -294,8 +295,11 @@ export class ChannelDO extends Agent<Env> {
       return raw ? credentialsHash(raw) : sha256Hex("wechat:unconfigured");
     }
 
+    const ownerIds = [
+      ...new Set(readRuntimeConfig(this.env).owner.telegramUserIds),
+    ].sort((a, b) => a - b);
     return sha256Hex(
-      `telegram:${this.env.TELEGRAM_BOT_TOKEN}:${config.owner.telegramUserIds.join(",")}`,
+      `telegram:${this.env.TELEGRAM_BOT_TOKEN ?? ""}:${ownerIds.join(",")}`,
     );
   }
 
@@ -326,7 +330,7 @@ export class ChannelDO extends Agent<Env> {
     if (row) return row.conversation_id;
 
     if (channel === "telegram") {
-      const fallback = config.owner.telegramUserIds[0];
+      const fallback = readRuntimeConfig(this.env).owner.telegramUserIds[0];
       if (fallback !== undefined) return String(fallback);
     }
 
@@ -712,7 +716,7 @@ export class ChannelDO extends Agent<Env> {
 
   private isOwner(event: InboundEvent): boolean {
     if (event.channel === "telegram") {
-      return isOwner(config, Number(event.userId));
+      return isOwner(readRuntimeConfig(this.env), Number(event.userId));
     }
     return this.parseWeChatCredentials()?.userId === event.userId;
   }

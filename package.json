@@ -13,6 +13,7 @@
     "wechat-login": "node --use-env-proxy --experimental-strip-types scripts/wechat-login.ts"
   },
   "dependencies": {
+    "@cfworker/json-schema": "4.1.4",
     "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",

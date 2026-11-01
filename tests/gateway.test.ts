@@ -97,4 +97,24 @@ describe("worker entry", () => {
 
     expect(response.status).toBe(404);
   });
+
+  it("serves artifacts while DESKWAND_CONFIG is missing", async () => {
+    const runtime = env as unknown as Record<string, unknown>;
+    const saved = runtime.DESKWAND_CONFIG;
+    delete runtime.DESKWAND_CONFIG;
+
+    try {
+      await env.ARTIFACTS.put("cfg/missing/r.md", "still served", {
+        httpMetadata: { contentType: "text/markdown" },
+      });
+      const response = await SELF.fetch(
+        "https://example.com/a/cfg/missing/r.md",
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("still served");
+    } finally {
+      runtime.DESKWAND_CONFIG = saved;
+    }
+  });
 });

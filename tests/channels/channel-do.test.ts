@@ -6,7 +6,7 @@ import {
   setWeChatCredentialsOverride,
 } from "../../src/channels/override";
 import type { ChannelAdapter } from "../../src/channels/types";
-import { config } from "../../src/config";
+import { readRuntimeConfig } from "../../src/runtime-config";
 import type {
   ActionEvent,
   InboundEvent,
@@ -18,7 +18,9 @@ declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
-const OWNER_ID = config.owner.telegramUserIds[0]!;
+const OWNER_ID = readRuntimeConfig(
+  env as unknown as Env,
+).owner.telegramUserIds[0]!;
 const SECRET = "s3cret";
 
 const MESSAGE: MessageEvent = {
@@ -336,6 +338,32 @@ describe("handleTelegramWebhook", () => {
     await expect(
       channels().handleTelegramWebhook(webhook()),
     ).resolves.toBeUndefined();
+  });
+
+  it("fails business processing with a fixed error when config is missing", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const events = await captureButler();
+    const tg = fakeTelegram(MESSAGE);
+    setChannelOverride("telegram", tg.adapter);
+    setEnv({ DESKWAND_CONFIG: undefined });
+
+    await channels().handleTelegramWebhook(webhook());
+
+    expect(events).toEqual([]);
+    expect(await ownerAddresses()).toEqual([]);
+    expect(error.mock.calls.flat().join(" ")).toContain("CONFIG_MISSING");
+    error.mockRestore();
+  });
+
+  it("rejects every webhook when the webhook secret is absent", async () => {
+    const events = await captureButler();
+    const hub = freshChannels("no-webhook-secret");
+    setEnv({ TELEGRAM_WEBHOOK_SECRET: undefined });
+
+    await hub.handleTelegramWebhook(webhook());
+
+    expect(events).toEqual([]);
+    expect(await ownerAddresses()).toEqual([]);
   });
 });
 

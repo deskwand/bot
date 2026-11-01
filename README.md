@@ -24,7 +24,7 @@
 - Telegram Bot Token（在 [@BotFather](https://t.me/BotFather) 创建 bot）
 - OpenCode Go API Key（模型调用）
 - 联网搜索使用 Exa 免费 MCP，无需 API Key
-- 可选：MCP 服务器（在 `src/config.ts` 中配置）
+- 可选：MCP 服务器（在 `DESKWAND_CONFIG` 中配置）
 
 ## 1. 安装依赖
 
@@ -64,11 +64,13 @@ cp .dev.vars.example .dev.vars
 
 | 名称 | 类型 | 说明 |
 | --- | --- | --- |
-| `OPENCODE_API_KEY` | secret | 模型调用（直接使用 OpenCode Go provider key，不经 AI Gateway） |
+| `OPENCODE_API_KEY` | secret | 模型调用（直接使用 OpenCode Go provider key，不经 AI Gateway）；缺失时只影响 opencode-go 模型 |
+| `ANTHROPIC_API_KEY` | secret | 可选；使用 `anthropic` provider 时填入 |
 | `TELEGRAM_BOT_TOKEN` | secret | BotFather 提供的 token |
-| `TELEGRAM_WEBHOOK_SECRET` | secret | webhook 校验密钥（自定义随机串） |
+| `TELEGRAM_WEBHOOK_SECRET` | secret | webhook 校验密钥（自定义随机串）；缺失时所有 Telegram webhook 都会被拒绝 |
 | `WECHAT_CREDENTIALS` | secret | 可选；微信 iLink 登录凭据，由 `npm run wechat-login` 写入 |
 | `PUBLIC_BASE_URL` | var | 产物链接前缀，填部署后的公开地址 |
+| `DESKWAND_CONFIG` | var | 非敏感业务配置（owner、模型、MCP），结构见 `contracts/deployment-config.schema.json` |
 | `ACTIVE_CHANNEL` | var | 业务渠道选择：`telegram` 或 `wechat`。生产模板不声明，由发布配置提供 |
 
 生产环境的 `wrangler.jsonc` 用 `keep_vars: true` 保留控制台或发布客户端设置的远端变量，并声明 `version_metadata` binding：
@@ -85,13 +87,30 @@ cp .dev.vars.example .dev.vars
 
 ## 4. 填写个人配置
 
-编辑 `src/config.ts`：
+业务配置不再写在源码里，而是由普通 var `DESKWAND_CONFIG` 提供，结构以 `contracts/deployment-config.schema.json` 为准：
 
-- `owner.telegramUserIds`：填入允许使用该 bot 的 Telegram 用户 ID（数字）。不在白名单内的消息会被忽略。
-- `models`：按角色（`butler` / `task`）配置模型，默认 OpenCode Go 的 `deepseek-v4.1-flash`。
-- `mcpServers`：MCP 服务器列表；对需要人工确认的工具在 `requireApproval` 中列出工具名，触发时会先发 ✅/❌ 审批按钮。
+```json
+{
+  "schemaVersion": 1,
+  "owner": { "telegramUserIds": [100000001] },
+  "models": {
+    "butler": { "provider": "opencode-go", "id": "deepseek-v4.1-flash" },
+    "task": { "provider": "opencode-go", "id": "deepseek-v4.1-flash" }
+  },
+  "mcpServers": []
+}
+```
 
-渠道选择不在 `src/config.ts` 里：`ACTIVE_CHANNEL` 是唯一权威，缺省为 `telegram`（兼容旧部署）；显式写成其他值时业务收发全部关闭并记录固定配置错误，不会悄悄回退到 Telegram。
+`100000001` 只是示例占位，请换成真实的 Telegram 用户 ID。
+
+- `owner.telegramUserIds`：允许使用该 bot 的 Telegram 用户 ID（正整数）。空数组是合法配置，表示不授权任何人；不存在仓库内置 owner，也不会回退到源码常量。
+- `models`：按角色（`butler` / `task`）配置模型，provider 只接受现有适配器支持的 `anthropic` 与 `opencode-go`。
+- `mcpServers`：MCP 服务器列表；对需要人工确认的工具在 `requireApproval` 中列出工具名，触发时会先发 ✅/❌ 审批按钮。header 值可以写 `env:NAME` 引用 Worker secret，引用会原样保留，不会把值展开进普通 var。
+- `schemaVersion` 必须为 `1`；未知版本、非整数/越界用户 ID、未知 provider 或非法 JSON 都会以固定错误拒绝，不会猜测或回退。
+
+`OPENCODE_API_KEY`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_WEBHOOK_SECRET` 都是可选 secret：缺失时只影响对应业务路径（例如缺少 webhook secret 时所有 Telegram webhook 都会被拒绝）。
+
+渠道选择不在 `DESKWAND_CONFIG` 里：`ACTIVE_CHANNEL` 是唯一权威，缺省为 `telegram`（兼容旧部署）；显式写成其他值时业务收发全部关闭并记录固定配置错误，不会悄悄回退到 Telegram。
 
 编辑 `wrangler.jsonc` 的 `vars.PUBLIC_BASE_URL`，填入部署后的公开地址，例如 `https://bot.<your-subdomain>.workers.dev` 或自定义域名。产物链接依赖该值；如果还不确定地址，可以先部署一次拿到 URL，回填后再部署一次。
 
@@ -163,6 +182,19 @@ cloudflared tunnel --url http://localhost:8787
 
 Telegram 需要公网 HTTPS 地址，所以本地调试需用隧道地址执行 `npm run set-webhook -- https://<tunnel-host>`，并把 `.dev.vars` 中的 `PUBLIC_BASE_URL` 也填成隧道地址（否则产物链接不可用）。调试结束后记得切回生产地址。
 
+## 从源码常量迁移到 DESKWAND_CONFIG
+
+本代码不再读取 `src/config.ts` 中的 owner、模型或 MCP 常量。对已经在线运行的 Worker，必须先写入等价的 `DESKWAND_CONFIG`，再部署本代码；否则业务会以固定 `CONFIG_MISSING` 错误停止，不会回退到仓库里的默认值或旧 owner。
+
+迁移顺序：
+
+1. 在 Cloudflare Dashboard 的 Worker 设置中新增普通变量（不是 secret）`DESKWAND_CONFIG`。值取自迁移前的源码常量：`owner.telegramUserIds`、`models.butler`、`models.task`、`mcpServers`，并补上 `"schemaVersion": 1`。只填实际值，不要用示例占位 ID。
+2. 保存后重新打开变量页面或通过只读设置接口核对：`schemaVersion`、owner 列表、两个模型和 MCP 名称/URL 与旧值一致。核对时不要把 secret 或带凭据的 header 输出到终端。
+3. 确认远端值可读且正确后，再部署新代码。首次部署后发送一条测试消息，确认业务未因配置缺失而拒绝。
+4. 之后 CLI 与桌面客户端可以共存，但远端 `DESKWAND_CONFIG` 是唯一权威；在任一侧修改后都要重新发布才会生效。不要把同一份配置再写回 `src/config.ts`，也不要在两处各维护一份草稿。
+
+`wrangler.jsonc` 故意不声明 `DESKWAND_CONFIG`，并保留 `keep_vars: true`，因此命令行部署会保留控制台或客户端写入的远端值。注意：显式写进模板的其他 vars 仍会覆盖远端同名值。
+
 ## 升级与迁移说明
 
 - 本次升级不重建 Durable Object，不新增 DO class migration；业务表只追加列（`tasks.progress_message_ref_json`、`approval_messages.message_ref_json`），旧行保持原样。
@@ -177,6 +209,7 @@ Telegram 需要公网 HTTPS 地址，所以本地调试需用隧道地址执行 
 管理客户端（另一个项目）通过 Cloudflare 发布配置，本仓库不提供管理 API 或 CLI：
 
 - `ACTIVE_CHANNEL`：只接受 `telegram`、`wechat`；缺省 `telegram`；其他值关闭业务收发并报固定错误，不回退。
+- `DESKWAND_CONFIG`：普通 var，结构见 `contracts/deployment-config.schema.json`；必须包含 `schemaVersion: 1`，owner/models/MCP 均以此为准，不读源码常量。
 - `WECHAT_CREDENTIALS`：仍是 Worker secret，保持现有 JSON 格式；本仓库不读取加密的动态凭据库，也不提供准备/就绪流程。
 - 发布配置必须保留 `version_metadata: { "binding": "CF_VERSION_METADATA" }`，否则 Channel DO 拒绝业务处理并记录固定配置错误；生产使用 `keep_vars: true` 保留客户端设置的其他 vars。
 - 变更必须发布新版本才生效；没有状态查询路由，也没有能力协商端点。健康检查 200 不代表微信轮询就绪；诊断用现有 Cloudflare 日志（只读查看版本与 `ACTIVE_CHANNEL`，不输出 secret）。
@@ -217,7 +250,9 @@ src/
   task/                 # Task DO：执行、事件 outbox、审批、控制指令
   tools/                # web_search、web_fetch、R2 产物、MCP 包装
   llm/                  # 按角色解析模型
-  config.ts             # 白名单、模型、MCP 与审批配置
+  config.ts             # 配置类型与 isOwner/needsApproval 纯函数
+  runtime-config.ts     # 从 DESKWAND_CONFIG 校验并读取运行时配置
+contracts/              # Go/TS 共用的部署配置 schema 与 fixtures
 scripts/set-webhook.ts  # 设置 Telegram webhook
 scripts/wechat-login.ts # 微信扫码登录并写入 Cloudflare secret
 tests/                  # 测试与测试专用 Worker 入口

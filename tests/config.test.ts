@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { config, isOwner, needsApproval, type AppConfig } from "../src/config";
+import { isOwner, needsApproval, type AppConfig } from "../src/config";
 
 const cfg: AppConfig = {
   owner: { telegramUserIds: [111, 222] },
@@ -21,6 +21,10 @@ describe("isOwner", () => {
   it("rejects ids outside the allowlist", () => {
     expect(isOwner(cfg, 333)).toBe(false);
   });
+
+  it("rejects every id for an empty allowlist", () => {
+    expect(isOwner({ ...cfg, owner: { telegramUserIds: [] } }, 111)).toBe(false);
+  });
 });
 
 describe("needsApproval", () => {
@@ -34,17 +38,5 @@ describe("needsApproval", () => {
 
   it("is false for an unknown server", () => {
     expect(needsApproval(cfg, "github", "create_page")).toBe(false);
-  });
-});
-
-describe("default config", () => {
-  it("configures both roles with the default model", () => {
-    expect(config.models.butler).toEqual({ provider: "opencode-go", id: "deepseek-v4.1-flash" });
-    expect(config.models.task).toEqual({ provider: "opencode-go", id: "deepseek-v4.1-flash" });
-  });
-
-  it("whitelists numeric owner ids and starts with no MCP servers", () => {
-    expect(config.owner.telegramUserIds.every(Number.isInteger)).toBe(true);
-    expect(config.mcpServers).toEqual([]);
   });
 });

@@ -13,18 +13,6 @@ export type AppConfig = {
   mcpServers: McpServerConfig[];
 };
 
-export const config: AppConfig = {
-  owner: {
-    // Fill in the Telegram user IDs allowed to use the bot.
-    telegramUserIds: [1764662370],
-  },
-  models: {
-    butler: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
-    task: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
-  },
-  mcpServers: [],
-};
-
 export function isOwner(cfg: AppConfig, telegramUserId: number): boolean {
   return cfg.owner.telegramUserIds.includes(telegramUserId);
 }

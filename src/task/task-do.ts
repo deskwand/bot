@@ -7,7 +7,7 @@ import {
   type ReportInfo,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
-import { config } from "../config";
+import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import { createModelsForEnv, resolveModel } from "../llm/models";
 import type {
   ActionEvent,
@@ -146,6 +146,9 @@ export class TaskDO extends Agent<Env> {
       ],
     });
 
+    // Model selection happens in `start` once the spec is available. Keeping
+    // the constructor config-free lets alarms and control RPCs run without a
+    // readable DESKWAND_CONFIG.
     this.harness = new PiHarness({
       harness: ({ storage, context, onWake }) =>
         Harness.open(
@@ -160,12 +163,6 @@ export class TaskDO extends Agent<Env> {
           },
           context,
         ),
-      defaults: {
-        model: resolveModel(
-          this.spec?.model ?? config.models.task,
-          this.env,
-        ),
-      },
     });
 
     // `Agent` already installed the lifecycle; adding to it is required.
@@ -232,7 +229,10 @@ export class TaskDO extends Agent<Env> {
     await this.harness
       .session()
       .setModel(
-        resolveModel(effective.model ?? config.models.task, this.env),
+        resolveModel(
+          effective.model ?? readRuntimeConfig(this.env).models.task,
+          this.env,
+        ),
       );
 
     // Durable before submit and only once: retries and very fast runs must not
@@ -365,10 +365,10 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async installMcpTools(): Promise<void> {
-    const servers = config.mcpServers;
-    if (servers.length === 0) return;
-
     try {
+      const servers = readRuntimeConfig(this.env).mcpServers;
+      if (servers.length === 0) return;
+
       const tools = await loadMcpTools(
         servers,
         this.approvals,
@@ -377,6 +377,12 @@ export class TaskDO extends Agent<Env> {
       );
       if (tools.length > 0) this.registry.install({ name: "mcp", tools });
     } catch (error) {
+      if (error instanceof RuntimeConfigError) {
+        // Configuration is not a transient MCP failure: run without MCP tools
+        // instead of rejecting `onStart` or caching a rejected promise.
+        console.error(`task mcp tools skipped: ${error.code}`);
+        return;
+      }
       const reason = error instanceof Error ? error.message : String(error);
       console.error(`task mcp tools failed to load: ${reason}`);
     }

@@ -185,6 +185,53 @@ describe("parseInbound", () => {
   });
 });
 
+describe("unconfigured secrets", () => {
+  it("rejects every webhook when the webhook secret is absent", async () => {
+    const { fetchImpl } = fakeFetch();
+    const adapter = createTelegramAdapter({ token: TOKEN, fetch: fetchImpl });
+
+    expect(
+      await adapter.parseInbound(
+        updateRequest({
+          update_id: 1,
+          message: {
+            message_id: 10,
+            from: { id: 7 },
+            chat: { id: 42 },
+            text: "hi",
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects only sending when the bot token is absent", async () => {
+    const { calls, fetchImpl } = fakeFetch();
+    const adapter = createTelegramAdapter({
+      webhookSecret: SECRET,
+      fetch: fetchImpl,
+    });
+
+    const event = await adapter.parseInbound(
+      updateRequest({
+        update_id: 1,
+        message: {
+          message_id: 10,
+          from: { id: 7 },
+          chat: { id: 42 },
+          text: "hi",
+        },
+      }),
+    );
+    expect(event).not.toBeNull();
+
+    await expect(adapter.send("42", { text: "hi" })).rejects.toThrow(
+      "telegram not configured",
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("send", () => {
   it("renders markdown into entities instead of parse_mode", async () => {
     const { calls, fetchImpl } = fakeFetch();

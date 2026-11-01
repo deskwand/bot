@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "owner": {
+    "telegramUserIds": []
+  },
+  "models": {
+    "butler": {
+      "provider": "opencode-go",
+      "id": "deepseek-v4.1-flash"
+    },
+    "task": {
+      "provider": "opencode-go",
+      "id": "deepseek-v4.1-flash"
+    }
+  },
+  "mcpServers": []
+}
