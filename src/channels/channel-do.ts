@@ -4,6 +4,7 @@ import {
   decodeAction,
   type ActionEvent,
   type Address,
+  type AdmittedMessage,
   type ChannelId,
   type ChannelMessageRef,
   type InboundEvent,
@@ -39,9 +40,6 @@ const WECHAT_POLL_BACKOFF_MS = 1_000;
 const WECHAT_POLL_MAX_BACKOFF_MS = 10_000;
 const WECHAT_GET_UPDATES_TIMEOUT_MS = 40_000;
 const WECHAT_HEARTBEAT_MAX_AGE_MS = 120_000;
-const WECHAT_EXPIRED_TEXT =
-  "微信登录已过期，请在电脑上运行 npm run wechat-login";
-
 type WeChatState = {
   credentials_hash: string | null;
   cursor: string | null;
@@ -96,7 +94,11 @@ export class ChannelDO extends Agent<Env> {
   private readonly db: SqlStorage;
 
   private telegramInstance: ChannelAdapter | undefined;
-  private activeWeChatRun: { hash: string; raw: string } | null = null;
+  private activeWeChatRun: {
+    hash: string;
+    raw: string;
+    routeKey: string;
+  } | null = null;
   /** Cached for the lifetime of this instance: its environment is immutable. */
   private routePromise: Promise<RouteSnapshot> | undefined;
 
@@ -129,6 +131,16 @@ export class ChannelDO extends Agent<Env> {
     );
   }
 
+  override async onStart(props?: object): Promise<void> {
+    await super.onStart(props);
+    // First wake (any existing RPC or the Cron) applies the selection early.
+    try {
+      await this.ensurePolling();
+    } catch (error) {
+      console.error(`channel: startup polling failed: ${errorMessage(error)}`);
+    }
+  }
+
   async handleTelegramWebhook(req: Request): Promise<void> {
     try {
       const adapter = this.adapter("telegram");
@@ -151,8 +163,23 @@ export class ChannelDO extends Agent<Env> {
 
       this.rememberOwner(event);
 
+      // The other channel's input must not reach the Butler or a task.
+      const route = await this.currentRoute();
+      if (route.channel !== "telegram") {
+        if (event.type === "action") {
+          try {
+            await adapter.answerAction(event.actionId, "该渠道未启用");
+          } catch (error) {
+            console.error(
+              `channel: answer callback failed: ${errorMessage(error)}`,
+            );
+          }
+        }
+        return;
+      }
+
       if (event.type === "message") {
-        this.dispatchMessage(event);
+        this.dispatchMessage(event, route.routeKey);
         return;
       }
 
@@ -300,10 +327,10 @@ export class ChannelDO extends Agent<Env> {
   /** Hashes the selected channel's account identity; never stores it plainly. */
   private targetIdentityHash(channel: ChannelId): Promise<string> {
     if (channel === "wechat") {
-      const raw = this.weChatCredentialsJson();
-      return raw
-        ? credentialsHash(raw)
-        : sha256Hex("wechat:unconfigured");
+      // Route ownership comes from the deployed secret only: the test-only
+      // polling override must never move an existing message reference.
+      const raw = this.env.WECHAT_CREDENTIALS ?? null;
+      return raw ? credentialsHash(raw) : sha256Hex("wechat:unconfigured");
     }
 
     return sha256Hex(
@@ -346,6 +373,34 @@ export class ChannelDO extends Agent<Env> {
   }
 
   async ensurePolling(): Promise<void> {
+    const route = await this.currentRoute();
+
+    if (route.channel !== "wechat") {
+      await this.stopWeChatPolling();
+      return;
+    }
+
+    await this.startWeChatPolling();
+  }
+
+  /** Stops the WeChat chain without discarding the selected credential. */
+  private async stopWeChatPolling(): Promise<void> {
+    this.activeWeChatRun = null;
+
+    for (const schedule of await this.listSchedules()) {
+      if (schedule.callback === "pollWeChat") {
+        await this.cancelSchedule(schedule.id);
+      }
+    }
+
+    // A deliberate deactivation is not an expiry: keep cursor and contexts so
+    // selecting WeChat again resumes where it left off.
+    if (this.readWeChatState().status === "running") {
+      this.updateWeChatState({ status: "stopped" });
+    }
+  }
+
+  private async startWeChatPolling(): Promise<void> {
     const raw = this.weChatCredentialsJson();
     if (!raw) return;
 
@@ -368,6 +423,13 @@ export class ChannelDO extends Agent<Env> {
         last_poll_at: null,
         expiry_notified: 0,
       });
+      state = this.readWeChatState();
+    }
+
+    // Same credentials after a redeploy: resume a deliberate stop, but never
+    // resurrect an expired session without new scanned credentials.
+    if (state.status === "stopped") {
+      this.updateWeChatState({ status: "running" });
       state = this.readWeChatState();
     }
 
@@ -399,18 +461,22 @@ export class ChannelDO extends Agent<Env> {
     _payload?: unknown,
     _schedule?: Schedule<unknown>,
   ): Promise<void> {
+    const route = await this.currentRoute();
+    if (route.channel !== "wechat") return;
+
     const raw = this.weChatCredentialsJson();
     const credentials = raw ? parseCredentials(raw) : null;
     const state = this.readWeChatState();
     if (!credentials || !raw || state.status !== "running" || !state.credentials_hash) return;
     if (this.activeWeChatRun) return;
-    const run = { hash: state.credentials_hash, raw };
+    const run = { hash: state.credentials_hash, raw, routeKey: route.routeKey };
     this.activeWeChatRun = run;
-    const ownsRun = () => {
+    const ownsRun = async () => {
       const current = this.readWeChatState();
       return this.activeWeChatRun === run &&
         this.weChatCredentialsJson() === run.raw &&
-        current.credentials_hash === run.hash && current.status === "running";
+        current.credentials_hash === run.hash && current.status === "running" &&
+        (await this.currentRoute()).routeKey === run.routeKey;
     };
 
     try {
@@ -425,7 +491,7 @@ export class ChannelDO extends Agent<Env> {
       let backoffMs = timing.baseBackoffMs;
 
       do {
-        if (!ownsRun()) return;
+        if (!(await ownsRun())) return;
         const cursor = this.readWeChatState().cursor ?? "";
         // Refresh the heartbeat before the long poll so ensurePolling does not
         // start a second chain while getupdates is still waiting.
@@ -437,15 +503,20 @@ export class ChannelDO extends Agent<Env> {
             cursor,
             AbortSignal.timeout(WECHAT_GET_UPDATES_TIMEOUT_MS),
           );
-          if (!ownsRun()) return;
+          if (!(await ownsRun())) return;
           this.updateWeChatState({
             cursor: batch.cursor,
             last_poll_at: Date.now(),
           });
-          this.dispatchWeChatUpdates(batch.updates, batch.cursor, credentials);
+          this.dispatchWeChatUpdates(
+            batch.updates,
+            batch.cursor,
+            credentials,
+            run.routeKey,
+          );
           backoffMs = timing.baseBackoffMs;
         } catch (error) {
-          if (!ownsRun()) return;
+          if (!(await ownsRun())) return;
           if (isSessionExpired(error)) {
             await this.expireWeChat();
             return;
@@ -458,7 +529,7 @@ export class ChannelDO extends Agent<Env> {
         }
       } while (Date.now() - startedAt < timing.runMs);
 
-      if (!ownsRun()) return;
+      if (!(await ownsRun())) return;
       await this.schedule(0, "pollWeChat");
     } finally {
       if (this.activeWeChatRun === run) this.activeWeChatRun = null;
@@ -466,23 +537,16 @@ export class ChannelDO extends Agent<Env> {
   }
 
   private async expireWeChat(): Promise<void> {
-    const state = this.readWeChatState();
     this.updateWeChatState({ status: "expired", expiry_notified: 1 });
-    if (state.expiry_notified !== 0) return;
-
-    try {
-      await this.send("notify", { text: WECHAT_EXPIRED_TEXT });
-    } catch (error) {
-      console.error(
-        `channel: wechat expiry notice failed: ${errorMessage(error)}`,
-      );
-    }
+    // Never notify through another channel; re-scan to obtain new credentials.
+    console.warn("channel: wechat session expired, run the login script");
   }
 
   private dispatchWeChatUpdates(
     updates: WeChatUpdate[],
     cursor: string,
     credentials: WeChatCredentials,
+    routeKey: string,
   ): void {
     updates.forEach((update, index) => {
       if (
@@ -514,7 +578,7 @@ export class ChannelDO extends Agent<Env> {
         eventId: `wx:${update.messageId ?? `${cursor}:${index}`}`,
       };
       this.rememberOwner(event);
-      this.dispatchMessage(event);
+      this.dispatchMessage(event, routeKey);
     });
   }
 
@@ -606,14 +670,15 @@ export class ChannelDO extends Agent<Env> {
     };
   }
 
-  private dispatchMessage(event: MessageEvent): void {
+  private dispatchMessage(event: MessageEvent, routeKey: string): void {
     try {
+      const admitted: AdmittedMessage = { ...event, routeKey };
       const butler = this.env.BUTLER.get(
         this.env.BUTLER.idFromName("owner"),
       );
       // Telegram retries slow webhooks; acknowledge now and let the Butler run.
       this.ctx.waitUntil(
-        butler.handleMessage(event).catch((error: unknown) => {
+        butler.handleMessage(admitted).catch((error: unknown) => {
           console.error(
             `channel: message dispatch failed: ${errorMessage(error)}`,
           );

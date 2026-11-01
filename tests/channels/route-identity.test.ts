@@ -1,5 +1,8 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ChannelDO } from "../../src/channels/channel-do";
+import { setWeChatCredentialsOverride } from "../../src/channels/override";
+import type { RouteSnapshot } from "../../src/protocol";
 import {
   DISABLED_ROUTE_KEY,
   parseActiveChannel,
@@ -230,5 +233,131 @@ describe("ChannelDO.currentRoute", () => {
 
     expect(route.channel).toBe("wechat");
     expect(route.routeKey).not.toBe("disabled");
+  });
+});
+
+describe("resolveRoute wiring (independent env snapshots)", () => {
+  const WX_A = JSON.stringify({
+    token: "token-a",
+    baseUrl: "https://ilink.example",
+    accountId: "account-a",
+    userId: "wx-owner",
+  });
+  const WX_B = JSON.stringify({
+    token: "token-b",
+    baseUrl: "https://ilink.example",
+    accountId: "account-b",
+    userId: "wx-owner",
+  });
+
+  afterEach(() => {
+    setWeChatCredentialsOverride(null);
+  });
+
+  /** Builds a ChannelDO over a DO's real state with a snapshot env fixture. */
+  async function routeWith(
+    name: string,
+    values: Record<string, unknown>,
+  ): Promise<RouteSnapshot> {
+    const hub = env.CHANNELS.get(env.CHANNELS.idFromName(name));
+    return runInDurableObject(hub, (_instance, state) => {
+      const snapshot = { ...(env as unknown as Env), ...values } as Env;
+      const fixture = new ChannelDO(state, snapshot);
+      return fixture.currentRoute();
+    });
+  }
+
+  it("derives the WeChat identity from the environment, not the test override", async () => {
+    setWeChatCredentialsOverride(WX_A);
+    const withoutEnvCredentials = await routeWith("wiring-override-a", {
+      ACTIVE_CHANNEL: "wechat",
+      WECHAT_CREDENTIALS: undefined,
+    });
+
+    setWeChatCredentialsOverride(WX_B);
+    const stillWithoutEnvCredentials = await routeWith("wiring-override-b", {
+      ACTIVE_CHANNEL: "wechat",
+      WECHAT_CREDENTIALS: undefined,
+    });
+
+    expect(stillWithoutEnvCredentials.routeKey).toBe(
+      withoutEnvCredentials.routeKey,
+    );
+
+    const withEnvCredentials = await routeWith("wiring-env-creds", {
+      ACTIVE_CHANNEL: "wechat",
+      WECHAT_CREDENTIALS: WX_A,
+    });
+    expect(withEnvCredentials.routeKey).not.toBe(
+      withoutEnvCredentials.routeKey,
+    );
+  });
+
+  it("changes the key with the deployment, Telegram token and WeChat credentials", async () => {
+    const base = { ACTIVE_CHANNEL: "telegram", TELEGRAM_BOT_TOKEN: "t1" };
+    const first = await routeWith("wiring-tg-v1", {
+      ...base,
+      CF_VERSION_METADATA: { id: "v1" },
+    });
+    const redeployed = await routeWith("wiring-tg-v2", {
+      ...base,
+      CF_VERSION_METADATA: { id: "v2" },
+    });
+    const rotatedToken = await routeWith("wiring-tg-token", {
+      ...base,
+      TELEGRAM_BOT_TOKEN: "t2",
+      CF_VERSION_METADATA: { id: "v1" },
+    });
+
+    expect(redeployed.routeKey).not.toBe(first.routeKey);
+    expect(rotatedToken.routeKey).not.toBe(first.routeKey);
+
+    const wxOne = await routeWith("wiring-wx-a", {
+      ACTIVE_CHANNEL: "wechat",
+      WECHAT_CREDENTIALS: WX_A,
+      CF_VERSION_METADATA: { id: "v1" },
+    });
+    const wxTwo = await routeWith("wiring-wx-b", {
+      ACTIVE_CHANNEL: "wechat",
+      WECHAT_CREDENTIALS: WX_B,
+      CF_VERSION_METADATA: { id: "v1" },
+    });
+    expect(wxTwo.routeKey).not.toBe(wxOne.routeKey);
+  });
+
+  it("keeps an existing instance on its own snapshot when a newer fixture exists", async () => {
+    const hub = env.CHANNELS.get(env.CHANNELS.idFromName("wiring-stable"));
+    const result = await runInDurableObject(hub, async (_instance, state) => {
+      const older = new ChannelDO(state, {
+        ...(env as unknown as Env),
+        ACTIVE_CHANNEL: "telegram",
+        TELEGRAM_BOT_TOKEN: "t1",
+        CF_VERSION_METADATA: { id: "v1" },
+      } as Env);
+      const before = await older.currentRoute();
+      const newer = new ChannelDO(state, {
+        ...(env as unknown as Env),
+        ACTIVE_CHANNEL: "wechat",
+        WECHAT_CREDENTIALS: WX_A,
+        CF_VERSION_METADATA: { id: "v2" },
+      } as Env);
+      const newerRoute = await newer.currentRoute();
+      const after = await older.currentRoute();
+      return { before, newerRoute, after };
+    });
+
+    expect(result.after).toEqual(result.before);
+    expect(result.newerRoute.routeKey).not.toBe(result.before.routeKey);
+  });
+
+  it("disables business routing for an invalid selection in the snapshot", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const route = await routeWith("wiring-invalid", {
+      ACTIVE_CHANNEL: "slack",
+      CF_VERSION_METADATA: { id: "v1" },
+    });
+
+    expect(route).toEqual({ channel: null, routeKey: "disabled" });
+    error.mockRestore();
   });
 });

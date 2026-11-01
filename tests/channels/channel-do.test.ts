@@ -1,4 +1,4 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
 import type { ChannelAdapter } from "../../src/channels/types";
@@ -81,6 +81,29 @@ function webhook(secret = SECRET): Request {
 
 function channels() {
   return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
+}
+
+function freshChannels(name: string) {
+  return env.CHANNELS.get(env.CHANNELS.idFromName(name));
+}
+
+const ENV = env as unknown as Record<string, unknown>;
+const savedEnv = new Map<string, unknown>();
+
+/** Builds an independent, immutable-ish env fixture for one DO instance. */
+function setEnv(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
+    ENV[key] = value;
+  }
+}
+
+function restoreEnv(): void {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete ENV[key];
+    else ENV[key] = value;
+  }
+  savedEnv.clear();
 }
 
 function butler() {
@@ -171,6 +194,7 @@ afterEach(async () => {
   for (const restore of restores.splice(0)) await restore();
   setChannelOverride("telegram", null);
   setChannelOverride("wechat", null);
+  restoreEnv();
 });
 
 describe("handleTelegramWebhook", () => {
@@ -207,7 +231,9 @@ describe("handleTelegramWebhook", () => {
     await channels().handleTelegramWebhook(webhook());
 
     await vi.waitFor(() => {
-      expect(events).toEqual([MESSAGE]);
+      expect(events).toEqual([
+        { ...MESSAGE, routeKey: expect.any(String) },
+      ]);
     });
     expect(await ownerAddresses()).toMatchObject([
       { channel: "telegram", conversation_id: "42" },
@@ -223,7 +249,9 @@ describe("handleTelegramWebhook", () => {
     await channels().handleTelegramWebhook(webhook());
 
     await vi.waitFor(() => {
-      expect(events).toEqual([nonText]);
+      expect(events).toEqual([
+        { ...nonText, routeKey: expect.any(String) },
+      ]);
     });
   });
 
@@ -250,7 +278,9 @@ describe("handleTelegramWebhook", () => {
 
     expect(outcome).toBe("returned");
     await vi.waitFor(() => {
-      expect(events).toEqual([MESSAGE]);
+      expect(events).toEqual([
+        { ...MESSAGE, routeKey: expect.any(String) },
+      ]);
     });
   });
 
@@ -302,6 +332,53 @@ describe("handleTelegramWebhook", () => {
     await expect(
       channels().handleTelegramWebhook(webhook()),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("active channel gating", () => {
+  it("ignores a Telegram message while WeChat is selected", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const events = await captureButler();
+    const tg = fakeTelegram(MESSAGE);
+    setChannelOverride("telegram", tg.adapter);
+
+    await freshChannels("gated-message").handleTelegramWebhook(webhook());
+
+    expect(events).toEqual([]);
+  });
+
+  it("answers an old Telegram button as not enabled and runs no task", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const events = await captureButler();
+    const tg = fakeTelegram(ACTION);
+    setChannelOverride("telegram", tg.adapter);
+
+    await expect(
+      freshChannels("gated-action").handleTelegramWebhook(webhook()),
+    ).resolves.toBeUndefined();
+
+    expect(events).toEqual([]);
+    expect(tg.answered).toEqual([
+      { actionId: "cb-1", text: "该渠道未启用" },
+    ]);
+  });
+
+  it("re-enables the route after the selection returns to Telegram", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("gated-back");
+    await hub.handleTelegramWebhook(webhook());
+
+    setEnv({ ACTIVE_CHANNEL: "telegram" });
+    await evictDurableObject(hub);
+    const events = await captureButler();
+    const tg = fakeTelegram(MESSAGE);
+    setChannelOverride("telegram", tg.adapter);
+
+    await hub.handleTelegramWebhook(webhook());
+
+    await vi.waitFor(() => {
+      expect(events).toHaveLength(1);
+    });
   });
 });
 

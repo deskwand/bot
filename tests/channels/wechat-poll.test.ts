@@ -1,4 +1,4 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   setChannelOverride,
@@ -6,7 +6,6 @@ import {
   setPollTimingOverride,
   setWeChatCredentialsOverride,
 } from "../../src/channels/override";
-import { config } from "../../src/config";
 import type { MessageEvent } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
 
@@ -15,7 +14,6 @@ declare module "cloudflare:test" {
 }
 
 const OWNER = "wx-owner";
-const EXPIRED_TEXT = "微信登录已过期，请在电脑上运行 npm run wechat-login";
 
 const CREDS_A = {
   token: "token-a",
@@ -76,8 +74,30 @@ function scriptedILink(responses: Array<Reply | Error> = []) {
   return { calls, fetchImpl };
 }
 
+let hubName = "channels";
+let hubCounter = 0;
+
 function channels() {
-  return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
+  return env.CHANNELS.get(env.CHANNELS.idFromName(hubName));
+}
+
+const ENV = env as unknown as Record<string, unknown>;
+const savedEnv = new Map<string, unknown>();
+
+/** Builds an independent env fixture for one ChannelDO instance. */
+function setEnv(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
+    ENV[key] = value;
+  }
+}
+
+function restoreEnv(): void {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete ENV[key];
+    else ENV[key] = value;
+  }
+  savedEnv.clear();
 }
 
 function readState(): Promise<WeChatStateRow | null> {
@@ -177,6 +197,8 @@ async function captureButler(): Promise<MessageEvent[]> {
 }
 
 beforeEach(async () => {
+  hubName = `wechat-poll-${++hubCounter}`;
+  setEnv({ ACTIVE_CHANNEL: "wechat" });
   await cancelSchedules();
   await runInDurableObject(channels(), (_instance, state) => {
     state.storage.sql.exec("DELETE FROM owner_addresses");
@@ -198,6 +220,7 @@ afterEach(async () => {
   setILinkFetchOverride(null);
   setPollTimingOverride(null);
   setWeChatCredentialsOverride(null);
+  restoreEnv();
   vi.restoreAllMocks();
 });
 
@@ -278,9 +301,8 @@ describe("ensurePolling", () => {
       status: "expired",
       expiry_notified: 1,
     });
-    expect(tg.sent).toEqual([
-      { chatId: String(config.owner.telegramUserIds[0]), text: EXPIRED_TEXT },
-    ]);
+    // An expired session must not notify the other channel.
+    expect(tg.sent).toEqual([]);
     expect(await pollSchedules()).toEqual([]);
 
     await channels().ensurePolling();
@@ -288,8 +310,88 @@ describe("ensurePolling", () => {
     await pollThroughDO();
 
     expect(await pollSchedules()).toEqual([]);
-    expect(tg.sent).toHaveLength(1);
+    expect(tg.sent).toEqual([]);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("channel selection", () => {
+  it("schedules no poll for stored WeChat credentials while Telegram is selected", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    setEnv({ ACTIVE_CHANNEL: "telegram" });
+    const hub = env.CHANNELS.get(env.CHANNELS.idFromName("wechat-idle"));
+
+    await hub.ensurePolling();
+
+    expect(
+      await runInDurableObject(hub, async (instance) => {
+        const target = instance as unknown as {
+          listSchedules(): Promise<{ callback: string }[]>;
+        };
+        return (await target.listSchedules()).filter(
+          (schedule) => schedule.callback === "pollWeChat",
+        );
+      }),
+    ).toEqual([]);
+  });
+
+  it("stops polling after a redeploy selects Telegram and keeps the conversation state", async () => {
+    const hub = channels();
+
+    // Persisted state of a WeChat deployment: a running chain scheduled by the
+    // previous version, a cursor and a context. No live request is in flight.
+    await runInDurableObject(hub, async (instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO wechat_state
+           (credentials_hash, cursor, status, last_poll_at, expiry_notified)
+         VALUES (?, ?, 'running', ?, 0)`,
+        "hash-a",
+        "kept-cursor",
+        Date.now(),
+      );
+      state.storage.sql.exec(
+        `INSERT INTO wechat_contexts (user_id, context_token, updated_at)
+         VALUES (?, ?, ?)`,
+        OWNER,
+        "kept-context",
+        Date.now(),
+      );
+      await instance.schedule(600, "pollWeChat");
+    });
+    expect(await pollSchedules()).toHaveLength(1);
+
+    setEnv({ ACTIVE_CHANNEL: "telegram" });
+    await evictDurableObject(hub);
+    await hub.ensurePolling();
+
+    expect(await pollSchedules()).toEqual([]);
+    expect(await readState()).toMatchObject({
+      status: "stopped",
+      cursor: "kept-cursor",
+    });
+    expect(await readContexts()).toEqual([
+      { user_id: OWNER, context_token: "kept-context" },
+    ]);
+  });
+
+  it("resumes a stopped chain when the same credentials are selected again", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    const hub = channels();
+    await hub.ensurePolling();
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE wechat_state SET cursor = ?, status = 'stopped', last_poll_at = NULL`,
+        "kept-cursor",
+      );
+    });
+
+    await hub.ensurePolling();
+
+    expect(await readState()).toMatchObject({
+      status: "running",
+      cursor: "kept-cursor",
+    });
+    expect(await pollSchedules()).toHaveLength(1);
   });
 });
 
@@ -331,6 +433,7 @@ describe("pollWeChat", () => {
     const scheduled = await pollThroughDO();
     expect(scheduled).toBe(1);
 
+    const route = await channels().currentRoute();
     await vi.waitFor(() => {
       expect(events).toEqual([
         {
@@ -340,6 +443,7 @@ describe("pollWeChat", () => {
           userId: OWNER,
           text: "hello",
           eventId: "wx:m1",
+          routeKey: route.routeKey,
         },
         {
           type: "message",
@@ -348,6 +452,7 @@ describe("pollWeChat", () => {
           userId: OWNER,
           text: null,
           eventId: "wx:cursor-2:2",
+          routeKey: route.routeKey,
         },
       ]);
     });
