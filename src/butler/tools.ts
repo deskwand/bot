@@ -34,6 +34,7 @@ const ScheduleId = Type.Object({ id: Type.String() });
 /** The Task DO operations the control tools call. */
 export type TaskControl = {
   start(spec: TaskSpec): Promise<void>;
+  status(): Promise<{ state: string; title: string }>;
   steer(text: string): Promise<{ ok: boolean; message: string }>;
   cancel(): Promise<{ ok: boolean; message: string }>;
   retryTask(): Promise<{ ok: boolean; message: string }>;
@@ -122,6 +123,11 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     replay: "safe",
     async execute({ id }) {
       try {
+        if (!repo.get(id)) return output(`没有任务 ${id}`);
+        // status() flushes the task's outbox, so asking about a task also
+        // repairs a stranded final event.
+        await task(id).status();
+
         const row = repo.get(id);
         if (!row) return output(`没有任务 ${id}`);
 

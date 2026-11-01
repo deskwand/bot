@@ -557,11 +557,61 @@ export class TaskDO extends Agent<Env> {
   private async flushOutbox(): Promise<void> {
     const taskId = this.currentTaskId();
     if (!taskId) return;
-    await this.outboxFor(taskId).flush();
+
+    let delivered = false;
+    try {
+      delivered = await this.outboxFor(taskId).flush();
+    } catch (error) {
+      console.error(
+        `task ${taskId} outbox flush failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    if (delivered) {
+      this.setMeta("outbox_retry_attempt", "0");
+      return;
+    }
+    await this.scheduleOutboxRetry();
+  }
+
+  /**
+   * Wake this object later to retry undelivered events. Only one retry is
+   * pending at a time; each attempt backs off a little, capped at 10 minutes.
+   */
+  private async scheduleOutboxRetry(): Promise<void> {
+    try {
+      const pending = await this.listSchedules();
+      if (pending.some((schedule) => schedule.callback === "retryOutbox")) {
+        return;
+      }
+
+      const attempt = Number(this.readMeta("outbox_retry_attempt") ?? "0");
+      const delayMs = Math.min(30_000 * 2 ** attempt, 10 * 60_000);
+      this.setMeta("outbox_retry_attempt", String(attempt + 1));
+      await this.schedule(delayMs / 1000, "retryOutbox");
+    } catch (error) {
+      console.error(
+        `task outbox retry schedule failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /** Scheduled callback: retry pending events after a delivery failure. */
+  async retryOutbox(): Promise<void> {
+    await this.flushOutbox();
   }
 
   private outboxFor(taskId: string): Outbox {
-    this.outbox ??= new Outbox(this.db, taskId, (event) => this.deliver(event));
+    this.outbox ??= new Outbox(
+      this.db,
+      taskId,
+      (event) => this.deliver(event),
+      () => this.scheduleOutboxRetry(),
+    );
     return this.outbox;
   }
 

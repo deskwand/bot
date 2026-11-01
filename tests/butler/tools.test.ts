@@ -92,6 +92,7 @@ describe("butler control tools", () => {
           repo,
           task: () => ({
             start: async () => {},
+            status: async () => ({ state: "queued", title: "" }),
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
@@ -116,6 +117,42 @@ describe("butler control tools", () => {
     );
 
     expect(result).toBe("任务 t1 启动失败：boom");
+  });
+
+  it("asks the Task DO to flush before get_task reads the row", async () => {
+    const result = await runInDurableObject(
+      butler("tools-get-flush"),
+      async (instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        repo.insert({ id: "t1", title: "查天气", chatId: "42" });
+        const calls: string[] = [];
+        (
+          instance as unknown as { taskFor(id: string): unknown }
+        ).taskFor = (id: string) => ({
+          status: async () => {
+            calls.push(id);
+            return { state: "running", title: "查天气" };
+          },
+        });
+
+        const entry = instance.registry
+          .snapshot()
+          .tools()
+          .find(({ tool }) => tool.name === "get_task");
+        const outcome = await entry!.tool.execute(
+          { id: "t1" } as never,
+          {} as never,
+          {} as never,
+        );
+        return {
+          calls,
+          text: (outcome.output?.[0] as { text: string }).text,
+        };
+      },
+    );
+
+    expect(result.calls).toEqual(["t1"]);
+    expect(result.text).toContain("t1 [queued] 查天气");
   });
 
   it("marks a task failed when its Task DO cannot start", async () => {
