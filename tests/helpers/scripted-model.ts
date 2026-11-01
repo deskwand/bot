@@ -1,4 +1,4 @@
-import type { ToolCall } from "@earendil-works/pi-ai";
+import type { ToolCall, TranscriptContext } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -14,6 +14,8 @@ import { registerTestProvider } from "../../src/llm/models";
 export type ScriptedTurn = {
   text?: string;
   toolCalls?: { name: string; args: unknown }[];
+  /** Called with the request context when the model is asked for this turn. */
+  observe?: (context: TranscriptContext) => void;
 };
 
 let nextModel = 0;
@@ -35,9 +37,15 @@ export function scriptedModel(turns: ScriptedTurn[]): PiModel {
         fauxToolCall(call.name, call.args as ToolCall["arguments"]),
       ),
     ];
-    return fauxAssistantMessage(content, {
+    const message = fauxAssistantMessage(content, {
       stopReason: turn.toolCalls?.length ? "toolUse" : "stop",
     });
+    return turn.observe
+      ? (context: TranscriptContext) => {
+          turn.observe!(context);
+          return message;
+        }
+      : message;
   });
   faux.setResponses(steps);
 

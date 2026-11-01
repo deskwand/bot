@@ -1,9 +1,10 @@
-import { Agent } from "agents";
+import { Agent, type RetryOptions } from "agents";
 import { PiHarness } from "agents/harness/pi";
 import { Type } from "@earendil-works/pi-ai";
 import {
   createRegistry,
   Harness,
+  type ReportInfo,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { config } from "../config";
@@ -28,6 +29,23 @@ export type TaskState =
   | "completed"
   | "failed"
   | "cancelled";
+
+const STATE_LABELS: Record<TaskState, string> = {
+  queued: "排队中",
+  running: "运行中",
+  completed: "完成",
+  failed: "失败",
+  cancelled: "取消",
+};
+
+type ControlResult = { ok: boolean; message: string };
+
+type AgentRetryOptions = RetryOptions & {
+  shouldRetry?: (error: unknown, nextAttempt: number) => boolean;
+};
+
+/** How long `cancel()` waits for pi to become idle before returning anyway. */
+const ABORT_TIMEOUT_MS = 10_000;
 
 const FinishTask = Type.Object({
   summary: Type.String(),
@@ -129,6 +147,9 @@ export class TaskDO extends Agent<Env> {
             models: createModelsForEnv(this.env),
             registry: this.registry,
             onWake,
+            onReport: (error, info) => {
+              this.ctx.waitUntil(this.handleReport(error, info));
+            },
           },
           context,
         ),
@@ -208,7 +229,16 @@ export class TaskDO extends Agent<Env> {
       await outbox.emit({ type: "started" });
     }
 
+    // A cancel can land while this start is setting up.
+    if (this.readMeta("state") === "cancelled") return;
+
     await this.harness.submit(effective.instructions, { operationId });
+
+    // …or while the submit is in flight: stop the run it just accepted.
+    if (this.readMeta("state") === "cancelled") {
+      await this.abortWithTimeout();
+      return;
+    }
     this.setMeta("state", "running");
 
     this.ctx.waitUntil(this.watchRun(operationId));
@@ -217,14 +247,139 @@ export class TaskDO extends Agent<Env> {
   async status(): Promise<{ state: TaskState; title: string }> {
     await this.flushOutbox();
     return {
-      state: (this.readMeta("state") ?? "queued") as TaskState,
+      state: this.currentState(),
       title: this.readMeta("title") ?? "",
     };
   }
 
-  async handleAction(_evt: ActionEvent): Promise<string> {
+  async steer(text: string): Promise<ControlResult> {
     await this.flushOutbox();
+    const taskId = this.currentTaskId();
+    const state = this.currentState();
+    if (!taskId) return { ok: false, message: "任务尚未开始，无法追加指令" };
+    if (state !== "running") {
+      return {
+        ok: false,
+        message: `任务 ${taskId} 已${STATE_LABELS[state]}，无法追加指令`,
+      };
+    }
+
+    await this.harness.session().steer(text);
+    return { ok: true, message: `已向任务 ${taskId} 追加指令` };
+  }
+
+  async cancel(): Promise<ControlResult> {
+    await this.flushOutbox();
+    const taskId = this.currentTaskId();
+    const state = this.currentState();
+    if (!taskId) return { ok: false, message: "任务尚未开始，无法取消" };
+    if (state !== "queued" && state !== "running") {
+      return {
+        ok: false,
+        message: `任务 ${taskId} 已${STATE_LABELS[state]}，无法取消`,
+      };
+    }
+
+    // Terminal state and event come before `abort()`: aborting makes pi's
+    // `wait` resolve as unanswered, and `fail()` ignores that only because
+    // the state is already terminal.
+    this.setMeta("state", "cancelled");
+    await this.outboxFor(taskId).emit({ type: "cancelled" });
+    await this.abortWithTimeout();
+
+    return { ok: true, message: `任务 ${taskId} 已取消` };
+  }
+
+  // `Agent` names its generic backoff helper `retry`, and the task-control
+  // RPC shares the name: a call with no callback resumes the failed task.
+  // (The no-argument overload must stay last: workerd's RPC typing picks it.)
+  override retry<T>(
+    fn: (attempt: number) => Promise<T>,
+    options?: AgentRetryOptions,
+  ): Promise<T>;
+  override retry(): Promise<ControlResult>;
+  override async retry<T>(
+    fn?: (attempt: number) => Promise<T>,
+    options?: AgentRetryOptions,
+  ): Promise<ControlResult | T> {
+    if (fn) return super.retry(fn, options);
+
+    await this.flushOutbox();
+    const taskId = this.currentTaskId();
+    const state = this.currentState();
+    if (!taskId) return { ok: false, message: "任务尚未开始，无法重试" };
+    if (state !== "failed") {
+      return {
+        ok: false,
+        message: `任务 ${taskId} 已${STATE_LABELS[state]}，无法重试`,
+      };
+    }
+
+    const lastFailure = this.lastFailedEvent();
+    if (!lastFailure?.retryable) {
+      return { ok: false, message: `任务 ${taskId} 的失败不可重试` };
+    }
+    // Revives the tasks pi's crash-loop guard parked. False means nothing was
+    // parked, followed by an ordinary run failure: re-attach to the run below.
+    await this.harness.session().retry();
+    this.setMeta("state", "running");
+    await this.outboxFor(taskId).emit({ type: "started" });
+
+    const operationId = this.readMeta("operation_id") ?? `task:${taskId}`;
+    this.setMeta("operation_id", operationId);
+    this.ctx.waitUntil(this.watchRun(operationId));
+
+    return { ok: true, message: `任务 ${taskId} 已重新开始` };
+  }
+
+  async handleAction(evt: ActionEvent): Promise<string> {
+    await this.flushOutbox();
+    if (evt.action === "cancel") return (await this.cancel()).message;
     return "暂不支持";
+  }
+
+  /**
+   * Pi's `onReport` sink. A parked task means pi gave up restarting it after
+   * `settings.restartLimit` crashes; report it retryable so the user can
+   * resume it with `retry()`.
+   */
+  private async handleReport(
+    _error: unknown,
+    info: ReportInfo,
+  ): Promise<void> {
+    if (info.type === "task_parked") {
+      await this.failWith("任务反复中断，已暂停", true);
+      return;
+    }
+    if (info.type === "task_faulted" && info.reason === "restart_limit") {
+      await this.failWith("任务反复中断，已暂停", true);
+    }
+  }
+
+  private async abortWithTimeout(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), ABORT_TIMEOUT_MS);
+    });
+
+    try {
+      const result = await Promise.race([
+        this.harness.session().abort(),
+        timeout,
+      ]);
+      if (result === "timeout") {
+        console.warn(
+          `task ${this.currentTaskId() ?? "unknown"} cancel timed out waiting for abort`,
+        );
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(
+        `task ${this.currentTaskId() ?? "unknown"} abort failed: ${reason}`,
+      );
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   private async watchRun(operationId: string): Promise<void> {
@@ -251,6 +406,9 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async finish(summary: string, artifacts: Artifact[]): Promise<void> {
+    // A cancelled task must not complete when a racing tool call returns.
+    if (this.readMeta("state") === "cancelled") return;
+
     // Synchronous check-and-set: no await before the event row and state are
     // written, so concurrent callers cannot emit two completed events.
     if (this.hasCompletedEvent()) {
@@ -274,21 +432,25 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async fail(error: unknown): Promise<void> {
-    const state = this.readMeta("state");
-    if (
-      state === "completed" ||
-      state === "cancelled" ||
-      this.hasCompletedEvent()
-    ) {
-      return;
-    }
+    // An abort or a late completion after cancel/completed is expected.
+    if (this.isTerminal()) return;
+
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(
+      `task ${this.currentTaskId() ?? "unknown"} run failed: ${reason}`,
+    );
+    await this.failWith(reason, false);
+  }
+
+  private async failWith(reason: string, retryable: boolean): Promise<void> {
+    if (this.isTerminal()) return;
 
     const taskId = this.currentTaskId();
-    const reason = error instanceof Error ? error.message : String(error);
-    console.error(`task ${taskId ?? "unknown"} run failed: ${reason}`);
     if (!taskId) return;
 
-    if (this.hasEvent("failed")) {
+    // One failure per run: a second failure of the same run (after a retry
+    // emitted a newer `started`) is still reported.
+    if (this.hasFailedSinceLastStart()) {
       this.setMeta("state", "failed");
       return;
     }
@@ -297,14 +459,50 @@ export class TaskDO extends Agent<Env> {
     const delivery = this.outboxFor(taskId).emit({
       type: "failed",
       reason,
-      retryable: false,
+      retryable,
     });
     this.setMeta("state", "failed");
     await delivery;
   }
 
+  private isTerminal(): boolean {
+    const state = this.readMeta("state");
+    return (
+      state === "completed" ||
+      state === "cancelled" ||
+      this.hasCompletedEvent()
+    );
+  }
+
   private hasCompletedEvent(): boolean {
     return this.hasEvent("completed");
+  }
+
+  private hasFailedSinceLastStart(): boolean {
+    const row = this.db
+      .exec<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM events
+         WHERE type = 'failed'
+           AND seq > COALESCE((SELECT MAX(seq) FROM events WHERE type = 'started'), 0)`,
+      )
+      .toArray()[0];
+    return (row?.count ?? 0) > 0;
+  }
+
+  private lastFailedEvent(): { retryable: boolean } | undefined {
+    const row = this.db
+      .exec<{ payload_json: string }>(
+        `SELECT payload_json FROM events
+         WHERE type = 'failed' ORDER BY seq DESC LIMIT 1`,
+      )
+      .toArray()[0];
+    return row
+      ? (JSON.parse(row.payload_json) as { retryable: boolean })
+      : undefined;
+  }
+
+  private currentState(): TaskState {
+    return (this.readMeta("state") ?? "queued") as TaskState;
   }
 
   private hasEvent(type: string): boolean {
