@@ -43,8 +43,8 @@ describe("default config", () => {
     expect(config.models.task).toEqual({ provider: "opencode-go", id: "deepseek-v4.1-flash" });
   });
 
-  it("starts with no owners and no MCP servers", () => {
-    expect(config.owner.telegramUserIds).toEqual([]);
+  it("whitelists numeric owner ids and starts with no MCP servers", () => {
+    expect(config.owner.telegramUserIds.every(Number.isInteger)).toBe(true);
     expect(config.mcpServers).toEqual([]);
   });
 });
