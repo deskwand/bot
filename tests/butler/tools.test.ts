@@ -155,6 +155,88 @@ describe("butler control tools", () => {
     expect(result.text).toContain("t1 [queued] 查天气");
   });
 
+  it("sends the start message before the Task DO can report progress", async () => {
+    const channel = fakeChannel();
+    setChannelOverride(channel.adapter);
+
+    const result = await runInDurableObject(
+      butler("tools-spawn-order"),
+      async (instance, state) => {
+        (
+          instance as unknown as { taskFor(id: string): unknown }
+        ).taskFor = (id: string) => ({
+          start: async () => {
+            await instance.report({
+              taskId: id,
+              seq: 1,
+              type: "progress",
+              text: "早期进度",
+            });
+          },
+        });
+
+        await instance.spawn("查天气", "查询北京天气", "42");
+        return new TasksRepo(state.storage.sql).get("t1");
+      },
+    );
+
+    expect(result).toMatchObject({
+      id: "t1",
+      progressMessageId: "1",
+      status: "queued",
+    });
+    expect(channel.sent).toEqual([
+      {
+        chatId: "42",
+        text: "⏳ t1 查天气：已开始",
+        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
+      },
+    ]);
+    expect(channel.edits).toEqual([
+      {
+        chatId: "42",
+        messageId: "1",
+        text: "⏳ t1 查天气：早期进度",
+        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
+      },
+    ]);
+  });
+
+  it("edits the start message when the Task DO cannot start", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const channel = fakeChannel();
+    setChannelOverride(channel.adapter);
+
+    const result = await runInDurableObject(
+      butler("tools-spawn-failure-edit"),
+      async (instance, state) => {
+        (
+          instance as unknown as { taskFor(id: string): unknown }
+        ).taskFor = () => ({
+          start: async () => {
+            throw new Error("boom");
+          },
+        });
+
+        try {
+          await instance.spawn("坏任务", "BOOM", "42");
+        } catch (error) {
+          return {
+            message: (error as Error).message,
+            row: new TasksRepo(state.storage.sql).get("t1"),
+          };
+        }
+        return null;
+      },
+    );
+
+    expect(result?.message).toBe("boom");
+    expect(result?.row).toMatchObject({ status: "failed", summary: "boom" });
+    expect(channel.edits).toEqual([
+      { chatId: "42", messageId: "1", text: "❌ t1 坏任务：boom" },
+    ]);
+  });
+
   it("marks a task failed when its Task DO cannot start", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await runInDurableObject(
