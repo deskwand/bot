@@ -52,6 +52,38 @@ describe("parseTextAction", () => {
     expect(parseTextAction("批准 task3 ap1")).toBeNull();
   });
 
+  it("accepts the quotes the WeChat hint shows", () => {
+    // The hint reads 回复"批准 t3 ap1": copying it must work verbatim.
+    expect(parseTextAction('"批准 t3 ap1"')).toEqual({
+      action: "approve",
+      taskId: "t3",
+      approvalId: "ap1",
+    });
+    expect(parseTextAction("“拒绝 t3 ap1”")).toEqual({
+      action: "reject",
+      taskId: "t3",
+      approvalId: "ap1",
+    });
+    expect(parseTextAction("'取消 t3'")).toEqual({
+      action: "cancel",
+      taskId: "t3",
+    });
+    expect(parseTextAction('  “批准 t3 ap1”  ')).toEqual({
+      action: "approve",
+      taskId: "t3",
+      approvalId: "ap1",
+    });
+  });
+
+  it("still refuses chatter and unbalanced quotes", () => {
+    expect(parseTextAction('"批准 明天"')).toBeNull();
+    expect(parseTextAction("“拒绝 t3”")).toBeNull();
+    expect(parseTextAction('"取消 t3 ap1"')).toBeNull();
+    expect(parseTextAction('"请批准 t3 ap1"')).toBeNull();
+    expect(parseTextAction('“批准 t3 ap1')).toBeNull();
+    expect(parseTextAction('批准 t3 ap1"')).toBeNull();
+  });
+
   it("accepts surrounding whitespace only", () => {
     expect(parseTextAction("  批准 t3 ap1 ")).toEqual({
       action: "approve",
