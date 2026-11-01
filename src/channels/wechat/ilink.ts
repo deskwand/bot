@@ -11,13 +11,18 @@ export type WeChatCredentials = {
 };
 
 export class ILinkError extends Error {
+  public code: number | undefined;
+  public status: number;
+
   constructor(
     message: string,
-    public code: number | undefined,
-    public status: number,
+    code: number | undefined,
+    status: number,
   ) {
     super(message);
     this.name = "ILinkError";
+    this.code = code;
+    this.status = status;
   }
 }
 
