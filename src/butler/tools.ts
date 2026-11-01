@@ -1,6 +1,10 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
-import { encodeAction, type OutboundMessage } from "../protocol";
+import {
+  encodeAction,
+  type OutboundMessage,
+  type TaskSpec,
+} from "../protocol";
 import type { TasksRepo } from "./tasks-repo";
 
 const SpawnTask = Type.Object({
@@ -16,12 +20,20 @@ const TaskId = Type.Object({ id: Type.String() });
 
 const SteerTask = Type.Object({ id: Type.String(), text: Type.String() });
 
+/** The Task DO operations the control tools call. */
+export type TaskControl = {
+  start(spec: TaskSpec): Promise<void>;
+  steer(text: string): Promise<{ ok: boolean; message: string }>;
+  cancel(): Promise<{ ok: boolean; message: string }>;
+  retryTask(): Promise<{ ok: boolean; message: string }>;
+};
+
 export type ButlerToolDeps = {
-  env: Env;
   repo: TasksRepo;
   /** The chat currently talking to the Butler, if any. */
   chatId(): string | null;
   send(chatId: string, msg: OutboundMessage): Promise<{ messageId: string }>;
+  task(id: string): TaskControl;
 };
 
 function output(text: string) {
@@ -37,11 +49,7 @@ function errorText(error: unknown): string {
  * never throws: a failure is reported to the model, which can explain it.
  */
 export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
-  const { env, repo } = deps;
-
-  function task(id: string) {
-    return env.TASK.get(env.TASK.idFromName(id));
-  }
+  const { repo, task } = deps;
 
   const spawnTask: ToolRegistration<typeof SpawnTask> = {
     name: "spawn_task",
@@ -49,36 +57,46 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
       "Start a background task for work that needs many searches/reads or more than about a minute.",
     parameters: SpawnTask,
     async execute({ title, instructions }) {
+      let id: string;
+      let chatId: string | null;
       try {
-        const id = repo.nextId();
-        const chatId = deps.chatId();
+        id = repo.nextId();
+        chatId = deps.chatId();
         repo.insert({ id, title, chatId });
-
-        await task(id).start({ taskId: id, title, instructions });
-
-        if (chatId !== null) {
-          try {
-            const sent = await deps.send(chatId, {
-              text: `⏳ ${id} ${title}：已开始`,
-              buttons: [
-                [
-                  {
-                    label: "取消",
-                    data: encodeAction({ action: "cancel", taskId: id }),
-                  },
-                ],
-              ],
-            });
-            repo.update(id, { progressMessageId: sent.messageId });
-          } catch (error) {
-            console.error(`butler progress message failed: ${errorText(error)}`);
-          }
-        }
-
-        return output(`已开始任务 ${id}`);
       } catch (error) {
         return output(errorText(error));
       }
+
+      try {
+        await task(id).start({ taskId: id, title, instructions });
+      } catch (error) {
+        // Without a started Task DO the row would otherwise stay `queued`
+        // forever and look like an active task.
+        const message = errorText(error);
+        repo.update(id, { status: "failed", summary: message });
+        return output(`任务 ${id} 启动失败：${message}`);
+      }
+
+      if (chatId !== null) {
+        try {
+          const sent = await deps.send(chatId, {
+            text: `⏳ ${id} ${title}：已开始`,
+            buttons: [
+              [
+                {
+                  label: "取消",
+                  data: encodeAction({ action: "cancel", taskId: id }),
+                },
+              ],
+            ],
+          });
+          repo.update(id, { progressMessageId: sent.messageId });
+        } catch (error) {
+          console.error(`butler progress message failed: ${errorText(error)}`);
+        }
+      }
+
+      return output(`已开始任务 ${id}`);
     },
   };
 

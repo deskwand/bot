@@ -76,10 +76,10 @@ export class ButlerDO extends Agent<Env> {
     this.registry.install({
       name: "butler",
       tools: createButlerTools({
-        env: this.env,
         repo: this.repo,
         chatId: () => this.readMeta("chat_id"),
         send: (chatId, msg) => this.channel().send(chatId, msg),
+        task: (id) => this.env.TASK.get(this.env.TASK.idFromName(id)),
       }),
       sections: [{ key: "butler", render: () => butlerSystemPrompt() }],
     });
