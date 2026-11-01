@@ -1,6 +1,6 @@
 # 多渠道管家 Bot（Cloudflare Workers）
 
-一个部署在 Cloudflare Workers 上的单人 Telegram 助手：管家负责对话、记忆、任务派发与通知，每个任务由独立的 Durable Object 执行，结果（含产物链接）统一由管家回传。
+一个部署在 Cloudflare Workers 上的单人助手：管家负责对话、记忆、任务派发与通知，每个任务由独立的 Durable Object 执行，结果（含产物链接）统一由管家经当前选中渠道回传。同一时刻只启用一个业务渠道，由 Worker 环境变量 `ACTIVE_CHANNEL` 选择（`telegram` 或 `wechat`）。
 
 - 渠道层：`ChannelDO`（Telegram webhook 与微信 iLink 轮询，单实例）
 - 控制链路：`ButlerDO`（全局单实例，Pi agent + SQLite 业务表）
@@ -67,7 +67,21 @@ cp .dev.vars.example .dev.vars
 | `OPENCODE_API_KEY` | secret | 模型调用（直接使用 OpenCode Go provider key，不经 AI Gateway） |
 | `TELEGRAM_BOT_TOKEN` | secret | BotFather 提供的 token |
 | `TELEGRAM_WEBHOOK_SECRET` | secret | webhook 校验密钥（自定义随机串） |
+| `WECHAT_CREDENTIALS` | secret | 可选；微信 iLink 登录凭据，由 `npm run wechat-login` 写入 |
 | `PUBLIC_BASE_URL` | var | 产物链接前缀，填部署后的公开地址 |
+| `ACTIVE_CHANNEL` | var | 业务渠道选择：`telegram` 或 `wechat`。生产模板不声明，由发布配置提供 |
+
+生产环境的 `wrangler.jsonc` 用 `keep_vars: true` 保留控制台或发布客户端设置的远端变量，并声明 `version_metadata` binding：
+
+```jsonc
+"vars": {
+  "PUBLIC_BASE_URL": "https://your-worker.workers.dev"
+},
+"keep_vars": true,
+"version_metadata": { "binding": "CF_VERSION_METADATA" }
+```
+
+`wrangler deploy` 会保留未在模板中声明的远端 vars（例如 `ACTIVE_CHANNEL`）；显式写在模板里的字段仍会覆盖远端值。测试部署或 `wrangler deploy --dry-run` 不能证明远端值被保留，线上需用只读方式核对实际 vars（只输出 `ACTIVE_CHANNEL` 等名称，不输出 secret）。
 
 ## 4. 填写个人配置
 
@@ -76,6 +90,8 @@ cp .dev.vars.example .dev.vars
 - `owner.telegramUserIds`：填入允许使用该 bot 的 Telegram 用户 ID（数字）。不在白名单内的消息会被忽略。
 - `models`：按角色（`butler` / `task`）配置模型，默认 OpenCode Go 的 `deepseek-v4.1-flash`。
 - `mcpServers`：MCP 服务器列表；对需要人工确认的工具在 `requireApproval` 中列出工具名，触发时会先发 ✅/❌ 审批按钮。
+
+渠道选择不在 `src/config.ts` 里：`ACTIVE_CHANNEL` 是唯一权威，缺省为 `telegram`（兼容旧部署）；显式写成其他值时业务收发全部关闭并记录固定配置错误，不会悄悄回退到 Telegram。
 
 编辑 `wrangler.jsonc` 的 `vars.PUBLIC_BASE_URL`，填入部署后的公开地址，例如 `https://bot.<your-subdomain>.workers.dev` 或自定义域名。产物链接依赖该值；如果还不确定地址，可以先部署一次拿到 URL，回填后再部署一次。
 
@@ -87,7 +103,7 @@ Telegram 用户 ID 可通过 [@userinfobot](https://t.me/userinfobot) 获取。
 npm run deploy
 ```
 
-部署完成后，用 Worker 的公开地址设置 Telegram webhook：
+部署完成后，用 Worker 的公开地址设置 Telegram webhook（webhook 始终设置；只有选中 Telegram 时才会向管家分发）：
 
 ```bash
 npm run set-webhook -- https://bot.<your-subdomain>.workers.dev
@@ -107,7 +123,16 @@ token 与 secret 从环境变量读取，缺失时回退到 `.dev.vars`；脚本
 curl "https://api.telegram.org/bot<token>/getWebhookInfo"
 ```
 
-## 微信渠道
+## 渠道选择与切换
+
+`ACTIVE_CHANNEL` 决定唯一业务渠道：
+
+- 全部对话回复、任务进度、审批、完成/失败/取消和定时任务通知都发往选中渠道；消息来源只作记录。
+- 另一渠道的入站消息和旧按钮不会执行任何任务；旧按钮会收到“该渠道未启用”的回调提示（Telegram）或被忽略（微信）。
+- 不自动切换渠道，也不通过备用渠道发送提醒。发送失败只记录脱敏日志，任务状态和结果仍会保存，可在恢复后的选中渠道查询。
+- 修改选择需要发布新的 Worker 配置版本（例如控制台改 vars 后保存并部署，或由管理客户端发布）。变更随配置发布生效；发布交替期间，旧版本已经在处理的请求可能继续完成，不承诺全局瞬时切换。
+
+### 微信启用步骤
 
 部署后运行（推荐 Node 26，脚本使用 `--use-env-proxy`）：
 
@@ -115,11 +140,17 @@ curl "https://api.telegram.org/bot<token>/getWebhookInfo"
 npm run wechat-login
 ```
 
-用主人的微信扫描终端二维码，并在手机上确认。脚本每 2 秒查询一次状态；二维码过期后自动换码，最多显示 3 张。登录凭据通过 stdin 写入 Cloudflare 的 `WECHAT_CREDENTIALS` secret，不保存到文件，也不打印 token。iLink 请求使用环境代理；上传 secret 时会移除 HTTP/HTTPS 代理变量。
+用主人的微信扫描终端二维码，并在手机上确认。脚本每 2 秒查询一次状态；二维码过期后自动换码，最多显示 3 张。登录凭据通过 stdin 写入 Cloudflare 的 `WECHAT_CREDENTIALS` secret，不保存到文件，也不打印 token。iLink 请求使用环境代理；上传 secret 时会移除 HTTP/HTTPS 代理变量。该脚本只更新凭据，不会自动把 `ACTIVE_CHANNEL` 改成 `wechat`。
 
-Cron 每 5 分钟检查微信轮询。登录后最迟约 5 分钟开始接收消息。只接受扫码主人的消息，目前支持文字对话；图片或文件会得到“目前只支持文字消息”的回复。微信与 Telegram 共用管家、记忆与任务，对话回复回到发起渠道，任务进度、审批与完成通知默认发往 Telegram（`src/config.ts` 的 `notifyChannel`）。
+选中微信的顺序是：先运行上面的登录脚本写入凭据，再把发布配置中的 `ACTIVE_CHANNEL` 设为 `wechat` 并发布。选中后 Cron 每 5 分钟尝试启动轮询，Channel DO 首次启动或收到现有调用时也会尝试，因此没有外部触发时需要等下一轮 Cron，不承诺立即开始。
 
-微信不支持消息编辑与按钮。需要显示按钮时，正文会追加 `回复"取消 t3"`、`回复"批准 t3"` 或 `回复"拒绝 t3"` 等文字提示。登录过期后，Telegram 会收到一次提醒；重新运行 `npm run wechat-login` 扫码即可恢复。
+只接受扫码主人的消息，目前支持文字对话；图片或文件会得到“目前只支持文字消息”的回复。首条主人文字消息会正常处理和回复（保存该凭据版本的 context 后进入管家），不需要“准备消息”，也没有准备期。未选中微信时不会保留轮询链，但会保留 cursor 与 context 以便再次选中时继续。
+
+微信不支持消息编辑与按钮：
+
+- 进度和审批改为发送新消息，保留节流。
+- 按钮降级为文字提示，并保留完整审批编号，例如 `回复"批准 t3 ap1"`、`回复"拒绝 t3 ap1"`、`回复"取消 t3"`。批准/拒绝必须带编号，不接受让模型猜测；无匹配的命令按普通文字处理。
+- 登录过期（iLink `-14`）只把状态标记为 `expired` 并写脱敏日志，不再向 Telegram 发提醒。重新运行 `npm run wechat-login` 扫码取得新凭据即可恢复；相同的过期凭据不会因为重新部署而复活。
 
 本地开发可在 `.dev.vars` 中设置 `WECHAT_CREDENTIALS`，格式见 `.dev.vars.example`。凭据包含敏感 token，请勿提交或复制到日志。
 
@@ -131,6 +162,25 @@ cloudflared tunnel --url http://localhost:8787
 ```
 
 Telegram 需要公网 HTTPS 地址，所以本地调试需用隧道地址执行 `npm run set-webhook -- https://<tunnel-host>`，并把 `.dev.vars` 中的 `PUBLIC_BASE_URL` 也填成隧道地址（否则产物链接不可用）。调试结束后记得切回生产地址。
+
+## 升级与迁移说明
+
+- 本次升级不重建 Durable Object，不新增 DO class migration；业务表只追加列（`tasks.progress_message_ref_json`、`approval_messages.message_ref_json`），旧行保持原样。
+- 消息引用（`ChannelMessageRef`）记录渠道、会话、部署归属和消息 ID。引用只在同一部署、同一选择、同一会话时才能编辑；旧版本只留下裸消息 ID 的记录无法推断归属，会安全降级为新发一条消息。
+- 普通代码发布会改变 route key：切换后或有旧消息引用时，下一条进度改发新消息，这是预期代价。A→B→A 切换即使中间版本没有唤醒 Channel DO，也不会复用旧引用。
+- 旧版本在途的长轮询或模型请求可能在新配置发布后完成；新版本处理的请求使用新选择。不承诺跨版本同时在途请求的原子切换。
+- 漏发的结果不会自动补发；用任务查询（例如「列出任务」）在恢复后的选中渠道取回。
+- 待审批在新渠道重展的前提是审批仍真实 pending、本实例仍在等待且未中止、未超时；仅数据库里残留 pending 但没有等待者的记录不会复活，也不会为了重展重新执行工具。重展是 best-effort，发送成功但引用尚未写入时崩溃可能重发一次。
+
+## 客户端窄契约
+
+管理客户端（另一个项目）通过 Cloudflare 发布配置，本仓库不提供管理 API 或 CLI：
+
+- `ACTIVE_CHANNEL`：只接受 `telegram`、`wechat`；缺省 `telegram`；其他值关闭业务收发并报固定错误，不回退。
+- `WECHAT_CREDENTIALS`：仍是 Worker secret，保持现有 JSON 格式；本仓库不读取加密的动态凭据库，也不提供准备/就绪流程。
+- 发布配置必须保留 `version_metadata: { "binding": "CF_VERSION_METADATA" }`，否则 Channel DO 拒绝业务处理并记录固定配置错误；生产使用 `keep_vars: true` 保留客户端设置的其他 vars。
+- 变更必须发布新版本才生效；没有状态查询路由，也没有能力协商端点。健康检查 200 不代表微信轮询就绪；诊断用现有 Cloudflare 日志（只读查看版本与 `ACTIVE_CHANNEL`，不输出 secret）。
+- 发布时保留其他 vars、secrets、bindings 和 DO 数据；`npm run wechat-login` 不修改 `ACTIVE_CHANNEL`。
 
 ## 测试
 
@@ -152,6 +202,9 @@ npm run typecheck    # tsc --noEmit
 7. 发送「列出任务」→ 显示各任务状态。
 8. 发送「每天早上 9 点给我汇总 X」→ 次日（或先在配置中改成临近时间测试）自动产生任务。注意 cron 按 UTC 解释：北京时间 9 点对应 `0 1 * * *`。
 9. 发送图片 → 回复「目前只支持文字消息」。
+10. 渠道切换：把 `ACTIVE_CHANNEL` 改为另一渠道并发布，确认新配置版本里当前渠道能对话，另一边发消息不会执行任务；任务进度、审批与完成通知都出现在当前渠道。
+11. 未选中微信时确认没有持续轮询；选中微信且尚无 context 时，给主人发第一条文字消息能正常回复，随后待审批会重展。
+12. 用文字「批准 t3 ap1」/「拒绝 t3 ap1」/「取消 t3」在微信执行审批与取消，重复发送仍是幂等结果。
 
 ## 项目结构
 
@@ -174,5 +227,6 @@ tests/                  # 测试与测试专用 Worker 入口
 
 - 只响应 `owner.telegramUserIds` 中的用户；其他人发来的消息返回 200 并忽略。
 - 所有 secrets 只通过 `wrangler secret put` 或 `.dev.vars` 提供，切勿提交到仓库。`.dev.vars` 已加入 `.gitignore`。
-- 修改 `wrangler.jsonc` 后重新执行 `npx wrangler types` 更新 `worker-configuration.d.ts`。
+- 修改 `wrangler.jsonc` 后重新执行 `npx wrangler types` 更新 `worker-configuration.d.ts`；`CF_VERSION_METADATA` binding 是消息归属的一部分，发布配置不要删除。
+- 日志不包含 token、凭据、context 或消息正文；排查渠道问题时只核对版本与 `ACTIVE_CHANNEL`。
 - 修改 Durable Object 类或迁移后需重新部署；已部署的 migration 不可重写。

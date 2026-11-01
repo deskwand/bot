@@ -111,6 +111,69 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("ApprovalGate.pending", () => {
+  it("lists a live, unexpired waiter with a bounded argument summary", async () => {
+    await withGate("t-pending-live", async (gate) => {
+      const decision = gate.request(
+        "create_page",
+        { title: "x".repeat(400) },
+        new AbortController().signal,
+      );
+
+      await vi.waitFor(() => expect(gate.pending()).toHaveLength(1));
+      const [pending] = gate.pending();
+      expect(pending).toMatchObject({
+        approvalId: "ap1",
+        tool: "create_page",
+      });
+      expect(pending?.argsSummary.length).toBe(200);
+
+      await gate.resolve("ap1", "approved");
+      await decision;
+      expect(gate.pending()).toEqual([]);
+    }, 5000);
+  });
+
+  it("does not revive a pending row that has no waiter", async () => {
+    await withGate("t-pending-orphan", async (gate, sql) => {
+      sql.exec(
+        `INSERT INTO approvals (id, tool, args_json, status, created_at)
+         VALUES ('ap9', 'create_page', '{}', 'pending', ?)`,
+        Date.now(),
+      );
+
+      expect(gate.pending()).toEqual([]);
+    }, 5000);
+  });
+
+  it("does not list a request after its timeout", async () => {
+    await withGate("t-pending-timeout", async (gate) => {
+      const decision = gate.request(
+        "create_page",
+        null,
+        new AbortController().signal,
+      );
+      await vi.waitFor(() => expect(gate.pending()).toHaveLength(1));
+
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(gate.pending()).toEqual([]);
+      await decision;
+    }, 10);
+  });
+
+  it("does not list a request whose waiter was aborted", async () => {
+    await withGate("t-pending-aborted", async (gate) => {
+      const controller = new AbortController();
+      const decision = gate.request("create_page", null, controller.signal);
+      await vi.waitFor(() => expect(gate.pending()).toHaveLength(1));
+
+      controller.abort();
+      expect(gate.pending()).toEqual([]);
+      await decision;
+    }, 5000);
+  });
+});
+
 describe("ApprovalGate", () => {
   it("resolves an approved request and reports both events in order", async () => {
     const outcome = await withGate("t-approve", async (gate, sql, events) => {

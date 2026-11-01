@@ -6,8 +6,9 @@ import { createModelsForEnv, resolveModel } from "../llm/models";
 import {
   encodeAction,
   type Address,
+  type AdmittedMessage,
   type Artifact,
-  type MessageEvent,
+  type ChannelMessageRef,
   type OutboundMessage,
   type TaskEvent,
   type TaskEventBody,
@@ -32,7 +33,7 @@ type TaskEventRow = {
 type ApprovalMessageRow = {
   approval_id: string;
   task_id: string;
-  message_id: string;
+  message_ref_json: string | null;
   text: string;
 };
 
@@ -45,6 +46,15 @@ const DECISION_LABELS = {
   rejected: "已拒绝",
   expired: "已过期",
 } as const;
+
+/**
+ * What an edit attempt achieved for a saved message reference.
+ *
+ * `unsupported` means the reference can never be edited (the channel has no
+ * message ids, or another deployment owns it); `failed` is transient, so the
+ * old message stays valid and a retry may still succeed.
+ */
+type EditOutcome = "edited" | "unsupported" | "failed";
 
 /**
  * Control-plane object: the Butler agent lives here. It converses with the
@@ -73,6 +83,12 @@ export class ButlerDO extends Agent<Env> {
 
   private readonly progressTimers = new Map<string, unknown>();
 
+  /** Single-flight guard for reconciling pending approvals on this instance. */
+  private reconcilePromise: Promise<void> | null = null;
+
+  /** The disabled-selection notice is logged once per instance, not per cron. */
+  private disabledScheduleLogged = false;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
@@ -86,6 +102,7 @@ export class ButlerDO extends Agent<Env> {
         updated_at INTEGER NOT NULL,
         chat_id TEXT,
         progress_message_id TEXT,
+        progress_message_ref_json TEXT,
         summary TEXT,
         artifacts_json TEXT,
         last_seq INTEGER NOT NULL DEFAULT 0
@@ -111,9 +128,14 @@ export class ButlerDO extends Agent<Env> {
         approval_id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
         message_id TEXT NOT NULL,
-        text TEXT NOT NULL
+        text TEXT NOT NULL,
+        message_ref_json TEXT
       )`,
     );
+
+    // Appended columns keep existing objects: no rebuild, no data loss.
+    this.ensureColumn("tasks", "progress_message_ref_json", "TEXT");
+    this.ensureColumn("approval_messages", "message_ref_json", "TEXT");
 
     this.repo = new TasksRepo(this.db);
     this.memory = new MemoryStore(this.db);
@@ -181,8 +203,8 @@ export class ButlerDO extends Agent<Env> {
     // Send the start message before the run begins: the first progress event
     // can arrive while `start()` is still in flight, and it must edit this
     // message rather than create a second one. Task output always goes to the
-    // notify channel, whichever channel the task was spawned from.
-    const progressMessageId = await this.sendBestEffort({
+    // selected channel, whichever channel the task was spawned from.
+    const progressRef = await this.sendBestEffort({
       text: `⏳ ${id} ${title}：已开始`,
       buttons: [
         [
@@ -193,8 +215,8 @@ export class ButlerDO extends Agent<Env> {
         ],
       ],
     });
-    if (progressMessageId !== null) {
-      this.repo.update(id, { progressMessageId });
+    if (progressRef !== null) {
+      this.repo.update(id, { progressMessageRef: progressRef });
     }
 
     try {
@@ -204,8 +226,8 @@ export class ButlerDO extends Agent<Env> {
       // forever and look like an active task.
       const message = errorText(error);
       this.repo.update(id, { status: "failed", summary: message });
-      if (progressMessageId !== null) {
-        await this.editBestEffort(progressMessageId, {
+      if (progressRef !== null) {
+        await this.editBestEffort(progressRef, {
           text: clampMessage(`❌ ${id} ${title}：${message}`),
         });
       }
@@ -252,6 +274,21 @@ export class ButlerDO extends Agent<Env> {
   async runSchedule(payload: { scheduleId: string }): Promise<void> {
     const row = this.schedules.get(payload.scheduleId);
     if (!row) return;
+
+    // With a disabled selection (for example a typo in ACTIVE_CHANNEL) every
+    // notification would be swallowed: do not burn model tokens on a run
+    // nobody hears about.
+    const route = await this.channels().currentRoute();
+    if (route.channel === null) {
+      if (!this.disabledScheduleLogged) {
+        this.disabledScheduleLogged = true;
+        console.error(
+          `butler schedule ${row.id} skipped: channel selection disabled`,
+        );
+      }
+      return;
+    }
+
     try {
       await this.spawn(row.title, row.instructions, null);
     } catch (error) {
@@ -266,12 +303,12 @@ export class ButlerDO extends Agent<Env> {
    * `onMessage` for its hibernating-WebSocket handler (and hide it from RPC),
    * so the gateway's `onMessage` is mapped here in `src/index.ts`.
    */
-  async handleMessage(evt: MessageEvent): Promise<void> {
+  async handleMessage(evt: AdmittedMessage): Promise<void> {
     try {
       await this.handleInboundMessage(evt);
     } catch (error) {
       console.error("butler message failed:", error);
-      await this.sendErrorReply(addressOf(evt), "出错了，稍后再试");
+      await this.sendErrorReply("出错了，稍后再试");
     }
   }
 
@@ -305,26 +342,84 @@ export class ButlerDO extends Agent<Env> {
     switch (body.type) {
       case "started":
         this.repo.update(taskId, { status: "running", updatedAt: now });
-        return;
+        break;
       case "progress":
         await this.handleProgress(taskId, body.text, now);
-        return;
+        break;
       case "approval_requested":
         await this.handleApprovalRequested(taskId, body);
-        return;
+        break;
       case "approval_resolved":
         await this.handleApprovalResolved(taskId, body.approvalId, body.decision);
-        return;
+        break;
       case "completed":
         await this.handleCompleted(taskId, body.summary, body.artifacts, now);
-        return;
+        break;
       case "failed":
         await this.handleFailed(taskId, body.reason, body.retryable, now);
-        return;
+        break;
       case "cancelled":
         await this.handleCancelled(taskId, now);
-        return;
+        break;
     }
+
+    // A report is an activity point: re-present approvals this route owns.
+    this.kickReconcile();
+  }
+
+  /**
+   * Re-presents live approvals after the selection changed or an earlier
+   * presentation failed. The Worker's Cron calls this after channel keepalive.
+   */
+  async reconcileChannel(routeKey: string): Promise<void> {
+    const route = await this.channels().currentRoute();
+    if (route.channel === null || route.routeKey !== routeKey) return;
+    await this.reconcileOnce(route.routeKey);
+  }
+
+  private reconcileOnce(routeKey: string): Promise<void> {
+    this.reconcilePromise ??= this.reconcileNow(routeKey).finally(() => {
+      this.reconcilePromise = null;
+    });
+    return this.reconcilePromise;
+  }
+
+  /** Fire-and-forget trigger used by inbound handling and task reports. */
+  private kickReconcile(): void {
+    this.ctx.waitUntil(
+      (async () => {
+        const route = await this.channels().currentRoute();
+        if (route.channel === null) return;
+        await this.reconcileOnce(route.routeKey);
+      })().catch((error) => {
+        console.error("butler reconcile failed:", error);
+      }),
+    );
+  }
+
+  private async reconcileNow(routeKey: string): Promise<void> {
+    for (const task of this.repo.list({ active: true })) {
+      let pending: { approvalId: string; tool: string; argsSummary: string }[];
+      try {
+        pending = await this.taskFor(task.id).pendingApprovals();
+      } catch (error) {
+        console.error(
+          `butler reconcile skipped task ${task.id}: ${errorText(error)}`,
+        );
+        continue;
+      }
+
+      for (const approval of pending) {
+        if (this.presentedUnder(approval.approvalId, routeKey)) continue;
+        await this.presentApproval(task.id, approval);
+      }
+    }
+  }
+
+  private presentedUnder(approvalId: string, routeKey: string): boolean {
+    const approval = this.approvalMessage(approvalId);
+    if (!approval) return false;
+    return parseMessageRef(approval.message_ref_json)?.routeKey === routeKey;
   }
 
   private async handleProgress(
@@ -396,17 +491,22 @@ export class ButlerDO extends Agent<Env> {
       ],
     };
 
-    if (row.progressMessageId !== null) {
-      const edited = await this.editBestEffort(row.progressMessageId, message);
-      if (edited) return;
-      // The message is gone or the edit failed: send the next update anew.
-      this.repo.update(taskId, { progressMessageId: null });
-      return;
+    if (row.progressMessageRef !== null) {
+      const outcome = await this.editBestEffort(row.progressMessageRef, message);
+      if (outcome === "edited") return;
+
+      // The reference is useless to us either way. A transient failure keeps
+      // the old message in place, so the next update re-sends instead of
+      // duplicating this one; a reference that can never be edited (WeChat
+      // has no message ids, an older deployment owns it) must not swallow the
+      // update, so fall through and send it as a new message.
+      this.repo.update(taskId, { progressMessageRef: null });
+      if (outcome === "failed") return;
     }
 
-    const messageId = await this.sendBestEffort(message);
-    if (messageId !== null) {
-      this.repo.update(taskId, { progressMessageId: messageId });
+    const ref = await this.sendBestEffort(message);
+    if (ref !== null) {
+      this.repo.update(taskId, { progressMessageRef: ref });
     }
   }
 
@@ -415,15 +515,15 @@ export class ButlerDO extends Agent<Env> {
     if (!row) return;
 
     const message: OutboundMessage = { text: clampMessage(text) };
-    if (row.progressMessageId !== null) {
-      const edited = await this.editBestEffort(row.progressMessageId, message);
-      if (edited) return;
-      this.repo.update(taskId, { progressMessageId: null });
+    if (row.progressMessageRef !== null) {
+      const outcome = await this.editBestEffort(row.progressMessageRef, message);
+      if (outcome === "edited") return;
+      this.repo.update(taskId, { progressMessageRef: null });
     }
 
-    const messageId = await this.sendBestEffort(message);
-    if (messageId !== null) {
-      this.repo.update(taskId, { progressMessageId: messageId });
+    const ref = await this.sendBestEffort(message);
+    if (ref !== null) {
+      this.repo.update(taskId, { progressMessageRef: ref });
     }
   }
 
@@ -431,13 +531,25 @@ export class ButlerDO extends Agent<Env> {
     taskId: string,
     body: Extract<TaskEventBody, { type: "approval_requested" }>,
   ): Promise<void> {
-    const row = this.repo.get(taskId);
-    if (!row) return;
+    if (!this.repo.get(taskId)) return;
+    await this.presentApproval(taskId, body);
+  }
+
+  /** Sends one approval request and records the reference that owns it. */
+  private async presentApproval(
+    taskId: string,
+    approval: {
+      approvalId: string;
+      tool: string;
+      argsSummary: string;
+    },
+  ): Promise<boolean> {
+    if (!this.repo.get(taskId)) return false;
 
     const text = clampMessage(
-      `🔐 ${taskId} 请求执行 ${body.tool}\n${body.argsSummary}`,
+      `🔐 ${taskId} 请求执行 ${approval.tool}\n${approval.argsSummary}`,
     );
-    const messageId = await this.sendBestEffort({
+    const ref = await this.sendBestEffort({
       text,
       buttons: [
         [
@@ -446,7 +558,7 @@ export class ButlerDO extends Agent<Env> {
             data: encodeAction({
               action: "approve",
               taskId,
-              approvalId: body.approvalId,
+              approvalId: approval.approvalId,
             }),
           },
           {
@@ -454,26 +566,31 @@ export class ButlerDO extends Agent<Env> {
             data: encodeAction({
               action: "reject",
               taskId,
-              approvalId: body.approvalId,
+              approvalId: approval.approvalId,
             }),
           },
         ],
       ],
     });
-    if (messageId === null) return;
+    // A failed send leaves no reference, so the next reconcile retries.
+    if (ref === null) return false;
 
     this.db.exec(
-      `INSERT INTO approval_messages (approval_id, task_id, message_id, text)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO approval_messages
+         (approval_id, task_id, message_id, text, message_ref_json)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(approval_id) DO UPDATE SET
          task_id = excluded.task_id,
          message_id = excluded.message_id,
-         text = excluded.text`,
-      body.approvalId,
+         text = excluded.text,
+         message_ref_json = excluded.message_ref_json`,
+      approval.approvalId,
       taskId,
-      messageId,
+      ref.messageId ?? "",
       text,
+      JSON.stringify(ref),
     );
+    return true;
   }
 
   private async handleApprovalResolved(
@@ -486,7 +603,7 @@ export class ButlerDO extends Agent<Env> {
     if (!this.repo.get(taskId)) return;
 
     const suffix = `\n→ ${DECISION_LABELS[decision]}`;
-    await this.editBestEffort(approval.message_id, {
+    await this.editBestEffort(parseMessageRef(approval.message_ref_json), {
       text: `${clamp(approval.text, MESSAGE_MAX - suffix.length)}${suffix}`,
     });
   }
@@ -586,7 +703,7 @@ export class ButlerDO extends Agent<Env> {
   private approvalMessage(approvalId: string): ApprovalMessageRow | undefined {
     return this.db
       .exec<ApprovalMessageRow>(
-        `SELECT approval_id, task_id, message_id, text
+        `SELECT approval_id, task_id, message_ref_json, text
          FROM approval_messages WHERE approval_id = ?`,
         approvalId,
       )
@@ -595,10 +712,9 @@ export class ButlerDO extends Agent<Env> {
 
   private async sendBestEffort(
     message: OutboundMessage,
-  ): Promise<string | null> {
+  ): Promise<ChannelMessageRef | null> {
     try {
-      const sent = await this.channels().send("notify", message);
-      return sent.messageId;
+      return await this.channels().sendCurrent(message);
     } catch (error) {
       console.error("butler channel send failed:", error);
       return null;
@@ -606,14 +722,15 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private async editBestEffort(
-    messageId: string,
+    ref: ChannelMessageRef | null,
     message: OutboundMessage,
-  ): Promise<boolean> {
+  ): Promise<EditOutcome> {
+    if (ref === null) return "unsupported";
     try {
-      const edited = await this.channels().edit("notify", messageId, message);
-      if (edited) return true;
-      console.error("butler channel edit failed: unsupported channel");
-      return false;
+      const edited = await this.channels().editCurrent(ref, message);
+      if (edited) return "edited";
+      console.error("butler channel edit failed: unsupported or stale reference");
+      return "unsupported";
     } catch (error) {
       // Telegram answers 400 when an edit would not change the message. That
       // is success for us: the message already shows the wanted text. The
@@ -624,10 +741,10 @@ export class ButlerDO extends Agent<Env> {
           .toLowerCase()
           .includes("message is not modified")
       ) {
-        return true;
+        return "edited";
       }
       console.error("butler channel edit failed:", error);
-      return false;
+      return "failed";
     }
   }
 
@@ -649,20 +766,25 @@ export class ButlerDO extends Agent<Env> {
       }));
   }
 
-  private async handleInboundMessage(evt: MessageEvent): Promise<void> {
-    const origin = addressOf(evt);
+  private async handleInboundMessage(evt: AdmittedMessage): Promise<void> {
     // Remember where a task spawned during this turn came from; task output
-    // itself always goes to "notify".
-    this.origin = origin;
+    // itself always goes to the selected channel.
+    this.origin = addressOf(evt);
+
+    if (!(await this.admissionHolds(evt))) return;
 
     if (evt.text === null) {
-      await this.channels().send(origin, { text: "目前只支持文字消息" });
+      await this.sendBestEffort({ text: "目前只支持文字消息" });
+      this.kickReconcile();
       return;
     }
 
     // Tests replace the model per message; in production this is a no-op after
     // the first message of an object instance.
     await this.ensureModel();
+
+    // Processing starts at `submit`; a stale input never reaches it.
+    if (!(await this.admissionHolds(evt))) return;
 
     const operationId = evt.eventId;
     const receipt = await this.harness.submit(evt.text, { operationId });
@@ -671,12 +793,24 @@ export class ButlerDO extends Agent<Env> {
 
     const result = await this.harness.wait(operationId);
     if (result.status === "unanswered") {
-      await this.channels().send(origin, { text: "出错了，稍后再试" });
+      await this.sendBestEffort({ text: "出错了，稍后再试" });
+      this.kickReconcile();
       return;
     }
     if (result.text) {
-      await this.channels().send(origin, { text: result.text });
+      await this.sendBestEffort({ text: result.text });
     }
+    this.kickReconcile();
+  }
+
+  private async admissionHolds(evt: AdmittedMessage): Promise<boolean> {
+    if (
+      await this.channels().isAdmissionCurrent(evt.channel, evt.routeKey)
+    ) {
+      return true;
+    }
+    console.warn("butler: dropped input from an old channel route");
+    return false;
   }
 
   private async ensureModel(): Promise<void> {
@@ -691,12 +825,17 @@ export class ButlerDO extends Agent<Env> {
     this.appliedModel = model;
   }
 
-  private async sendErrorReply(address: Address, text: string): Promise<void> {
-    try {
-      await this.channels().send(address, { text });
-    } catch (error) {
-      console.error("butler error reply failed:", error);
-    }
+  private async sendErrorReply(text: string): Promise<void> {
+    await this.sendBestEffort({ text });
+  }
+
+  /** Adds a column to an object created by an older release. */
+  private ensureColumn(table: string, column: string, type: string): void {
+    const columns = this.db
+      .exec<{ name: string }>(`PRAGMA table_info(${table})`)
+      .toArray();
+    if (columns.some((entry) => entry.name === column)) return;
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 
   private channels() {
@@ -714,7 +853,16 @@ function progressText(row: TaskRow, detail: string): string {
   );
 }
 
-function addressOf(evt: MessageEvent): Address {
+function parseMessageRef(json: string | null): ChannelMessageRef | null {
+  if (!json) return null;
+  try {
+    return JSON.parse(json) as ChannelMessageRef;
+  } catch {
+    return null;
+  }
+}
+
+function addressOf(evt: AdmittedMessage): Address {
   return { channel: evt.channel, conversationId: evt.chatId };
 }
 

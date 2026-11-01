@@ -260,6 +260,13 @@ export class TaskDO extends Agent<Env> {
     this.ctx.waitUntil(this.watchRun(operationId));
   }
 
+  /** Read-only projection used by the Butler to re-present approvals. */
+  async pendingApprovals(): Promise<
+    { approvalId: string; tool: string; argsSummary: string }[]
+  > {
+    return this.approvals.pending();
+  }
+
   async status(): Promise<{ state: TaskState; title: string }> {
     await this.flushOutbox();
     return {

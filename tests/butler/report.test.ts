@@ -1,28 +1,53 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
+import type { OutboundMessage, RouteSnapshot } from "../../src/protocol";
 import { createTelegramAdapter } from "../../src/channels/telegram";
 import type { ChannelAdapter } from "../../src/channels/types";
 import { ChannelError } from "../../src/channels/types";
 import { setClockOverride, type Clock } from "../../src/butler/notifier";
 import { setModelOverride } from "../../src/llm/models";
 import { fakeChannel } from "../helpers/fake-channel";
-import { seedNotifyAddress } from "../helpers/owner-address";
+import { currentChannelRef, seedOwnerAddress } from "../helpers/channel-ref";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
+const ENV = env as unknown as Record<string, unknown>;
+const savedEnv = new Map<string, unknown>();
+
+/** Builds an independent env fixture for the next ChannelDO instance. */
+function setEnv(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
+    ENV[key] = value;
+  }
+}
+
+function restoreEnv(): void {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete ENV[key];
+    else ENV[key] = value;
+  }
+  savedEnv.clear();
+}
+
 beforeEach(async () => {
-  await seedNotifyAddress("42");
+  await seedOwnerAddress("42");
 });
 
 afterEach(() => {
   setClockOverride(null);
   setChannelOverride("telegram", null);
+  setChannelOverride("wechat", null);
   setModelOverride(null);
   vi.restoreAllMocks();
+  // A ChannelDO caches its route for the life of the instance and cannot be
+  // evicted while reports still run, so a test that needs another selection
+  // points the Butler at its own hub instead of mutating the shared one.
+  restoreEnv();
 });
 
 /** A Telegram Bot API stand-in that records bodies and hands out message ids. */
@@ -124,18 +149,31 @@ async function seedTask(
     status?: string;
     chatId?: string | null;
     progressMessageId?: string | null;
+    /** Seeds only the pre-migration column, as an older release left it. */
+    legacyMessageId?: string | null;
   } = {},
 ): Promise<void> {
+  const messageId =
+    row.progressMessageId === undefined ? "77" : row.progressMessageId;
+  const ref =
+    row.legacyMessageId !== undefined
+      ? null
+      : messageId === null
+        ? null
+        : await currentChannelRef(messageId);
+
   await runInDurableObject(stub, (_instance, state) => {
     state.storage.sql.exec(
       `INSERT INTO tasks
-        (id, title, status, created_at, updated_at, chat_id, progress_message_id, artifacts_json, last_seq)
-       VALUES (?, ?, ?, 0, 0, ?, ?, '[]', 0)`,
+        (id, title, status, created_at, updated_at, chat_id, progress_message_id,
+         progress_message_ref_json, artifacts_json, last_seq)
+       VALUES (?, ?, ?, 0, 0, ?, ?, ?, '[]', 0)`,
       row.id ?? "t1",
       row.title ?? "查天气",
       row.status ?? "queued",
       row.chatId === undefined ? "42" : row.chatId,
-      row.progressMessageId === undefined ? "77" : row.progressMessageId,
+      row.legacyMessageId ?? null,
+      ref === null ? null : JSON.stringify(ref),
     );
   });
 }
@@ -158,14 +196,15 @@ async function progressMessageId(
   stub: ButlerStub,
   taskId: string,
 ): Promise<string | null | undefined> {
-  return runInDurableObject(stub, (_instance, state) =>
-    state.storage.sql
-      .exec<{ progress_message_id: string | null }>(
-        `SELECT progress_message_id FROM tasks WHERE id = ?`,
+  return runInDurableObject(stub, (_instance, state) => {
+    const json = state.storage.sql
+      .exec<{ progress_message_ref_json: string | null }>(
+        `SELECT progress_message_ref_json FROM tasks WHERE id = ?`,
         taskId,
       )
-      .toArray()[0]?.progress_message_id,
-  );
+      .toArray()[0]?.progress_message_ref_json;
+    return json ? (JSON.parse(json) as { messageId: string | null }).messageId : null;
+  });
 }
 
 describe("ButlerDO.report", () => {
@@ -196,6 +235,61 @@ describe("ButlerDO.report", () => {
     });
     expect(channel.edits[1]?.text).toBe("⏳ t1 查天气：c");
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "running" });
+  });
+
+  it("keeps every progress update on a channel that cannot edit messages", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("wechat", channel.adapter);
+    setEnv({
+      ACTIVE_CHANNEL: "wechat",
+      WECHAT_CREDENTIALS: JSON.stringify({
+        token: "token-a",
+        baseUrl: "https://ilink.example",
+        accountId: "account-a",
+        userId: "wx-owner",
+      }),
+    });
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+
+    // A WeChat-selected hub of its own: the shared one resolved Telegram
+    // earlier in this file and keeps that route.
+    const hubName = "report-wechat-channel";
+    await runInDurableObject(
+      env.CHANNELS.get(env.CHANNELS.idFromName(hubName)),
+      (_instance, state) => {
+        state.storage.sql.exec(
+          `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+           VALUES ('wechat', 'wx-owner', ?)
+           ON CONFLICT(channel) DO UPDATE SET
+             conversation_id = excluded.conversation_id`,
+          Date.now(),
+        );
+      },
+    );
+
+    const stub = butler("report-wechat-progress");
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { channels(): unknown }).channels = () =>
+        env.CHANNELS.get(env.CHANNELS.idFromName(hubName));
+    });
+    await seedTask(stub, { progressMessageId: null });
+
+    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
+    expect(channel.sent).toEqual([
+      { chatId: "wx-owner", text: '⏳ t1 查天气：a\n回复"取消 t1"' },
+    ]);
+
+    // WeChat sends carry no message id, so the saved reference can never be
+    // edited: the next update must be a new message, not dropped.
+    fake.advance(3001);
+    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
+
+    expect(channel.sent.map((msg) => msg.text)).toEqual([
+      '⏳ t1 查天气：a\n回复"取消 t1"',
+      '⏳ t1 查天气：b\n回复"取消 t1"',
+    ]);
+    expect(channel.edits).toEqual([]);
   });
 
   it("re-arms a progress flush that fires before the window closes", async () => {
@@ -346,14 +440,16 @@ describe("ButlerDO.report", () => {
         .callback_data,
     ).toBe("a:approve:t1:ap1");
 
-    const saved = await runInDurableObject(stub, (_instance, state) =>
-      state.storage.sql
-        .exec<{ message_id: string }>(
-          `SELECT message_id FROM approval_messages WHERE approval_id = ?`,
+    const saved = await runInDurableObject(stub, (_instance, state) => {
+      const json = state.storage.sql
+        .exec<{ message_ref_json: string }>(
+          `SELECT message_ref_json FROM approval_messages WHERE approval_id = ?`,
           "ap1",
         )
-        .toArray()[0]?.message_id,
-    );
+        .toArray()[0]?.message_ref_json;
+      return (JSON.parse(json ?? "null") as { messageId: string | null } | null)
+        ?.messageId;
+    });
     expect(saved).toBe(String(500 + sends.length));
 
     await stub.report({
@@ -671,40 +767,230 @@ describe("ButlerDO.report", () => {
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
   });
 
-  it("sends a new message when ChannelDO reports the edit unsupported", async () => {
+  it("re-sends a progress update whose message cannot be edited", async () => {
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
     const stub = butler("report-edit-unsupported");
     await seedTask(stub);
 
-    const sent: { to: unknown; text: string }[] = [];
+    const sent: { text: string }[] = [];
     await runInDurableObject(stub, (instance) => {
       (
         instance as unknown as {
           channels(): {
-            edit(): Promise<boolean>;
-            send(to: unknown, msg: { text: string }): Promise<{
+            currentRoute(): Promise<{
+              channel: "telegram";
+              routeKey: string;
+            }>;
+            editCurrent(): Promise<boolean>;
+            sendCurrent(msg: { text: string }): Promise<{
+              channel: "telegram";
+              conversationId: string;
+              routeKey: string;
               messageId: string;
             }>;
           };
         }
       ).channels = () => ({
-        edit: async () => false,
-        send: async (to, msg) => {
-          sent.push({ to, text: msg.text });
-          return { messageId: "99" };
+        currentRoute: async () => ({
+          channel: "telegram",
+          routeKey: "test-route",
+        }),
+        editCurrent: async () => false,
+        sendCurrent: async (msg) => {
+          sent.push({ text: msg.text });
+          return {
+            channel: "telegram",
+            conversationId: "42",
+            routeKey: "test-route",
+            messageId: "99",
+          };
         },
       });
     });
 
     await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-    expect(sent).toEqual([]);
-    expect(await progressMessageId(stub, "t1")).toBeNull();
+    // The saved reference cannot be edited, so this update is delivered as a
+    // new message instead of being dropped until the next event.
+    expect(sent).toEqual([{ text: "⏳ t1 查天气：a" }]);
+    expect(await progressMessageId(stub, "t1")).toBe("99");
 
     fake.advance(3001);
     await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
-    expect(sent).toEqual([{ to: "notify", text: "⏳ t1 查天气：b" }]);
+    expect(sent).toEqual([
+      { text: "⏳ t1 查天气：a" },
+      { text: "⏳ t1 查天气：b" },
+    ]);
     expect(await progressMessageId(stub, "t1")).toBe("99");
+  });
+
+  it("sends a new message for a pre-migration bare progress message id", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+
+    const stub = butler("report-legacy-id");
+    await seedTask(stub, { legacyMessageId: "77" });
+
+    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
+
+    // A bare id cannot prove ownership, so it is never edited.
+    expect(channel.edits).toEqual([]);
+    expect(channel.sent).toEqual([
+      {
+        chatId: "42",
+        text: "⏳ t1 查天气：a",
+        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
+      },
+    ]);
+    expect(await progressMessageId(stub, "t1")).toBe("1");
+  });
+});
+
+describe("ButlerDO.reconcileChannel", () => {
+  type Boundary = {
+    currentRoute: RouteSnapshot;
+    sends: OutboundMessage[];
+    failSend: boolean;
+    explicitTargets: string[];
+  };
+
+  function boundary(routeKey = "k1"): Boundary {
+    return {
+      currentRoute: { channel: "telegram", routeKey },
+      sends: [],
+      failSend: false,
+      explicitTargets: [],
+    };
+  }
+
+  async function stubBoundary(
+    stub: ButlerStub,
+    state: Boundary,
+  ): Promise<void> {
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as { channels(): unknown }
+      ).channels = () => ({
+        currentRoute: async () => state.currentRoute,
+        isAdmissionCurrent: async (
+          channel: string,
+          routeKey: string,
+        ) =>
+          state.currentRoute.channel === channel &&
+          state.currentRoute.routeKey === routeKey,
+        sendCurrent: async (msg: OutboundMessage) => {
+          if (state.failSend) throw new Error("wechat context missing");
+          state.sends.push(msg);
+          const route = state.currentRoute;
+          return {
+            channel: route.channel!,
+            conversationId: "42",
+            routeKey: route.routeKey,
+            messageId: String(state.sends.length),
+          };
+        },
+        editCurrent: async () => true,
+        send: async () => {
+          state.explicitTargets.push("send");
+        },
+        edit: async () => {
+          state.explicitTargets.push("edit");
+        },
+      });
+    });
+  }
+
+  async function stubPending(
+    stub: ButlerStub,
+    pending: { approvalId: string; tool: string; argsSummary: string }[],
+  ): Promise<void> {
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { taskFor(id: string): unknown }).taskFor = () => ({
+        start: async () => {},
+        status: async () => ({ state: "running", title: "" }),
+        steer: async () => ({ ok: false, message: "" }),
+        cancel: async () => ({ ok: false, message: "" }),
+        retryTask: async () => ({ ok: false, message: "" }),
+        pendingApprovals: async () => pending,
+      });
+    });
+  }
+
+  const AP1 = {
+    approvalId: "ap1",
+    tool: "web_fetch",
+    argsSummary: "https://example.com",
+  };
+
+  it("retries a failed send, presents once per route, and re-presents after a redeploy", async () => {
+    const stub = butler("reconcile-routes");
+    await seedTask(stub, { status: "running", progressMessageId: null });
+    const state = boundary("k1");
+    state.failSend = true;
+    await stubBoundary(stub, state);
+    await stubPending(stub, [AP1]);
+
+    await stub.reconcileChannel("k1");
+    expect(state.sends).toEqual([]);
+
+    state.failSend = false;
+    await stub.reconcileChannel("k1");
+    expect(state.sends).toHaveLength(1);
+    expect(state.sends[0]?.text).toContain("请求执行 web_fetch");
+
+    // Same deployment and route: the saved reference suppresses duplicates.
+    await stub.reconcileChannel("k1");
+    expect(state.sends).toHaveLength(1);
+
+    // A new deployment owns new references, so the approval is re-presented.
+    state.currentRoute = { channel: "telegram", routeKey: "k2" };
+    await stub.reconcileChannel("k2");
+    expect(state.sends).toHaveLength(2);
+
+    // A stale key from another deployment is ignored.
+    await stub.reconcileChannel("k1");
+    expect(state.sends).toHaveLength(2);
+    expect(state.explicitTargets).toEqual([]);
+  });
+
+  it("presents nothing when the task has no live pending approval", async () => {
+    const stub = butler("reconcile-none");
+    await seedTask(stub, { status: "running", progressMessageId: null });
+    const state = boundary();
+    await stubBoundary(stub, state);
+    await stubPending(stub, []);
+
+    await stub.reconcileChannel("k1");
+
+    expect(state.sends).toEqual([]);
+  });
+
+  it("presents nothing for a task that is already terminal", async () => {
+    const stub = butler("reconcile-terminal");
+    await seedTask(stub, { status: "completed", progressMessageId: null });
+    const state = boundary();
+    await stubBoundary(stub, state);
+    await stubPending(stub, [AP1]);
+
+    await stub.reconcileChannel("k1");
+
+    expect(state.sends).toEqual([]);
+  });
+
+  it("reconciles after a task report", async () => {
+    const stub = butler("reconcile-report");
+    await seedTask(stub, { status: "running", progressMessageId: null });
+    const state = boundary();
+    await stubBoundary(stub, state);
+    await stubPending(stub, [AP1]);
+
+    await stub.report({ taskId: "t1", seq: 1, type: "started" });
+
+    await vi.waitFor(() => {
+      expect(state.sends).toHaveLength(1);
+    });
   });
 });

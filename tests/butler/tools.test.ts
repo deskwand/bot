@@ -5,9 +5,9 @@ import { TasksRepo } from "../../src/butler/tasks-repo";
 import { createButlerTools, SpawnFailedError } from "../../src/butler/tools";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
-import type { MessageEvent, TaskSpec } from "../../src/protocol";
+import type { AdmittedMessage, RouteSnapshot, TaskSpec } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
-import { seedNotifyAddress } from "../helpers/owner-address";
+import { currentChannelRef, seedOwnerAddress } from "../helpers/channel-ref";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
@@ -22,13 +22,20 @@ function task(taskId: string) {
   return env.TASK.get(env.TASK.idFromName(taskId));
 }
 
-function message(evt: { text: string; eventId: string }): MessageEvent {
+let route: RouteSnapshot;
+
+function channels() {
+  return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
+}
+
+function message(evt: { text: string; eventId: string }): AdmittedMessage {
   return {
     type: "message",
     channel: "telegram",
     chatId: "42",
     userId: "1",
     ...evt,
+    routeKey: route.routeKey,
   };
 }
 
@@ -65,7 +72,8 @@ const cancelModel = scriptedModel([
 ]);
 
 beforeEach(async () => {
-  await seedNotifyAddress("42");
+  await seedOwnerAddress("42");
+  route = await channels().currentRoute();
 });
 
 afterEach(() => {
@@ -101,6 +109,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            pendingApprovals: async () => [],
           }),
           spawn: async () => {
             throw new SpawnFailedError("t1", "boom");
@@ -191,7 +200,9 @@ describe("butler control tools", () => {
 
     expect(result).toMatchObject({
       id: "t1",
-      progressMessageId: "1",
+      progressMessageRef: {
+        ...(await currentChannelRef("1")),
+      },
       status: "queued",
     });
     expect(channel.sent).toEqual([

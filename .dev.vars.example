@@ -1,8 +1,12 @@
 # 复制为 .dev.vars 后填写本地开发用的值（.dev.vars 已在 .gitignore 中）。
+# 生产环境通过 `wrangler secret put` 写入 secret。
 OPENCODE_API_KEY=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
-PUBLIC_BASE_URL=
+PUBLIC_BASE_URL=http://localhost:8787
 
-# 可选：微信本地开发凭据。生产环境由 npm run wechat-login 写入 secret。
+# 可选：微信本地开发凭据（单行 JSON）。生产环境由 npm run wechat-login 写入 secret。
 # WECHAT_CREDENTIALS={"token":"...","baseUrl":"https://ilinkai.weixin.qq.com","accountId":"...","userId":"..."}
+
+# 仅本地开发使用；生产选择由发布配置管理，不写进 wrangler.jsonc。
+ACTIVE_CHANNEL=telegram

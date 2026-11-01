@@ -1,6 +1,10 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setChannelOverride } from "../../src/channels/override";
+import { ChannelDO } from "../../src/channels/channel-do";
+import {
+  setChannelOverride,
+  setWeChatCredentialsOverride,
+} from "../../src/channels/override";
 import type { ChannelAdapter } from "../../src/channels/types";
 import { config } from "../../src/config";
 import type {
@@ -81,6 +85,29 @@ function webhook(secret = SECRET): Request {
 
 function channels() {
   return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
+}
+
+function freshChannels(name: string) {
+  return env.CHANNELS.get(env.CHANNELS.idFromName(name));
+}
+
+const ENV = env as unknown as Record<string, unknown>;
+const savedEnv = new Map<string, unknown>();
+
+/** Builds an independent, immutable-ish env fixture for one DO instance. */
+function setEnv(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
+    ENV[key] = value;
+  }
+}
+
+function restoreEnv(): void {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete ENV[key];
+    else ENV[key] = value;
+  }
+  savedEnv.clear();
 }
 
 function butler() {
@@ -171,6 +198,7 @@ afterEach(async () => {
   for (const restore of restores.splice(0)) await restore();
   setChannelOverride("telegram", null);
   setChannelOverride("wechat", null);
+  restoreEnv();
 });
 
 describe("handleTelegramWebhook", () => {
@@ -207,7 +235,9 @@ describe("handleTelegramWebhook", () => {
     await channels().handleTelegramWebhook(webhook());
 
     await vi.waitFor(() => {
-      expect(events).toEqual([MESSAGE]);
+      expect(events).toEqual([
+        { ...MESSAGE, routeKey: expect.any(String) },
+      ]);
     });
     expect(await ownerAddresses()).toMatchObject([
       { channel: "telegram", conversation_id: "42" },
@@ -223,7 +253,9 @@ describe("handleTelegramWebhook", () => {
     await channels().handleTelegramWebhook(webhook());
 
     await vi.waitFor(() => {
-      expect(events).toEqual([nonText]);
+      expect(events).toEqual([
+        { ...nonText, routeKey: expect.any(String) },
+      ]);
     });
   });
 
@@ -250,7 +282,9 @@ describe("handleTelegramWebhook", () => {
 
     expect(outcome).toBe("returned");
     await vi.waitFor(() => {
-      expect(events).toEqual([MESSAGE]);
+      expect(events).toEqual([
+        { ...MESSAGE, routeKey: expect.any(String) },
+      ]);
     });
   });
 
@@ -305,25 +339,77 @@ describe("handleTelegramWebhook", () => {
   });
 });
 
-describe("send", () => {
-  it("resolves notify to the first Telegram owner when no address is stored", async () => {
+describe("active channel gating", () => {
+  it("ignores a Telegram message while WeChat is selected", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const events = await captureButler();
+    const tg = fakeTelegram(MESSAGE);
+    setChannelOverride("telegram", tg.adapter);
+
+    await freshChannels("gated-message").handleTelegramWebhook(webhook());
+
+    expect(events).toEqual([]);
+  });
+
+  it("answers an old Telegram button as not enabled and runs no task", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const events = await captureButler();
+    const tg = fakeTelegram(ACTION);
+    setChannelOverride("telegram", tg.adapter);
+
+    await expect(
+      freshChannels("gated-action").handleTelegramWebhook(webhook()),
+    ).resolves.toBeUndefined();
+
+    expect(events).toEqual([]);
+    expect(tg.answered).toEqual([
+      { actionId: "cb-1", text: "该渠道未启用" },
+    ]);
+  });
+
+  it("re-enables the route after the selection returns to Telegram", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("gated-back");
+    await hub.handleTelegramWebhook(webhook());
+
+    setEnv({ ACTIVE_CHANNEL: "telegram" });
+    await evictDurableObject(hub);
+    const events = await captureButler();
+    const tg = fakeTelegram(MESSAGE);
+    setChannelOverride("telegram", tg.adapter);
+
+    await hub.handleTelegramWebhook(webhook());
+
+    await vi.waitFor(() => {
+      expect(events).toHaveLength(1);
+    });
+  });
+});
+
+describe("sendCurrent", () => {
+  it("falls back to the first Telegram owner when no address is stored", async () => {
     const tg = fakeTelegram(null);
     setChannelOverride("telegram", tg.adapter);
 
-    const result = await channels().send("notify", { text: "n" });
+    const ref = await channels().sendCurrent({ text: "n" });
 
-    expect(result).toEqual({ messageId: "1" });
+    expect(ref).toMatchObject({
+      channel: "telegram",
+      conversationId: String(OWNER_ID),
+      messageId: "1",
+      routeKey: expect.any(String),
+    });
     expect(tg.sent).toEqual([
       { to: String(OWNER_ID), msg: { text: "n" } },
     ]);
   });
 
-  it("resolves notify to the owner's latest conversation", async () => {
+  it("uses the owner's latest conversation", async () => {
     await runInDurableObject(channels(), (_instance, state) => {
       state.storage.sql.exec(
         `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
          VALUES (?, ?, ?)`,
-        config.notifyChannel,
+        "telegram",
         "777",
         Date.now(),
       );
@@ -331,22 +417,45 @@ describe("send", () => {
     const tg = fakeTelegram(null);
     setChannelOverride("telegram", tg.adapter);
 
-    await channels().send("notify", { text: "n" });
+    const ref = await channels().sendCurrent({ text: "n" });
 
     expect(tg.sent).toEqual([{ to: "777", msg: { text: "n" } }]);
+    expect(ref.conversationId).toBe("777");
   });
 
+  it("downgrades buttons to text on a selected WeChat channel", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("send-wechat");
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'u1', ?)`,
+        Date.now(),
+      );
+    });
+    const sent: { to: string; msg: OutboundMessage }[] = [];
+    setChannelOverride("wechat", {
+      parseInbound: async () => null,
+      async send(to, msg) {
+        sent.push({ to, msg });
+        return { messageId: "" };
   it("filters unsupported markdown for WeChat and keeps the hints", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("send-wechat-markdown");
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'u1', ?)`,
+        Date.now(),
+      );
+    });
     const wx = fakeAdapter(async () => null);
     setChannelOverride("wechat", wx.adapter);
 
-    await channels().send(
-      { channel: "wechat", conversationId: "u1" },
-      {
-        text: "**粗体** *中文斜体* ![图](https://example.com/a.png) 完毕",
-        buttons: [[{ label: "取消", data: "a:cancel:t3" }]],
-      },
-    );
+    await hub.sendCurrent({
+      text: "**粗体** *中文斜体* ![图](https://example.com/a.png) 完毕",
+      buttons: [[{ label: "取消", data: "a:cancel:t3" }]],
+    });
 
     expect(wx.sent).toEqual([
       { to: "u1", msg: { text: '**粗体** 中文斜体  完毕\n回复"取消 t3"' } },
@@ -354,47 +463,207 @@ describe("send", () => {
   });
 
   it("sends Telegram markdown through unfiltered", async () => {
+    setEnv({ ACTIVE_CHANNEL: "telegram" });
+    const hub = freshChannels("send-telegram-markdown");
     const tg = fakeTelegram(null);
     setChannelOverride("telegram", tg.adapter);
     const markdown =
       "**粗体** *中文斜体* ![图](https://example.com/a.png)";
 
-    await channels().send("notify", { text: markdown });
+    await hub.sendCurrent({ text: markdown });
 
     expect(tg.sent).toEqual([{ to: String(OWNER_ID), msg: { text: markdown } }]);
   });
-
-  it("downgrades buttons to text for WeChat", async () => {
-    const wx = fakeAdapter(async () => null);
-    setChannelOverride("wechat", wx.adapter);
-
-    await channels().send(
-      { channel: "wechat", conversationId: "u1" },
-      {
-        text: "x",
-        buttons: [[{ label: "取消", data: "a:cancel:t3" }]],
       },
-    );
+      async edit() {},
+      async answerAction() {},
+    });
 
-    expect(wx.sent).toEqual([
+    const ref = await hub.sendCurrent({
+      text: "x",
+      buttons: [[{ label: "取消", data: "a:cancel:t3" }]],
+    });
+
+    expect(sent).toEqual([
       { to: "u1", msg: { text: 'x\n回复"取消 t3"' } },
     ]);
-    expect(wx.sent[0]?.msg.buttons).toBeUndefined();
+    expect(sent[0]?.msg.buttons).toBeUndefined();
+    // WeChat has no message ids, but the send still succeeded.
+    expect(ref).toMatchObject({ channel: "wechat", messageId: null });
+  });
+
+  it("does not fall back to Telegram when WeChat has no context", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    setWeChatCredentialsOverride(
+      JSON.stringify({
+        token: "token-a",
+        baseUrl: "https://ilink.example",
+        accountId: "account-a",
+        userId: "u1",
+      }),
+    );
+    const hub = freshChannels("send-wechat-no-context");
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'u1', ?)`,
+        Date.now(),
+      );
+    });
+    const tg = fakeTelegram(null);
+    setChannelOverride("telegram", tg.adapter);
+
+    const outcome = await runInDurableObject(hub, (instance) =>
+      instance.sendCurrent({ text: "x" }).then(
+        () => "sent",
+        (error: Error) => error.message,
+      ),
+    );
+
+    expect(outcome).toBe("wechat context missing");
+    expect(tg.sent).toEqual([]);
+    setWeChatCredentialsOverride(null);
+  });
+
+  it("keeps the approval id in the WeChat button hint", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("send-wechat-approval");
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'u1', ?)`,
+        Date.now(),
+      );
+    });
+    const sent: OutboundMessage[] = [];
+    setChannelOverride("wechat", {
+      parseInbound: async () => null,
+      async send(_to, msg) {
+        sent.push(msg);
+        return { messageId: "" };
+      },
+      async edit() {},
+      async answerAction() {},
+    });
+
+    await hub.sendCurrent({
+      text: "🔐 t3 请求执行 web_fetch",
+      buttons: [
+        [
+          { label: "✅ 批准", data: "a:approve:t3:ap1" },
+          { label: "❌ 拒绝", data: "a:reject:t3:ap1" },
+        ],
+      ],
+    });
+
+    expect(sent[0]?.text).toContain('回复"批准 t3 ap1"');
+    expect(sent[0]?.text).toContain('回复"拒绝 t3 ap1"');
+  });
+
+  it("refuses to send when the selection is invalid", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setEnv({ ACTIVE_CHANNEL: "slack" });
+    const hub = freshChannels("send-invalid");
+    const tg = fakeTelegram(null);
+    setChannelOverride("telegram", tg.adapter);
+
+    const outcome = await runInDurableObject(hub, (instance) =>
+      instance.sendCurrent({ text: "n" }).then(
+        () => "sent",
+        (error: Error) => error.message,
+      ),
+    );
+    expect(outcome).toBe("channel selection disabled");
+    expect(tg.sent).toEqual([]);
   });
 });
 
-describe("edit", () => {
-  it("returns false for WeChat", async () => {
+describe("editCurrent", () => {
+  it("edits a reference owned by this deployment", async () => {
+    const tg = fakeTelegram(null);
+    setChannelOverride("telegram", tg.adapter);
+    const hub = channels();
+
+    const ref = await hub.sendCurrent({ text: "x" });
+    const edited = await hub.editCurrent(ref, { text: "y" });
+
+    expect(edited).toBe(true);
+    expect(tg.edits).toEqual([
+      { to: ref.conversationId, messageId: ref.messageId, msg: { text: "y" } },
+    ]);
+  });
+
+  it("returns false for a WeChat reference", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("edit-wechat");
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'u1', ?)`,
+        Date.now(),
+      );
+    });
     const wx = fakeAdapter(async () => null);
     setChannelOverride("wechat", wx.adapter);
 
-    const edited = await channels().edit(
-      { channel: "wechat", conversationId: "u1" },
-      "m1",
-      { text: "y" },
-    );
+    const ref = await hub.sendCurrent({ text: "x" });
+    const edited = await hub.editCurrent(ref, { text: "y" });
 
     expect(edited).toBe(false);
     expect(wx.edits).toEqual([]);
+  });
+
+  it("rejects a reference issued by an older deployment", async () => {
+    const tg = fakeTelegram(null);
+    setChannelOverride("telegram", tg.adapter);
+    const hub = channels();
+
+    const result = await runInDurableObject(hub, async (instance, state) => {
+      const base = env as unknown as Env;
+      const older = new ChannelDO(state, {
+        ...base,
+        ACTIVE_CHANNEL: "telegram",
+        CF_VERSION_METADATA: { id: "deploy-old" },
+      } as Env);
+      const ref = await older.sendCurrent({ text: "progress" });
+
+      const newer = new ChannelDO(state, {
+        ...base,
+        ACTIVE_CHANNEL: "telegram",
+        CF_VERSION_METADATA: { id: "deploy-new" },
+      } as Env);
+      const edited = await newer.editCurrent(ref, { text: "next" });
+      return { ref, edited };
+    });
+
+    expect(result.ref.routeKey).toBeTypeOf("string");
+    expect(result.edited).toBe(false);
+    expect(tg.edits).toEqual([]);
+  });
+
+  it("does not edit a reference whose conversation moved", async () => {
+    const tg = fakeTelegram(null);
+    setChannelOverride("telegram", tg.adapter);
+    const hub = channels();
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('telegram', '777', ?)`,
+        Date.now(),
+      );
+    });
+
+    const ref = await hub.sendCurrent({ text: "x" });
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE owner_addresses SET conversation_id = '888' WHERE channel = 'telegram'`,
+      );
+    });
+
+    const edited = await hub.editCurrent(ref, { text: "y" });
+
+    expect(edited).toBe(false);
+    expect(tg.edits).toEqual([]);
   });
 });
