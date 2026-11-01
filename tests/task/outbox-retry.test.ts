@@ -24,7 +24,7 @@ describe("TaskDO outbox retry", () => {
         emitProgress(body: { type: "progress"; text: string }): Promise<void>;
         retryOutbox(): Promise<void>;
         deliver(event: unknown): Promise<void>;
-        listSchedules(): Promise<{ callback: string }[]>;
+        listSchedules(): Promise<{ id: string; callback: string }[]>;
       };
       target.setMeta("task_id", taskId);
       target.setMeta("title", "重试测试");
@@ -47,6 +47,13 @@ describe("TaskDO outbox retry", () => {
       // callback the schedule would invoke.
       target.deliver = original;
       await target.retryOutbox();
+
+      // Do not leave the test's retry alarm behind for later tests.
+      const schedules = await target.listSchedules();
+      const cancel = (
+        instance as unknown as { cancelSchedule(id: string): Promise<boolean> }
+      ).cancelSchedule.bind(instance);
+      for (const schedule of schedules) await cancel(schedule.id);
 
       return { retries, eventsBeforeRetry };
     });
