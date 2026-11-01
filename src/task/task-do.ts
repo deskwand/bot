@@ -17,9 +17,11 @@ import type {
   TaskSpec,
 } from "../protocol";
 import { saveArtifactTool } from "../tools/artifacts";
+import { loadMcpTools, mcpConnector } from "../tools/mcp";
 import { webFetchTool } from "../tools/web-fetch";
 import { webSearchTool } from "../tools/web-search";
 import { withProgress } from "../tools/wrap";
+import { ApprovalGate } from "./approvals";
 import { Outbox } from "./outbox";
 import { taskSystemPrompt } from "./prompt";
 
@@ -60,6 +62,11 @@ export class TaskDO extends Agent<Env> {
 
   readonly harness: PiHarness;
 
+  readonly approvals: ApprovalGate;
+
+  /** Resolves once MCP tools were loaded and installed on this instance. */
+  private mcpTools: Promise<void> | undefined;
+
   private readonly db: SqlStorage;
 
   private spec: TaskSpec | null;
@@ -87,6 +94,10 @@ export class TaskDO extends Agent<Env> {
 
     const storedSpec = this.readMeta("spec");
     this.spec = storedSpec ? (JSON.parse(storedSpec) as TaskSpec) : null;
+
+    this.approvals = new ApprovalGate(this.db, (body) =>
+      this.emitProgress(body),
+    );
 
     const finishTask: ToolRegistration<typeof FinishTask> = {
       name: "finish_task",
@@ -164,6 +175,7 @@ export class TaskDO extends Agent<Env> {
   override async onStart(_props?: object): Promise<void> {
     await super.onStart(_props);
     await this.flushOutbox();
+    await this.ensureMcpTools();
 
     // `wait` reads storage, so this survives restarts: re-attach to a run
     // that was still going when the object was evicted.
@@ -227,6 +239,10 @@ export class TaskDO extends Agent<Env> {
 
     // A cancel can land while this start is setting up.
     if (this.readMeta("state") === "cancelled") return;
+
+    // MCP tools are loaded outside the harness factory so a restart never
+    // rebuilds them mid-run; install them before the model can ask for one.
+    await this.ensureMcpTools();
 
     await this.harness.submit(effective.instructions, { operationId });
 
@@ -318,7 +334,38 @@ export class TaskDO extends Agent<Env> {
   async handleAction(evt: ActionEvent): Promise<string> {
     await this.flushOutbox();
     if (evt.action === "cancel") return (await this.cancel()).message;
-    return "暂不支持";
+    if (evt.approvalId === undefined) return "缺少审批编号";
+    return this.approvals.resolve(
+      evt.approvalId,
+      evt.action === "approve" ? "approved" : "rejected",
+    ).message;
+  }
+
+  /**
+   * Load MCP tools once per object instance, after construction. The registry
+   * is installed in the constructor but its extension list is published live,
+   * so a later install is visible to the next model request.
+   */
+  private ensureMcpTools(): Promise<void> {
+    this.mcpTools ??= this.installMcpTools();
+    return this.mcpTools;
+  }
+
+  private async installMcpTools(): Promise<void> {
+    const servers = config.mcpServers;
+    if (servers.length === 0) return;
+
+    try {
+      const tools = await loadMcpTools(
+        servers,
+        this.approvals,
+        mcpConnector(this.mcp),
+      );
+      if (tools.length > 0) this.registry.install({ name: "mcp", tools });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`task mcp tools failed to load: ${reason}`);
+    }
   }
 
   /**
