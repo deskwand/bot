@@ -15,9 +15,15 @@ import {
   type TaskEventBody,
 } from "../protocol";
 import { getClock, ProgressThrottle } from "./notifier";
+import { MemoryStore, renderMemorySection } from "./memory";
 import { butlerSystemPrompt } from "./prompt";
+import {
+  InvalidCronError,
+  isCronParseError,
+  ScheduleStore,
+} from "./schedules";
 import { TasksRepo, type TaskRow } from "./tasks-repo";
-import { createButlerTools } from "./tools";
+import { createButlerTools, SpawnFailedError, type TaskControl } from "./tools";
 
 type TaskEventRow = {
   seq: number;
@@ -54,6 +60,10 @@ export class ButlerDO extends Agent<Env> {
   private readonly db: SqlStorage;
 
   private readonly repo: TasksRepo;
+
+  private readonly memory: MemoryStore;
+
+  private readonly schedules: ScheduleStore;
 
   /** The model last applied to the Butler session (see `ensureModel`). */
   private appliedModel: PiModel | undefined;
@@ -107,6 +117,8 @@ export class ButlerDO extends Agent<Env> {
     );
 
     this.repo = new TasksRepo(this.db);
+    this.memory = new MemoryStore(this.db);
+    this.schedules = new ScheduleStore(this.db);
 
     // Installed once, at construction: Pi may re-run the harness factory after
     // a storage error, so registry changes must not depend on it.
@@ -114,11 +126,20 @@ export class ButlerDO extends Agent<Env> {
       name: "butler",
       tools: createButlerTools({
         repo: this.repo,
-        chatId: () => this.readMeta("chat_id"),
-        send: (chatId, msg) => this.channel().send(chatId, msg),
-        task: (id) => this.env.TASK.get(this.env.TASK.idFromName(id)),
+        task: (id) => this.taskFor(id),
+        spawn: (title, instructions) => this.spawn(title, instructions),
+        memory: this.memory,
+        createSchedule: (cron, title, instructions) =>
+          this.createSchedule(cron, title, instructions),
+        removeSchedule: (id) => this.removeSchedule(id),
       }),
-      sections: [{ key: "butler", render: () => butlerSystemPrompt() }],
+      sections: [
+        { key: "butler", render: () => butlerSystemPrompt() },
+        {
+          key: "memory",
+          render: () => renderMemorySection(this.memory.all()),
+        },
+      ],
     });
 
     this.harness = new PiHarness({
@@ -139,6 +160,101 @@ export class ButlerDO extends Agent<Env> {
 
     // `Agent` already installed the lifecycle; adding to it is required.
     this.lifecycle.use(this.harness);
+  }
+
+  /**
+   * Creates the task row and starts its Task DO. Shared by the `spawn_task`
+   * tool and by scheduled runs. Returns the new task id.
+   */
+  async spawn(
+    title: string,
+    instructions: string,
+    chatId: string | null = this.readMeta("chat_id"),
+  ): Promise<string> {
+    const id = this.repo.nextId();
+    this.repo.insert({ id, title, chatId });
+
+    try {
+      await this.taskFor(id).start({ taskId: id, title, instructions });
+    } catch (error) {
+      // Without a started Task DO the row would otherwise stay `queued`
+      // forever and look like an active task.
+      const message = errorText(error);
+      this.repo.update(id, { status: "failed", summary: message });
+      throw new SpawnFailedError(id, message);
+    }
+
+    if (chatId !== null) {
+      try {
+        const sent = await this.channel().send(chatId, {
+          text: `⏳ ${id} ${title}：已开始`,
+          buttons: [
+            [
+              {
+                label: "取消",
+                data: encodeAction({ action: "cancel", taskId: id }),
+              },
+            ],
+          ],
+        });
+        this.repo.update(id, { progressMessageId: sent.messageId });
+      } catch (error) {
+        console.error(`butler progress message failed: ${errorText(error)}`);
+      }
+    }
+
+    return id;
+  }
+
+  /** Persists a schedule and registers its cron on the Agent lifecycle. */
+  async createSchedule(
+    cron: string,
+    title: string,
+    instructions: string,
+  ): Promise<string> {
+    const id = this.schedules.add(
+      cron,
+      instructions,
+      title,
+      this.readMeta("chat_id"),
+    );
+
+    try {
+      const schedule = await this.schedule<{ scheduleId: string }>(
+        cron,
+        "runSchedule",
+        { scheduleId: id },
+      );
+      this.schedules.setAgentScheduleId(id, schedule.id);
+    } catch (error) {
+      // Keep no row for an expression the scheduler refuses.
+      this.schedules.remove(id);
+      throw isCronParseError(error) ? new InvalidCronError(cron) : error;
+    }
+
+    return id;
+  }
+
+  async removeSchedule(id: string): Promise<boolean> {
+    const row = this.schedules.get(id);
+    if (!row) return false;
+    if (row.agentScheduleId !== null) {
+      await this.cancelSchedule(row.agentScheduleId);
+    }
+    return this.schedules.remove(id);
+  }
+
+  /** Cron callback registered through `Agent.schedule`. */
+  async runSchedule(payload: { scheduleId: string }): Promise<void> {
+    const row = this.schedules.get(payload.scheduleId);
+    if (!row) return;
+    try {
+      await this.spawn(row.title, row.instructions, row.chatId);
+    } catch (error) {
+      // The task row was already marked failed; retrying the cron would only
+      // create another task, so log and wait for the next occurrence.
+      console.error(`butler schedule ${row.id} failed:`, error);
+    }
   }
 
   /**
@@ -586,6 +702,10 @@ export class ButlerDO extends Agent<Env> {
     return this.channelInstance;
   }
 
+  private taskFor(id: string): TaskControl {
+    return this.env.TASK.get(this.env.TASK.idFromName(id));
+  }
+
   private readMeta(key: string): string | null {
     return (
       this.db
@@ -608,6 +728,10 @@ function progressText(row: TaskRow, detail: string): string {
   return clampMessage(
     `⏳ ${row.id} ${row.title}：${clamp(detail, PROGRESS_DETAIL_MAX)}`,
   );
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isTerminal(status: TaskRow["status"]): boolean {

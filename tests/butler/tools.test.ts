@@ -1,7 +1,8 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryStore } from "../../src/butler/memory";
 import { TasksRepo } from "../../src/butler/tasks-repo";
-import { createButlerTools } from "../../src/butler/tools";
+import { createButlerTools, SpawnFailedError } from "../../src/butler/tools";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import type { MessageEvent, TaskSpec } from "../../src/protocol";
@@ -82,29 +83,25 @@ describe("butler control tools", () => {
     expect(unknownIdsTranscript[0]?.match(/没有任务 t99/g)).toHaveLength(3);
   });
 
-  it("marks a task failed when TaskDO.start rejects", async () => {
-    // Driven directly so the rejection happens in this context; a rejecting
-    // Durable Object RPC would be logged as an uncaught exception by workerd.
+  it("reports a failed spawn to the model", async () => {
     const result = await runInDurableObject(
       butler("tools-203"),
       async (_instance, state) => {
         const repo = new TasksRepo(state.storage.sql);
-        let sent = 0;
         const tools = createButlerTools({
           repo,
-          chatId: () => "42",
-          send: async () => {
-            sent += 1;
-            return { messageId: "1" };
-          },
           task: () => ({
-            start: async () => {
-              throw new Error("boom");
-            },
+            start: async () => {},
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
           }),
+          spawn: async () => {
+            throw new SpawnFailedError("t1", "boom");
+          },
+          memory: new MemoryStore(state.storage.sql),
+          createSchedule: async () => "s1",
+          removeSchedule: async () => false,
         });
 
         const spawn = tools.find((tool) => tool.name === "spawn_task");
@@ -114,17 +111,47 @@ describe("butler control tools", () => {
           {} as never,
         );
 
-        return {
-          text: (outcome.output?.[0] as { text: string }).text,
-          row: repo.get("t1"),
-          sent,
-        };
+        return (outcome.output?.[0] as { text: string }).text;
       },
     );
 
-    expect(result.text).toBe("任务 t1 启动失败：boom");
-    expect(result.row).toMatchObject({ status: "failed", summary: "boom" });
-    expect(result.sent).toBe(0);
+    expect(result).toBe("任务 t1 启动失败：boom");
+  });
+
+  it("marks a task failed when its Task DO cannot start", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await runInDurableObject(
+      butler("tools-204"),
+      async (instance, state) => {
+        // A rejecting Task DO RPC would be logged as an uncaught exception by
+        // workerd, so replace the binding lookup with a failable control.
+        (
+          instance as unknown as { taskFor(id: string): unknown }
+        ).taskFor = () => ({
+          start: async () => {
+            throw new Error("boom");
+          },
+        });
+
+        try {
+          await instance.spawn("坏任务", "BOOM");
+          return null;
+        } catch (error) {
+          return {
+            name: (error as Error).name,
+            message: (error as Error).message,
+            row: new TasksRepo(state.storage.sql).get("t1"),
+          };
+        }
+      },
+    );
+
+    expect(result?.message).toBe("boom");
+    expect(result?.row).toMatchObject({
+      id: "t1",
+      status: "failed",
+      summary: "boom",
+    });
   });
 
   it("returns the task's refusal when cancelling a completed task", async () => {

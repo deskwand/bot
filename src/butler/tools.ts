@@ -1,10 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
-import {
-  encodeAction,
-  type OutboundMessage,
-  type TaskSpec,
-} from "../protocol";
+import type { TaskSpec } from "../protocol";
+import type { MemoryStore } from "./memory";
 import type { TasksRepo } from "./tasks-repo";
 
 const SpawnTask = Type.Object({
@@ -20,6 +17,20 @@ const TaskId = Type.Object({ id: Type.String() });
 
 const SteerTask = Type.Object({ id: Type.String(), text: Type.String() });
 
+const Remember = Type.Object({ content: Type.String() });
+
+const Recall = Type.Object({ keyword: Type.String() });
+
+const Forget = Type.Object({ id: Type.Number() });
+
+const CreateSchedule = Type.Object({
+  cron: Type.String(),
+  title: Type.String(),
+  instructions: Type.String(),
+});
+
+const ScheduleId = Type.Object({ id: Type.String() });
+
 /** The Task DO operations the control tools call. */
 export type TaskControl = {
   start(spec: TaskSpec): Promise<void>;
@@ -30,11 +41,29 @@ export type TaskControl = {
 
 export type ButlerToolDeps = {
   repo: TasksRepo;
-  /** The chat currently talking to the Butler, if any. */
-  chatId(): string | null;
-  send(chatId: string, msg: OutboundMessage): Promise<{ messageId: string }>;
   task(id: string): TaskControl;
+  /** Inserts a task row and starts its Task DO; returns the task id. */
+  spawn(title: string, instructions: string): Promise<string>;
+  memory: MemoryStore;
+  /** Persists the schedule and registers its Agent cron callback. */
+  createSchedule(
+    cron: string,
+    title: string,
+    instructions: string,
+  ): Promise<string>;
+  removeSchedule(id: string): Promise<boolean>;
 };
+
+/** A `spawn` that created the task row but could not start its Task DO. */
+export class SpawnFailedError extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly reason: string,
+  ) {
+    super(reason);
+    this.name = "SpawnFailedError";
+  }
+}
 
 function output(text: string) {
   return { output: [{ type: "text" as const, text }] };
@@ -49,7 +78,7 @@ function errorText(error: unknown): string {
  * never throws: a failure is reported to the model, which can explain it.
  */
 export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
-  const { repo, task } = deps;
+  const { repo, task, memory } = deps;
 
   const spawnTask: ToolRegistration<typeof SpawnTask> = {
     name: "spawn_task",
@@ -57,46 +86,14 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
       "Start a background task for work that needs many searches/reads or more than about a minute.",
     parameters: SpawnTask,
     async execute({ title, instructions }) {
-      let id: string;
-      let chatId: string | null;
       try {
-        id = repo.nextId();
-        chatId = deps.chatId();
-        repo.insert({ id, title, chatId });
+        return output(`已开始任务 ${await deps.spawn(title, instructions)}`);
       } catch (error) {
+        if (error instanceof SpawnFailedError) {
+          return output(`任务 ${error.taskId} 启动失败：${error.reason}`);
+        }
         return output(errorText(error));
       }
-
-      try {
-        await task(id).start({ taskId: id, title, instructions });
-      } catch (error) {
-        // Without a started Task DO the row would otherwise stay `queued`
-        // forever and look like an active task.
-        const message = errorText(error);
-        repo.update(id, { status: "failed", summary: message });
-        return output(`任务 ${id} 启动失败：${message}`);
-      }
-
-      if (chatId !== null) {
-        try {
-          const sent = await deps.send(chatId, {
-            text: `⏳ ${id} ${title}：已开始`,
-            buttons: [
-              [
-                {
-                  label: "取消",
-                  data: encodeAction({ action: "cancel", taskId: id }),
-                },
-              ],
-            ],
-          });
-          repo.update(id, { progressMessageId: sent.messageId });
-        } catch (error) {
-          console.error(`butler progress message failed: ${errorText(error)}`);
-        }
-      }
-
-      return output(`已开始任务 ${id}`);
     },
   };
 
@@ -185,6 +182,89 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     },
   };
 
+  const remember: ToolRegistration<typeof Remember> = {
+    name: "remember",
+    description:
+      "Store a lasting fact about the owner (preferences, routines, people, ongoing plans).",
+    parameters: Remember,
+    async execute({ content }) {
+      try {
+        return output(`已记住 #${memory.add(content)}`);
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+
+  const recall: ToolRegistration<typeof Recall> = {
+    name: "recall",
+    description: "Search the stored facts about the owner by keyword.",
+    parameters: Recall,
+    replay: "safe",
+    async execute({ keyword }) {
+      try {
+        const items = memory.search(keyword);
+        if (items.length === 0) return output("没有相关记忆");
+        return output(
+          items.map((item) => `#${item.id} ${item.content}`).join("\n"),
+        );
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+
+  const forget: ToolRegistration<typeof Forget> = {
+    name: "forget",
+    description: "Delete a stored fact by its #id.",
+    parameters: Forget,
+    async execute({ id }) {
+      try {
+        return output(
+          memory.remove(id) ? `已删除 #${id}` : `没有记忆 #${id}`,
+        );
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+
+  const createSchedule: ToolRegistration<typeof CreateSchedule> = {
+    name: "schedule",
+    description: [
+      "Create a recurring background task.",
+      "cron is a standard 5-field expression (minute hour day month weekday)",
+      "interpreted in UTC. The owner is normally in Asia/Shanghai (UTC+8), so",
+      "convert their local time: a daily 09:00 request becomes `0 1 * * *`.",
+    ].join(" "),
+    parameters: CreateSchedule,
+    async execute({ cron, title, instructions }) {
+      try {
+        const id = await deps.createSchedule(cron, title, instructions);
+        return output(`已创建定时任务 ${id}`);
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+
+  const unschedule: ToolRegistration<typeof ScheduleId> = {
+    name: "unschedule",
+    description: "Delete a scheduled recurring task by its s<number> id.",
+    parameters: ScheduleId,
+    async execute({ id }) {
+      try {
+        return output(
+          (await deps.removeSchedule(id))
+            ? `已删除定时任务 ${id}`
+            : `没有定时任务 ${id}`,
+        );
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+
   return [
     spawnTask,
     listTasks,
@@ -192,5 +272,10 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     steerTask,
     cancelTask,
     retryTask,
+    remember,
+    recall,
+    forget,
+    createSchedule,
+    unschedule,
   ];
 }
