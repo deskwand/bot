@@ -7,7 +7,7 @@ import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import type { MessageEvent, TaskSpec } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
-import { seedNotifyAddress } from "../helpers/owner-address";
+import { currentChannelRef, seedOwnerAddress } from "../helpers/owner-address";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
@@ -65,7 +65,7 @@ const cancelModel = scriptedModel([
 ]);
 
 beforeEach(async () => {
-  await seedNotifyAddress("42");
+  await seedOwnerAddress("42");
 });
 
 afterEach(() => {
@@ -191,7 +191,9 @@ describe("butler control tools", () => {
 
     expect(result).toMatchObject({
       id: "t1",
-      progressMessageId: "1",
+      progressMessageRef: {
+        ...(await currentChannelRef("1")),
+      },
       status: "queued",
     });
     expect(channel.sent).toEqual([

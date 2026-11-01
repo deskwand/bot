@@ -7,6 +7,7 @@ import {
   encodeAction,
   type Address,
   type Artifact,
+  type ChannelMessageRef,
   type MessageEvent,
   type OutboundMessage,
   type TaskEvent,
@@ -32,7 +33,7 @@ type TaskEventRow = {
 type ApprovalMessageRow = {
   approval_id: string;
   task_id: string;
-  message_id: string;
+  message_ref_json: string | null;
   text: string;
 };
 
@@ -86,6 +87,7 @@ export class ButlerDO extends Agent<Env> {
         updated_at INTEGER NOT NULL,
         chat_id TEXT,
         progress_message_id TEXT,
+        progress_message_ref_json TEXT,
         summary TEXT,
         artifacts_json TEXT,
         last_seq INTEGER NOT NULL DEFAULT 0
@@ -111,9 +113,14 @@ export class ButlerDO extends Agent<Env> {
         approval_id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,
         message_id TEXT NOT NULL,
-        text TEXT NOT NULL
+        text TEXT NOT NULL,
+        message_ref_json TEXT
       )`,
     );
+
+    // Appended columns keep existing objects: no rebuild, no data loss.
+    this.ensureColumn("tasks", "progress_message_ref_json", "TEXT");
+    this.ensureColumn("approval_messages", "message_ref_json", "TEXT");
 
     this.repo = new TasksRepo(this.db);
     this.memory = new MemoryStore(this.db);
@@ -181,8 +188,8 @@ export class ButlerDO extends Agent<Env> {
     // Send the start message before the run begins: the first progress event
     // can arrive while `start()` is still in flight, and it must edit this
     // message rather than create a second one. Task output always goes to the
-    // notify channel, whichever channel the task was spawned from.
-    const progressMessageId = await this.sendBestEffort({
+    // selected channel, whichever channel the task was spawned from.
+    const progressRef = await this.sendBestEffort({
       text: `⏳ ${id} ${title}：已开始`,
       buttons: [
         [
@@ -193,8 +200,8 @@ export class ButlerDO extends Agent<Env> {
         ],
       ],
     });
-    if (progressMessageId !== null) {
-      this.repo.update(id, { progressMessageId });
+    if (progressRef !== null) {
+      this.repo.update(id, { progressMessageRef: progressRef });
     }
 
     try {
@@ -204,8 +211,8 @@ export class ButlerDO extends Agent<Env> {
       // forever and look like an active task.
       const message = errorText(error);
       this.repo.update(id, { status: "failed", summary: message });
-      if (progressMessageId !== null) {
-        await this.editBestEffort(progressMessageId, {
+      if (progressRef !== null) {
+        await this.editBestEffort(progressRef, {
           text: clampMessage(`❌ ${id} ${title}：${message}`),
         });
       }
@@ -271,7 +278,7 @@ export class ButlerDO extends Agent<Env> {
       await this.handleInboundMessage(evt);
     } catch (error) {
       console.error("butler message failed:", error);
-      await this.sendErrorReply(addressOf(evt), "出错了，稍后再试");
+      await this.sendErrorReply("出错了，稍后再试");
     }
   }
 
@@ -396,17 +403,17 @@ export class ButlerDO extends Agent<Env> {
       ],
     };
 
-    if (row.progressMessageId !== null) {
-      const edited = await this.editBestEffort(row.progressMessageId, message);
+    if (row.progressMessageRef !== null) {
+      const edited = await this.editBestEffort(row.progressMessageRef, message);
       if (edited) return;
-      // The message is gone or the edit failed: send the next update anew.
-      this.repo.update(taskId, { progressMessageId: null });
+      // The message is gone or the reference is stale: send it anew.
+      this.repo.update(taskId, { progressMessageRef: null });
       return;
     }
 
-    const messageId = await this.sendBestEffort(message);
-    if (messageId !== null) {
-      this.repo.update(taskId, { progressMessageId: messageId });
+    const ref = await this.sendBestEffort(message);
+    if (ref !== null) {
+      this.repo.update(taskId, { progressMessageRef: ref });
     }
   }
 
@@ -415,15 +422,15 @@ export class ButlerDO extends Agent<Env> {
     if (!row) return;
 
     const message: OutboundMessage = { text: clampMessage(text) };
-    if (row.progressMessageId !== null) {
-      const edited = await this.editBestEffort(row.progressMessageId, message);
+    if (row.progressMessageRef !== null) {
+      const edited = await this.editBestEffort(row.progressMessageRef, message);
       if (edited) return;
-      this.repo.update(taskId, { progressMessageId: null });
+      this.repo.update(taskId, { progressMessageRef: null });
     }
 
-    const messageId = await this.sendBestEffort(message);
-    if (messageId !== null) {
-      this.repo.update(taskId, { progressMessageId: messageId });
+    const ref = await this.sendBestEffort(message);
+    if (ref !== null) {
+      this.repo.update(taskId, { progressMessageRef: ref });
     }
   }
 
@@ -437,7 +444,7 @@ export class ButlerDO extends Agent<Env> {
     const text = clampMessage(
       `🔐 ${taskId} 请求执行 ${body.tool}\n${body.argsSummary}`,
     );
-    const messageId = await this.sendBestEffort({
+    const ref = await this.sendBestEffort({
       text,
       buttons: [
         [
@@ -460,19 +467,22 @@ export class ButlerDO extends Agent<Env> {
         ],
       ],
     });
-    if (messageId === null) return;
+    if (ref === null) return;
 
     this.db.exec(
-      `INSERT INTO approval_messages (approval_id, task_id, message_id, text)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO approval_messages
+         (approval_id, task_id, message_id, text, message_ref_json)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(approval_id) DO UPDATE SET
          task_id = excluded.task_id,
          message_id = excluded.message_id,
-         text = excluded.text`,
+         text = excluded.text,
+         message_ref_json = excluded.message_ref_json`,
       body.approvalId,
       taskId,
-      messageId,
+      ref.messageId ?? "",
       text,
+      JSON.stringify(ref),
     );
   }
 
@@ -486,7 +496,7 @@ export class ButlerDO extends Agent<Env> {
     if (!this.repo.get(taskId)) return;
 
     const suffix = `\n→ ${DECISION_LABELS[decision]}`;
-    await this.editBestEffort(approval.message_id, {
+    await this.editBestEffort(parseMessageRef(approval.message_ref_json), {
       text: `${clamp(approval.text, MESSAGE_MAX - suffix.length)}${suffix}`,
     });
   }
@@ -586,7 +596,7 @@ export class ButlerDO extends Agent<Env> {
   private approvalMessage(approvalId: string): ApprovalMessageRow | undefined {
     return this.db
       .exec<ApprovalMessageRow>(
-        `SELECT approval_id, task_id, message_id, text
+        `SELECT approval_id, task_id, message_ref_json, text
          FROM approval_messages WHERE approval_id = ?`,
         approvalId,
       )
@@ -595,10 +605,9 @@ export class ButlerDO extends Agent<Env> {
 
   private async sendBestEffort(
     message: OutboundMessage,
-  ): Promise<string | null> {
+  ): Promise<ChannelMessageRef | null> {
     try {
-      const sent = await this.channels().send("notify", message);
-      return sent.messageId;
+      return await this.channels().sendCurrent(message);
     } catch (error) {
       console.error("butler channel send failed:", error);
       return null;
@@ -606,13 +615,14 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private async editBestEffort(
-    messageId: string,
+    ref: ChannelMessageRef | null,
     message: OutboundMessage,
   ): Promise<boolean> {
+    if (ref === null) return false;
     try {
-      const edited = await this.channels().edit("notify", messageId, message);
+      const edited = await this.channels().editCurrent(ref, message);
       if (edited) return true;
-      console.error("butler channel edit failed: unsupported channel");
+      console.error("butler channel edit failed: unsupported or stale reference");
       return false;
     } catch (error) {
       // Telegram answers 400 when an edit would not change the message. That
@@ -650,13 +660,12 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private async handleInboundMessage(evt: MessageEvent): Promise<void> {
-    const origin = addressOf(evt);
     // Remember where a task spawned during this turn came from; task output
-    // itself always goes to "notify".
-    this.origin = origin;
+    // itself always goes to the selected channel.
+    this.origin = addressOf(evt);
 
     if (evt.text === null) {
-      await this.channels().send(origin, { text: "目前只支持文字消息" });
+      await this.sendBestEffort({ text: "目前只支持文字消息" });
       return;
     }
 
@@ -671,11 +680,11 @@ export class ButlerDO extends Agent<Env> {
 
     const result = await this.harness.wait(operationId);
     if (result.status === "unanswered") {
-      await this.channels().send(origin, { text: "出错了，稍后再试" });
+      await this.sendBestEffort({ text: "出错了，稍后再试" });
       return;
     }
     if (result.text) {
-      await this.channels().send(origin, { text: result.text });
+      await this.sendBestEffort({ text: result.text });
     }
   }
 
@@ -691,12 +700,17 @@ export class ButlerDO extends Agent<Env> {
     this.appliedModel = model;
   }
 
-  private async sendErrorReply(address: Address, text: string): Promise<void> {
-    try {
-      await this.channels().send(address, { text });
-    } catch (error) {
-      console.error("butler error reply failed:", error);
-    }
+  private async sendErrorReply(text: string): Promise<void> {
+    await this.sendBestEffort({ text });
+  }
+
+  /** Adds a column to an object created by an older release. */
+  private ensureColumn(table: string, column: string, type: string): void {
+    const columns = this.db
+      .exec<{ name: string }>(`PRAGMA table_info(${table})`)
+      .toArray();
+    if (columns.some((entry) => entry.name === column)) return;
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 
   private channels() {
@@ -712,6 +726,15 @@ function progressText(row: TaskRow, detail: string): string {
   return clampMessage(
     `⏳ ${row.id} ${row.title}：${clamp(detail, PROGRESS_DETAIL_MAX)}`,
   );
+}
+
+function parseMessageRef(json: string | null): ChannelMessageRef | null {
+  if (!json) return null;
+  try {
+    return JSON.parse(json) as ChannelMessageRef;
+  } catch {
+    return null;
+  }
 }
 
 function addressOf(evt: MessageEvent): Address {

@@ -17,7 +17,7 @@ import { setChannelOverride } from "../../src/channels/override";
 import { registerTestProvider, setModelOverride } from "../../src/llm/models";
 import type { MessageEvent } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
-import { seedNotifyAddress } from "../helpers/owner-address";
+import { seedOwnerAddress } from "../helpers/owner-address";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
@@ -147,7 +147,7 @@ async function releaseSlowTask(stub: ReturnType<typeof task>): Promise<void> {
 }
 
 beforeEach(async () => {
-  await seedNotifyAddress("42");
+  await seedOwnerAddress("42");
 });
 
 afterEach(() => {
@@ -276,7 +276,7 @@ describe("butler chat", () => {
     );
   });
 
-  it("replies to a WeChat message on WeChat and sends task progress to Telegram", async () => {
+  it("answers and reports a WeChat-origin task on the selected Telegram channel", async () => {
     const tg = fakeChannel();
     const wx = fakeChannel();
     setChannelOverride("telegram", tg.adapter);
@@ -312,13 +312,15 @@ describe("butler chat", () => {
       }),
     );
 
-    expect(wx.sent).toEqual([{ chatId: "wx-user", text: "已安排" }]);
+    // Output follows the selected channel; WeChat never receives it.
+    expect(wx.sent).toEqual([]);
     expect(tg.sent).toEqual([
       {
         chatId: "42",
         text: "⏳ t1 查天气：已开始",
         buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
       },
+      { chatId: "42", text: "已安排" },
     ]);
 
     const row = await runInDurableObject(butlerStub, (_instance, state) =>
@@ -329,6 +331,7 @@ describe("butler chat", () => {
         )
         .toArray()[0],
     );
+    // The source stays a record only, never an output target.
     expect(row).toMatchObject({
       chat_id: JSON.stringify({
         channel: "wechat",
@@ -345,13 +348,13 @@ describe("butler chat", () => {
     );
   });
 
-  it("routes each reply back to the channel it came from", async () => {
+  it("answers two source channels on the selected channel only", async () => {
     const tg = fakeChannel();
     const wx = fakeChannel();
     setChannelOverride("telegram", tg.adapter);
     setChannelOverride("wechat", wx.adapter);
     setModelOverride(
-      scriptedModel([{ text: "来自 Telegram 的回复" }, { text: "来自微信的回复" }]),
+      scriptedModel([{ text: "第一条" }, { text: "第二条" }]),
     );
 
     const stub = butler("chat-106");
@@ -366,10 +369,9 @@ describe("butler chat", () => {
     );
 
     expect(tg.sent).toEqual([
-      { chatId: "42", text: "来自 Telegram 的回复" },
+      { chatId: "42", text: "第一条" },
+      { chatId: "42", text: "第二条" },
     ]);
-    expect(wx.sent).toEqual([
-      { chatId: "wx-user", text: "来自微信的回复" },
-    ]);
+    expect(wx.sent).toEqual([]);
   });
 });

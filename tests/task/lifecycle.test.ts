@@ -6,6 +6,7 @@ import { setModelOverride } from "../../src/llm/models";
 import type { TaskSpec } from "../../src/protocol";
 import { scriptedModel } from "../helpers/scripted-model";
 import { fakeChannel } from "../helpers/fake-channel";
+import { seedOwnerAddress } from "../helpers/owner-address";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -253,6 +254,7 @@ describe("TaskDO lifecycle", () => {
   it("still accepts gateway message events", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
+    await seedOwnerAddress("1");
 
     // Non-text input exercises the RPC entry without opening pi, which this
     // file's Butler already set up with a different model catalog.

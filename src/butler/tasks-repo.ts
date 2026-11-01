@@ -1,4 +1,4 @@
-import type { Artifact } from "../protocol";
+import type { Artifact, ChannelMessageRef } from "../protocol";
 
 export type TaskStatus =
   | "queued"
@@ -12,7 +12,7 @@ export type TaskRow = {
   title: string;
   status: TaskStatus;
   chatId: string | null;
-  progressMessageId: string | null;
+  progressMessageRef: ChannelMessageRef | null;
   summary: string | null;
   artifacts: Artifact[];
   lastSeq: number;
@@ -25,7 +25,7 @@ type RawTaskRow = {
   title: string;
   status: string;
   chat_id: string | null;
-  progress_message_id: string | null;
+  progress_message_ref_json: string | null;
   summary: string | null;
   artifacts_json: string | null;
   last_seq: number;
@@ -113,9 +113,13 @@ export class TasksRepo {
       sets.push("chat_id = ?");
       values.push(patch.chatId);
     }
-    if (patch.progressMessageId !== undefined) {
-      sets.push("progress_message_id = ?");
-      values.push(patch.progressMessageId);
+    if (patch.progressMessageRef !== undefined) {
+      sets.push("progress_message_ref_json = ?");
+      values.push(
+        patch.progressMessageRef === null
+          ? null
+          : JSON.stringify(patch.progressMessageRef),
+      );
     }
     if (patch.summary !== undefined) {
       sets.push("summary = ?");
@@ -150,13 +154,22 @@ function toTaskRow(row: RawTaskRow): TaskRow {
     title: row.title,
     status: row.status as TaskStatus,
     chatId: row.chat_id,
-    progressMessageId: row.progress_message_id,
+    progressMessageRef: parseMessageRef(row.progress_message_ref_json),
     summary: row.summary,
     artifacts: parseArtifacts(row.artifacts_json),
     lastSeq: row.last_seq,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function parseMessageRef(json: string | null): ChannelMessageRef | null {
+  if (!json) return null;
+  try {
+    return JSON.parse(json) as ChannelMessageRef;
+  } catch {
+    return null;
+  }
 }
 
 function parseArtifacts(json: string | null): Artifact[] {

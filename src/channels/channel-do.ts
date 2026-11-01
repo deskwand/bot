@@ -3,7 +3,6 @@ import { config, isOwner } from "../config";
 import {
   decodeAction,
   type ActionEvent,
-  type Address,
   type AdmittedMessage,
   type ChannelId,
   type ChannelMessageRef,
@@ -259,48 +258,6 @@ export class ChannelDO extends Agent<Env> {
       ref.messageId,
       message,
     );
-    return true;
-  }
-
-  // Legacy entry points kept until the Butler migrates to sendCurrent/editCurrent.
-  async send(
-    to: Address | "notify",
-    msg: OutboundMessage,
-  ): Promise<{ messageId: string | null }> {
-    if (to === "notify") {
-      const ref = await this.sendCurrent(msg);
-      return { messageId: ref.messageId };
-    }
-
-    const outbound = to.channel === "wechat" ? forWechat(msg) : msg;
-    const sent = await this.adapter(to.channel).send(
-      to.conversationId,
-      outbound,
-    );
-    return { messageId: sent.messageId || null };
-  }
-
-  async edit(
-    to: Address | "notify",
-    messageId: string,
-    msg: OutboundMessage,
-  ): Promise<boolean> {
-    if (to === "notify") {
-      const route = await this.currentRoute();
-      if (route.channel === null) return false;
-      return this.editCurrent(
-        {
-          channel: route.channel,
-          conversationId: this.currentAddress(route.channel),
-          routeKey: route.routeKey,
-          messageId,
-        },
-        msg,
-      );
-    }
-    if (to.channel === "wechat") return false;
-
-    await this.adapter(to.channel).edit(to.conversationId, messageId, msg);
     return true;
   }
 

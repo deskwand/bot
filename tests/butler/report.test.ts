@@ -7,7 +7,7 @@ import { ChannelError } from "../../src/channels/types";
 import { setClockOverride, type Clock } from "../../src/butler/notifier";
 import { setModelOverride } from "../../src/llm/models";
 import { fakeChannel } from "../helpers/fake-channel";
-import { seedNotifyAddress } from "../helpers/owner-address";
+import { currentChannelRef, seedOwnerAddress } from "../helpers/owner-address";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
@@ -15,7 +15,7 @@ declare module "cloudflare:test" {
 }
 
 beforeEach(async () => {
-  await seedNotifyAddress("42");
+  await seedOwnerAddress("42");
 });
 
 afterEach(() => {
@@ -124,18 +124,31 @@ async function seedTask(
     status?: string;
     chatId?: string | null;
     progressMessageId?: string | null;
+    /** Seeds only the pre-migration column, as an older release left it. */
+    legacyMessageId?: string | null;
   } = {},
 ): Promise<void> {
+  const messageId =
+    row.progressMessageId === undefined ? "77" : row.progressMessageId;
+  const ref =
+    row.legacyMessageId !== undefined
+      ? null
+      : messageId === null
+        ? null
+        : await currentChannelRef(messageId);
+
   await runInDurableObject(stub, (_instance, state) => {
     state.storage.sql.exec(
       `INSERT INTO tasks
-        (id, title, status, created_at, updated_at, chat_id, progress_message_id, artifacts_json, last_seq)
-       VALUES (?, ?, ?, 0, 0, ?, ?, '[]', 0)`,
+        (id, title, status, created_at, updated_at, chat_id, progress_message_id,
+         progress_message_ref_json, artifacts_json, last_seq)
+       VALUES (?, ?, ?, 0, 0, ?, ?, ?, '[]', 0)`,
       row.id ?? "t1",
       row.title ?? "查天气",
       row.status ?? "queued",
       row.chatId === undefined ? "42" : row.chatId,
-      row.progressMessageId === undefined ? "77" : row.progressMessageId,
+      row.legacyMessageId ?? null,
+      ref === null ? null : JSON.stringify(ref),
     );
   });
 }
@@ -158,14 +171,15 @@ async function progressMessageId(
   stub: ButlerStub,
   taskId: string,
 ): Promise<string | null | undefined> {
-  return runInDurableObject(stub, (_instance, state) =>
-    state.storage.sql
-      .exec<{ progress_message_id: string | null }>(
-        `SELECT progress_message_id FROM tasks WHERE id = ?`,
+  return runInDurableObject(stub, (_instance, state) => {
+    const json = state.storage.sql
+      .exec<{ progress_message_ref_json: string | null }>(
+        `SELECT progress_message_ref_json FROM tasks WHERE id = ?`,
         taskId,
       )
-      .toArray()[0]?.progress_message_id,
-  );
+      .toArray()[0]?.progress_message_ref_json;
+    return json ? (JSON.parse(json) as { messageId: string | null }).messageId : null;
+  });
 }
 
 describe("ButlerDO.report", () => {
@@ -346,14 +360,16 @@ describe("ButlerDO.report", () => {
         .callback_data,
     ).toBe("a:approve:t1:ap1");
 
-    const saved = await runInDurableObject(stub, (_instance, state) =>
-      state.storage.sql
-        .exec<{ message_id: string }>(
-          `SELECT message_id FROM approval_messages WHERE approval_id = ?`,
+    const saved = await runInDurableObject(stub, (_instance, state) => {
+      const json = state.storage.sql
+        .exec<{ message_ref_json: string }>(
+          `SELECT message_ref_json FROM approval_messages WHERE approval_id = ?`,
           "ap1",
         )
-        .toArray()[0]?.message_id,
-    );
+        .toArray()[0]?.message_ref_json;
+      return (JSON.parse(json ?? "null") as { messageId: string | null } | null)
+        ?.messageId;
+    });
     expect(saved).toBe(String(500 + sends.length));
 
     await stub.report({
@@ -678,22 +694,30 @@ describe("ButlerDO.report", () => {
     const stub = butler("report-edit-unsupported");
     await seedTask(stub);
 
-    const sent: { to: unknown; text: string }[] = [];
+    const sent: { text: string }[] = [];
     await runInDurableObject(stub, (instance) => {
       (
         instance as unknown as {
           channels(): {
-            edit(): Promise<boolean>;
-            send(to: unknown, msg: { text: string }): Promise<{
+            editCurrent(): Promise<boolean>;
+            sendCurrent(msg: { text: string }): Promise<{
+              channel: "telegram";
+              conversationId: string;
+              routeKey: string;
               messageId: string;
             }>;
           };
         }
       ).channels = () => ({
-        edit: async () => false,
-        send: async (to, msg) => {
-          sent.push({ to, text: msg.text });
-          return { messageId: "99" };
+        editCurrent: async () => false,
+        sendCurrent: async (msg) => {
+          sent.push({ text: msg.text });
+          return {
+            channel: "telegram",
+            conversationId: "42",
+            routeKey: "test-route",
+            messageId: "99",
+          };
         },
       });
     });
@@ -704,7 +728,30 @@ describe("ButlerDO.report", () => {
 
     fake.advance(3001);
     await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
-    expect(sent).toEqual([{ to: "notify", text: "⏳ t1 查天气：b" }]);
+    expect(sent).toEqual([{ text: "⏳ t1 查天气：b" }]);
     expect(await progressMessageId(stub, "t1")).toBe("99");
+  });
+
+  it("sends a new message for a pre-migration bare progress message id", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+
+    const stub = butler("report-legacy-id");
+    await seedTask(stub, { legacyMessageId: "77" });
+
+    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
+
+    // A bare id cannot prove ownership, so it is never edited.
+    expect(channel.edits).toEqual([]);
+    expect(channel.sent).toEqual([
+      {
+        chatId: "42",
+        text: "⏳ t1 查天气：a",
+        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
+      },
+    ]);
+    expect(await progressMessageId(stub, "t1")).toBe("1");
   });
 });

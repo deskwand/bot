@@ -500,6 +500,12 @@ describe("WeChat sending", () => {
         "ctx-reply",
         Date.now(),
       );
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', ?, ?)`,
+        OWNER,
+        Date.now(),
+      );
     });
 
     const { calls, fetchImpl } = scriptedILink([
@@ -507,10 +513,7 @@ describe("WeChat sending", () => {
     ]);
     setILinkFetchOverride(fetchImpl);
 
-    await channels().send(
-      { channel: "wechat", conversationId: OWNER },
-      { text: "reply" },
-    );
+    await channels().sendCurrent({ text: "reply" });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe(
