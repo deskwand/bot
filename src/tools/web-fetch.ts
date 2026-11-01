@@ -17,6 +17,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function abortReason(signal: AbortSignal): unknown {
+  if (signal.reason !== undefined) return signal.reason;
+  const error = new Error("aborted");
+  error.name = "AbortError";
+  return error;
+}
+
 function truncate(text: string): string {
   return text.length <= MAX_TEXT_CHARS
     ? text
@@ -31,10 +38,10 @@ async function fetchWithAbort(
   let cleanup = () => {};
   const aborted = new Promise<never>((_resolve, reject) => {
     if (signal.aborted) {
-      reject(new Error("已取消"));
+      reject(abortReason(signal));
       return;
     }
-    const onAbort = () => reject(new Error("已取消"));
+    const onAbort = () => reject(abortReason(signal));
     signal.addEventListener("abort", onAbort, { once: true });
     cleanup = () => signal.removeEventListener("abort", onAbort);
   });
@@ -99,6 +106,14 @@ export function webFetchTool(
       try {
         response = await fetchWithAbort(fetchImpl, url, signal);
       } catch (error) {
+        // Caller cancellation must propagate so the run stops; only the
+        // tool's own timeout becomes a normal "timed out" answer.
+        if (context.abortSignal?.aborted) throw error;
+        if (timeout.aborted) {
+          return textResult(
+            `读取超时：超过 ${FETCH_TIMEOUT_MS / 1000} 秒`,
+          );
+        }
         return textResult(`读取失败：${errorMessage(error)}`);
       }
 

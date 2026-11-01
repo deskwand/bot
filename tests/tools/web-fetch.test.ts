@@ -1,6 +1,6 @@
 import type { Context } from "@earendil-works/chord";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { webFetchTool } from "../../src/tools/web-fetch";
 
 function context(signal?: AbortSignal): Context {
@@ -130,7 +130,7 @@ describe("webFetchTool", () => {
     expect(text.length).toBeLessThan(20_000 + 50);
   });
 
-  it("ends quickly when the caller aborts, even if fetch never settles", async () => {
+  it("rethrows a caller abort, even if fetch never settles", async () => {
     const fakeFetch = (() => new Promise<Response>(() => {})) as typeof fetch;
     const controller = new AbortController();
     const tool = webFetchTool(fakeFetch);
@@ -138,13 +138,36 @@ describe("webFetchTool", () => {
     const started = Date.now();
     setTimeout(() => controller.abort(), 10);
 
-    const result = await tool.execute(
+    const promise = tool.execute(
       { url: "https://example.test/hang" },
       {} as never,
       context(controller.signal),
     );
 
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
     expect(Date.now() - started).toBeLessThan(100);
-    expect(textOf(result)).toContain("已取消");
+  });
+
+  it("reports the tool timeout as a timeout message", async () => {
+    const timeout = AbortSignal.abort(
+      new DOMException("timed out", "TimeoutError"),
+    );
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(timeout);
+
+    try {
+      const fakeFetch = (() => new Promise<Response>(() => {})) as typeof fetch;
+      const result = await webFetchTool(fakeFetch).execute(
+        { url: "https://example.test/slow" },
+        {} as never,
+        context(),
+      );
+
+      expect(textOf(result)).toContain("超时");
+      expect(textOf(result)).not.toContain("已取消");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });

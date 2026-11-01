@@ -43,6 +43,28 @@ describe("saveArtifactTool", () => {
     );
   });
 
+  it("sanitizes traversal characters and encodes each key segment in the link", async () => {
+    const baseUrl = "https://example.com";
+    const tool = saveArtifactTool(env.ARTIFACTS, () => "t3", baseUrl);
+
+    const result = await tool.execute(
+      { filename: "../x/报告 v1?.md", content: "body" },
+      {} as never,
+      context(),
+    );
+    const url = textOf(result).match(/https:\/\/example\.com\/a\/\S+/)?.[0];
+
+    expect(url).toBeDefined();
+    const path = new URL(url!).pathname;
+    const key = decodeURIComponent(path.slice("/a/".length));
+
+    expect(key.split("/")).toHaveLength(3);
+    expect(key.startsWith("t3/")).toBe(true);
+    expect(key.endsWith("/报告_v1_.md")).toBe(true);
+    expect(key).not.toContain("..");
+    expect(await (await env.ARTIFACTS.get(key))?.text()).toBe("body");
+  });
+
   it("honours a custom content type", async () => {
     const tool = saveArtifactTool(env.ARTIFACTS, () => "t2", "https://example.com");
 
