@@ -4,8 +4,8 @@ import { config, isOwner, needsApproval, type AppConfig } from "../src/config";
 const cfg: AppConfig = {
   owner: { telegramUserIds: [111, 222] },
   models: {
-    butler: { provider: "anthropic", id: "claude-sonnet-5-5" },
-    task: { provider: "anthropic", id: "claude-sonnet-5-5" },
+    butler: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+    task: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
   },
   mcpServers: [
     { name: "notion", url: "https://mcp.example.com/notion", requireApproval: ["create_page"] },
@@ -39,8 +39,8 @@ describe("needsApproval", () => {
 
 describe("default config", () => {
   it("configures both roles with the default model", () => {
-    expect(config.models.butler).toEqual({ provider: "anthropic", id: "claude-sonnet-5-5" });
-    expect(config.models.task).toEqual({ provider: "anthropic", id: "claude-sonnet-5-5" });
+    expect(config.models.butler).toEqual({ provider: "opencode-go", id: "deepseek-v4.1-flash" });
+    expect(config.models.task).toEqual({ provider: "opencode-go", id: "deepseek-v4.1-flash" });
   });
 
   it("starts with no owners and no MCP servers", () => {

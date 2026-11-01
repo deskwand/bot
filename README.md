@@ -13,7 +13,7 @@
 - npm
 - Cloudflare 账号，并已执行 `npx wrangler login`
 - Telegram Bot Token（在 [@BotFather](https://t.me/BotFather) 创建 bot）
-- Anthropic API Key
+- OpenCode Go API Key（模型调用）
 - Tavily API Key（联网搜索）
 - 可选：MCP 服务器（在 `src/config.ts` 中配置）
 
@@ -36,7 +36,7 @@ npx wrangler r2 bucket create my-artifacts
 生产环境通过 `wrangler secret put` 逐个写入（值不会进入仓库）：
 
 ```bash
-npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put OPENCODE_API_KEY
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put TAVILY_API_KEY
@@ -56,7 +56,7 @@ cp .dev.vars.example .dev.vars
 
 | 名称 | 类型 | 说明 |
 | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | secret | 模型调用（直接使用 provider key，不经 AI Gateway） |
+| `OPENCODE_API_KEY` | secret | 模型调用（直接使用 OpenCode Go provider key，不经 AI Gateway） |
 | `TELEGRAM_BOT_TOKEN` | secret | BotFather 提供的 token |
 | `TELEGRAM_WEBHOOK_SECRET` | secret | webhook 校验密钥（自定义随机串） |
 | `TAVILY_API_KEY` | secret | Tavily 搜索 |
@@ -67,7 +67,7 @@ cp .dev.vars.example .dev.vars
 编辑 `src/config.ts`：
 
 - `owner.telegramUserIds`：填入允许使用该 bot 的 Telegram 用户 ID（数字）。不在白名单内的消息会被忽略。
-- `models`：按角色（`butler` / `task`）配置模型，默认 `claude-sonnet-5-5`。
+- `models`：按角色（`butler` / `task`）配置模型，默认 OpenCode Go 的 `deepseek-v4.1-flash`。
 - `mcpServers`：MCP 服务器列表；对需要人工确认的工具在 `requireApproval` 中列出工具名，触发时会先发 ✅/❌ 审批按钮。
 
 编辑 `wrangler.jsonc` 的 `vars.PUBLIC_BASE_URL`，填入部署后的公开地址，例如 `https://bot.<your-subdomain>.workers.dev` 或自定义域名。产物链接依赖该值；如果还不确定地址，可以先部署一次拿到 URL，回填后再部署一次。

@@ -1,11 +1,12 @@
 import { createModels, type MutableModels, type Provider } from "@earendil-works/pi-ai/models";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { opencodeGoProvider } from "@earendil-works/pi-ai/providers/opencode-go";
 import type { AuthContext } from "@earendil-works/pi-ai";
 import type { PiModel } from "agents/harness/pi";
 
 export type Role = "butler" | "task";
 
-export type ModelRef = { provider: "anthropic"; id: string };
+export type ModelRef = { provider: "anthropic" | "opencode-go"; id: string };
 
 /**
  * Test-only model override. When set, `resolveModel` returns it regardless of
@@ -33,10 +34,10 @@ export function resolveModel(ref: ModelRef, _env: Env): PiModel {
 }
 
 /**
- * Builds the pi-ai model catalog for a Worker environment. The Anthropic
- * provider resolves `ANTHROPIC_API_KEY` through this auth context, because the
- * default pi-ai auth context reads `process.env`, which Workers does not
- * populate from bindings.
+ * Builds the pi-ai model catalog for a Worker environment. Providers resolve
+ * their API keys (`OPENCODE_API_KEY`, `ANTHROPIC_API_KEY`) through this auth
+ * context, because the default pi-ai auth context reads `process.env`, which
+ * Workers does not populate from bindings.
  */
 export function createModelsForEnv(env: Env): MutableModels {
   const authContext: AuthContext = {
@@ -50,6 +51,7 @@ export function createModelsForEnv(env: Env): MutableModels {
   };
 
   const models = createModels({ authContext });
+  models.setProvider(opencodeGoProvider());
   models.setProvider(anthropicProvider());
   for (const provider of testProviders.values()) models.setProvider(provider);
   return models;

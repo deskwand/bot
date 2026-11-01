@@ -19,8 +19,8 @@ export const config: AppConfig = {
     telegramUserIds: [],
   },
   models: {
-    butler: { provider: "anthropic", id: "claude-sonnet-5-5" },
-    task: { provider: "anthropic", id: "claude-sonnet-5-5" },
+    butler: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+    task: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
   },
   mcpServers: [],
 };
