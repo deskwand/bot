@@ -1,10 +1,11 @@
-# Telegram 管家 Bot（Cloudflare Workers）
+# 多渠道管家 Bot（Cloudflare Workers）
 
 一个部署在 Cloudflare Workers 上的单人 Telegram 助手：管家负责对话、记忆、任务派发与通知，每个任务由独立的 Durable Object 执行，结果（含产物链接）统一由管家回传。
 
+- 渠道层：`ChannelDO`（Telegram webhook 与微信 iLink 轮询，单实例）
 - 控制链路：`ButlerDO`（全局单实例，Pi agent + SQLite 业务表）
 - 执行链路：`TaskDO`（每任务一个实例，工具调用、审批、崩溃恢复）
-- 定时任务：通过 Agents SDK `Agent.schedule` 注册 cron（不使用 Cron Trigger），cron 按 **UTC** 解释
+- 定时任务：通过 Agents SDK `Agent.schedule` 注册 cron（微信轮询保活另用每 5 分钟一次的 Cron Trigger），cron 按 **UTC** 解释
 - 产物：写入 R2，通过 `${PUBLIC_BASE_URL}/a/<key>` 访问
 
 ## 前置条件
@@ -98,6 +99,22 @@ token 与 secret 从环境变量读取，缺失时回退到 `.dev.vars`；脚本
 curl "https://api.telegram.org/bot<token>/getWebhookInfo"
 ```
 
+## 微信渠道
+
+部署后运行（推荐 Node 26，脚本使用 `--use-env-proxy`）：
+
+```bash
+npm run wechat-login
+```
+
+用主人的微信扫描终端二维码，并在手机上确认。脚本每 2 秒查询一次状态；二维码过期后自动换码，最多显示 3 张。登录凭据通过 stdin 写入 Cloudflare 的 `WECHAT_CREDENTIALS` secret，不保存到文件，也不打印 token。iLink 请求使用环境代理；上传 secret 时会移除 HTTP/HTTPS 代理变量。
+
+Cron 每 5 分钟检查微信轮询。登录后最迟约 5 分钟开始接收消息。只接受扫码主人的消息，目前支持文字对话；图片或文件会得到“目前只支持文字消息”的回复。微信与 Telegram 共用管家、记忆与任务，对话回复回到发起渠道，任务进度、审批与完成通知默认发往 Telegram（`src/config.ts` 的 `notifyChannel`）。
+
+微信不支持消息编辑与按钮。需要显示按钮时，正文会追加 `回复"取消 t3"`、`回复"批准 t3"` 或 `回复"拒绝 t3"` 等文字提示。登录过期后，Telegram 会收到一次提醒；重新运行 `npm run wechat-login` 扫码即可恢复。
+
+本地开发可在 `.dev.vars` 中设置 `WECHAT_CREDENTIALS`，格式见 `.dev.vars.example`。凭据包含敏感 token，请勿提交或复制到日志。
+
 ## 本地开发
 
 ```bash
@@ -133,14 +150,15 @@ npm run typecheck    # tsc --noEmit
 ```
 src/
   index.ts              # Worker 入口 + Gateway 路由（/telegram/webhook、/a/<key>）
-  gateway.ts            # 请求分发、owner 校验、动作回调
-  channels/             # ChannelAdapter（Telegram 实现）
+  gateway.ts            # webhook 转发、产物路由
+  channels/             # ChannelDO、Telegram 与微信 iLink 适配器
   butler/               # Butler DO：对话、记忆、任务索引、定时任务、通知节流
   task/                 # Task DO：执行、事件 outbox、审批、控制指令
   tools/                # web_search、web_fetch、R2 产物、MCP 包装
   llm/                  # 按角色解析模型
   config.ts             # 白名单、模型、MCP 与审批配置
 scripts/set-webhook.ts  # 设置 Telegram webhook
+scripts/wechat-login.ts # 微信扫码登录并写入 Cloudflare secret
 tests/                  # 测试与测试专用 Worker 入口
 ```
 

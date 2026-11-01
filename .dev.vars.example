@@ -3,3 +3,6 @@ OPENCODE_API_KEY=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
 PUBLIC_BASE_URL=
+
+# 可选：微信本地开发凭据。生产环境由 npm run wechat-login 写入 secret。
+# WECHAT_CREDENTIALS={"token":"...","baseUrl":"https://ilinkai.weixin.qq.com","accountId":"...","userId":"..."}
