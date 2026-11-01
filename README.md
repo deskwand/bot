@@ -14,7 +14,7 @@
 - Cloudflare 账号，并已执行 `npx wrangler login`
 - Telegram Bot Token（在 [@BotFather](https://t.me/BotFather) 创建 bot）
 - OpenCode Go API Key（模型调用）
-- Tavily API Key（联网搜索）
+- 联网搜索使用 Exa 免费 MCP，无需 API Key
 - 可选：MCP 服务器（在 `src/config.ts` 中配置）
 
 ## 1. 安装依赖
@@ -39,7 +39,6 @@ npx wrangler r2 bucket create my-artifacts
 npx wrangler secret put OPENCODE_API_KEY
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
-npx wrangler secret put TAVILY_API_KEY
 ```
 
 `TELEGRAM_WEBHOOK_SECRET` 是自定义的随机字符串，用于校验 Telegram 回调头 `X-Telegram-Bot-Api-Secret-Token`，可用下面命令生成：
@@ -59,7 +58,6 @@ cp .dev.vars.example .dev.vars
 | `OPENCODE_API_KEY` | secret | 模型调用（直接使用 OpenCode Go provider key，不经 AI Gateway） |
 | `TELEGRAM_BOT_TOKEN` | secret | BotFather 提供的 token |
 | `TELEGRAM_WEBHOOK_SECRET` | secret | webhook 校验密钥（自定义随机串） |
-| `TAVILY_API_KEY` | secret | Tavily 搜索 |
 | `PUBLIC_BASE_URL` | var | 产物链接前缀，填部署后的公开地址 |
 
 ## 4. 填写个人配置

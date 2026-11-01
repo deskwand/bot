@@ -129,7 +129,7 @@ export class TaskDO extends Agent<Env> {
       name: "execution",
       tools: [
         withProgress(
-          webSearchTool(this.env.TAVILY_API_KEY),
+          webSearchTool(),
           emitProgress,
           (args) => `搜索：${args.query}`,
         ),
