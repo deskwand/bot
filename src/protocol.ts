@@ -13,6 +13,21 @@ export type MessageEvent = {
   eventId: string;
 };
 
+/** An inbound message that passed the active-channel admission check. */
+export type AdmittedMessage = MessageEvent & { routeKey: string };
+
+/** Where a sent message lives, scoped to the deployment that sent it. */
+export type ChannelMessageRef = Address & {
+  routeKey: string;
+  messageId: string | null;
+};
+
+/** The channel currently selected, with the ownership key of this instance. */
+export type RouteSnapshot = {
+  channel: ChannelId | null;
+  routeKey: string;
+};
+
 export type ActionKind = "approve" | "reject" | "cancel";
 
 export type ActionEvent = {

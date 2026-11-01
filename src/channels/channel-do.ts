@@ -5,9 +5,11 @@ import {
   type ActionEvent,
   type Address,
   type ChannelId,
+  type ChannelMessageRef,
   type InboundEvent,
   type MessageEvent,
   type OutboundMessage,
+  type RouteSnapshot,
 } from "../protocol";
 import {
   getChannelOverride,
@@ -15,6 +17,13 @@ import {
   getPollTimingOverride,
   getWeChatCredentialsOverride,
 } from "./override";
+import {
+  DISABLED_ROUTE_KEY,
+  parseActiveChannel,
+  routeIdentity,
+  sha256Hex,
+  versionIdOf,
+} from "./route-identity";
 import { createTelegramAdapter } from "./telegram";
 import { ChannelError, type ChannelAdapter } from "./types";
 import {
@@ -45,14 +54,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function credentialsHash(json: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(json),
-  );
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+function credentialsHash(json: string): Promise<string> {
+  return sha256Hex(json);
 }
 
 const ACTION_LABELS = {
@@ -94,6 +97,8 @@ export class ChannelDO extends Agent<Env> {
 
   private telegramInstance: ChannelAdapter | undefined;
   private activeWeChatRun: { hash: string; raw: string } | null = null;
+  /** Cached for the lifetime of this instance: its environment is immutable. */
+  private routePromise: Promise<RouteSnapshot> | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -174,15 +179,77 @@ export class ChannelDO extends Agent<Env> {
     }
   }
 
+  /**
+   * The selection this instance executes: the active channel and the route key
+   * that scopes message references to this deployment and target account.
+   */
+  async currentRoute(): Promise<RouteSnapshot> {
+    this.routePromise ??= this.resolveRoute();
+    return this.routePromise;
+  }
+
+  /** True while `routeKey` still describes this instance's selection. */
+  async isAdmissionCurrent(
+    channel: ChannelId,
+    routeKey: string,
+  ): Promise<boolean> {
+    const route = await this.currentRoute();
+    return route.channel === channel && route.routeKey === routeKey;
+  }
+
+  /** Sends on the selected channel and returns the owned message reference. */
+  async sendCurrent(message: OutboundMessage): Promise<ChannelMessageRef> {
+    const route = await this.currentRoute();
+    if (route.channel === null) {
+      throw new ChannelError("channel selection disabled", 0);
+    }
+
+    return this.sendOnRoute(route.channel, route.routeKey, message);
+  }
+
+  /** Edits only a reference owned by this instance's current route. */
+  async editCurrent(
+    ref: ChannelMessageRef,
+    message: OutboundMessage,
+  ): Promise<boolean> {
+    const route = await this.currentRoute();
+    if (
+      route.channel === null ||
+      ref.channel !== route.channel ||
+      ref.routeKey !== route.routeKey ||
+      ref.messageId === null ||
+      route.channel === "wechat"
+    ) {
+      return false;
+    }
+
+    if (ref.conversationId !== this.currentAddress(route.channel)) {
+      return false;
+    }
+
+    await this.adapter(route.channel).edit(
+      ref.conversationId,
+      ref.messageId,
+      message,
+    );
+    return true;
+  }
+
+  // Legacy entry points kept until the Butler migrates to sendCurrent/editCurrent.
   async send(
     to: Address | "notify",
     msg: OutboundMessage,
   ): Promise<{ messageId: string | null }> {
-    const address = this.resolveAddress(to);
-    const adapter = this.adapter(address.channel);
-    const outbound =
-      address.channel === "wechat" ? forWechat(msg) : msg;
-    const sent = await adapter.send(address.conversationId, outbound);
+    if (to === "notify") {
+      const ref = await this.sendCurrent(msg);
+      return { messageId: ref.messageId };
+    }
+
+    const outbound = to.channel === "wechat" ? forWechat(msg) : msg;
+    const sent = await this.adapter(to.channel).send(
+      to.conversationId,
+      outbound,
+    );
     return { messageId: sent.messageId || null };
   }
 
@@ -191,15 +258,91 @@ export class ChannelDO extends Agent<Env> {
     messageId: string,
     msg: OutboundMessage,
   ): Promise<boolean> {
-    const address = this.resolveAddress(to);
-    if (address.channel === "wechat") return false;
+    if (to === "notify") {
+      const route = await this.currentRoute();
+      if (route.channel === null) return false;
+      return this.editCurrent(
+        {
+          channel: route.channel,
+          conversationId: this.currentAddress(route.channel),
+          routeKey: route.routeKey,
+          messageId,
+        },
+        msg,
+      );
+    }
+    if (to.channel === "wechat") return false;
 
-    await this.adapter("telegram").edit(
-      address.conversationId,
-      messageId,
-      msg,
-    );
+    await this.adapter(to.channel).edit(to.conversationId, messageId, msg);
     return true;
+  }
+
+  private async resolveRoute(): Promise<RouteSnapshot> {
+    const versionId = versionIdOf(this.env.CF_VERSION_METADATA);
+    if (versionId === null) {
+      console.error("channel: missing CF_VERSION_METADATA binding");
+      return { channel: null, routeKey: DISABLED_ROUTE_KEY };
+    }
+
+    const channel = parseActiveChannel(this.env.ACTIVE_CHANNEL);
+    if (channel === null) {
+      console.error("channel: invalid ACTIVE_CHANNEL");
+      return { channel: null, routeKey: DISABLED_ROUTE_KEY };
+    }
+
+    return routeIdentity({
+      versionId,
+      channel,
+      targetIdentityHash: await this.targetIdentityHash(channel),
+    });
+  }
+
+  /** Hashes the selected channel's account identity; never stores it plainly. */
+  private targetIdentityHash(channel: ChannelId): Promise<string> {
+    if (channel === "wechat") {
+      const raw = this.weChatCredentialsJson();
+      return raw
+        ? credentialsHash(raw)
+        : sha256Hex("wechat:unconfigured");
+    }
+
+    return sha256Hex(
+      `telegram:${this.env.TELEGRAM_BOT_TOKEN}:${config.owner.telegramUserIds.join(",")}`,
+    );
+  }
+
+  private async sendOnRoute(
+    channel: ChannelId,
+    routeKey: string,
+    msg: OutboundMessage,
+  ): Promise<ChannelMessageRef> {
+    const conversationId = this.currentAddress(channel);
+    const outbound = channel === "wechat" ? forWechat(msg) : msg;
+    const sent = await this.adapter(channel).send(conversationId, outbound);
+    return {
+      channel,
+      conversationId,
+      routeKey,
+      messageId: sent.messageId || null,
+    };
+  }
+
+  /** Selected channel's conversation; never falls back to the other channel. */
+  private currentAddress(channel: ChannelId): string {
+    const row = this.db
+      .exec<{ conversation_id: string }>(
+        `SELECT conversation_id FROM owner_addresses WHERE channel = ?`,
+        channel,
+      )
+      .toArray()[0];
+    if (row) return row.conversation_id;
+
+    if (channel === "telegram") {
+      const fallback = config.owner.telegramUserIds[0];
+      if (fallback !== undefined) return String(fallback);
+    }
+
+    throw new ChannelError(`no ${channel} address`, 0);
   }
 
   async ensurePolling(): Promise<void> {
@@ -501,30 +644,6 @@ export class ChannelDO extends Agent<Env> {
       event.chatId,
       Date.now(),
     );
-  }
-
-  private resolveAddress(to: Address | "notify"): Address {
-    if (to !== "notify") return to;
-
-    const row = this.db
-      .exec<{ conversation_id: string }>(
-        `SELECT conversation_id FROM owner_addresses WHERE channel = ?`,
-        config.notifyChannel,
-      )
-      .toArray()[0];
-    if (row) {
-      return {
-        channel: config.notifyChannel,
-        conversationId: row.conversation_id,
-      };
-    }
-
-    const fallback = config.owner.telegramUserIds[0];
-    if (fallback !== undefined) {
-      return { channel: "telegram", conversationId: String(fallback) };
-    }
-
-    throw new ChannelError("no notify address", 0);
   }
 
   private adapter(channel: ChannelId): ChannelAdapter {
