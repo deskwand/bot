@@ -32,7 +32,20 @@ export function parseCredentials(json: string): WeChatCredentials | null {
   } catch {
     return null;
   }
-  return isRecord(value) ? credentialsFromQrStatus(value) : null;
+  if (!isRecord(value)) return null;
+  return credentialsFromQrStatus(value) ?? credentialsFromStored(value);
+}
+
+/** Accepts the assembled credential object written by `wechat-login`. */
+function credentialsFromStored(
+  value: Record<string, unknown>,
+): WeChatCredentials | null {
+  const token = readString(value, "token");
+  const baseUrl = readString(value, "baseUrl");
+  const accountId = readString(value, "accountId");
+  const userId = readString(value, "userId");
+  if (!token || !baseUrl || !accountId || !userId) return null;
+  return { token, baseUrl, accountId, userId };
 }
 
 export function credentialsFromQrStatus(

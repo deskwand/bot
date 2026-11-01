@@ -1,4 +1,4 @@
-import { Agent } from "agents";
+import { Agent, type Schedule } from "agents";
 import { config, isOwner } from "../config";
 import {
   decodeAction,
@@ -9,9 +9,51 @@ import {
   type MessageEvent,
   type OutboundMessage,
 } from "../protocol";
-import { getChannelOverride } from "./override";
+import {
+  getChannelOverride,
+  getILinkFetchOverride,
+  getPollTimingOverride,
+  getWeChatCredentialsOverride,
+} from "./override";
 import { createTelegramAdapter } from "./telegram";
 import { ChannelError, type ChannelAdapter } from "./types";
+import {
+  createILinkClient,
+  isSessionExpired,
+  parseCredentials,
+  type WeChatCredentials,
+  type WeChatUpdate,
+} from "./wechat/ilink";
+
+const WECHAT_POLL_RUN_MS = 600_000;
+const WECHAT_POLL_BACKOFF_MS = 1_000;
+const WECHAT_POLL_MAX_BACKOFF_MS = 10_000;
+const WECHAT_GET_UPDATES_TIMEOUT_MS = 40_000;
+const WECHAT_HEARTBEAT_MAX_AGE_MS = 120_000;
+const WECHAT_EXPIRED_TEXT =
+  "微信登录已过期，请在电脑上运行 npm run wechat-login";
+
+type WeChatState = {
+  credentials_hash: string | null;
+  cursor: string | null;
+  status: string | null;
+  last_poll_at: number | null;
+  expiry_notified: number;
+};
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function credentialsHash(json: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(json),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
 
 const ACTION_LABELS = {
   approve: "批准",
@@ -160,7 +202,246 @@ export class ChannelDO extends Agent<Env> {
   }
 
   async ensurePolling(): Promise<void> {
-    // WeChat polling starts in a later task.
+    const raw = this.weChatCredentialsJson();
+    if (!raw) return;
+
+    const credentials = parseCredentials(raw);
+    if (!credentials) {
+      this.updateWeChatState({ status: "stopped" });
+      console.error("channel: invalid WECHAT_CREDENTIALS");
+      return;
+    }
+
+    const hash = await credentialsHash(raw);
+    let state = this.readWeChatState();
+    if (state.credentials_hash !== hash) {
+      this.db.exec("DELETE FROM wechat_contexts");
+      this.updateWeChatState({
+        credentials_hash: hash,
+        cursor: null,
+        status: "running",
+        last_poll_at: null,
+        expiry_notified: 0,
+      });
+      state = this.readWeChatState();
+    }
+
+    if (state.status !== "running") return;
+
+    const now = Date.now();
+    if (
+      state.last_poll_at !== null &&
+      now - state.last_poll_at < WECHAT_HEARTBEAT_MAX_AGE_MS
+    ) {
+      return;
+    }
+
+    const pending = await this.listSchedules();
+    if (
+      pending.some(
+        (schedule) =>
+          schedule.callback === "pollWeChat" && schedule.time * 1000 > now,
+      )
+    ) {
+      return;
+    }
+
+    // Idempotent so a schedule(0) that is already due still counts as pending.
+    await this.schedule(0, "pollWeChat", undefined, { idempotent: true });
+  }
+
+  async pollWeChat(
+    _payload?: unknown,
+    _schedule?: Schedule<unknown>,
+  ): Promise<void> {
+    const credentials = this.parseWeChatCredentials();
+    if (!credentials) return;
+    if (this.readWeChatState().status !== "running") return;
+
+    const timing = getPollTimingOverride() ?? {
+      runMs: WECHAT_POLL_RUN_MS,
+      baseBackoffMs: WECHAT_POLL_BACKOFF_MS,
+    };
+    const client = createILinkClient({
+      fetch: getILinkFetchOverride() ?? undefined,
+    });
+    const startedAt = Date.now();
+    let backoffMs = timing.baseBackoffMs;
+
+    do {
+      const cursor = this.readWeChatState().cursor ?? "";
+      // Refresh the heartbeat before the long poll so ensurePolling does not
+      // start a second chain while getupdates is still waiting.
+      this.updateWeChatState({ last_poll_at: Date.now() });
+
+      try {
+        const batch = await client.getUpdates(
+          credentials,
+          cursor,
+          AbortSignal.timeout(WECHAT_GET_UPDATES_TIMEOUT_MS),
+        );
+        this.updateWeChatState({
+          cursor: batch.cursor,
+          last_poll_at: Date.now(),
+        });
+        this.dispatchWeChatUpdates(batch.updates, batch.cursor, credentials);
+        backoffMs = timing.baseBackoffMs;
+      } catch (error) {
+        if (isSessionExpired(error)) {
+          await this.expireWeChat();
+          return;
+        }
+        console.error(
+          `channel: wechat poll failed: ${errorMessage(error)}`,
+        );
+        await sleep(backoffMs);
+        backoffMs = Math.min(backoffMs * 2, WECHAT_POLL_MAX_BACKOFF_MS);
+      }
+    } while (Date.now() - startedAt < timing.runMs);
+
+    if (this.readWeChatState().status !== "running") return;
+    await this.schedule(0, "pollWeChat");
+  }
+
+  private async expireWeChat(): Promise<void> {
+    const state = this.readWeChatState();
+    this.updateWeChatState({ status: "expired", expiry_notified: 1 });
+    if (state.expiry_notified !== 0) return;
+
+    try {
+      await this.send("notify", { text: WECHAT_EXPIRED_TEXT });
+    } catch (error) {
+      console.error(
+        `channel: wechat expiry notice failed: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  private dispatchWeChatUpdates(
+    updates: WeChatUpdate[],
+    cursor: string,
+    credentials: WeChatCredentials,
+  ): void {
+    updates.forEach((update, index) => {
+      if (
+        update.messageType !== 1 ||
+        update.fromUserId !== credentials.userId
+      ) {
+        return;
+      }
+
+      if (update.contextToken) {
+        this.db.exec(
+          `INSERT INTO wechat_contexts (user_id, context_token, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             context_token = excluded.context_token,
+             updated_at = excluded.updated_at`,
+          update.fromUserId,
+          update.contextToken,
+          Date.now(),
+        );
+      }
+
+      const event: MessageEvent = {
+        type: "message",
+        channel: "wechat",
+        chatId: update.fromUserId,
+        userId: update.fromUserId,
+        text: update.text,
+        eventId: `wx:${update.messageId ?? `${cursor}:${index}`}`,
+      };
+      this.rememberOwner(event);
+      this.dispatchMessage(event);
+    });
+  }
+
+  private weChatCredentialsJson(): string | null {
+    return getWeChatCredentialsOverride() ?? this.env.WECHAT_CREDENTIALS ?? null;
+  }
+
+  private parseWeChatCredentials(): WeChatCredentials | null {
+    const raw = this.weChatCredentialsJson();
+    return raw ? parseCredentials(raw) : null;
+  }
+
+  private readWeChatState(): WeChatState {
+    return (
+      this.db
+        .exec<WeChatState>(
+          `SELECT credentials_hash, cursor, status, last_poll_at,
+                  expiry_notified
+           FROM wechat_state LIMIT 1`,
+        )
+        .toArray()[0] ?? {
+        credentials_hash: null,
+        cursor: null,
+        status: null,
+        last_poll_at: null,
+        expiry_notified: 0,
+      }
+    );
+  }
+
+  private updateWeChatState(patch: Partial<WeChatState>): void {
+    const next = { ...this.readWeChatState(), ...patch };
+    this.db.exec(
+      `INSERT INTO wechat_state
+         (credentials_hash, cursor, status, last_poll_at, expiry_notified)
+       SELECT ?, ?, ?, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM wechat_state)`,
+      next.credentials_hash,
+      next.cursor,
+      next.status,
+      next.last_poll_at,
+      next.expiry_notified,
+    );
+    this.db.exec(
+      `UPDATE wechat_state SET
+         credentials_hash = ?,
+         cursor = ?,
+         status = ?,
+         last_poll_at = ?,
+         expiry_notified = ?`,
+      next.credentials_hash,
+      next.cursor,
+      next.status,
+      next.last_poll_at,
+      next.expiry_notified,
+    );
+  }
+
+  private wechatAdapter(): ChannelAdapter {
+    const client = createILinkClient({
+      fetch: getILinkFetchOverride() ?? undefined,
+    });
+    const hub = this;
+
+    return {
+      parseInbound: async () => null,
+      send: async (chatId, msg) => {
+        const credentials = hub.parseWeChatCredentials();
+        if (!credentials) {
+          throw new ChannelError("wechat not configured", 0);
+        }
+
+        const context = hub.db
+          .exec<{ context_token: string }>(
+            `SELECT context_token FROM wechat_contexts WHERE user_id = ?`,
+            chatId,
+          )
+          .toArray()[0]?.context_token;
+        if (!context) {
+          throw new ChannelError("wechat context missing", 0);
+        }
+
+        if (msg.text.length === 0) return { messageId: "" };
+        await client.sendText(credentials, chatId, context, msg.text);
+        return { messageId: "" };
+      },
+      edit: async () => {},
+      answerAction: async () => {},
+    };
   }
 
   private dispatchMessage(event: MessageEvent): void {
@@ -187,8 +468,7 @@ export class ChannelDO extends Agent<Env> {
     if (event.channel === "telegram") {
       return isOwner(config, Number(event.userId));
     }
-    // WeChat uses the logged-in user's id once the channel is configured.
-    return false;
+    return this.parseWeChatCredentials()?.userId === event.userId;
   }
 
   private rememberOwner(event: InboundEvent): void {
@@ -233,7 +513,7 @@ export class ChannelDO extends Agent<Env> {
     if (override) return override;
 
     if (channel === "wechat") {
-      throw new ChannelError("wechat not configured", 0);
+      return this.wechatAdapter();
     }
 
     this.telegramInstance ??= createTelegramAdapter({

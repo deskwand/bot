@@ -23,3 +23,38 @@ export function getChannelOverride(
 ): ChannelAdapter | null {
   return channelOverrides.get(channel) ?? null;
 }
+
+/** Test-only iLink fetch replacement. */
+let ilinkFetchOverride: typeof fetch | null = null;
+
+export function setILinkFetchOverride(fetchImpl: typeof fetch | null): void {
+  ilinkFetchOverride = fetchImpl;
+}
+
+export function getILinkFetchOverride(): typeof fetch | null {
+  return ilinkFetchOverride;
+}
+
+/** Test-only shortened polling durations. */
+export type PollTiming = { runMs: number; baseBackoffMs: number };
+
+let pollTimingOverride: PollTiming | null = null;
+
+export function setPollTimingOverride(timing: PollTiming | null): void {
+  pollTimingOverride = timing;
+}
+
+export function getPollTimingOverride(): PollTiming | null {
+  return pollTimingOverride;
+}
+
+/** Test-only credential JSON injection. */
+let weChatCredentialsOverride: string | null = null;
+
+export function setWeChatCredentialsOverride(json: string | null): void {
+  weChatCredentialsOverride = json;
+}
+
+export function getWeChatCredentialsOverride(): string | null {
+  return weChatCredentialsOverride;
+}
