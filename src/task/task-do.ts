@@ -1,4 +1,4 @@
-import { Agent } from "agents";
+import { Agent, type Schedule } from "agents";
 import { PiHarness } from "agents/harness/pi";
 import { Type } from "@earendil-works/pi-ai";
 import {
@@ -558,13 +558,13 @@ export class TaskDO extends Agent<Env> {
     await this.outboxFor(taskId).emit(body);
   }
 
-  private async flushOutbox(): Promise<void> {
+  private async flushOutbox(excludeRetryId?: string): Promise<void> {
     const taskId = this.currentTaskId();
     if (!taskId) return;
 
     let delivered = false;
     try {
-      delivered = await this.outboxFor(taskId).flush();
+      delivered = await this.outboxFor(taskId).flush(excludeRetryId);
     } catch (error) {
       console.error(
         `task ${taskId} outbox flush failed: ${
@@ -577,17 +577,31 @@ export class TaskDO extends Agent<Env> {
       this.setMeta("outbox_retry_attempt", "0");
       return;
     }
-    await this.scheduleOutboxRetry();
+    await this.scheduleOutboxRetry(excludeRetryId);
   }
 
   /**
    * Wake this object later to retry undelivered events. Only one retry is
    * pending at a time; each attempt backs off a little, capped at 10 minutes.
+   *
+   * `excludeRetryId` is the retry currently executing: the scheduler deletes
+   * its job row only after the callback returns, so it must not count as a
+   * pending retry. Schedules already due are ignored for the same reason
+   * (they are running or about to run) and would otherwise suppress the
+   * successor.
    */
-  private async scheduleOutboxRetry(): Promise<void> {
+  private async scheduleOutboxRetry(excludeRetryId?: string): Promise<void> {
     try {
+      const now = Date.now();
       const pending = await this.listSchedules();
-      if (pending.some((schedule) => schedule.callback === "retryOutbox")) {
+      if (
+        pending.some(
+          (schedule) =>
+            schedule.callback === "retryOutbox" &&
+            schedule.id !== excludeRetryId &&
+            schedule.time * 1000 > now,
+        )
+      ) {
         return;
       }
 
@@ -605,8 +619,11 @@ export class TaskDO extends Agent<Env> {
   }
 
   /** Scheduled callback: retry pending events after a delivery failure. */
-  async retryOutbox(): Promise<void> {
-    await this.flushOutbox();
+  async retryOutbox(
+    _payload?: unknown,
+    schedule?: Schedule<unknown>,
+  ): Promise<void> {
+    await this.flushOutbox(schedule?.id);
   }
 
   private outboxFor(taskId: string): Outbox {
@@ -614,7 +631,7 @@ export class TaskDO extends Agent<Env> {
       this.db,
       taskId,
       (event) => this.deliver(event),
-      () => this.scheduleOutboxRetry(),
+      (excludeRetryId) => this.scheduleOutboxRetry(excludeRetryId),
     );
     return this.outbox;
   }

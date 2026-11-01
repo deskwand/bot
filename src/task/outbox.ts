@@ -15,7 +15,7 @@ export class Outbox {
     private readonly sql: SqlStorage,
     private readonly taskId: string,
     private readonly deliver: (event: TaskEvent) => Promise<void>,
-    private readonly onFailure?: () => Promise<void>,
+    private readonly onFailure?: (excludeRetryId?: string) => Promise<void>,
   ) {
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS events (
@@ -36,7 +36,7 @@ export class Outbox {
     await this.flush();
   }
 
-  async flush(): Promise<boolean> {
+  async flush(excludeRetryId?: string): Promise<boolean> {
     const rows = this.sql
       .exec<EventRow>(
         `SELECT seq, payload_json FROM events
@@ -50,7 +50,7 @@ export class Outbox {
         await this.deliver({ ...body, taskId: this.taskId, seq: row.seq });
       } catch {
         // Keep this and later events undelivered: order matters.
-        await this.onFailure?.();
+        await this.onFailure?.(excludeRetryId);
         return false;
       }
       this.sql.exec(`UPDATE events SET delivered = 1 WHERE seq = ?`, row.seq);
