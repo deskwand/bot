@@ -18,7 +18,12 @@ export default {
         webhookSecret: env.TELEGRAM_WEBHOOK_SECRET,
       }),
       isOwner: (userId) => isOwner(config, userId),
-      butler: () => env.BUTLER.get(env.BUTLER.idFromName("owner")),
+      butler: () => {
+        const stub = env.BUTLER.get(env.BUTLER.idFromName("owner"));
+        // `Agent` reserves `onMessage` for WebSocket messages and does not
+        // expose it over RPC; the Butler's RPC entry is `handleMessage`.
+        return { onMessage: (evt) => stub.handleMessage(evt) };
+      },
       task: (taskId) => env.TASK.get(env.TASK.idFromName(taskId)),
       artifacts: env.ARTIFACTS,
     });
