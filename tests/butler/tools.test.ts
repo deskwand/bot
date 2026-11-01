@@ -7,7 +7,7 @@ import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import type { AdmittedMessage, RouteSnapshot, TaskSpec } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
-import { currentChannelRef, seedOwnerAddress } from "../helpers/owner-address";
+import { currentChannelRef, seedOwnerAddress } from "../helpers/channel-ref";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {

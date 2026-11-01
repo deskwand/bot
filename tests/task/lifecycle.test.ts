@@ -6,7 +6,7 @@ import { setModelOverride } from "../../src/llm/models";
 import type { TaskSpec } from "../../src/protocol";
 import { scriptedModel } from "../helpers/scripted-model";
 import { fakeChannel } from "../helpers/fake-channel";
-import { seedOwnerAddress } from "../helpers/owner-address";
+import { seedOwnerAddress } from "../helpers/channel-ref";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}

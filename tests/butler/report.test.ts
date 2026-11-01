@@ -8,7 +8,7 @@ import { ChannelError } from "../../src/channels/types";
 import { setClockOverride, type Clock } from "../../src/butler/notifier";
 import { setModelOverride } from "../../src/llm/models";
 import { fakeChannel } from "../helpers/fake-channel";
-import { currentChannelRef, seedOwnerAddress } from "../helpers/owner-address";
+import { currentChannelRef, seedOwnerAddress } from "../helpers/channel-ref";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
