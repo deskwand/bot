@@ -6,10 +6,10 @@ import {
   type MessageEvent,
   type OutboundMessage,
 } from "../protocol";
+import { renderForTelegram } from "./telegram-render";
 import { ChannelError, type ChannelAdapter } from "./types";
 
 const API_BASE = "https://api.telegram.org";
-const DEFAULT_LIMIT = 4096;
 
 type TelegramUser = { id: number };
 type TelegramChat = { id: number };
@@ -42,24 +42,6 @@ export type TelegramAdapterOptions = {
   webhookSecret: string;
   fetch?: typeof fetch;
 };
-
-/** Split text into Telegram-sized chunks, preferring newline boundaries. */
-export function splitMessage(text: string, limit = DEFAULT_LIMIT): string[] {
-  if (limit < 1) throw new Error("splitMessage limit must be positive");
-
-  const chunks: string[] = [];
-  let rest = text;
-
-  while (rest.length > limit) {
-    const newline = rest.lastIndexOf("\n", limit - 1);
-    const cut = newline > 0 ? newline + 1 : limit;
-    chunks.push(rest.slice(0, cut));
-    rest = rest.slice(cut);
-  }
-
-  chunks.push(rest);
-  return chunks;
-}
 
 function toKeyboard(buttons: Button[][]) {
   return {
@@ -105,6 +87,33 @@ export function createTelegramAdapter(
     }
 
     return json;
+  }
+
+  /**
+   * POST a body that may carry `entities`. Telegram answers 400 when it cannot
+   * accept them; retrying the same body without them keeps the message flowing.
+   * `message is not modified` is never retried: the butler reads that text to
+   * treat a repeated edit as success.
+   */
+  async function postWithEntities(
+    method: string,
+    body: Record<string, unknown>,
+  ): Promise<TelegramResponse> {
+    if (!("entities" in body)) return await call(method, body);
+
+    try {
+      return await call(method, body);
+    } catch (error) {
+      const retryable =
+        error instanceof ChannelError &&
+        error.status === 400 &&
+        !error.message.toLowerCase().includes("message is not modified");
+      if (!retryable) throw error;
+
+      console.error(`telegram entities rejected on ${method}, retrying:`, error);
+      const { entities: _dropped, ...plain } = body;
+      return await call(method, plain);
+    }
   }
 
   return {
@@ -166,21 +175,21 @@ export function createTelegramAdapter(
       chatId: string,
       msg: OutboundMessage,
     ): Promise<{ messageId: string }> {
-      const chunks = splitMessage(msg.text);
+      const chunks = renderForTelegram(msg.text);
       let messageId = "";
 
       for (let index = 0; index < chunks.length; index++) {
-        const isLast = index === chunks.length - 1;
+        const chunk = chunks[index];
         const body: Record<string, unknown> = {
           chat_id: chatId,
-          text: chunks[index],
+          text: chunk.text,
         };
-
-        if (isLast && msg.buttons && msg.buttons.length > 0) {
+        if (chunk.entities.length > 0) body.entities = chunk.entities;
+        if (index === chunks.length - 1 && msg.buttons && msg.buttons.length > 0) {
           body.reply_markup = toKeyboard(msg.buttons);
         }
 
-        const response = await call("sendMessage", body);
+        const response = await postWithEntities("sendMessage", body);
         messageId = String(response.result?.message_id ?? "");
       }
 
@@ -192,15 +201,27 @@ export function createTelegramAdapter(
       messageId: string,
       msg: OutboundMessage,
     ): Promise<void> {
-      await call("editMessageText", {
+      const chunks = renderForTelegram(msg.text);
+      // One message, one `editMessageText`: a long original cannot be split
+      // into several edits, so send it whole and unformatted instead of
+      // dropping the tail (the approval decision lives at the end).
+      if (chunks.length !== 1 && msg.text.length > 4096) {
+        throw new ChannelError("Telegram edit requires a single message", 400);
+      }
+      const chunk =
+        chunks.length === 1 ? chunks[0] : { text: msg.text, entities: [] };
+      const body: Record<string, unknown> = {
         chat_id: chatId,
         message_id: messageId,
-        text: msg.text,
+        text: chunk.text,
         reply_markup:
           msg.buttons && msg.buttons.length > 0
             ? toKeyboard(msg.buttons)
             : { inline_keyboard: [] },
-      });
+      };
+      if (chunk.entities.length > 0) body.entities = chunk.entities;
+
+      await postWithEntities("editMessageText", body);
     },
 
     async answerAction(actionId: string, text?: string): Promise<void> {

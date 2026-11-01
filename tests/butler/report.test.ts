@@ -1,6 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
+import { createTelegramAdapter } from "../../src/channels/telegram";
 import type { ChannelAdapter } from "../../src/channels/types";
 import { ChannelError } from "../../src/channels/types";
 import { setClockOverride, type Clock } from "../../src/butler/notifier";
@@ -23,6 +24,32 @@ afterEach(() => {
   setModelOverride(null);
   vi.restoreAllMocks();
 });
+
+/** A Telegram Bot API stand-in that records bodies and hands out message ids. */
+function fakeTelegramFetch(startId = 500) {
+  const calls: {
+    method: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    body: any;
+  }[] = [];
+  let nextId = startId;
+
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = url.slice(url.lastIndexOf("/") + 1);
+    const body =
+      typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    calls.push({ method, body });
+
+    nextId += 1;
+    return new Response(
+      JSON.stringify({ ok: true, result: { message_id: nextId } }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  return { calls, fetchImpl };
+}
 
 function butler(name: string) {
   return env.BUTLER.get(env.BUTLER.idFromName(name));
@@ -277,6 +304,73 @@ describe("ButlerDO.report", () => {
     });
     expect(channel.edits[0]?.text.length).toBeLessThanOrEqual(4096);
     expect(channel.edits[0]?.text.endsWith("\n→ 已批准")).toBe(true);
+  });
+
+  it("resolves the approval on the message id the real adapter returned", async () => {
+    const { calls, fetchImpl } = fakeTelegramFetch();
+    setChannelOverride(
+      "telegram",
+      createTelegramAdapter({
+        token: "123:test-token",
+        webhookSecret: "s3cret",
+        fetch: fetchImpl,
+      }),
+    );
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+
+    const stub = butler("report-approval-entities");
+    await seedTask(stub);
+
+    const argsSummary = "**甲** ".repeat(100);
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "approval_requested",
+      approvalId: "ap1",
+      tool: "web_fetch",
+      argsSummary,
+    });
+
+    // The rendered request carries bold entities (100 of them, so the library
+    // splits it) and the buttons ride on the last chunk only.
+    const sends = calls.filter((call) => call.method === "sendMessage");
+    expect(sends.length).toBeGreaterThan(1);
+    expect(sends[0].body.entities.length).toBeGreaterThan(0);
+    expect(sends[0].body).not.toHaveProperty("parse_mode");
+    expect(sends.slice(0, -1).every((c) => c.body.reply_markup === undefined)).toBe(
+      true,
+    );
+    expect(
+      sends[sends.length - 1].body.reply_markup.inline_keyboard[0][0]
+        .callback_data,
+    ).toBe("a:approve:t1:ap1");
+
+    const saved = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ message_id: string }>(
+          `SELECT message_id FROM approval_messages WHERE approval_id = ?`,
+          "ap1",
+        )
+        .toArray()[0]?.message_id,
+    );
+    expect(saved).toBe(String(500 + sends.length));
+
+    await stub.report({
+      taskId: "t1",
+      seq: 2,
+      type: "approval_resolved",
+      approvalId: "ap1",
+      decision: "approved",
+    });
+
+    const edits = calls.filter((call) => call.method === "editMessageText");
+    expect(edits).toHaveLength(1);
+    expect(edits[0].body.message_id).toBe(saved);
+    expect(edits[0].body.text).toBe(
+      `🔐 t1 请求执行 web_fetch\n${argsSummary}\n→ 已批准`,
+    );
+    expect(edits[0].body.text.endsWith("\n→ 已批准")).toBe(true);
   });
 
   it("marks completion, asks the butler to report, and sends the answer", async () => {

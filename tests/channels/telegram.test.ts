@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ChannelError } from "../../src/channels/types";
-import { createTelegramAdapter, splitMessage } from "../../src/channels/telegram";
+import { createTelegramAdapter } from "../../src/channels/telegram";
 
 type RecordedCall = {
   url: string;
@@ -186,19 +186,30 @@ describe("parseInbound", () => {
 });
 
 describe("send", () => {
-  it("posts a plain text message", async () => {
+  it("renders markdown into entities instead of parse_mode", async () => {
     const { calls, fetchImpl } = fakeFetch();
     const adapter = makeAdapter(fetchImpl);
 
-    const result = await adapter.send("42", {
+    await adapter.send("42", { text: "已完成 **任务 A**" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body).toEqual({
+      chat_id: "42",
+      text: "已完成 任务 A",
+      entities: [{ type: "bold", offset: 4, length: 4 }],
+    });
+    expect(calls[0].body).not.toHaveProperty("parse_mode");
+  });
+
+  it("omits entities when the text carries no formatting", async () => {
+    const { calls, fetchImpl } = fakeFetch();
+    const adapter = makeAdapter(fetchImpl);
+
+    await adapter.send("42", {
       text: "hello",
       buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
     });
 
-    expect(result.messageId).toBe("101");
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe(`https://api.telegram.org/bot${TOKEN}/sendMessage`);
-    expect(calls[0].method).toBe("POST");
     expect(calls[0].body).toEqual({
       chat_id: "42",
       text: "hello",
@@ -208,7 +219,7 @@ describe("send", () => {
     });
   });
 
-  it("splits long text and attaches buttons to last chunk", async () => {
+  it("splits long text and attaches buttons to last chunk only", async () => {
     const { calls, fetchImpl } = fakeFetch();
     const adapter = makeAdapter(fetchImpl);
 
@@ -217,25 +228,34 @@ describe("send", () => {
       buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
     });
 
-    expect(calls.map((c) => c.body.text.length)).toEqual([4096, 904]);
-    expect(calls[0].body.reply_markup).toBeUndefined();
-    expect(calls[1].body.reply_markup.inline_keyboard[0][0].callback_data).toBe(
-      "a:cancel:t1",
+    expect(calls.length).toBeGreaterThan(1);
+    expect(calls.reduce((sum, c) => sum + c.body.text.length, 0)).toBe(5000);
+    for (const call of calls) {
+      expect(call.body.text.length).toBeLessThanOrEqual(4096);
+    }
+    expect(calls.slice(0, -1).every((c) => c.body.reply_markup === undefined)).toBe(
+      true,
     );
-    expect(result.messageId).toBe("102");
+    expect(
+      calls[calls.length - 1].body.reply_markup.inline_keyboard[0][0].callback_data,
+    ).toBe("a:cancel:t1");
+    expect(result.messageId).toBe(String(100 + calls.length));
   });
 
-  it("never sets parse_mode", async () => {
-    const { calls, fetchImpl } = fakeFetch();
+  it("resends as plain text when telegram rejects the entities", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      {
+        status: 400,
+        body: { ok: false, description: "Bad Request: ENTITY_TEXT_INVALID" },
+      },
+    ]);
     const adapter = makeAdapter(fetchImpl);
 
-    await adapter.send("42", { text: "*bold* _markdown_" });
-    await adapter.edit("42", "9", { text: "`code`" });
+    const result = await adapter.send("42", { text: "**粗体**" });
 
     expect(calls).toHaveLength(2);
-    for (const call of calls) {
-      expect(call.body).not.toHaveProperty("parse_mode");
-    }
+    expect(calls[1].body).toEqual({ chat_id: "42", text: "粗体" });
+    expect(result.messageId).toBe("101");
   });
 
   it("throws ChannelError with status on ok:false", async () => {
@@ -287,6 +307,98 @@ describe("edit", () => {
     expect(calls[0].body.reply_markup).toEqual({ inline_keyboard: [] });
   });
 
+  it("renders markdown into entities", async () => {
+    const { calls, fetchImpl } = fakeFetch();
+    const adapter = makeAdapter(fetchImpl);
+
+    await adapter.edit("42", "9", { text: "`npm test` 通过" });
+
+    expect(calls[0].body).toEqual({
+      chat_id: "42",
+      message_id: "9",
+      text: "npm test 通过",
+      entities: [{ type: "code", offset: 0, length: 8 }],
+      reply_markup: { inline_keyboard: [] },
+    });
+  });
+
+  it("resends without entities when telegram rejects them", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      {
+        status: 400,
+        body: { ok: false, description: "Bad Request: ENTITY_TEXT_INVALID" },
+      },
+    ]);
+    const adapter = makeAdapter(fetchImpl);
+
+    await adapter.edit("42", "9", { text: "**粗体**" });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1].body).toEqual({
+      chat_id: "42",
+      message_id: "9",
+      text: "粗体",
+      reply_markup: { inline_keyboard: [] },
+    });
+  });
+
+  it("propagates message-is-not-modified without retrying", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      {
+        status: 400,
+        body: { ok: false, description: "Bad Request: message is not modified" },
+      },
+    ]);
+    const adapter = makeAdapter(fetchImpl);
+
+    const error = await adapter
+      .edit("42", "9", { text: "**同样的文本**" })
+      .catch((e) => e);
+
+    expect(calls).toHaveLength(1);
+    expect(error).toBeInstanceOf(ChannelError);
+    expect(error.message).toContain("message is not modified");
+  });
+
+  it("edits the whole raw text when rendering split it and it still fits", async () => {
+    const { calls, fetchImpl } = fakeFetch();
+    const adapter = makeAdapter(fetchImpl);
+    const text = `${"**甲** ".repeat(100)}\n→ 已批准`;
+
+    await adapter.edit("42", "9", { text });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body.text).toBe(text);
+    expect(calls[0].body).not.toHaveProperty("entities");
+    expect(calls[0].body.message_id).toBe("9");
+    expect(calls[0].body.text.endsWith("\n→ 已批准")).toBe(true);
+  });
+
+  it("rejects an over-long edit before making any request", async () => {
+    const { calls, fetchImpl } = fakeFetch();
+    const adapter = makeAdapter(fetchImpl);
+
+    const error = await adapter
+      .edit("42", "9", { text: "x".repeat(5000) })
+      .catch((e) => e);
+
+    expect(calls).toHaveLength(0);
+    expect(error).toBeInstanceOf(ChannelError);
+    expect(error.message).toContain("single message");
+  });
+
+  it("never sets parse_mode", async () => {
+    const { calls, fetchImpl } = fakeFetch();
+    const adapter = makeAdapter(fetchImpl);
+
+    await adapter.send("42", { text: "*bold* _markdown_" });
+    await adapter.edit("42", "9", { text: "`code`" });
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.body).not.toHaveProperty("parse_mode");
+    }
+  });
 });
 
 describe("answerAction", () => {
@@ -309,23 +421,5 @@ describe("answerAction", () => {
     await adapter.answerAction("cb-1");
 
     expect(calls[0].body).toEqual({ callback_query_id: "cb-1" });
-  });
-});
-
-describe("splitMessage", () => {
-  it("splits at the last newline within the limit", () => {
-    const text = `${"a".repeat(5)}\n${"b".repeat(5)}`;
-    expect(splitMessage(text, 8)).toEqual(["aaaaa\n", "bbbbb"]);
-  });
-
-  it("hard-splits when there is no newline", () => {
-    expect(splitMessage("abcdefghij", 4)).toEqual(["abcd", "efgh", "ij"]);
-  });
-
-  it("keeps short text whole and defaults to 4096", () => {
-    expect(splitMessage("short")).toEqual(["short"]);
-    expect(splitMessage("z".repeat(4097)).map((c) => c.length)).toEqual([
-      4096, 1,
-    ]);
   });
 });
