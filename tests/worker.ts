@@ -3,4 +3,5 @@
 export { default } from "../src/index";
 export { ButlerDO } from "../src/butler/butler-do";
 export { TaskDO } from "../src/task/task-do";
+export { ChannelDO } from "../src/channels/channel-do";
 export { TestHarnessDO } from "./test-harness-do";

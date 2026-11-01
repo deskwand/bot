@@ -13,7 +13,7 @@ declare module "cloudflare:test" {
 }
 
 afterEach(() => {
-  setChannelOverride(null);
+  setChannelOverride("telegram", null);
   setModelOverride(null);
   vi.restoreAllMocks();
 });
@@ -198,7 +198,7 @@ describe("butler schedule tools", () => {
 describe("ButlerDO.runSchedule", () => {
   it("runs a cron callback on the same lifecycle as the harness", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     setModelOverride(scriptedModel([{ text: "管家在" }]));
 
     const stub = butler("schedules-run");

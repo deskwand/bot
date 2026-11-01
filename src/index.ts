@@ -1,32 +1,29 @@
-import { createTelegramAdapter } from "./channels/telegram";
-import { config, isOwner } from "./config";
+import { ChannelDO } from "./channels/channel-do";
 import { createGateway } from "./gateway";
 
 export { ButlerDO } from "./butler/butler-do";
 export { TaskDO } from "./task/task-do";
+export { ChannelDO };
+
+function channels(env: Env): DurableObjectStub<ChannelDO> {
+  return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
+}
 
 export default {
-  async fetch(
-    req: Request,
-    env: Env,
-    ctx: ExecutionContext,
-  ): Promise<Response> {
+  async fetch(req: Request, env: Env): Promise<Response> {
     const gateway = createGateway({
-      adapter: createTelegramAdapter({
-        token: env.TELEGRAM_BOT_TOKEN,
-        webhookSecret: env.TELEGRAM_WEBHOOK_SECRET,
-      }),
-      isOwner: (userId) => isOwner(config, userId),
-      butler: () => {
-        const stub = env.BUTLER.get(env.BUTLER.idFromName("owner"));
-        // `Agent` reserves `onMessage` for WebSocket messages and does not
-        // expose it over RPC; the Butler's RPC entry is `handleMessage`.
-        return { onMessage: (evt) => stub.handleMessage(evt) };
-      },
-      task: (taskId) => env.TASK.get(env.TASK.idFromName(taskId)),
+      channels: () => channels(env),
       artifacts: env.ARTIFACTS,
     });
 
-    return gateway.fetch(req, ctx);
+    return gateway.fetch(req);
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    try {
+      await channels(env).ensurePolling();
+    } catch (error) {
+      console.error("channel polling failed:", error);
+    }
   },
 } satisfies ExportedHandler<Env>;

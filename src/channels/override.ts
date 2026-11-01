@@ -1,15 +1,25 @@
+import type { ChannelId } from "../protocol";
 import type { ChannelAdapter } from "./types";
 
 /**
- * Test-only channel override, mirroring `setModelOverride` in `llm/models`.
- * When set, the Butler sends through this adapter instead of Telegram.
+ * Test-only channel overrides, mirroring `setModelOverride` in `llm/models`.
+ * When set, the Butler and ChannelDO use this adapter instead of the real one.
  */
-let channelOverride: ChannelAdapter | null = null;
+const channelOverrides = new Map<ChannelId, ChannelAdapter>();
 
-export function setChannelOverride(adapter: ChannelAdapter | null): void {
-  channelOverride = adapter;
+export function setChannelOverride(
+  channel: ChannelId,
+  adapter: ChannelAdapter | null,
+): void {
+  if (adapter === null) {
+    channelOverrides.delete(channel);
+  } else {
+    channelOverrides.set(channel, adapter);
+  }
 }
 
-export function getChannelOverride(): ChannelAdapter | null {
-  return channelOverride;
+export function getChannelOverride(
+  channel: ChannelId,
+): ChannelAdapter | null {
+  return channelOverrides.get(channel) ?? null;
 }

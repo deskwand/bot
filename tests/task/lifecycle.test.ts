@@ -13,7 +13,7 @@ declare module "cloudflare:test" {
 
 afterEach(() => {
   setModelOverride(null);
-  setChannelOverride(null);
+  setChannelOverride("telegram", null);
   vi.restoreAllMocks();
 });
 
@@ -248,7 +248,7 @@ describe("TaskDO lifecycle", () => {
 
   it("still accepts gateway message events", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
 
     // Non-text input exercises the RPC entry without opening pi, which this
     // file's Butler already set up with a different model catalog.

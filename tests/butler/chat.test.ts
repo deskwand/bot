@@ -141,13 +141,13 @@ async function releaseSlowTask(stub: ReturnType<typeof task>): Promise<void> {
 
 afterEach(() => {
   setModelOverride(null);
-  setChannelOverride(null);
+  setChannelOverride("telegram", null);
 });
 
 describe("butler chat", () => {
   it("answers a text message", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     setModelOverride(scriptedModel([{ text: "你好！" }]));
 
     await butler("chat-101").handleMessage(
@@ -159,7 +159,7 @@ describe("butler chat", () => {
 
   it("does not answer a redelivered event twice", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     setModelOverride(scriptedModel([{ text: "只回一次" }]));
 
     const evt = message({ text: "你好", eventId: "tg:102" });
@@ -171,7 +171,7 @@ describe("butler chat", () => {
 
   it("rejects non-text messages without calling the model", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     let calls = 0;
     setModelOverride(
       scriptedModel([
@@ -196,7 +196,7 @@ describe("butler chat", () => {
 
   it("spawns a task and sends a progress message with a cancel button", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     setModelOverride(
       routedModel(
         [

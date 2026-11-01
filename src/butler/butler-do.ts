@@ -718,7 +718,7 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private channel(): ChannelAdapter {
-    const override = getChannelOverride();
+    const override = getChannelOverride("telegram");
     if (override) return override;
     this.channelInstance ??= createTelegramAdapter({
       token: this.env.TELEGRAM_BOT_TOKEN,

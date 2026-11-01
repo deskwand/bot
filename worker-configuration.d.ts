@@ -6,11 +6,12 @@ interface __BaseEnv_Env {
 	PUBLIC_BASE_URL: "https://example.com";
 	BUTLER: DurableObjectNamespace<import("./src/index").ButlerDO>;
 	TASK: DurableObjectNamespace<import("./src/index").TaskDO>;
+	CHANNELS: DurableObjectNamespace<import("./src/index").ChannelDO>;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./src/index");
-		durableNamespaces: "ButlerDO" | "TaskDO";
+		durableNamespaces: "ButlerDO" | "TaskDO" | "ChannelDO";
 	}
 	interface Env extends __BaseEnv_Env {}
 }

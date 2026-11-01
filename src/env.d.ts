@@ -5,6 +5,7 @@ declare namespace Cloudflare {
     OPENCODE_API_KEY: string;
     TELEGRAM_BOT_TOKEN: string;
     TELEGRAM_WEBHOOK_SECRET: string;
+    WECHAT_CREDENTIALS?: string;
   }
 }
 

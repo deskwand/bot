@@ -1,11 +1,5 @@
-import type { ChannelAdapter } from "./channels/types";
-import type { ActionEvent, MessageEvent } from "./protocol";
-
 export type GatewayDeps = {
-  adapter: ChannelAdapter;
-  isOwner(userId: number): boolean;
-  butler(): { onMessage(evt: MessageEvent): Promise<void> };
-  task(taskId: string): { handleAction(evt: ActionEvent): Promise<string> };
+  channels(): { handleTelegramWebhook(req: Request): Promise<void> };
   artifacts: R2Bucket;
 };
 
@@ -36,49 +30,14 @@ function notFound(): Response {
 }
 
 export function createGateway(deps: GatewayDeps): {
-  fetch(req: Request, ctx: ExecutionContext): Promise<Response>;
+  fetch(req: Request): Promise<Response>;
 } {
-  async function handleWebhook(
-    req: Request,
-    ctx: ExecutionContext,
-  ): Promise<Response> {
-    let event;
+  async function handleWebhook(req: Request): Promise<Response> {
+    // Telegram retries failed deliveries; always acknowledge and log instead.
     try {
-      event = await deps.adapter.parseInbound(req);
+      await deps.channels().handleTelegramWebhook(req);
     } catch (error) {
-      console.error(`gateway: failed to parse update: ${errorMessage(error)}`);
-      return ok();
-    }
-    if (!event) return ok();
-
-    if (!deps.isOwner(Number(event.userId))) {
-      console.warn(`gateway: ignoring event from non-owner ${event.userId}`);
-      return ok();
-    }
-
-    if (event.type === "message") {
-      // Telegram retries slow webhooks; acknowledge now and let the Butler run.
-      try {
-        ctx.waitUntil(deps.butler().onMessage(event));
-      } catch (error) {
-        console.error(`gateway: message dispatch failed: ${errorMessage(error)}`);
-      }
-      return ok();
-    }
-
-    let text = "出错了，稍后再试";
-    try {
-      text = await deps.task(event.taskId).handleAction(event);
-    } catch (error) {
-      console.error(`gateway: action failed: ${errorMessage(error)}`);
-    }
-
-    try {
-      await deps.adapter.answerAction(event.actionId, text);
-    } catch (error) {
-      console.error(
-        `gateway: answer callback failed: ${errorMessage(error)}`,
-      );
+      console.error(`gateway: webhook forward failed: ${errorMessage(error)}`);
     }
     return ok();
   }
@@ -114,11 +73,11 @@ export function createGateway(deps: GatewayDeps): {
   }
 
   return {
-    async fetch(req: Request, ctx: ExecutionContext): Promise<Response> {
+    async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
 
       if (req.method === "POST" && url.pathname === "/telegram/webhook") {
-        return handleWebhook(req, ctx);
+        return handleWebhook(req);
       }
 
       if (req.method === "GET" && url.pathname.startsWith(ARTIFACT_PREFIX)) {

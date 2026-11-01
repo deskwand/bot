@@ -15,7 +15,7 @@ declare module "cloudflare:test" {
 
 afterEach(() => {
   setClockOverride(null);
-  setChannelOverride(null);
+  setChannelOverride("telegram", null);
   setModelOverride(null);
   vi.restoreAllMocks();
 });
@@ -140,7 +140,7 @@ async function progressMessageId(
 describe("ButlerDO.report", () => {
   it("edits progress immediately, then flushes the latest text after the interval", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -169,7 +169,7 @@ describe("ButlerDO.report", () => {
 
   it("re-arms a progress flush that fires before the window closes", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -199,7 +199,7 @@ describe("ButlerDO.report", () => {
 
   it("sends an approval request with buttons and resolves it in place", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -247,7 +247,7 @@ describe("ButlerDO.report", () => {
 
   it("keeps the approval outcome when the request text is long", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -277,7 +277,7 @@ describe("ButlerDO.report", () => {
 
   it("marks completion, asks the butler to report, and sends the answer", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
     setModelOverride(scriptedModel([{ text: "t1 完成：ok" }]));
@@ -314,7 +314,7 @@ describe("ButlerDO.report", () => {
 
   it("quotes the task summary as data in the completion entry", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
     setModelOverride(scriptedModel([{ text: "已汇报" }]));
@@ -344,7 +344,7 @@ describe("ButlerDO.report", () => {
 
   it("does not send a second completion report for the same operation", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
     setModelOverride(scriptedModel([{ text: "t1 完成：ok" }]));
@@ -378,7 +378,7 @@ describe("ButlerDO.report", () => {
 
   it("does not flush buffered progress after a terminal event", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
     setModelOverride(scriptedModel([{ text: "t1 完成：ok" }]));
@@ -414,7 +414,7 @@ describe("ButlerDO.report", () => {
         throw new ChannelError("Too Many Requests", 429);
       },
     };
-    setChannelOverride(failing);
+    setChannelOverride("telegram", failing);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -452,7 +452,7 @@ describe("ButlerDO.report", () => {
         );
       },
     };
-    setChannelOverride(notModified);
+    setChannelOverride("telegram", notModified);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -475,7 +475,7 @@ describe("ButlerDO.report", () => {
 
   it("shows the retry hint for a retryable failure", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -502,7 +502,7 @@ describe("ButlerDO.report", () => {
 
   it("clamps progress details while preserving the retry hint", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -533,7 +533,7 @@ describe("ButlerDO.report", () => {
 
   it("marks a cancelled task and its progress message", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -550,7 +550,7 @@ describe("ButlerDO.report", () => {
 
   it("falls back to the owner's chat when the task row has no chat", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 
@@ -575,7 +575,7 @@ describe("ButlerDO.report", () => {
 
   it("updates state without channel output when the chat is unknown", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     const fake = fakeClock();
     setClockOverride(fake.clock);
 

@@ -65,14 +65,14 @@ const cancelModel = scriptedModel([
 
 afterEach(() => {
   setModelOverride(null);
-  setChannelOverride(null);
+  setChannelOverride("telegram", null);
   vi.restoreAllMocks();
 });
 
 describe("butler control tools", () => {
   it("returns 没有任务 for unknown task ids", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
     setModelOverride(unknownIdsModel);
 
     await butler("tools-201").handleMessage(
@@ -158,7 +158,7 @@ describe("butler control tools", () => {
 
   it("sends the start message before the Task DO can report progress", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
 
     const result = await runInDurableObject(
       butler("tools-spawn-order"),
@@ -206,7 +206,7 @@ describe("butler control tools", () => {
   it("edits the start message when the Task DO cannot start", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
 
     const result = await runInDurableObject(
       butler("tools-spawn-failure-edit"),
@@ -276,7 +276,7 @@ describe("butler control tools", () => {
 
   it("returns the task's refusal when cancelling a completed task", async () => {
     const channel = fakeChannel();
-    setChannelOverride(channel.adapter);
+    setChannelOverride("telegram", channel.adapter);
 
     const taskId = "t-done";
     const stub = task(taskId);
