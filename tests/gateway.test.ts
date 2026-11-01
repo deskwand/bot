@@ -149,6 +149,83 @@ describe("POST /telegram/webhook", () => {
     expect(h.answered).toEqual([{ actionId: "cb-1", text: "已处理" }]);
     expect(h.messages).toHaveLength(0);
   });
+
+  it("returns 200 and answers with an error when handleAction throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const answered: Array<{ actionId: string; text?: string }> = [];
+    const gateway = createGateway({
+      adapter: {
+        parseInbound: async () => ACTION,
+        send: async () => ({ messageId: "1" }),
+        edit: async () => {},
+        answerAction: async (actionId, text) => {
+          answered.push({ actionId, text });
+        },
+      },
+      isOwner: () => true,
+      butler: () => ({ onMessage: async () => {} }),
+      task: () => ({
+        handleAction: async () => {
+          throw new Error("boom");
+        },
+      }),
+      artifacts: env.ARTIFACTS,
+    });
+    const ctx = fakeContext();
+
+    const response = await gateway.fetch(webhook(), ctx.ctx);
+
+    expect(response.status).toBe(200);
+    expect(answered).toEqual([
+      { actionId: "cb-1", text: "出错了，稍后再试" },
+    ]);
+  });
+
+  it("returns 200 even when answering the callback throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const gateway = createGateway({
+      adapter: {
+        parseInbound: async () => ACTION,
+        send: async () => ({ messageId: "1" }),
+        edit: async () => {},
+        answerAction: async () => {
+          throw new Error("telegram down");
+        },
+      },
+      isOwner: () => true,
+      butler: () => ({ onMessage: async () => {} }),
+      task: () => ({ handleAction: async () => "已处理" }),
+      artifacts: env.ARTIFACTS,
+    });
+    const ctx = fakeContext();
+
+    const response = await gateway.fetch(webhook(), ctx.ctx);
+
+    expect(response.status).toBe(200);
+  });
+
+  it("returns 200 when parsing the update throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const gateway = createGateway({
+      adapter: {
+        parseInbound: async () => {
+          throw new Error("bad json");
+        },
+        send: async () => ({ messageId: "1" }),
+        edit: async () => {},
+        answerAction: async () => {},
+      },
+      isOwner: () => true,
+      butler: () => ({ onMessage: async () => {} }),
+      task: () => ({ handleAction: async () => "已处理" }),
+      artifacts: env.ARTIFACTS,
+    });
+    const ctx = fakeContext();
+
+    const response = await gateway.fetch(webhook(), ctx.ctx);
+
+    expect(response.status).toBe(200);
+  });
 });
 
 describe("GET /a/<key>", () => {
@@ -163,9 +240,9 @@ describe("GET /a/<key>", () => {
     expect(response.status).toBe(404);
   });
 
-  it("serves an artifact from R2 with its content type", async () => {
+  it("serves an allowlisted artifact inline with hardening headers", async () => {
     await env.ARTIFACTS.put("t1/u/r.md", "hi", {
-      httpMetadata: { contentType: "text/markdown" },
+      httpMetadata: { contentType: "text/markdown; charset=utf-8" },
     });
     const h = setup(null);
 
@@ -176,8 +253,37 @@ describe("GET /a/<key>", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("hi");
-    expect(response.headers.get("content-type")).toBe("text/markdown");
+    expect(response.headers.get("content-type")).toBe(
+      "text/markdown; charset=utf-8",
+    );
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("content-security-policy")).toBe("sandbox");
+    expect(response.headers.get("content-disposition")).toBeNull();
   });
+
+  it.each(["text/html", "image/svg+xml"])(
+    "forces a %s artifact to download as octet-stream",
+    async (contentType) => {
+      const key = `t1/u/${contentType.replace("/", "-")}`;
+      await env.ARTIFACTS.put(key, "<script>alert(1)</script>", {
+        httpMetadata: { contentType },
+      });
+      const h = setup(null);
+
+      const response = await h.gateway.fetch(
+        new Request(`https://example.com/a/${key}`),
+        h.ctx,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe(
+        "application/octet-stream",
+      );
+      expect(response.headers.get("content-disposition")).toBe("attachment");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("content-security-policy")).toBe("sandbox");
+    },
+  );
 });
 
 describe("worker entry", () => {

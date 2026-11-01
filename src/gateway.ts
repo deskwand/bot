@@ -11,6 +11,22 @@ export type GatewayDeps = {
 
 const ARTIFACT_PREFIX = "/a/";
 
+/** Types safe to display inline; everything else is a download. */
+const INLINE_CONTENT_TYPES = new Set([
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "application/json",
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function ok(): Response {
   return new Response(null, { status: 200 });
 }
@@ -26,7 +42,13 @@ export function createGateway(deps: GatewayDeps): {
     req: Request,
     ctx: ExecutionContext,
   ): Promise<Response> {
-    const event = await deps.adapter.parseInbound(req);
+    let event;
+    try {
+      event = await deps.adapter.parseInbound(req);
+    } catch (error) {
+      console.error(`gateway: failed to parse update: ${errorMessage(error)}`);
+      return ok();
+    }
     if (!event) return ok();
 
     if (!deps.isOwner(Number(event.userId))) {
@@ -36,12 +58,28 @@ export function createGateway(deps: GatewayDeps): {
 
     if (event.type === "message") {
       // Telegram retries slow webhooks; acknowledge now and let the Butler run.
-      ctx.waitUntil(deps.butler().onMessage(event));
+      try {
+        ctx.waitUntil(deps.butler().onMessage(event));
+      } catch (error) {
+        console.error(`gateway: message dispatch failed: ${errorMessage(error)}`);
+      }
       return ok();
     }
 
-    const text = await deps.task(event.taskId).handleAction(event);
-    await deps.adapter.answerAction(event.actionId, text);
+    let text = "出错了，稍后再试";
+    try {
+      text = await deps.task(event.taskId).handleAction(event);
+    } catch (error) {
+      console.error(`gateway: action failed: ${errorMessage(error)}`);
+    }
+
+    try {
+      await deps.adapter.answerAction(event.actionId, text);
+    } catch (error) {
+      console.error(
+        `gateway: answer callback failed: ${errorMessage(error)}`,
+      );
+    }
     return ok();
   }
 
@@ -57,12 +95,22 @@ export function createGateway(deps: GatewayDeps): {
     const object = await deps.artifacts.get(key);
     if (!object) return notFound();
 
-    return new Response(object.body, {
-      headers: {
-        "content-type":
-          object.httpMetadata?.contentType ?? "application/octet-stream",
-      },
+    const served =
+      object.httpMetadata?.contentType ?? "application/octet-stream";
+    const mime = served.split(";")[0]!.trim().toLowerCase();
+    const headers = new Headers({
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "sandbox",
     });
+
+    if (INLINE_CONTENT_TYPES.has(mime)) {
+      headers.set("content-type", served);
+    } else {
+      headers.set("content-type", "application/octet-stream");
+      headers.set("content-disposition", "attachment");
+    }
+
+    return new Response(object.body, { headers });
   }
 
   return {
