@@ -2,7 +2,6 @@ import { createTelegramAdapter } from "./channels/telegram";
 import { config, isOwner } from "./config";
 import { createGateway } from "./gateway";
 
-export { TestHarnessDO } from "./testing/test-harness-do";
 export { ButlerDO } from "./butler/butler-do";
 export { TaskDO } from "./task/task-do";
 

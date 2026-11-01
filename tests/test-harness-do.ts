@@ -11,7 +11,7 @@ import {
   type PiReceipt,
 } from "agents/harness/pi";
 import { Lifecycle } from "agents/lifecycle";
-import { createModelsForEnv, resolveModel } from "../llm/models";
+import { createModelsForEnv, resolveModel } from "../src/llm/models";
 
 /**
  * Test-only Durable Object that hosts a real `PiHarness`. It exists so the
