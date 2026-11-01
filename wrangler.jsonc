@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  "vars": {
+    "PUBLIC_BASE_URL": "https://example.com"
+  },
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "my-artifacts"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "BUTLER", "class_name": "ButlerDO" },
+      { "name": "TASK", "class_name": "TaskDO" },
+      { "name": "TEST_HARNESS", "class_name": "TestHarnessDO" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ButlerDO", "TaskDO", "TestHarnessDO"]
+    }
+  ]
+}
