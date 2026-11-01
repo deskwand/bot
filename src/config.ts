@@ -16,7 +16,7 @@ export type AppConfig = {
 export const config: AppConfig = {
   owner: {
     // Fill in the Telegram user IDs allowed to use the bot.
-    telegramUserIds: [],
+    telegramUserIds: [1764662370],
   },
   models: {
     butler: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
