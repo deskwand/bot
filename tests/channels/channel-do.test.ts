@@ -439,6 +439,24 @@ describe("sendCurrent", () => {
       async send(to, msg) {
         sent.push({ to, msg });
         return { messageId: "" };
+      },
+      async edit() {},
+      async answerAction() {},
+    });
+
+    const ref = await hub.sendCurrent({
+      text: "x",
+      buttons: [[{ label: "取消", data: "a:cancel:t3" }]],
+    });
+
+    expect(sent).toEqual([
+      { to: "u1", msg: { text: 'x\n回复"取消 t3"' } },
+    ]);
+    expect(sent[0]?.msg.buttons).toBeUndefined();
+    // WeChat has no message ids, but the send still succeeded.
+    expect(ref).toMatchObject({ channel: "wechat", messageId: null });
+  });
+
   it("filters unsupported markdown for WeChat and keeps the hints", async () => {
     setEnv({ ACTIVE_CHANNEL: "wechat" });
     const hub = freshChannels("send-wechat-markdown");
@@ -462,6 +480,26 @@ describe("sendCurrent", () => {
     ]);
   });
 
+  it("filters unsupported markdown for WeChat without buttons", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("send-wechat-plain");
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'u1', ?)`,
+        Date.now(),
+      );
+    });
+    const wx = fakeAdapter(async () => null);
+    setChannelOverride("wechat", wx.adapter);
+
+    await hub.sendCurrent({
+      text: "*中文* ![图](https://example.com/a.png) 完毕",
+    });
+
+    expect(wx.sent).toEqual([{ to: "u1", msg: { text: "中文  完毕" } }]);
+  });
+
   it("sends Telegram markdown through unfiltered", async () => {
     setEnv({ ACTIVE_CHANNEL: "telegram" });
     const hub = freshChannels("send-telegram-markdown");
@@ -473,23 +511,6 @@ describe("sendCurrent", () => {
     await hub.sendCurrent({ text: markdown });
 
     expect(tg.sent).toEqual([{ to: String(OWNER_ID), msg: { text: markdown } }]);
-  });
-      },
-      async edit() {},
-      async answerAction() {},
-    });
-
-    const ref = await hub.sendCurrent({
-      text: "x",
-      buttons: [[{ label: "取消", data: "a:cancel:t3" }]],
-    });
-
-    expect(sent).toEqual([
-      { to: "u1", msg: { text: 'x\n回复"取消 t3"' } },
-    ]);
-    expect(sent[0]?.msg.buttons).toBeUndefined();
-    // WeChat has no message ids, but the send still succeeded.
-    expect(ref).toMatchObject({ channel: "wechat", messageId: null });
   });
 
   it("does not fall back to Telegram when WeChat has no context", async () => {

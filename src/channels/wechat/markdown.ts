@@ -227,7 +227,8 @@ function stripUnsupported(text: string): string {
  * keeps English italics and bold runs intact.
  */
 function matchItalic(text: string, start: number): ItalicMatch | null {
-  if (text[start + 1] === "*") return null;
+  // The opener must stand alone: inside a run such as `**` it is bold syntax.
+  if (text[start + 1] === "*" || text[start - 1] === "*") return null;
 
   let cursor = start + 1;
   while (cursor < text.length) {
@@ -241,16 +242,16 @@ function matchItalic(text: string, start: number): ItalicMatch | null {
       continue;
     }
 
-    // Part of a longer run: skip the whole run, it is not a closer.
-    if (text[cursor + 1] === "*" || text[cursor - 1] === "*") {
-      while (text[cursor] === "*") cursor++;
-      continue;
-    }
+    // A run of two or more asterisks is bold/delimiter syntax, never a
+    // closer. Accepting a later single asterisk as the closer would swallow
+    // the bold markers, so abort the whole candidate instead.
+    if (text[cursor + 1] === "*" || text[cursor - 1] === "*") return null;
 
     const content = text.slice(start + 1, cursor);
     if (
       content.length > 0 &&
       CJK_CHARACTER.test(content) &&
+      !content.includes("*") &&
       !/^[ \t]|[ \t]$/.test(content)
     ) {
       return { content, end: cursor + 1 };

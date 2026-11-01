@@ -28,6 +28,18 @@ describe("toWeChatText", () => {
     );
   });
 
+  it("keeps bold intact when a chinese italic follows on the same line", () => {
+    expect(toWeChatText("**粗体**，*中文*")).toBe("**粗体**，中文");
+    expect(toWeChatText("**甲**、**乙**，*中文*")).toBe("**甲**、**乙**，中文");
+    expect(toWeChatText("**任务**完成：*中文*。")).toBe(
+      "**任务**完成：中文。",
+    );
+  });
+
+  it("leaves english italics alone even next to bold", () => {
+    expect(toWeChatText("**粗体**，*english*")).toBe("**粗体**，*english*");
+  });
+
   it("drops images entirely", () => {
     expect(toWeChatText("看图 ![截图](https://example.com/a.png) 完毕")).toBe(
       "看图  完毕",
