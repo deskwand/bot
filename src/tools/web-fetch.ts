@@ -7,7 +7,9 @@ const Fetch = Type.Object({
 
 const FETCH_TIMEOUT_MS = 30_000;
 const MAX_TEXT_CHARS = 20_000;
+const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const TRUNCATION_MARKER = "\n\n[已截断]";
+const BODY_TRUNCATION_MARKER = "\n\n[内容超过 2 MB，已截断]";
 
 function textResult(text: string): ToolExecutionResult {
   return { output: [{ type: "text", text }] };
@@ -51,6 +53,50 @@ async function fetchWithAbort(
   } finally {
     cleanup();
   }
+}
+
+/**
+ * Read at most 2 MB from the response. Streaming stops early so a huge body
+ * cannot exhaust the Worker's memory; the caller notes the truncation.
+ */
+async function readCapped(
+  response: Response,
+): Promise<{ response: Response; truncated: boolean }> {
+  if (!response.body) return { response, truncated: false };
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let truncated = false;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      if (total + value.byteLength > MAX_BODY_BYTES) {
+        const remaining = MAX_BODY_BYTES - total;
+        if (remaining > 0) chunks.push(value.subarray(0, remaining));
+        truncated = true;
+        break;
+      }
+
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    if (truncated) await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+
+  return {
+    response: new Response(new Blob(chunks), {
+      status: response.status,
+      headers: response.headers,
+    }),
+    truncated,
+  };
 }
 
 async function extractHtml(response: Response): Promise<string> {
@@ -126,9 +172,14 @@ export function webFetchTool(
       ).toLowerCase();
       const mime = contentType.split(";")[0]!.trim();
 
+      const capped = await readCapped(response);
+      const note = capped.truncated ? BODY_TRUNCATION_MARKER : "";
+
       if (mime === "text/html" || mime === "application/xhtml+xml") {
-        const html = await extractHtml(response);
-        return textResult(truncate(html.replace(/\s+/g, " ").trim()));
+        const html = await extractHtml(capped.response);
+        return textResult(
+          truncate(html.replace(/\s+/g, " ").trim()) + note,
+        );
       }
 
       if (
@@ -136,7 +187,7 @@ export function webFetchTool(
         mime === "application/json" ||
         mime.endsWith("+json")
       ) {
-        return textResult(truncate(await response.text()));
+        return textResult(truncate(await capped.response.text()) + note);
       }
 
       return textResult(`不支持的内容类型：${mime || "未知"}`);

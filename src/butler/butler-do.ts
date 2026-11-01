@@ -613,7 +613,7 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private targetChat(row: TaskRow): string | null {
-    return row.chatId;
+    return row.chatId ?? this.readMeta("chat_id");
   }
 
   private async sendBestEffort(

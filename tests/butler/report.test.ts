@@ -548,6 +548,31 @@ describe("ButlerDO.report", () => {
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
   });
 
+  it("falls back to the owner's chat when the task row has no chat", async () => {
+    const channel = fakeChannel();
+    setChannelOverride(channel.adapter);
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+
+    const stub = butler("report-meta-chat");
+    await seedTask(stub, { chatId: null, progressMessageId: null });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO meta (key, value) VALUES ('chat_id', '42')`,
+      );
+    });
+
+    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
+
+    expect(channel.sent).toEqual([
+      {
+        chatId: "42",
+        text: "⏳ t1 查天气：a",
+        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
+      },
+    ]);
+  });
+
   it("updates state without channel output when the chat is unknown", async () => {
     const channel = fakeChannel();
     setChannelOverride(channel.adapter);

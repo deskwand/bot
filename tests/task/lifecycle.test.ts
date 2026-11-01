@@ -270,14 +270,15 @@ describe("TaskDO lifecycle", () => {
 
   it("dedupes task events by seq", async () => {
     const taskId = "dedupe-1";
+    const target = env.BUTLER.get(env.BUTLER.idFromName("dedupe-owner"));
 
-    await butler().report({ taskId, seq: 1, type: "started" });
-    await butler().report({ taskId, seq: 1, type: "started" });
-    await butler().report({ taskId, seq: 2, type: "progress", text: "a" });
-    await butler().report({ taskId, seq: 1, type: "started" });
-    await butler().report({ taskId, seq: 2, type: "progress", text: "a" });
+    await target.report({ taskId, seq: 1, type: "started" });
+    await target.report({ taskId, seq: 1, type: "started" });
+    await target.report({ taskId, seq: 2, type: "progress", text: "a" });
+    await target.report({ taskId, seq: 1, type: "started" });
+    await target.report({ taskId, seq: 2, type: "progress", text: "a" });
 
-    const events = await butler().debugEvents(taskId);
+    const events = await target.debugEvents(taskId);
     expect(events.map((event) => [event.seq, event.type])).toEqual([
       [1, "started"],
       [2, "progress"],

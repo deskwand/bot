@@ -1,6 +1,6 @@
 import type { Context } from "@earendil-works/chord";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { webSearchTool } from "../../src/tools/web-search";
 
 function context(signal?: AbortSignal): Context {
@@ -43,7 +43,11 @@ describe("webSearchTool", () => {
     expect(calls).toHaveLength(1);
     expect(String(calls[0]!.input)).toBe("https://api.tavily.com/search");
     expect(calls[0]!.init?.method).toBe("POST");
-    expect(calls[0]!.init?.signal).toBe(controller.signal);
+    const signal = calls[0]!.init?.signal as AbortSignal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+    controller.abort();
+    expect(signal.aborted).toBe(true);
     expect(
       new Headers(calls[0]!.init?.headers).get("authorization"),
     ).toBe("Bearer tvly-test-key");
@@ -59,6 +63,63 @@ describe("webSearchTool", () => {
     expect(text).toContain("https://workers.cloudflare.com/");
     expect(text).toContain("Run code at the edge.");
     expect(tool.replay).toBe("safe");
+  });
+
+  it("reports its own timeout as a friendly message", async () => {
+    const timeout = AbortSignal.abort(
+      new DOMException("timed out", "TimeoutError"),
+    );
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(timeout);
+
+    try {
+      const fakeFetch = (async (
+        _input: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        throw init!.signal!.reason;
+      }) as typeof fetch;
+
+      const result = await webSearchTool("key", fakeFetch).execute(
+        { query: "q" },
+        {} as never,
+        context(),
+      );
+
+      expect(textOf(result)).toContain("搜索超时");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("rethrows a caller abort", async () => {
+    const controller = new AbortController();
+    const fakeFetch = ((
+      _input: RequestInfo | URL,
+      init?: RequestInit,
+    ) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init!.signal!;
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+      })) as typeof fetch;
+
+    const tool = webSearchTool("key", fakeFetch);
+    setTimeout(() => controller.abort(), 10);
+
+    await expect(
+      tool.execute(
+        { query: "q" },
+        {} as never,
+        context(controller.signal),
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("honours maxResults", async () => {

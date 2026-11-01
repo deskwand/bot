@@ -7,6 +7,15 @@ const Search = Type.Object({
 });
 
 const TAVILY_URL = "https://api.tavily.com/search";
+const SEARCH_TIMEOUT_MS = 30_000;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function textResult(text: string) {
+  return { output: [{ type: "text" as const, text }] };
+}
 
 type TavilyResult = {
   title?: unknown;
@@ -29,19 +38,37 @@ export function webSearchTool(
     parameters: Search,
     replay: "safe",
     async execute({ query, maxResults }, _api, context) {
-      const response = await fetchImpl(TAVILY_URL, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          query,
-          max_results: maxResults ?? 5,
-          search_depth: "basic",
-        }),
-        signal: context.abortSignal,
-      });
+      const timeout = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
+      const signal = context.abortSignal
+        ? AbortSignal.any([context.abortSignal, timeout])
+        : timeout;
+
+      let response: Response;
+      try {
+        response = await fetchImpl(TAVILY_URL, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            query,
+            max_results: maxResults ?? 5,
+            search_depth: "basic",
+          }),
+          signal,
+        });
+      } catch (error) {
+        // Caller cancellation must propagate so the run stops; only the
+        // tool's own timeout becomes a normal answer.
+        if (context.abortSignal?.aborted) throw error;
+        if (timeout.aborted) {
+          return textResult(
+            `搜索超时：超过 ${SEARCH_TIMEOUT_MS / 1000} 秒`,
+          );
+        }
+        return textResult(`搜索失败：${errorMessage(error)}`);
+      }
 
       if (!response.ok) {
         throw new Error(`搜索服务返回 HTTP ${response.status}`);

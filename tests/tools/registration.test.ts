@@ -65,11 +65,16 @@ describe("TaskDO execution tools", () => {
         expect(events.map((event) => event.type)).toEqual([
           "started",
           "progress",
+          "progress",
           "completed",
         ]);
         expect(events[1]?.payload).toMatchObject({
           type: "progress",
           text: "保存：report.md",
+        });
+        expect(events[2]?.payload).toMatchObject({
+          type: "progress",
+          text: "保存：report.md ✓",
         });
       },
       { timeout: 10_000 },

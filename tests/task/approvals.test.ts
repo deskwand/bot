@@ -310,6 +310,7 @@ describe("ApprovalGate", () => {
       "progress",
       "approval_requested",
       "approval_resolved",
+      "progress",
     ]);
   });
 });

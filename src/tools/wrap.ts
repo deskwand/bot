@@ -37,14 +37,24 @@ export function withProgress<T extends TSchema>(
         );
       }
 
+      let result;
       try {
-        return await tool.execute(args, api, context);
+        result = await tool.execute(args, api, context);
       } catch (error) {
         if (context.abortSignal?.aborted || isAbortError(error)) throw error;
         return {
           output: [{ type: "text", text: `工具出错：${errorMessage(error)}` }],
         };
       }
+
+      try {
+        await emit({ type: "progress", text: `${describe(args)} ✓` });
+      } catch (error) {
+        console.warn(
+          `tool ${tool.name} progress emit failed: ${errorMessage(error)}`,
+        );
+      }
+      return result;
     },
   };
 }

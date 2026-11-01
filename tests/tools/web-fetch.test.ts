@@ -130,6 +130,39 @@ describe("webFetchTool", () => {
     expect(text.length).toBeLessThan(20_000 + 50);
   });
 
+  it("stops reading a large body after 2 MB and notes truncation", async () => {
+    const chunk = new Uint8Array(512 * 1024).fill(97);
+    let pulled = 0;
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= 10) {
+          controller.close();
+          return;
+        }
+        sent += 1;
+        pulled += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    });
+    const fakeFetch = (async () =>
+      new Response(stream, {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      })) as typeof fetch;
+
+    const result = await webFetchTool(fakeFetch).execute(
+      { url: "https://example.test/big" },
+      {} as never,
+      context(),
+    );
+    const text = textOf(result);
+
+    expect(pulled).toBeLessThan(4 * 1024 * 1024);
+    expect(text).toContain("已截断");
+    expect(text.startsWith("a".repeat(20_000))).toBe(true);
+  });
+
   it("rethrows a caller abort, even if fetch never settles", async () => {
     const fakeFetch = (() => new Promise<Response>(() => {})) as typeof fetch;
     const controller = new AbortController();

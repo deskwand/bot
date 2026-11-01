@@ -53,8 +53,11 @@ describe("withProgress", () => {
       context(),
     );
 
-    expect(events).toEqual([{ type: "progress", text: "回显：hi" }]);
-    expect(order).toEqual(["emit", "execute"]);
+    expect(events).toEqual([
+      { type: "progress", text: "回显：hi" },
+      { type: "progress", text: "回显：hi ✓" },
+    ]);
+    expect(order).toEqual(["emit", "execute", "emit"]);
     expect(textOf(result)).toBe("hi");
   });
 
@@ -133,7 +136,7 @@ describe("withProgress", () => {
 
       expect(executed).toBe(1);
       expect(textOf(result)).toBe("tool output");
-      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledTimes(2);
     } finally {
       warn.mockRestore();
     }

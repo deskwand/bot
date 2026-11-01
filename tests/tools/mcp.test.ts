@@ -223,7 +223,9 @@ describe("loadMcpTools", () => {
     expect(calls).toEqual(['search:{"query":"notes"}']);
     expect(progress.events).toEqual([
       { type: "progress", text: "MCP notion：create_page" },
+      { type: "progress", text: "MCP notion：create_page ✓" },
       { type: "progress", text: "MCP notion：search" },
+      { type: "progress", text: "MCP notion：search ✓" },
     ]);
   });
 
