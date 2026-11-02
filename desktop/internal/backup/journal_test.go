@@ -99,3 +99,23 @@ func TestJournalRejectsCorruptRecord(t *testing.T) {
 		t.Fatalf("code = %q", code)
 	}
 }
+
+func TestJournalClearWorksWithCorruptRecord(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "restore")
+	journal, err := NewRestoreJournal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "restore.json")
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Clear must not decode the record first: a corrupt journal still has to
+	// be abandonable from the UI.
+	if err := journal.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("corrupt journal still exists: %v", err)
+	}
+}

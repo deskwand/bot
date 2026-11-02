@@ -105,6 +105,7 @@ func main() {
 				Publisher:   publish,
 				Credentials: credentials,
 			},
+			Locker: locker,
 			Progress: func(progress backup.Progress) {
 				_ = app.BackupProgressEvent.Broadcast(progress)
 			},

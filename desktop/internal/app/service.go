@@ -502,8 +502,8 @@ func (s *Service) InspectImport() (ImportPreviewDTO, error) {
 		OwnerConfigured:     preview.OwnerConfigured,
 		ModelsConfigured:    preview.ModelsConfigured,
 		ActiveChannel:       preview.ActiveChannel,
-		SecretNames:         append([]string(nil), preview.SecretNames...),
-		PreserveSecretNames: append([]string(nil), preview.PreserveSecretNames...),
+		SecretNames:         visibleSecretNames(preview.SecretNames),
+		PreserveSecretNames: visibleSecretNames(preview.PreserveSecretNames),
 		RequiredInputs:      append([]string(nil), preview.RequiredInputs...),
 		Warnings:            append([]string(nil), preview.Warnings...),
 	}

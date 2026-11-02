@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/deskwand/bot/desktop/internal/backup"
@@ -11,6 +12,26 @@ import (
 // hiddenSecretName is the Worker secret the client manages on its own. It is
 // never listed in the configuration UI and cannot be edited there.
 const hiddenSecretName = backup.AdminTokenSecret
+
+// backupOperationTimeout bounds one export or restore end to end. Each HTTP
+// request has its own shorter timeout; this is the outer guard that lets the
+// local busy flag clear even if a dependency misbehaves.
+var backupOperationTimeout = 30 * time.Minute
+
+func (s *Service) backupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), backupOperationTimeout)
+}
+
+func visibleSecretNames(names []string) []string {
+	visible := make([]string, 0, len(names))
+	for _, name := range names {
+		if name == hiddenSecretName {
+			continue
+		}
+		visible = append(visible, name)
+	}
+	return visible
+}
 
 // BackupProgressEvent carries export and restore progress to the frontend.
 // `mygo generate` turns it into `events.backupProgress`.
@@ -32,6 +53,7 @@ type BackupService interface {
 	Restore(ctx context.Context, target domain.Target, path string) error
 	Retry(ctx context.Context, useSnapshot bool) error
 	Pending() (*backup.RestoreRecord, error)
+	Abandon() error
 }
 
 // BackupSummaryDTO describes one backup file without exposing its contents.
@@ -59,6 +81,7 @@ type PendingRestoreDTO struct {
 	OperationID  string `json:"operationId"`
 	BackupPath   string `json:"backupPath"`
 	SnapshotPath string `json:"snapshotPath"`
+	State        string `json:"state"`
 	FailureCode  string `json:"failureCode"`
 }
 
@@ -86,7 +109,8 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 		return nil, err
 	}
 	defer s.endBackupOperation()
-	ctx := context.Background()
+	ctx, cancel := s.backupContext()
+	defer cancel()
 	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return nil, err
@@ -118,7 +142,8 @@ func (s *Service) ChooseBackup() (*BackupPreviewDTO, error) {
 		return nil, err
 	}
 	defer s.endBackupOperation()
-	ctx := context.Background()
+	ctx, cancel := s.backupContext()
+	defer cancel()
 	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return nil, err
@@ -169,7 +194,8 @@ func (s *Service) RestoreData() error {
 		return err
 	}
 	defer s.endBackupOperation()
-	ctx := context.Background()
+	ctx, cancel := s.backupContext()
+	defer cancel()
 	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return err
@@ -205,6 +231,7 @@ func (s *Service) PendingRestore() (*PendingRestoreDTO, error) {
 		OperationID:  record.OperationID,
 		BackupPath:   record.BackupPath,
 		SnapshotPath: record.SnapshotPath,
+		State:        record.State,
 		FailureCode:  record.FailureCode,
 	}, nil
 }
@@ -219,7 +246,23 @@ func (s *Service) RetryRestore(useSnapshot bool) error {
 	if s.backup == nil {
 		return serviceUnavailable()
 	}
-	return safeAppError(s.backup.Retry(context.Background(), useSnapshot))
+	ctx, cancel := s.backupContext()
+	defer cancel()
+	return safeAppError(s.backup.Retry(ctx, useSnapshot))
+}
+
+// AbandonPendingRestore clears the local unfinished-restore record. It does
+// not roll back or otherwise change any cloud data; the user is told this in
+// the confirmation. Clearing works even when restore.json is unreadable.
+func (s *Service) AbandonPendingRestore() error {
+	if err := s.beginBackupOperation(); err != nil {
+		return err
+	}
+	defer s.endBackupOperation()
+	if s.backup == nil {
+		return serviceUnavailable()
+	}
+	return safeAppError(s.backup.Abandon())
 }
 
 func backupSummary(path string, manifest backup.Manifest) BackupSummaryDTO {
@@ -283,4 +326,10 @@ func (r *BackupRunner) Retry(ctx context.Context, useSnapshot bool) error {
 // Pending returns the unfinished restore record, or nil.
 func (r *BackupRunner) Pending() (*backup.RestoreRecord, error) {
 	return r.Journal.Pending()
+}
+
+// Abandon removes the journal without decoding it, so a corrupt record can
+// still be cleared.
+func (r *BackupRunner) Abandon() error {
+	return r.Journal.Clear()
 }

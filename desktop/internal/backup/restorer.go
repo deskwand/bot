@@ -73,25 +73,44 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 	if err != nil {
 		return err
 	}
-	snapshot, err := deps.Token.Snapshots.ReadSnapshot(ctx, target)
+
+	opID, err := deps.newOpID()
+	if err != nil {
+		return err
+	}
+	// Establish the admin token before taking the shared target lock: the
+	// publish flow used by EnsureAdminToken/RepublishAdminToken takes the same
+	// non-reentrant lock.
+	client, snapshot, published, err := connect(ctx, deps, target, opID)
 	if err != nil {
 		return err
 	}
 	if err := CheckVersion(manifest, snapshot); err != nil {
 		return err
 	}
+	client, err = acquireLease(ctx, deps, target, client, published, "restore")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = releaseLease(client) }()
+
+	unlock, err := lockTarget(ctx, deps, target)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
 		return fmt.Errorf("backup: create snapshot directory: %w", err)
 	}
 	now := deps.now()
 	snapshotPath := filepath.Join(snapshotDir, "pre-restore-"+now.Format("20060102-150405")+".zip")
-	snapshotDeps := deps
-	snapshotDeps.Progress = func(progress Progress) {
-		progress.Op = "restore"
-		deps.report(progress)
-	}
-	snapshotManifest, err := Export(ctx, snapshotDeps, target, snapshotPath)
+	var snapshotManifest Manifest
+	err = withLeaseHeartbeat(ctx, client, func(heartbeatCtx context.Context) error {
+		var snapshotErr error
+		snapshotManifest, snapshotErr = writeSnapshot(heartbeatCtx, deps, client, snapshot, target, snapshotPath)
+		return snapshotErr
+	})
 	if err != nil {
 		return domain.Error{Code: CodeRestoreSnapshotFailed, Message: err.Error()}
 	}
@@ -108,10 +127,24 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 		}
 	}
 
-	opID, err := deps.newOpID()
+	// Re-read the deployment and check the release immediately before the
+	// first destructive call. The shared lock stops this client's publish path,
+	// and the recheck closes the window where another device upgraded during
+	// the snapshot.
+	current, err := deps.Token.Snapshots.ReadSnapshot(ctx, target)
 	if err != nil {
 		return err
 	}
+	if err := CheckVersion(manifest, current); err != nil {
+		return err
+	}
+
+	reader, err := Open(backupPath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
 	record := RestoreRecord{
 		OperationID:  opID,
 		Target:       target,
@@ -124,7 +157,12 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 	if err := journal.Save(record); err != nil {
 		return err
 	}
-	if err := restoreArchive(ctx, deps, target, backupPath, opID); err != nil {
+	progress := Progress{Op: "restore", Phase: PhaseDatabase}
+	deps.report(progress)
+	err = withLeaseHeartbeat(ctx, client, func(heartbeatCtx context.Context) error {
+		return restoreData(heartbeatCtx, deps, client, reader, manifest, &progress)
+	})
+	if err != nil {
 		record.State = restoreStateFailed
 		record.FailureCode = failureCode(err)
 		record.UpdatedAt = deps.now()
@@ -133,6 +171,8 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 		_ = journal.Save(record)
 		return err
 	}
+	progress.Phase = PhaseFinishing
+	deps.report(progress)
 	return journal.Clear()
 }
 
@@ -161,13 +201,6 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 	if err != nil {
 		return err
 	}
-	snapshot, err := deps.Token.Snapshots.ReadSnapshot(ctx, record.Target)
-	if err != nil {
-		return err
-	}
-	if err := CheckVersion(manifest, snapshot); err != nil {
-		return err
-	}
 
 	opID := record.OperationID
 	if opID == "" {
@@ -176,6 +209,42 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 			return err
 		}
 	}
+	client, snapshot, published, err := connect(ctx, deps, record.Target, opID)
+	if err != nil {
+		return err
+	}
+	if err := CheckVersion(manifest, snapshot); err != nil {
+		return err
+	}
+	client, err = acquireLease(ctx, deps, record.Target, client, published, "restore")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = releaseLease(client) }()
+
+	unlock, err := lockTarget(ctx, deps, record.Target)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	// Retry has no new snapshot, so the immediate pre-destructive recheck is
+	// the only guard against an upgrade that happened while this attempt was
+	// waiting for the lock.
+	current, err := deps.Token.Snapshots.ReadSnapshot(ctx, record.Target)
+	if err != nil {
+		return err
+	}
+	if err := CheckVersion(manifest, current); err != nil {
+		return err
+	}
+
+	reader, err := Open(path)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
 	record.OperationID = opID
 	record.State = restoreStateRun
 	record.FailureCode = ""
@@ -183,7 +252,12 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 	if err := journal.Save(*record); err != nil {
 		return err
 	}
-	if err := restoreArchive(ctx, deps, record.Target, path, opID); err != nil {
+	progress := Progress{Op: "restore", Phase: PhaseDatabase}
+	deps.report(progress)
+	err = withLeaseHeartbeat(ctx, client, func(heartbeatCtx context.Context) error {
+		return restoreData(heartbeatCtx, deps, client, reader, manifest, &progress)
+	})
+	if err != nil {
 		record.State = restoreStateFailed
 		record.FailureCode = failureCode(err)
 		record.UpdatedAt = deps.now()
@@ -192,7 +266,32 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 		_ = journal.Save(*record)
 		return err
 	}
+	progress.Phase = PhaseFinishing
+	deps.report(progress)
 	return journal.Clear()
+}
+
+// writeSnapshot exports the current deployment through an already-connected
+// client that holds the maintenance lease and the shared target lock.
+func writeSnapshot(ctx context.Context, deps Deps, client *AdminClient, snapshot domain.Snapshot, target domain.Target, path string) (Manifest, error) {
+	writer, err := NewWriter(path)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer writer.Abort()
+	snapshotDeps := deps
+	snapshotDeps.Progress = func(progress Progress) {
+		progress.Op = "restore"
+		deps.report(progress)
+	}
+	manifest, err := exportData(ctx, snapshotDeps, client, snapshot, target, writer)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if err := writer.Finish(manifest); err != nil {
+		return Manifest{}, err
+	}
+	return manifest, nil
 }
 
 func pendingRestoreError() error {
@@ -209,37 +308,6 @@ func failureCode(err error) string {
 		return code
 	}
 	return CodeBackupInvalid
-}
-
-// restoreArchive holds the maintenance lease and writes the whole archive
-// back. A failed write-back keeps the lease, so the bot stays paused with
-// half-restored data until the user retries or the lease expires.
-func restoreArchive(ctx context.Context, deps Deps, target domain.Target, path, opID string) error {
-	reader, err := Open(path)
-	if err != nil {
-		return err
-	}
-	defer reader.Close()
-	manifest := reader.Manifest()
-
-	client, _, published, err := connect(ctx, deps, target, opID)
-	if err != nil {
-		return err
-	}
-	client, err = acquireLease(ctx, deps, target, client, published, "restore")
-	if err != nil {
-		return err
-	}
-
-	progress := Progress{Op: "restore", Phase: PhaseDatabase}
-	deps.report(progress)
-	if err := restoreData(ctx, deps, client, reader, manifest, &progress); err != nil {
-		return err
-	}
-	progress.Phase = PhaseFinishing
-	deps.report(progress)
-	_ = releaseLease(client)
-	return nil
 }
 
 func restoreData(ctx context.Context, deps Deps, client *AdminClient, reader *Reader, manifest Manifest, progress *Progress) error {
@@ -367,7 +435,7 @@ func restoreObjects(ctx context.Context, deps Deps, client *AdminClient, reader 
 			return err
 		}
 		if item.Size > renewEveryBytes {
-			if err := renewLease(ctx, client, "restore"); err != nil {
+			if err := renewLease(ctx, client); err != nil {
 				return err
 			}
 		}

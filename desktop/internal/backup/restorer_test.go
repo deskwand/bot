@@ -66,8 +66,8 @@ func seedRestoreWorker(t *testing.T) *fakeWorker {
 	}, map[string][]json.RawMessage{
 		"__kv": {
 			json.RawMessage(`{"key":"schema_version","value":"3"}`),
-			json.RawMessage(`{"key":"owner","value":"u1"}`),
-			json.RawMessage(`{"key":"cursor","value":"abc"}`),
+			json.RawMessage(`{"key":"owner","value":"\"u1\""}`),
+			json.RawMessage(`{"key":"cursor","value":"\"abc\""}`),
 		},
 	})
 	worker.addObject("artifacts/a b.png", "image/png", []byte("png-bytes"))
@@ -580,10 +580,10 @@ func TestRestoreRenewsLeaseForLargeObjects(t *testing.T) {
 	if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
 		t.Fatal(err)
 	}
-	// One acquire for the snapshot export, one for the restore, and one
-	// renewal after the 20-byte upload.
-	if got := worker.requestCount("POST", acquirePath) - before; got != 3 {
-		t.Fatalf("acquire calls = %d, want 3", got)
+	// One acquire for the whole restore; renewals use the lease-checked Info
+	// request and must not reacquire.
+	if got := worker.requestCount("POST", acquirePath) - before; got != 1 {
+		t.Fatalf("acquire calls = %d, want 1", got)
 	}
 	restored, _, ok := worker.object("big.bin")
 	if !ok || string(restored) != string(body) {
@@ -740,5 +740,49 @@ func TestRetryWithoutPendingRecord(t *testing.T) {
 	err := Retry(context.Background(), deps, journal, false)
 	if code := adminErrorCode(t, err); code != CodeBackupInvalid {
 		t.Fatalf("code = %q", code)
+	}
+}
+
+func TestRestoreRechecksVersionImmediatelyBeforeDestructiveStep(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+
+	initial := exportSnapshot(worker.URL(), "1.2.3", true)
+	upgraded := exportSnapshot(worker.URL(), "1.3.0", true)
+	deps, _ := exportDeps(t, initial, "tok", time.Second)
+	deps.Token.Snapshots = &fakeSnapshots{queue: []domain.Snapshot{initial, upgraded}}
+
+	journal := newRestoreJournal(t)
+	err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups"))
+	if code := adminErrorCode(t, err); code != CodeBackupVersionMismatch {
+		t.Fatalf("code = %q, want %q", code, CodeBackupVersionMismatch)
+	}
+	if got := len(restoreCalls(worker)); got != 0 {
+		t.Fatalf("restore calls = %d, want 0", got)
+	}
+	pending, err := journal.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != nil {
+		t.Fatalf("pending = %+v, want nil", pending)
+	}
+}
+
+func TestRestoreOrderDoesNotDependOnManifestOrder(t *testing.T) {
+	objects := []DOManifest{
+		{DORef: DORef{DO: "butler"}},
+		{DORef: DORef{DO: "channel"}},
+		{DORef: DORef{DO: "task", ID: "t2"}},
+		{DORef: DORef{DO: "task", ID: "t1"}},
+	}
+	ordered := restoreOrder(objects)
+	var got []string
+	for _, object := range ordered {
+		got = append(got, object.DO+"/"+object.ID)
+	}
+	want := []string{"task/t2", "task/t1", "channel/", "butler/"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("restore order = %v, want %v", got, want)
 	}
 }

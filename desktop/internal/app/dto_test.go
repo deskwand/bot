@@ -73,7 +73,7 @@ func TestSecretInputDTOsFormatAndLogWithoutValues(t *testing.T) {
 
 func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 	expected := map[string]bool{
-		"AbandonOperation": true, "CancelCloudflareLogin": true, "CancelWeChatLogin": true,
+		"AbandonOperation": true, "AbandonPendingRestore": true, "CancelCloudflareLogin": true, "CancelWeChatLogin": true,
 		"CheckClientUpdate": true, "ChooseBackup": true, "CloudflareStatus": true, "ConfirmCloudflareAccount": true,
 		"ConfirmImport": true, "ConnectTelegram": true,
 		"DisconnectCloudflare": true, "ExportData": true, "ExportDiagnostics": true, "GetConfig": true,

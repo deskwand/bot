@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/backup"
+	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
 )
 
@@ -29,6 +30,12 @@ type fakeBackup struct {
 	restoreTarget domain.Target
 	restorePath   string
 	restoreCalls  int
+	// exportWaitContext makes Export block until the service deadline fires,
+	// proving the busy guard is released on timeout.
+	exportWaitContext bool
+
+	abandonCalls int
+	abandonErr   error
 	// restoreStarted and restoreBlock let a test hold a restore open while it
 	// probes the busy guard. Both are optional.
 	restoreStarted chan struct{}
@@ -42,10 +49,14 @@ type fakeBackup struct {
 	pendingErr error
 }
 
-func (f *fakeBackup) Export(_ context.Context, target domain.Target, path string) (backup.Manifest, error) {
+func (f *fakeBackup) Export(ctx context.Context, target domain.Target, path string) (backup.Manifest, error) {
 	f.exportCalls++
 	f.exportTarget = target
 	f.exportPath = path
+	if f.exportWaitContext {
+		<-ctx.Done()
+		return backup.Manifest{}, ctx.Err()
+	}
 	return f.exportManifest, f.exportErr
 }
 
@@ -82,6 +93,11 @@ func (f *fakeBackup) Retry(_ context.Context, useSnapshot bool) error {
 
 func (f *fakeBackup) Pending() (*backup.RestoreRecord, error) {
 	return f.pending, f.pendingErr
+}
+
+func (f *fakeBackup) Abandon() error {
+	f.abandonCalls++
+	return f.abandonErr
 }
 
 type fakeFileDialogs struct {
@@ -238,6 +254,7 @@ func TestPendingRestoreMapsRecord(t *testing.T) {
 		OperationID:  "op-restore",
 		BackupPath:   "/tmp/backup.zip",
 		SnapshotPath: "/tmp/pre-restore.zip",
+		State:        "failed",
 		FailureCode:  backup.CodeRestoreSnapshotFailed,
 	}
 
@@ -249,6 +266,7 @@ func TestPendingRestoreMapsRecord(t *testing.T) {
 		OperationID:  "op-restore",
 		BackupPath:   "/tmp/backup.zip",
 		SnapshotPath: "/tmp/pre-restore.zip",
+		State:        "failed",
 		FailureCode:  backup.CodeRestoreSnapshotFailed,
 	}
 	if pending == nil || *pending != want {
@@ -327,6 +345,9 @@ func TestBackupRunsOneOperationAtATime(t *testing.T) {
 	if err := f.service.RetryRestore(false); !hasCode(err, backup.CodeMaintenanceBusy) {
 		t.Fatalf("RetryRestore while busy = %v, want %s", err, backup.CodeMaintenanceBusy)
 	}
+	if err := f.service.AbandonPendingRestore(); !hasCode(err, backup.CodeMaintenanceBusy) {
+		t.Fatalf("AbandonPendingRestore while busy = %v, want %s", err, backup.CodeMaintenanceBusy)
+	}
 	if _, err := f.service.ChooseBackup(); !hasCode(err, backup.CodeMaintenanceBusy) {
 		t.Fatalf("ChooseBackup while busy = %v, want %s", err, backup.CodeMaintenanceBusy)
 	}
@@ -366,5 +387,61 @@ func TestChooseBackupFailureForgetsPreviousChoice(t *testing.T) {
 	}
 	if f.backup.restoreCalls != 0 {
 		t.Fatalf("restore used a stale path %q", f.backup.restorePath)
+	}
+}
+
+func TestAbandonPendingRestoreClearsJournal(t *testing.T) {
+	f := newBackupFixture(t)
+	if err := f.service.AbandonPendingRestore(); err != nil {
+		t.Fatal(err)
+	}
+	if f.backup.abandonCalls != 1 {
+		t.Fatalf("abandon calls = %d, want 1", f.backup.abandonCalls)
+	}
+}
+
+func TestBackupBusyGuardReleasesAfterOperationTimeout(t *testing.T) {
+	previous := backupOperationTimeout
+	backupOperationTimeout = 50 * time.Millisecond
+	defer func() { backupOperationTimeout = previous }()
+
+	f := newBackupFixture(t)
+	f.dialogs.savePath = "/tmp/backup.zip"
+	f.backup.exportWaitContext = true
+
+	if _, err := f.service.ExportData(); err == nil {
+		t.Fatal("expected the timed-out export to fail")
+	}
+
+	f.backup.exportWaitContext = false
+	f.dialogs.savePath = "/tmp/second.zip"
+	if _, err := f.service.ExportData(); err != nil {
+		t.Fatalf("busy guard stayed set after the timeout: %v", err)
+	}
+}
+
+func TestVisibleSecretNamesHidesAdminToken(t *testing.T) {
+	got := visibleSecretNames([]string{"TELEGRAM_BOT_TOKEN", backup.AdminTokenSecret, "WECHAT_CREDENTIALS"})
+	want := []string{"TELEGRAM_BOT_TOKEN", "WECHAT_CREDENTIALS"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("visibleSecretNames = %v, want %v", got, want)
+	}
+}
+
+func TestImportPreviewHidesAdminTokenName(t *testing.T) {
+	f := newBackupFixture(t)
+	f.lifecycle.inspectPreview = deployment.ImportPreview{
+		SecretNames:         []string{"TELEGRAM_BOT_TOKEN", backup.AdminTokenSecret},
+		PreserveSecretNames: []string{backup.AdminTokenSecret, "WECHAT_CREDENTIALS"},
+	}
+
+	preview, err := f.service.InspectImport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range append(append([]string{}, preview.SecretNames...), preview.PreserveSecretNames...) {
+		if name == backup.AdminTokenSecret {
+			t.Fatalf("import preview exposed %s", backup.AdminTokenSecret)
+		}
 	}
 }
