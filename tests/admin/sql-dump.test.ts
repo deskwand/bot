@@ -105,7 +105,7 @@ describe("sql-dump", () => {
     expect(tRow.b).toEqual({ $blob: "AP8=" });
     expect(tRow.s).toBe("a'b");
     expect(tRow.z).toBeNull();
-    expect(tRow.r).toBe(1.5);
+    expect(tRow.r).toEqual({ $real: "1.5" });
 
     const target = harness("dump-values-target");
     await runInDurableObject(target, (_instance, state) => {
@@ -176,13 +176,72 @@ describe("sql-dump", () => {
     expect(readBack.map((row) => row.rowid)).toEqual(["9007199254740993"]);
   });
 
+  it("keeps integer and real storage classes exact through JSON", async () => {
+    const source = harness("dump-storage-classes");
+    const captured = await runInDurableObject(source, (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec(`CREATE TABLE typed (id INTEGER PRIMARY KEY, v)`);
+      sql.exec(`INSERT INTO typed (id, v) VALUES (1, 5)`);
+      sql.exec(`INSERT INTO typed (id, v) VALUES (2, CAST(5.0 AS REAL))`);
+      sql.exec(`INSERT INTO typed (id, v) VALUES (3, 1.5)`);
+      sql.exec(`INSERT INTO typed (id, v) VALUES (4, 9e999)`);
+      sql.exec(`INSERT INTO typed (id, v) VALUES (5, -9e999)`);
+      const schema = readSchema(sql);
+      const pages = dump(sql, findTable(schema, "typed"));
+      const rows = rowsOf(pages).map(
+        (row) => JSON.parse(JSON.stringify(row)) as DumpRow,
+      );
+      const expected = sql
+        .exec<{ id: number; t: string; q: string }>(
+          `SELECT id, typeof(v) AS t, quote(v) AS q FROM typed ORDER BY id`,
+        )
+        .toArray();
+      return { schema, rows, expected };
+    });
+
+    expect(captured.rows.map((row) => row.v)).toEqual([
+      5,
+      { $real: "5.0" },
+      { $real: "1.5" },
+      { $real: "9.0e+999" },
+      { $real: "-9.0e+999" },
+    ]);
+
+    const target = harness("dump-storage-classes-target");
+    const readBack = await runInDurableObject(target, (_instance, state) => {
+      const sql = state.storage.sql;
+      createTables(sql, captured.schema);
+      writePage(sql, findTable(captured.schema, "typed"), captured.rows);
+      return sql
+        .exec<{ id: number; t: string; q: string }>(
+          `SELECT id, typeof(v) AS t, quote(v) AS q FROM typed ORDER BY id`,
+        )
+        .toArray();
+    });
+
+    expect(readBack).toEqual(captured.expected);
+    expect(readBack.map((row) => row.t)).toEqual([
+      "integer",
+      "real",
+      "real",
+      "real",
+      "real",
+    ]);
+  });
+
   it("excludes sqlite_, _cf_ and admin_maintenance tables", async () => {
     const source = harness("dump-excludes");
     const schema = await runInDurableObject(source, (_instance, state) => {
       const sql = state.storage.sql;
-      sql.exec(`CREATE TABLE admin_maintenance (singleton INTEGER PRIMARY KEY)`);
+      sql.exec(
+        `CREATE TABLE admin_maintenance (singleton INTEGER PRIMARY KEY, until INTEGER)`,
+      );
+      sql.exec(
+        `CREATE INDEX admin_maintenance_until ON admin_maintenance (until)`,
+      );
       sql.exec(`CREATE TABLE autoinc (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)`);
       sql.exec(`INSERT INTO autoinc (v) VALUES ('x')`);
+      sql.exec(`CREATE INDEX autoinc_v ON autoinc (v)`);
       return readSchema(sql);
     });
 
@@ -192,6 +251,47 @@ describe("sql-dump", () => {
     expect(names).not.toContain("sqlite_sequence");
     expect(names.some((name) => name.startsWith("sqlite_"))).toBe(false);
     expect(names.some((name) => name.startsWith("_cf_"))).toBe(false);
+    expect(
+      schema.indexes.some((sql) => sql.includes("admin_maintenance_until")),
+    ).toBe(false);
+    expect(schema.indexes.some((sql) => sql.includes("autoinc_v"))).toBe(true);
+  });
+
+  it("resumes WITHOUT ROWID tables across pages without gaps or duplicates", async () => {
+    const source = harness("dump-without-rowid-pages");
+    const result = await runInDurableObject(source, (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec(`CREATE TABLE wo (k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID`);
+      for (let i = 0; i < 200; i += 1) {
+        sql.exec(
+          `INSERT INTO wo (k, v) VALUES (?, ?)`,
+          `k${String(i).padStart(3, "0")}`,
+          `v${i}`,
+        );
+      }
+      const table = findTable(readSchema(sql), "wo");
+      const pages: number[] = [];
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let i = 0; i < 10_000; i += 1) {
+        const page = readPage(sql, table, cursor, 2000);
+        pages.push(page.rows.length);
+        for (const row of page.rows) seen.push(row.k as string);
+        cursor = page.next;
+        if (cursor === null) break;
+      }
+      return { pages, seen };
+    });
+
+    expect(result.pages.length).toBeGreaterThan(1);
+    expect(result.seen).toHaveLength(200);
+    expect(new Set(result.seen).size).toBe(200);
+    expect(result.seen).toEqual(
+      Array.from(
+        { length: 200 },
+        (_value, i) => `k${String(i).padStart(3, "0")}`,
+      ),
+    );
   });
 
   it("pages by size and resumes from the cursor", async () => {

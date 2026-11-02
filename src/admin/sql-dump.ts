@@ -3,8 +3,10 @@
  *
  * A dump row is a plain JSON object. Values are read through SQLite
  * `quote()` so every value survives the trip through JSON: TEXT stays a
- * string, BLOB becomes `{ $blob: <base64> }` and integers outside the JS safe
- * range become `{ $int: <decimal> }`. Rowid tables also carry `__rowid`.
+ * string, BLOB becomes `{ $blob: <base64> }`, REAL becomes
+ * `{ $real: <quote text> }` and integers outside the JS safe range become
+ * `{ $int: <decimal> }`. A plain JSON number always means INTEGER. Rowid
+ * tables also carry `__rowid`.
  */
 
 export const PAGE_BYTES = 1 << 20;
@@ -15,6 +17,7 @@ export type DumpValue =
   | number
   | null
   | { $int: string }
+  | { $real: string }
   | { $blob: string };
 
 export type DumpRow = Record<string, DumpValue>;
@@ -84,10 +87,12 @@ export function readSchema(sql: SqlStorage): DbSchema {
       withoutRowid: !hasRowid(sql, row.name),
     }));
   const indexes = sql
-    .exec<{ sql: string | null }>(
-      `SELECT sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name`,
+    .exec<{ tbl_name: string; sql: string | null }>(
+      `SELECT tbl_name, sql FROM sqlite_master
+       WHERE type = 'index' AND sql IS NOT NULL ORDER BY name`,
     )
     .toArray()
+    .filter((row) => !isExcludedTable(row.tbl_name))
     .map((row) => row.sql!);
   return { tables, indexes };
 }
@@ -158,9 +163,7 @@ function decodeValue(text: string): DumpValue {
   if (text.startsWith("'")) {
     return text.slice(1, -1).replace(/''/g, "'");
   }
-  if (/[.eE]/.test(text) || text === "Inf" || text === "-Inf") {
-    return Number(text);
-  }
+  if (/[.eE]/.test(text)) return { $real: text };
   const value = Number(text);
   if (Number.isSafeInteger(value)) return value;
   return { $int: text };
@@ -279,10 +282,18 @@ function bindValue(value: DumpValue): {
     if ("$int" in value) {
       return { placeholder: "CAST(? AS INTEGER)", binding: value.$int };
     }
+    if ("$real" in value) {
+      return { placeholder: "CAST(? AS REAL)", binding: value.$real };
+    }
     return {
       placeholder: "?",
       binding: base64ToBytes(value.$blob).buffer as ArrayBuffer,
     };
+  }
+  // A JSON number always means INTEGER: a bare number binding would be
+  // stored as REAL inside an untyped or BLOB-affinity column.
+  if (typeof value === "number") {
+    return { placeholder: "CAST(? AS INTEGER)", binding: value };
   }
   return { placeholder: "?", binding: value };
 }
