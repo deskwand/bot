@@ -60,28 +60,8 @@ func Verify(manifest, signature []byte, key ed25519.PublicKey, files map[string]
 // selected. No other manifest field is trusted until Verify has checked the
 // raw bytes.
 func (keys TrustedKeys) VerifyWithKeys(manifest, signature []byte, files map[string][]byte) error {
-	var header struct {
-		KeyID string `json:"keyId"`
-	}
-	if err := json.Unmarshal(manifest, &header); err != nil {
-		return fmt.Errorf("release: read manifest keyId: %w", err)
-	}
-	if header.KeyID == "" {
-		return errors.New("release: manifest keyId is empty")
-	}
-	key, ok := keys[header.KeyID]
-	if !ok {
-		return fmt.Errorf("release: untrusted release key %q", header.KeyID)
-	}
-
-	parsed, err := verify(manifest, signature, key, files)
-	if err != nil {
-		return err
-	}
-	if parsed.KeyID != header.KeyID {
-		return fmt.Errorf("release: manifest keyId %q does not match selected key %q", parsed.KeyID, header.KeyID)
-	}
-	return nil
+	_, err := keys.VerifyPackage(manifest, signature, files)
+	return err
 }
 
 func verify(manifest, signature []byte, key ed25519.PublicKey, files map[string][]byte) (*Manifest, error) {

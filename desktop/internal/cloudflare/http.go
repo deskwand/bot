@@ -246,6 +246,12 @@ func (c *Client) SendJSON(ctx context.Context, method, path string, in, out any)
 // response result into out. path follows the same unescaped-segment rules as
 // GetJSON.
 func (c *Client) SendMultipart(ctx context.Context, method, path string, parts []Part, out any) error {
+	return c.SendMultipartQuery(ctx, method, path, nil, parts, out)
+}
+
+// SendMultipartQuery is SendMultipart with query parameters, used by the
+// version upload where bindings_inherit=strict is required.
+func (c *Client) SendMultipartQuery(ctx context.Context, method, path string, query url.Values, parts []Part, out any) error {
 	var buffer bytes.Buffer
 	writer := multipart.NewWriter(&buffer)
 	for _, part := range parts {
@@ -277,7 +283,7 @@ func (c *Client) SendMultipart(ctx context.Context, method, path string, parts [
 		return fmt.Errorf("cloudflare: finish multipart body: %w", err)
 	}
 
-	resp, err := c.do(ctx, method, path, nil, bytes.NewReader(buffer.Bytes()), writer.FormDataContentType())
+	resp, err := c.do(ctx, method, path, query, bytes.NewReader(buffer.Bytes()), writer.FormDataContentType())
 	if err != nil {
 		return err
 	}

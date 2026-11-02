@@ -23,6 +23,9 @@ const (
 	LATEST_NOT_BASE          = "LATEST_NOT_BASE"
 	NO_ACTIVE_VERSION        = "NO_ACTIVE_VERSION"
 	INVALID_SECRET_EDIT      = "INVALID_SECRET_EDIT"
+	// NOT_SENT means a mutation was rejected or failed before any remote write
+	// could have happened. It is retryable without reconciliation.
+	NOT_SENT = "NOT_SENT"
 )
 
 // Secret operation names accepted by Merge.
