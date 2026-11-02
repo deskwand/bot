@@ -56,13 +56,15 @@ func (e *Error) Error() string {
 	if e == nil {
 		return "auth: <nil>"
 	}
+	// Lead with the stable code, like domain.Error, so the UI can map it
+	// after the error crosses the MyGo bridge as plain text.
 	if e.Message != "" {
-		return "auth: " + e.Message
+		return e.Code + ": " + e.Message
 	}
 	if e.Err != nil {
-		return "auth: " + e.Err.Error()
+		return e.Code + ": " + e.Err.Error()
 	}
-	return "auth: " + e.Code
+	return e.Code
 }
 
 func (e *Error) Unwrap() error { return e.Err }
