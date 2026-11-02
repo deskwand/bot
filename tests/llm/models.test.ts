@@ -1,39 +1,125 @@
 import { describe, expect, it } from "vitest";
-import validConfig from "../../contracts/fixtures/config-valid.json";
-import { createModelsForEnv } from "../../src/llm/models";
-import { readRuntimeConfig } from "../../src/runtime-config";
+import { createModelsForEnv, modelReadiness } from "../../src/llm/models";
 
-const cfg = readRuntimeConfig({
-  DESKWAND_CONFIG: validConfig,
-} as unknown as Env);
+const customConfig = {
+  schemaVersion: 1,
+  owner: { telegramUserIds: [] },
+  models: {
+    butler: { provider: "my-proxy", id: "gpt-5.6" },
+    task: { provider: "deepseek", id: "deepseek-flash" },
+    customProviders: [
+      {
+        id: "my-proxy",
+        name: "My Proxy",
+        api: "openai-completions",
+        baseUrl: "https://proxy.example.com/v1",
+        models: [{ id: "gpt-5.6" }],
+      },
+    ],
+  },
+  mcpServers: [],
+};
 
-function envWith(overrides: Record<string, string>): Env {
+function envWith(overrides: Record<string, unknown>): Env {
   return overrides as unknown as Env;
 }
 
 describe("createModelsForEnv", () => {
-  it("resolves every configured model ref from the offline catalog", () => {
+  it("reads each built-in provider's key from MODEL_KEY_<ID>", async () => {
     const models = createModelsForEnv(
-      envWith({ OPENCODE_API_KEY: "oc-test-key" }),
+      envWith({
+        MODEL_KEY_OPENCODE_GO: "a",
+        MODEL_KEY_OPENCODE: "b",
+      }),
     );
 
-    for (const ref of [cfg.models.butler, cfg.models.task]) {
-      const model = models.getModel(ref.provider, ref.id);
-      expect(model).toBeDefined();
-      expect(model).toMatchObject({
-        provider: ref.provider,
-        id: ref.id,
-      });
+    const goAuth = await models.getAuth("opencode-go");
+    expect(goAuth?.auth.apiKey).toBe("a");
+    expect(goAuth?.source).toBe("MODEL_KEY_OPENCODE_GO");
+
+    const opencodeAuth = await models.getAuth("opencode");
+    expect(opencodeAuth?.auth.apiKey).toBe("b");
+    expect(opencodeAuth?.source).toBe("MODEL_KEY_OPENCODE");
+  });
+
+  it("ignores legacy and native variable names", async () => {
+    const models = createModelsForEnv(
+      envWith({
+        ANTHROPIC_API_KEY: "a",
+        OPENCODE_API_KEY: "b",
+        DEEPSEEK_API_KEY: "c",
+      }),
+    );
+
+    for (const provider of ["anthropic", "opencode-go", "deepseek"]) {
+      expect(await models.getAuth(provider)).toBeUndefined();
     }
   });
 
-  it("resolves the OpenCode Go key from the Worker env", async () => {
+  it("treats a blank key as missing", async () => {
     const models = createModelsForEnv(
-      envWith({ OPENCODE_API_KEY: "oc-test-key" }),
+      envWith({ MODEL_KEY_DEEPSEEK: "  " }),
     );
 
-    const auth = await models.getAuth("opencode-go");
-    expect(auth?.source).toBe("OPENCODE_API_KEY");
-    expect(auth?.auth.apiKey).toBe("oc-test-key");
+    expect(await models.getAuth("deepseek")).toBeUndefined();
+  });
+
+  it("registers configured custom providers", async () => {
+    const models = createModelsForEnv(
+      envWith({
+        DESKWAND_CONFIG: customConfig,
+        MODEL_KEY_MY_PROXY: "k",
+      }),
+    );
+
+    expect(models.getModel("my-proxy", "gpt-5.6")).toMatchObject({
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+
+    const auth = await models.getAuth("my-proxy");
+    expect(auth?.auth.apiKey).toBe("k");
+    expect(auth?.source).toBe("MODEL_KEY_MY_PROXY");
+  });
+
+  it("builds models without a readable config", () => {
+    for (const config of [undefined, "{"]) {
+      const models = createModelsForEnv(envWith({ DESKWAND_CONFIG: config }));
+      expect(models.getModel("deepseek", "deepseek-flash")).toBeDefined();
+    }
+  });
+});
+
+describe("modelReadiness", () => {
+  const ref = { provider: "deepseek", id: "deepseek-flash" };
+
+  it("reports a missing key", () => {
+    const env = envWith({});
+    const models = createModelsForEnv(env);
+
+    expect(modelReadiness(env, models, ref)).toBe(
+      "模型 deepseek 没有配置 key（MODEL_KEY_DEEPSEEK），请在桌面端模型页填写",
+    );
+  });
+
+  it("reports a model missing from the catalog", () => {
+    const env = envWith({ MODEL_KEY_DEEPSEEK: "k" });
+    const models = createModelsForEnv(env);
+
+    expect(
+      modelReadiness(env, models, {
+        provider: "deepseek",
+        id: "not-in-catalog",
+      }),
+    ).toBe("模型 deepseek/not-in-catalog 不可用，请在桌面端模型页重新选择");
+  });
+
+  it("returns undefined when the model and key are available", () => {
+    const env = envWith({ MODEL_KEY_DEEPSEEK: "k" });
+    const models = createModelsForEnv(env);
+
+    expect(modelReadiness(env, models, ref)).toBeUndefined();
   });
 });

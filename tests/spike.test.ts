@@ -27,12 +27,12 @@ describe("PiHarness on a Durable Object", () => {
 
   it("resolves the Anthropic key from the Worker env", async () => {
     const models = createModelsForEnv({
-      ANTHROPIC_API_KEY: "sk-ant-test",
+      MODEL_KEY_ANTHROPIC: "sk-ant-test",
     } as unknown as Env);
 
     expect(models.getModel("anthropic", "claude-sonnet-5-5")).toBeDefined();
     const auth = await models.getAuth("anthropic");
-    expect(auth?.source).toBe("ANTHROPIC_API_KEY");
+    expect(auth?.source).toBe("MODEL_KEY_ANTHROPIC");
     expect(auth?.auth.apiKey).toBe("sk-ant-test");
   });
 

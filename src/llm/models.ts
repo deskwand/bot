@@ -1,8 +1,22 @@
-import { createModels, type MutableModels, type Provider } from "@earendil-works/pi-ai/models";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { opencodeGoProvider } from "@earendil-works/pi-ai/providers/opencode-go";
+import {
+  createModels,
+  createProvider,
+  type Models,
+  type MutableModels,
+  type Provider,
+} from "@earendil-works/pi-ai/models";
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { AuthContext } from "@earendil-works/pi-ai";
 import type { PiModel } from "agents/harness/pi";
+import { readRuntimeConfig, RuntimeConfigError } from "../runtime-config";
+import { BUILTIN_PROVIDERS } from "./catalog.generated";
+import { modelKeyAuth } from "./model-key-auth";
+import {
+  MODEL_KEY_PREFIX,
+  secretNameFor,
+  type CustomProviderConfig,
+} from "./providers";
 
 export type Role = "butler" | "task";
 
@@ -34,16 +48,17 @@ export function resolveModel(ref: ModelRef, _env: Env): PiModel {
 }
 
 /**
- * Builds the pi-ai model catalog for a Worker environment. Providers resolve
- * their API keys (`OPENCODE_API_KEY`, `ANTHROPIC_API_KEY`) through this auth
- * context, because the default pi-ai auth context reads `process.env`, which
- * Workers does not populate from bindings.
+ * Builds the pi-ai model catalog for a Worker environment. Every provider
+ * resolves its API key through the read-only `MODEL_KEY_<ID>` secrets; the
+ * default pi-ai auth context reads `process.env`, which Workers does not
+ * populate from bindings.
  */
 export function createModelsForEnv(env: Env): MutableModels {
   const authContext: AuthContext = {
     async env(name) {
+      if (!name.startsWith(MODEL_KEY_PREFIX)) return undefined;
       const value = (env as unknown as Record<string, unknown>)[name];
-      return typeof value === "string" ? value : undefined;
+      return typeof value === "string" && value.trim() ? value : undefined;
     },
     async fileExists() {
       return false;
@@ -51,8 +66,87 @@ export function createModelsForEnv(env: Env): MutableModels {
   };
 
   const models = createModels({ authContext });
-  models.setProvider(opencodeGoProvider());
-  models.setProvider(anthropicProvider());
+  for (const { create } of BUILTIN_PROVIDERS) {
+    const provider = create();
+    models.setProvider(
+      Object.create(provider, {
+        auth: {
+          value: {
+            apiKey: modelKeyAuth(
+              provider.name + " API key",
+              secretNameFor(provider.id),
+            ),
+          },
+          enumerable: true,
+        },
+      }) as Provider,
+    );
+  }
+
+  for (const config of readCustomProviders(env)) {
+    models.setProvider(customProvider(config));
+  }
   for (const provider of testProviders.values()) models.setProvider(provider);
   return models;
+}
+
+/**
+ * Reports why a model cannot run, or `undefined` when it can. Test overrides
+ * and scripted test providers bypass the check.
+ */
+export function modelReadiness(
+  env: Env,
+  models: Models,
+  ref: ModelRef,
+): string | undefined {
+  if (modelOverride || testProviders.has(ref.provider)) return undefined;
+
+  if (!models.getModel(ref.provider, ref.id)) {
+    return `模型 ${ref.provider}/${ref.id} 不可用，请在桌面端模型页重新选择`;
+  }
+
+  const secretName = secretNameFor(ref.provider);
+  const key = (env as unknown as Record<string, string | undefined>)[secretName];
+  if (!key?.trim()) {
+    return `模型 ${ref.provider} 没有配置 key（${secretName}），请在桌面端模型页填写`;
+  }
+
+  return undefined;
+}
+
+function readCustomProviders(env: Env): CustomProviderConfig[] {
+  try {
+    return readRuntimeConfig(env).models.customProviders ?? [];
+  } catch (error) {
+    if (error instanceof RuntimeConfigError) return [];
+    throw error;
+  }
+}
+
+function customProvider(config: CustomProviderConfig): Provider {
+  const name = config.name ?? config.id;
+  return createProvider({
+    id: config.id,
+    name,
+    baseUrl: config.baseUrl,
+    auth: {
+      apiKey: modelKeyAuth(`${name} API key`, secretNameFor(config.id)),
+    },
+    api:
+      config.api === "anthropic-messages"
+        ? anthropicMessagesApi()
+        : openAICompletionsApi(),
+    models: config.models.map((model) => ({
+      id: model.id,
+      name: model.id,
+      api: config.api,
+      provider: config.id,
+      baseUrl: config.baseUrl,
+      input: ["text"],
+      reasoning: false,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: model.contextWindow ?? 128000,
+      maxTokens: model.maxTokens ?? 8192,
+    })),
+  });
 }
