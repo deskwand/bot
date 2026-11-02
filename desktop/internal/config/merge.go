@@ -93,7 +93,7 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 	if err := modelcatalog.ValidateModels(modelsDoc); err != nil {
 		return domain.PublishPlan{}, domain.Error{
 			Code:    domain.UNSUPPORTED_SCHEMA,
-			Message: "the merged configuration has invalid model references: " + err.Error(),
+			Message: err.Error(),
 		}
 	}
 

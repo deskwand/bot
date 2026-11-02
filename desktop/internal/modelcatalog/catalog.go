@@ -136,6 +136,9 @@ func ValidateModels(doc ModelsDoc) error {
 		secretNames[secret] = provider.ID
 		models := make(map[string]bool, len(provider.Models))
 		for _, model := range provider.Models {
+			if models[model.ID] {
+				return fmt.Errorf("custom provider %q declares model %q more than once", provider.ID, model.ID)
+			}
 			models[model.ID] = true
 		}
 		custom[provider.ID] = models
@@ -163,7 +166,7 @@ func validateRole(role string, ref RoleRef, custom map[string]map[string]bool) e
 			return nil
 		}
 	}
-	return fmt.Errorf("models.%s references model %q that built-in provider %q does not list", role, ref.ID, ref.Provider)
+	return fmt.Errorf("模型 %s/%s 不可用，请在桌面端模型页重新选择", ref.Provider, ref.ID)
 }
 
 // RequiredSecretNames returns the sorted, deduplicated MODEL_KEY_* names the

@@ -98,6 +98,13 @@ func TestValidateModelsRejectsInvalidReferences(t *testing.T) {
 			},
 			want: "not-in-catalog",
 		},
+		{
+			name: "duplicate custom model id",
+			edit: func(doc *ModelsDoc) {
+				doc.CustomProviders[0].Models = append(doc.CustomProviders[0].Models, doc.CustomProviders[0].Models[0])
+			},
+			want: "gpt-5.6",
+		},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

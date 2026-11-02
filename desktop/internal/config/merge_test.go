@@ -258,6 +258,60 @@ func TestMergeRejectsCustomProviderWithBuiltinID(t *testing.T) {
 	}
 }
 
+func TestMergeRejectsInvalidCustomProvidersPatch(t *testing.T) {
+	tests := []struct {
+		name  string
+		patch string
+	}{
+		{name: "null", patch: `null`},
+		{name: "object", patch: `{}`},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			base := baseSnapshot(t)
+			_, err := Merge(base, domain.Change{
+				BaseFingerprint: base.Fingerprint,
+				Patch:           domain.EditablePatch{CustomProviders: rawModel(t, testCase.patch)},
+			})
+			assertMergeCode(t, err, domain.UNSUPPORTED_SCHEMA)
+		})
+	}
+}
+
+func TestMergeRejectsRemovingReferencedCustomProvider(t *testing.T) {
+	base := baseSnapshot(t)
+	document := `{"schemaVersion":1,"owner":{"telegramUserIds":[42]},"models":{"butler":{"provider":"my-proxy","id":"gpt-5.6"},"task":{"provider":"my-proxy","id":"gpt-5.6"},"customProviders":[{"id":"my-proxy","api":"openai-completions","baseUrl":"https://proxy.example.com/v1","models":[{"id":"gpt-5.6"}]}]},"mcpServers":[]}`
+	canonical, err := domain.CanonicalizeJSON([]byte(document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.ConfigJSON = canonical
+	_, err = Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{CustomProviders: rawModel(t, `[]`)},
+	})
+	assertMergeCode(t, err, domain.UNSUPPORTED_SCHEMA)
+}
+
+func TestMergeSurfacesUnavailableBuiltinModel(t *testing.T) {
+	base := baseSnapshot(t)
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch: domain.EditablePatch{
+			ButlerModel: rawModel(t, `{"provider":"deepseek","id":"not-in-catalog"}`),
+		},
+	})
+	assertMergeCode(t, err, domain.UNSUPPORTED_SCHEMA)
+	var coded domain.Error
+	if !errors.As(err, &coded) {
+		t.Fatalf("error = %v, want domain.Error", err)
+	}
+	const want = "模型 deepseek/not-in-catalog 不可用，请在桌面端模型页重新选择"
+	if coded.Message != want {
+		t.Fatalf("message = %q, want %q", coded.Message, want)
+	}
+}
+
 func TestMergeNilConfigRequiresOwnerAndModels(t *testing.T) {
 	base := domain.Snapshot{VersionID: "v1", Fingerprint: "fp"}
 	_, err := Merge(base, domain.Change{BaseFingerprint: "fp"})
