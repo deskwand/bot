@@ -472,6 +472,9 @@ func TestRestoreDeletesObjectsNotInBackup(t *testing.T) {
 	for key := range original {
 		want = append(want, key)
 	}
+	// The fake Worker lists objects in sorted key order, matching R2. Map
+	// iteration order is random, so the expectation must be sorted too.
+	sort.Strings(want)
 	if !reflect.DeepEqual(keys, want) {
 		t.Fatalf("object keys = %v, want %v", keys, want)
 	}
