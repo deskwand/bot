@@ -232,7 +232,7 @@ export class ButlerDO extends Agent<Env> {
 
   override async alarm(): Promise<void> {
     if (this.lease.current() !== null) {
-      this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
+      await this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
       return;
     }
     await super.alarm();

@@ -56,6 +56,10 @@ function channels(name: string) {
   return env.CHANNELS.get(env.CHANNELS.idFromName(name));
 }
 
+function task(name: string) {
+  return env.TASK.get(env.TASK.idFromName(name));
+}
+
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     headers: { "content-type": "application/json" },
@@ -69,14 +73,6 @@ async function readWeChatState(hub: ReturnType<typeof channels>) {
         `SELECT cursor, status FROM wechat_state LIMIT 1`,
       )
       .toArray()[0] ?? null,
-  );
-}
-
-async function pollSchedules(hub: ReturnType<typeof channels>) {
-  return runInDurableObject(hub, async (instance) =>
-    (await instance.listSchedules()).filter(
-      (schedule) => schedule.callback === "pollWeChat",
-    ),
   );
 }
 
@@ -95,7 +91,7 @@ beforeEach(() => {
   setWeChatCredentialsOverride(null);
 });
 
-afterEach(() => {
+afterEach(async () => {
   setChannelOverride("telegram", null);
   setChannelOverride("wechat", null);
   setILinkFetchOverride(null);
@@ -103,6 +99,10 @@ afterEach(() => {
   setWeChatCredentialsOverride(null);
   restoreEnv();
   vi.restoreAllMocks();
+  // TaskDO always asks the "owner" Butler, so leases there outlive a test.
+  await runInDurableObject(butler(), (_instance, state) => {
+    state.storage.sql.exec(`DROP TABLE IF EXISTS admin_maintenance`);
+  });
 });
 
 describe("MaintenanceStore", () => {
@@ -239,6 +239,51 @@ describe("maintenance lease pauses", () => {
     expect(ran).toEqual(["ran"]);
   });
 
+  it("defers the Task alarm while the Butler holds a lease", async () => {
+    await butler().acquireMaintenance("export", "op-task-alarm");
+    const stub = task("maintenance-task-alarm");
+
+    const at = await runInDurableObject(stub, async (instance, state) => {
+      await instance.alarm();
+      return state.storage.getAlarm();
+    });
+
+    expect(at).not.toBeNull();
+    expect(Math.abs(at! - (Date.now() + DEFER_MS))).toBeLessThan(5000);
+  });
+
+  it("re-arms the Task alarm when the Butler check fails", async () => {
+    const stub = task("maintenance-task-alarm-error");
+    let original!: () => Promise<boolean>;
+    await runInDurableObject(stub, (instance) => {
+      const proto = Object.getPrototypeOf(instance) as {
+        butlerMaintenanceActive(): Promise<boolean>;
+      };
+      original = proto.butlerMaintenanceActive;
+      proto.butlerMaintenanceActive = async () => {
+        throw new Error("butler down");
+      };
+    });
+
+    try {
+      const at = await runInDurableObject(stub, async (instance, state) => {
+        await expect(instance.alarm()).resolves.toBeUndefined();
+        return state.storage.getAlarm();
+      });
+
+      expect(at).not.toBeNull();
+      expect(Math.abs(at! - (Date.now() + DEFER_MS))).toBeLessThan(5000);
+    } finally {
+      await runInDurableObject(stub, (restored) => {
+        (
+          Object.getPrototypeOf(restored) as {
+            butlerMaintenanceActive(): Promise<boolean>;
+          }
+        ).butlerMaintenanceActive = original;
+      });
+    }
+  });
+
   it("defers the Butler alarm while a lease is live", async () => {
     const stub = butler("maintenance-alarm");
     const ran: string[] = [];
@@ -272,18 +317,53 @@ describe("maintenance lease pauses", () => {
   it("does not poll WeChat while a lease is live", async () => {
     setEnv({ ACTIVE_CHANNEL: "wechat" });
     setWeChatCredentialsOverride(JSON.stringify(CREDS));
+    setPollTimingOverride({ runMs: 0, baseBackoffMs: 1, manualStart: true });
+
+    const hub = channels("maintenance-wechat-idle");
+    await hub.ensurePolling();
+    await cancelSchedules(hub);
+    await hub.acquireMaintenance("export", "op-idle");
+
+    // With an automatic start enabled, only the lease keeps ensurePolling
+    // from scheduling a new chain.
+    setPollTimingOverride({ runMs: 0, baseBackoffMs: 1 });
+    const scheduled = await runInDurableObject(hub, async (instance) => {
+      await instance.ensurePolling();
+      return (await instance.listSchedules()).filter(
+        (schedule) => schedule.callback === "pollWeChat",
+      ).length;
+    });
+    expect(scheduled).toBe(0);
+
+    // A direct callback invocation must not reach iLink either. The loop's
+    // ownsRun check would also stop it after the route lookup, so count route
+    // lookups to pin the entry guard specifically.
+    let routeCalls = 0;
+    await runInDurableObject(hub, (instance) => {
+      const target = instance as unknown as {
+        currentRoute(): Promise<unknown>;
+      };
+      const original = target.currentRoute.bind(instance);
+      target.currentRoute = async () => {
+        routeCalls += 1;
+        return original();
+      };
+    });
+
     let calls = 0;
     setILinkFetchOverride((async () => {
       calls += 1;
-      return jsonResponse({});
+      return jsonResponse({ get_updates_buf: "leased-cursor", msgs: [] });
     }) as typeof fetch);
 
-    const hub = channels("maintenance-wechat-idle");
-    await hub.acquireMaintenance("export", "op-idle");
-    await hub.ensurePolling();
+    await runInDurableObject(hub, (instance) => instance.pollWeChat());
 
+    expect(routeCalls).toBe(0);
     expect(calls).toBe(0);
-    expect(await pollSchedules(hub)).toEqual([]);
+    expect(await readWeChatState(hub)).toMatchObject({
+      cursor: null,
+      status: "running",
+    });
   });
 
   it("stops a running WeChat poll loop once a lease is acquired", async () => {
@@ -336,9 +416,12 @@ describe("maintenance lease pauses", () => {
     });
 
     try {
+      await worker.scheduled({} as ScheduledController, env);
+      expect(reconciled).toBe(1);
+
       await stub.acquireMaintenance("export", "op-cron");
       await worker.scheduled({} as ScheduledController, env);
-      expect(reconciled).toBe(0);
+      expect(reconciled).toBe(1);
     } finally {
       await runInDurableObject(stub, (restored) => {
         (

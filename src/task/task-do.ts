@@ -223,8 +223,18 @@ export class TaskDO extends Agent<Env> {
 
   /** A live admin lease defers every alarm, including outbox retries. */
   override async alarm(): Promise<void> {
-    if (await this.butlerMaintenanceActive()) {
-      this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
+    let maintenanceActive: boolean;
+    try {
+      maintenanceActive = await this.butlerMaintenanceActive();
+    } catch {
+      // Fail closed: an unknown lease state must not run a task or schedule.
+      // Keep retrying so the alarm fires again once the Butler answers.
+      await this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
+      return;
+    }
+
+    if (maintenanceActive) {
+      await this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
       return;
     }
     await super.alarm();
