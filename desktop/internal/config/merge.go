@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 )
 
 // Merge applies the whitelisted UI patch and secret edits to the configuration
@@ -82,6 +83,19 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 			Message: message,
 		}
 	}
+	modelsDoc, err := modelcatalog.ParseModels(canonical)
+	if err != nil {
+		return domain.PublishPlan{}, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "the merged configuration has unreadable model settings",
+		}
+	}
+	if err := modelcatalog.ValidateModels(modelsDoc); err != nil {
+		return domain.PublishPlan{}, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "the merged configuration has invalid model references: " + err.Error(),
+		}
+	}
 
 	return domain.PublishPlan{
 		BaseVersionID: base.VersionID,
@@ -139,12 +153,19 @@ func applyPatch(document map[string]any, patch domain.EditablePatch) error {
 		owner["telegramUserIds"] = ids
 	}
 
-	if patch.ButlerModel == nil && patch.TaskModel == nil {
+	if patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil {
 		return nil
 	}
 	models, err := objectAt(document, "models")
 	if err != nil {
 		return err
+	}
+	if patch.CustomProviders != nil {
+		providers, err := decodeCustomProviders(*patch.CustomProviders)
+		if err != nil {
+			return err
+		}
+		models["customProviders"] = providers
 	}
 	if patch.ButlerModel != nil {
 		value, err := decodeModel(*patch.ButlerModel)
@@ -204,8 +225,33 @@ func decodeModel(raw json.RawMessage) (any, error) {
 	return value, nil
 }
 
+func decodeCustomProviders(raw json.RawMessage) ([]any, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "a customProviders patch must be a JSON array",
+		}
+	}
+	value, err := domain.DecodeJSON(trimmed)
+	if err != nil {
+		return nil, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "a customProviders patch is not valid JSON",
+		}
+	}
+	providers, ok := value.([]any)
+	if !ok {
+		return nil, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "a customProviders patch must be a JSON array",
+		}
+	}
+	return providers, nil
+}
+
 func patchIsEmpty(patch domain.EditablePatch) bool {
-	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil
+	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil
 }
 
 var (

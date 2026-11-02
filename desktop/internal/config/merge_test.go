@@ -13,7 +13,7 @@ import (
 
 const mergeSecretSentinel = "merge-SENTINEL-secret-never-export"
 
-const baseConfigDocument = `{"schemaVersion":1,"owner":{"telegramUserIds":[42]},"models":{"butler":{"provider":"opencode-go","id":"butler-model"},"task":{"provider":"opencode-go","id":"task-model"}},"mcpServers":[{"name":"notion","url":"https://mcp.example.com","headers":{"Authorization":"env:MCP_TOKEN"}}],"advanced":{"retryLimit":3}}`
+const baseConfigDocument = `{"schemaVersion":1,"owner":{"telegramUserIds":[42]},"models":{"butler":{"provider":"opencode-go","id":"deepseek-v4.1-flash"},"task":{"provider":"opencode-go","id":"kimi-k3"}},"mcpServers":[{"name":"notion","url":"https://mcp.example.com","headers":{"Authorization":"env:MCP_TOKEN"}}],"advanced":{"retryLimit":3}}`
 
 func canonicalBaseDocument(t *testing.T) []byte {
 	t.Helper()
@@ -215,8 +215,46 @@ func TestMergeReplacesModelRawJSON(t *testing.T) {
 	if document.Models.Butler.Thinking["effort"] != "low" {
 		t.Fatalf("model advanced fields were dropped: %#v", document.Models.Butler.Thinking)
 	}
-	if document.Models.Task.ID != "task-model" {
+	if document.Models.Task.ID != "kimi-k3" {
 		t.Fatalf("task model changed unexpectedly: %#v", document.Models.Task)
+	}
+}
+
+func TestMergeWritesCustomProviders(t *testing.T) {
+	base := baseSnapshot(t)
+	providers := rawModel(t, `[{"id":"my-proxy","name":"My Proxy","api":"openai-completions","baseUrl":"https://proxy.example.com/v1","models":[{"id":"gpt-5.6"}]}]`)
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{CustomProviders: providers},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Models struct {
+			CustomProviders []struct {
+				ID string `json:"id"`
+			} `json:"customProviders"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(plan.ConfigJSON, &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Models.CustomProviders) != 1 || document.Models.CustomProviders[0].ID != "my-proxy" {
+		t.Fatalf("customProviders = %#v", document.Models.CustomProviders)
+	}
+}
+
+func TestMergeRejectsCustomProviderWithBuiltinID(t *testing.T) {
+	base := baseSnapshot(t)
+	providers := rawModel(t, `[{"id":"deepseek","api":"openai-completions","baseUrl":"https://proxy.example.com/v1","models":[{"id":"gpt-5.6"}]}]`)
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{CustomProviders: providers},
+	})
+	assertMergeCode(t, err, domain.UNSUPPORTED_SCHEMA)
+	if !strings.Contains(err.Error(), "deepseek") {
+		t.Fatalf("error does not name the conflicting provider: %v", err)
 	}
 }
 
@@ -233,8 +271,8 @@ func TestMergeNilConfigRequiresOwnerAndModels(t *testing.T) {
 		BaseFingerprint: "fp",
 		Patch: domain.EditablePatch{
 			TelegramUserIDs: &owner,
-			ButlerModel:     rawModel(t, `{"provider":"opencode-go","id":"butler"}`),
-			TaskModel:       rawModel(t, `{"provider":"opencode-go","id":"task"}`),
+			ButlerModel:     rawModel(t, `{"provider":"opencode-go","id":"deepseek-v4.1-flash"}`),
+			TaskModel:       rawModel(t, `{"provider":"opencode-go","id":"kimi-k3"}`),
 		},
 	})
 	if err != nil {

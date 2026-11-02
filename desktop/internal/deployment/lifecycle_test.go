@@ -450,7 +450,7 @@ func installRequest(t *testing.T) InstallRequest {
 		AccountID:     strings.Repeat("a", 32),
 		WorkerName:    "deskwand-bot",
 		BucketName:    "deskwand-probe-bucket",
-		Config:        InstallConfig{TelegramUserIDs: []int64{}, ButlerModel: modelJSON(t, "butler"), TaskModel: modelJSON(t, "task")},
+		Config:        InstallConfig{TelegramUserIDs: []int64{}, ButlerModel: modelJSON(t, "deepseek-v4.1-flash"), TaskModel: modelJSON(t, "kimi-k3")},
 		ActiveChannel: ChannelTelegram,
 	}
 }
@@ -566,8 +566,8 @@ func lifecycleConfig(t *testing.T, mcpHeader string) []byte {
 		"schemaVersion": 1,
 		"owner":         map[string]any{"telegramUserIds": []any{}},
 		"models": map[string]any{
-			"butler": map[string]any{"provider": "opencode-go", "id": "butler"},
-			"task":   map[string]any{"provider": "opencode-go", "id": "task"},
+			"butler": map[string]any{"provider": "opencode-go", "id": "deepseek-v4.1-flash"},
+			"task":   map[string]any{"provider": "opencode-go", "id": "kimi-k3"},
 		},
 		"mcpServers": []any{},
 	}
@@ -642,8 +642,8 @@ func TestImportLegacyRequiresOwnerAndModelsAndStartsMcpEmpty(t *testing.T) {
 	assertCode(t, err, CodeOwnerRequired)
 
 	owner := []int64{}
-	butler := modelJSON(t, "butler")
-	task := modelJSON(t, "task")
+	butler := modelJSON(t, "deepseek-v4.1-flash")
+	task := modelJSON(t, "kimi-k3")
 	result, err := f.Lifecycle.ConfirmImport(context.Background(), f.target(), ImportConfirmation{
 		TelegramUserIDs: &owner,
 		ButlerModel:     &butler,
@@ -674,8 +674,8 @@ func TestImportRetainsWeChatCredentialsAndActiveChannel(t *testing.T) {
 	f.API.scripts = []cloudflare.ScriptSummary{{ID: "deskwand-bot", MigrationTag: "v2"}}
 
 	owner := []int64{101}
-	butler := modelJSON(t, "butler-2")
-	task := modelJSON(t, "task-2")
+	butler := modelJSON(t, "deepseek-v4.1-flash")
+	task := modelJSON(t, "kimi-k3")
 	result, err := f.Lifecycle.ConfirmImport(context.Background(), f.target(), ImportConfirmation{
 		TelegramUserIDs: &owner,
 		ButlerModel:     &butler,
@@ -800,6 +800,25 @@ func TestUpgradePreservesResourceIdentity(t *testing.T) {
 	}
 	if !contains(f.API.secrets(), "WECHAT_CREDENTIALS") {
 		t.Fatalf("secrets = %#v", f.API.secrets())
+	}
+}
+
+func TestUpgradeDoesNotRequireModelKeys(t *testing.T) {
+	pkg := lifecyclePackage(t, "1.0.0", "1.0.0", nil)
+	f := newLifecycleFixture(t, pkg)
+	f.API.configJSON = lifecycleConfig(t, "")
+	f.API.settingsJSON = lifecycleSettings(t, pkg.Manifest().ResourceTemplate, f.API.configJSON, ChannelWeChat, true)
+	f.API.secretNames = []string{"OPENCODE_API_KEY"}
+	f.API.releaseVersion = "1.0.0"
+	f.API.scripts = []cloudflare.ScriptSummary{{ID: "deskwand-bot", MigrationTag: "v2"}}
+
+	result, err := f.Lifecycle.Upgrade(context.Background(), f.target(), pkg)
+	if err != nil {
+		t.Fatalf("Upgrade() = %v, want nil", err)
+	}
+	assertLifecycleState(t, result, StatePublished)
+	if f.API.createVersionCalls != 1 || f.API.uploadCalls != 0 {
+		t.Fatalf("create=%d upload=%d", f.API.createVersionCalls, f.API.uploadCalls)
 	}
 }
 
@@ -989,8 +1008,8 @@ func TestImportWarnsAboutNonHeaderAndMCPURLCredentials(t *testing.T) {
 		"schemaVersion": 1,
 		"owner":         map[string]any{"telegramUserIds": []any{}},
 		"models": map[string]any{
-			"butler": map[string]any{"provider": "opencode-go", "id": "butler"},
-			"task":   map[string]any{"provider": "opencode-go", "id": "task"},
+			"butler": map[string]any{"provider": "opencode-go", "id": "deepseek-v4.1-flash"},
+			"task":   map[string]any{"provider": "opencode-go", "id": "kimi-k3"},
 		},
 		"advanced": map[string]any{"apiKey": "short-value"},
 		"mcpServers": []any{map[string]any{

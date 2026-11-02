@@ -24,6 +24,7 @@ const (
 	NO_ACTIVE_VERSION        = "NO_ACTIVE_VERSION"
 	INVALID_SECRET_EDIT      = "INVALID_SECRET_EDIT"
 	INVALID_VAR              = "INVALID_VAR"
+	MODEL_KEY_MISSING        = "MODEL_KEY_MISSING"
 	// NOT_SENT means a mutation was rejected or failed before any remote write
 	// could have happened. It is retryable without reconciliation.
 	NOT_SENT = "NOT_SENT"
@@ -159,6 +160,7 @@ type EditablePatch struct {
 	TelegramUserIDs *[]int64         `json:"telegramUserIds"`
 	ButlerModel     *json.RawMessage `json:"butlerModel"`
 	TaskModel       *json.RawMessage `json:"taskModel"`
+	CustomProviders *json.RawMessage `json:"customProviders"`
 }
 
 // ConfigReference rewrites one existing JSON string in DESKWAND_CONFIG to an

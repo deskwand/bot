@@ -94,8 +94,8 @@ func TestInstallDeploymentSummaryIsFrontendSafe(t *testing.T) {
 		WorkerName:      "deskwand-bot",
 		BucketName:      "deskwand-probe-bucket",
 		TelegramUserIDs: []int64{},
-		ButlerModel:     ModelRefInput{Provider: "opencode-go", ID: "butler"},
-		TaskModel:       ModelRefInput{Provider: "opencode-go", ID: "task"},
+		ButlerModel:     ModelRefInput{Provider: "opencode-go", ID: "deepseek-v4.1-flash"},
+		TaskModel:       ModelRefInput{Provider: "opencode-go", ID: "kimi-k3"},
 		ActiveChannel:   "telegram",
 	})
 	if err != nil {

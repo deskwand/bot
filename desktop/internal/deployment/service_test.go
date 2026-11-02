@@ -84,7 +84,7 @@ func newFakeAPI() *fakeAPI {
 		latestVersion:  "version-base",
 		fingerprint:    "fingerprint-base",
 		releaseVersion: "3.0.0",
-		secretNames:    []string{"ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WECHAT_CREDENTIALS"},
+		secretNames:    []string{"MODEL_KEY_OPENCODE_GO", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WECHAT_CREDENTIALS"},
 		configJSON:     append([]byte(nil), validConfigJSON...),
 	}
 }
@@ -221,7 +221,7 @@ func releasePackageFixture(t *testing.T) release.Package {
 		R2Buckets:       []release.R2Binding{{Name: "ARTIFACTS", ParameterKey: "r2BucketName"}},
 		VersionMetadata: release.BindingRef{Name: "CF_VERSION_METADATA"},
 		ConfigBinding:   release.ConfigBinding{Name: "DESKWAND_CONFIG", Type: "json", SchemaVersion: 1},
-		SecretNames:     []string{"ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WECHAT_CREDENTIALS"},
+		SecretNames:     []string{"MODEL_KEY_OPENCODE_GO", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WECHAT_CREDENTIALS"},
 		PlainVars:       []string{"ACTIVE_CHANNEL", "PUBLIC_BASE_URL"},
 		Crons:           []string{"*/5 * * * *"},
 		Vars:            []release.VarBinding{{Name: "PUBLIC_BASE_URL", ParameterKey: "PUBLIC_BASE_URL"}},
@@ -666,6 +666,42 @@ func TestPreviewReturnsPlanAndConflictNote(t *testing.T) {
 	}
 }
 
+const missingModelKeyConfig = `{
+  "schemaVersion": 1,
+  "owner": {"telegramUserIds": []},
+  "models": {
+    "butler": {"provider": "deepseek", "id": "deepseek-flash"},
+    "task": {"provider": "deepseek", "id": "deepseek-flash"}
+  },
+  "mcpServers": []
+}`
+
+func TestPreviewRequiresReferencedModelKeys(t *testing.T) {
+	f := newPublishFixture(t)
+	f.API.configJSON = []byte(missingModelKeyConfig)
+	_, err := f.Service.Preview(context.Background(), f.target(), f.change())
+	assertCode(t, err, domain.MODEL_KEY_MISSING)
+	if !strings.Contains(err.Error(), "MODEL_KEY_DEEPSEEK") {
+		t.Fatalf("error = %v, want it to list the missing key", err)
+	}
+}
+
+func TestApplyRequiresReferencedModelKeysBeforeWriting(t *testing.T) {
+	f := newPublishFixture(t)
+	f.API.configJSON = []byte(missingModelKeyConfig)
+	result, err := f.Service.Apply(context.Background(), f.target(), f.change())
+	assertCode(t, err, domain.MODEL_KEY_MISSING)
+	if result.State != StateFailed {
+		t.Fatalf("state = %q, want failed", result.State)
+	}
+	if !strings.Contains(err.Error(), "MODEL_KEY_DEEPSEEK") {
+		t.Fatalf("error = %v, want it to list the missing key", err)
+	}
+	if f.API.createCount() != 0 || f.API.activateCount() != 0 {
+		t.Fatalf("missing key still created/activated: %d/%d", f.API.createCount(), f.API.activateCount())
+	}
+}
+
 func TestApplyRejectsReleaseVersionChanges(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -691,6 +727,20 @@ func TestApplyRejectsReleaseVersionChanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplySkipsModelKeyCheckForExplicitReleaseChange(t *testing.T) {
+	f := newPublishFixture(t)
+	f.API.configJSON = append([]byte(nil), validConfigJSON...)
+	f.API.secretNames = []string{"OPENCODE_API_KEY"}
+	change := f.change()
+	change.AllowReleaseChange = true
+
+	result, err := f.Service.Apply(context.Background(), f.target(), change)
+	if err != nil {
+		t.Fatalf("Apply() = %v, want nil", err)
+	}
+	assertState(t, result, StatePublished)
 }
 
 func TestApplyAllowsExplicitReleaseChange(t *testing.T) {
