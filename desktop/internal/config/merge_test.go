@@ -1,0 +1,360 @@
+package config
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/deskwand/bot/desktop/internal/domain"
+)
+
+const mergeSecretSentinel = "merge-SENTINEL-secret-never-export"
+
+const baseConfigDocument = `{"schemaVersion":1,"owner":{"telegramUserIds":[42]},"models":{"butler":{"provider":"opencode-go","id":"butler-model"},"task":{"provider":"opencode-go","id":"task-model"}},"mcpServers":[{"name":"notion","url":"https://mcp.example.com","headers":{"Authorization":"env:MCP_TOKEN"}}],"advanced":{"retryLimit":3}}`
+
+func canonicalBaseDocument(t *testing.T) []byte {
+	t.Helper()
+	canonical, err := domain.CanonicalizeJSON([]byte(baseConfigDocument))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
+}
+
+func baseSnapshot(t *testing.T) domain.Snapshot {
+	t.Helper()
+	return domain.Snapshot{
+		Target:       domain.Target{AccountID: "account", ScriptName: "worker"},
+		DeploymentID: "deployment",
+		VersionID:    "version-1",
+		ConfigJSON:   canonicalBaseDocument(t),
+		SecretNames:  []string{"TELEGRAM_BOT_TOKEN"},
+		Fingerprint:  "current-fingerprint",
+	}
+}
+
+func rawModel(t *testing.T, value string) *json.RawMessage {
+	t.Helper()
+	raw := json.RawMessage(value)
+	if !json.Valid(raw) {
+		t.Fatalf("invalid model fixture: %s", value)
+	}
+	return &raw
+}
+
+func TestRejectStaleDraft(t *testing.T) {
+	base := domain.Snapshot{Fingerprint: "new"}
+	_, err := Merge(base, domain.Change{BaseFingerprint: "old"})
+	if err == nil {
+		t.Fatal("stale draft overwrote current settings")
+	}
+	assertMergeCode(t, err, domain.CONFIG_CONFLICT)
+}
+
+func TestMergeEmptyPatchIsCanonicalAndLossless(t *testing.T) {
+	base := baseSnapshot(t)
+	plan, err := Merge(base, domain.Change{BaseFingerprint: base.Fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(plan.ConfigJSON, base.ConfigJSON) {
+		t.Fatalf("all-nil patch changed the document:\n got %s\nwant %s", plan.ConfigJSON, base.ConfigJSON)
+	}
+	if plan.BaseVersionID != base.VersionID {
+		t.Fatalf("BaseVersionID = %q, want %q", plan.BaseVersionID, base.VersionID)
+	}
+
+	var document map[string]any
+	if err := json.Unmarshal(plan.ConfigJSON, &document); err != nil {
+		t.Fatal(err)
+	}
+	advanced, ok := document["advanced"].(map[string]any)
+	if !ok || advanced["retryLimit"] != float64(3) {
+		t.Fatalf("unknown advanced field was dropped: %#v", document["advanced"])
+	}
+	servers, ok := document["mcpServers"].([]any)
+	if !ok || len(servers) != 1 {
+		t.Fatalf("MCP servers were not preserved: %#v", document["mcpServers"])
+	}
+}
+
+func TestMergeAppliesOwnerPatchAndPreservesUnknownFields(t *testing.T) {
+	base := baseSnapshot(t)
+	ids := []int64{7, 9007199254740991}
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{TelegramUserIDs: &ids},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var document struct {
+		Owner struct {
+			TelegramUserIDs []int64 `json:"telegramUserIds"`
+		} `json:"owner"`
+		Models  map[string]json.RawMessage `json:"models"`
+		Advance map[string]any             `json:"advanced"`
+	}
+	if err := json.Unmarshal(plan.ConfigJSON, &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Owner.TelegramUserIDs) != 2 || document.Owner.TelegramUserIDs[0] != 7 || document.Owner.TelegramUserIDs[1] != 9007199254740991 {
+		t.Fatalf("owner patch = %#v", document.Owner.TelegramUserIDs)
+	}
+	if document.Advance["retryLimit"] != float64(3) {
+		t.Fatalf("advanced field dropped: %#v", document.Advance)
+	}
+	if _, ok := document.Models["butler"]; !ok {
+		t.Fatal("untouched model was dropped")
+	}
+}
+
+func TestMergeExplicitEmptyOwnerClearsAllowlist(t *testing.T) {
+	base := baseSnapshot(t)
+	empty := []int64{}
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{TelegramUserIDs: &empty},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Owner struct {
+			TelegramUserIDs []int64 `json:"telegramUserIds"`
+		} `json:"owner"`
+	}
+	if err := json.Unmarshal(plan.ConfigJSON, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.Owner.TelegramUserIDs == nil || len(document.Owner.TelegramUserIDs) != 0 {
+		t.Fatalf("explicit empty owner was not preserved: %#v", document.Owner.TelegramUserIDs)
+	}
+	if !bytes.Contains(plan.ConfigJSON, []byte(`"telegramUserIds":[]`)) {
+		t.Fatalf("canonical output does not show an empty owner array: %s", plan.ConfigJSON)
+	}
+}
+
+func TestMergeReplacesModelRawJSON(t *testing.T) {
+	base := baseSnapshot(t)
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch: domain.EditablePatch{
+			ButlerModel: rawModel(t, `{"provider":"anthropic","id":"claude-sonnet-4-5","thinking":{"effort":"low"}}`),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Models struct {
+			Butler struct {
+				Provider string         `json:"provider"`
+				ID       string         `json:"id"`
+				Thinking map[string]any `json:"thinking"`
+			} `json:"butler"`
+			Task struct {
+				ID string `json:"id"`
+			} `json:"task"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(plan.ConfigJSON, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.Models.Butler.Provider != "anthropic" || document.Models.Butler.ID != "claude-sonnet-4-5" {
+		t.Fatalf("butler model = %#v", document.Models.Butler)
+	}
+	if document.Models.Butler.Thinking["effort"] != "low" {
+		t.Fatalf("model advanced fields were dropped: %#v", document.Models.Butler.Thinking)
+	}
+	if document.Models.Task.ID != "task-model" {
+		t.Fatalf("task model changed unexpectedly: %#v", document.Models.Task)
+	}
+}
+
+func TestMergeNilConfigRequiresOwnerAndModels(t *testing.T) {
+	base := domain.Snapshot{VersionID: "v1", Fingerprint: "fp"}
+	_, err := Merge(base, domain.Change{BaseFingerprint: "fp"})
+	assertMergeCode(t, err, domain.UNSUPPORTED_SCHEMA)
+	if !strings.Contains(err.Error(), "owner") || !strings.Contains(err.Error(), "models") {
+		t.Fatalf("error does not explain the missing configuration: %v", err)
+	}
+
+	owner := []int64{}
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: "fp",
+		Patch: domain.EditablePatch{
+			TelegramUserIDs: &owner,
+			ButlerModel:     rawModel(t, `{"provider":"opencode-go","id":"butler"}`),
+			TaskModel:       rawModel(t, `{"provider":"opencode-go","id":"task"}`),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(plan.ConfigJSON, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document["schemaVersion"] != float64(1) {
+		t.Fatalf("schemaVersion = %#v", document["schemaVersion"])
+	}
+	if _, ok := document["mcpServers"]; !ok {
+		t.Fatal("seeded configuration has no mcpServers")
+	}
+}
+
+func TestMergeSecretEdits(t *testing.T) {
+	base := baseSnapshot(t)
+	tests := []struct {
+		name    string
+		edit    domain.SecretEdit
+		wantErr bool
+	}{
+		{name: "keep existing", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretKeep, "")},
+		{name: "keep missing", edit: domain.NewSecretEdit("ANTHROPIC_API_KEY", domain.SecretKeep, ""), wantErr: true},
+		{name: "keep with value", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretKeep, "x"), wantErr: true},
+		{name: "replace existing", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretReplace, "new")},
+		{name: "replace new template secret", edit: domain.NewSecretEdit("ANTHROPIC_API_KEY", domain.SecretReplace, "new")},
+		{name: "replace without value", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretReplace, ""), wantErr: true},
+		{name: "replace undeclared name", edit: domain.NewSecretEdit("UNKNOWN_SECRET", domain.SecretReplace, "x"), wantErr: true},
+		{name: "clear existing", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretClear, "")},
+		{name: "clear with value", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretClear, "x"), wantErr: true},
+		{name: "clear missing", edit: domain.NewSecretEdit("WECHAT_CREDENTIALS", domain.SecretClear, ""), wantErr: true},
+		{name: "unknown operation", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", "rotate", ""), wantErr: true},
+		{name: "empty name", edit: domain.NewSecretEdit("", domain.SecretKeep, ""), wantErr: true},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := Merge(base, domain.Change{
+				BaseFingerprint: base.Fingerprint,
+				Secrets:         []domain.SecretEdit{testCase.edit},
+			})
+			if testCase.wantErr {
+				assertMergeCode(t, err, domain.INVALID_SECRET_EDIT)
+				return
+			}
+			if err != nil {
+				t.Fatalf("Merge() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestMergeRejectsDuplicateSecretEdits(t *testing.T) {
+	base := baseSnapshot(t)
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Secrets: []domain.SecretEdit{
+			domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretKeep, ""),
+			domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretReplace, "new"),
+		},
+	})
+	assertMergeCode(t, err, domain.INVALID_SECRET_EDIT)
+}
+
+func TestMergeNeverExportsNewSecretValue(t *testing.T) {
+	base := baseSnapshot(t)
+	before := base.Fingerprint
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Secrets: []domain.SecretEdit{
+			domain.NewSecretEdit("ANTHROPIC_API_KEY", domain.SecretReplace, mergeSecretSentinel),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.Fingerprint != before {
+		t.Fatal("Merge changed the base fingerprint")
+	}
+
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for label, output := range map[string]string{
+		"json":   string(encoded),
+		"%v":     fmt.Sprintf("%v", plan),
+		"%+v":    fmt.Sprintf("%+v", plan),
+		"%#v":    fmt.Sprintf("%#v", plan),
+		"config": string(plan.ConfigJSON),
+	} {
+		if strings.Contains(output, mergeSecretSentinel) {
+			t.Fatalf("%s leaked the new secret value: %s", label, output)
+		}
+	}
+	if !strings.Contains(fmt.Sprintf("%v", plan.Secrets), domain.RedactedValue) {
+		t.Fatalf("secret edit value was not marked redacted: %v", plan.Secrets)
+	}
+	if len(plan.Secrets) != 1 || plan.Secrets[0].Value() != mergeSecretSentinel {
+		t.Fatal("Merge did not retain the value in memory for the publish step")
+	}
+}
+
+func TestMergeRejectsInvalidBaseDocument(t *testing.T) {
+	base := baseSnapshot(t)
+	base.ConfigJSON = []byte(`{not json`)
+	_, err := Merge(base, domain.Change{BaseFingerprint: base.Fingerprint})
+	assertMergeCode(t, err, domain.UNSUPPORTED_SCHEMA)
+}
+
+func assertMergeCode(t *testing.T, err error, code string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected %s, got nil", code)
+	}
+	var domainErr domain.Error
+	if !errors.As(err, &domainErr) {
+		t.Fatalf("error %v is not a domain.Error", err)
+	}
+	if domainErr.Code != code {
+		t.Fatalf("error code = %s, want %s (%v)", domainErr.Code, code, err)
+	}
+}
+
+func TestMergeRejectsEmptyFingerprint(t *testing.T) {
+	_, err := Merge(domain.Snapshot{VersionID: "v1"}, domain.Change{})
+	assertMergeCode(t, err, domain.CONFIG_CONFLICT)
+}
+
+func TestMergeRejectsNoActiveVersion(t *testing.T) {
+	base := baseSnapshot(t)
+	base.VersionID = ""
+	_, err := Merge(base, domain.Change{BaseFingerprint: base.Fingerprint})
+	assertMergeCode(t, err, domain.NO_ACTIVE_VERSION)
+}
+
+func TestMergeValidatesSecretEditsBeforeSchema(t *testing.T) {
+	base := baseSnapshot(t)
+	base.ConfigJSON = []byte(`{not json`)
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Secrets: []domain.SecretEdit{
+			domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretKeep, "must-be-rejected"),
+		},
+	})
+	assertMergeCode(t, err, domain.INVALID_SECRET_EDIT)
+}
+
+func TestMergeReportsSchemaLocationsWithoutValues(t *testing.T) {
+	base := baseSnapshot(t)
+	const forbiddenValue = "-424242"
+	ids := []int64{-424242}
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{TelegramUserIDs: &ids},
+	})
+	assertMergeCode(t, err, domain.UNSUPPORTED_SCHEMA)
+	if !strings.Contains(err.Error(), "/owner/telegramUserIds") {
+		t.Fatalf("schema error does not carry the instance location: %v", err)
+	}
+	if strings.Contains(err.Error(), forbiddenValue) {
+		t.Fatalf("schema error leaked the invalid value: %v", err)
+	}
+}

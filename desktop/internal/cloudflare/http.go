@@ -199,14 +199,28 @@ func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 }
 
 // GetJSON sends a GET request and decodes result into out when out is non-nil.
-// path must start with /accounts/ or /user/ and contain unescaped segments;
-// the client rejects schemes, hosts, queries, fragments and parent segments.
+// path must be /accounts, start with /accounts/ or start with /user/, and
+// contain unescaped segments; the client rejects schemes, hosts, queries,
+// fragments and parent segments.
 func (c *Client) GetJSON(ctx context.Context, path string, query url.Values, out any) error {
 	resp, err := c.do(ctx, http.MethodGet, path, query, nil, "")
 	if err != nil {
 		return err
 	}
 	return decodeResult(resp, out, resp.StatusCode)
+}
+
+// GetJSONWithResultInfo is GetJSON with the raw result_info object returned as
+// well, for paginated list endpoints.
+func (c *Client) GetJSONWithResultInfo(ctx context.Context, path string, query url.Values, out any) (json.RawMessage, error) {
+	resp, err := c.do(ctx, http.MethodGet, path, query, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := decodeResult(resp, out, resp.StatusCode); err != nil {
+		return nil, err
+	}
+	return resp.ResultInfo, nil
 }
 
 // SendJSON sends method with an optional JSON request body and decodes the
@@ -383,6 +397,10 @@ func (c *Client) endpoint(path string, query url.Values) string {
 	return target.String()
 }
 
+func validAPIPath(path string) bool {
+	return path == "/accounts" || strings.HasPrefix(path, "/accounts/") || strings.HasPrefix(path, "/user/")
+}
+
 func validateMethod(method string) error {
 	switch method {
 	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
@@ -395,8 +413,8 @@ func validateMethod(method string) error {
 // Callers pass path segments unescaped. Percent-encoded input is rejected when
 // decoding would introduce a parent segment or otherwise escape the prefix.
 func validatePath(path string) error {
-	if !strings.HasPrefix(path, "/accounts/") && !strings.HasPrefix(path, "/user/") {
-		return fmt.Errorf("cloudflare: path %q must start with /accounts/ or /user/", path)
+	if !validAPIPath(path) {
+		return fmt.Errorf("cloudflare: path %q must be /accounts, start with /accounts/ or start with /user/", path)
 	}
 	parsed, err := url.Parse(path)
 	if err != nil {
@@ -406,7 +424,7 @@ func validatePath(path string) error {
 		return fmt.Errorf("cloudflare: path %q must not contain a scheme, host, query or fragment", path)
 	}
 	for _, candidate := range []string{path, parsed.Path} {
-		if !strings.HasPrefix(candidate, "/accounts/") && !strings.HasPrefix(candidate, "/user/") {
+		if !validAPIPath(candidate) {
 			return fmt.Errorf("cloudflare: path %q escapes the API prefix", path)
 		}
 		if strings.Contains(candidate, "//") || strings.Contains(candidate, `\`) {

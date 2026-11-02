@@ -114,6 +114,19 @@ describe("Worker release manifest", () => {
       { name: "ARTIFACTS", parameterKey: "r2BucketName" },
     ]);
     expect(manifest.resourceTemplate.versionMetadataBinding.name).toBe("CF_VERSION_METADATA");
+    expect(manifest.resourceTemplate.configBinding).toEqual({
+      name: "DESKWAND_CONFIG",
+      type: "json",
+      schemaVersion: 1,
+    });
+    expect(manifest.resourceTemplate.secretNames).toEqual([
+      "ANTHROPIC_API_KEY",
+      "OPENCODE_API_KEY",
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_WEBHOOK_SECRET",
+      "WECHAT_CREDENTIALS",
+    ]);
+    expect(manifest.resourceTemplate.plainVars).toEqual(["ACTIVE_CHANNEL", "PUBLIC_BASE_URL"]);
     expect(manifest.resourceTemplate.crons).toEqual(["*/5 * * * *"]);
     expect(manifest.resourceTemplate.installParameters.map((parameter) => parameter.key)).toEqual([
       "workerName",
@@ -340,6 +353,28 @@ describe("release template consistency", () => {
     );
     expect(template.crons).toEqual(wrangler.triggers.crons);
     expect(template.versionMetadataBinding.name).toBe(wrangler.version_metadata.binding);
+    expect(template.configBinding.name).toBe("DESKWAND_CONFIG");
+    expect(template.configBinding.schemaVersion).toBe(1);
+  });
+
+  it("declares exactly the Worker secrets from src/env.d.ts", () => {
+    const envSource = readFileSync(join(repoRoot, "src", "env.d.ts"), "utf8");
+    const secrets = [...envSource.matchAll(/^\s+([A-Z0-9_]+)\?:\s*string;\s*$/gm)]
+      .map((match) => match[1])
+      .filter((name) => name !== "ACTIVE_CHANNEL")
+      .sort();
+
+    expect(secrets).toEqual([...readTemplate().secretNames].sort());
+  });
+
+  it("includes every plain var declared by wrangler.jsonc", () => {
+    const wrangler = JSON.parse(readFileSync(join(repoRoot, "wrangler.jsonc"), "utf8")) as {
+      vars?: Record<string, string>;
+    };
+    const plainVars = [...readTemplate().plainVars].sort();
+    for (const name of Object.keys(wrangler.vars ?? {})) {
+      expect(plainVars).toContain(name);
+    }
   });
 });
 

@@ -84,10 +84,21 @@ type ResourceTemplate struct {
 	DurableObjects  []DOBinding        `json:"durableObjects"`
 	R2Buckets       []R2Binding        `json:"r2Buckets"`
 	VersionMetadata BindingRef         `json:"versionMetadataBinding"`
+	ConfigBinding   ConfigBinding      `json:"configBinding"`
+	SecretNames     []string           `json:"secretNames"`
+	PlainVars       []string           `json:"plainVars"`
 	Crons           []string           `json:"crons"`
 	Vars            []VarBinding       `json:"vars"`
 	Migrations      []Migration        `json:"migrations"`
 	InstallParams   []InstallParameter `json:"installParameters"`
+}
+
+// ConfigBinding describes the single JSON binding that carries the editable
+// deployment configuration. Snapshot reads and Merge both key off this name.
+type ConfigBinding struct {
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	SchemaVersion int    `json:"schemaVersion"`
 }
 
 // DOBinding names a Durable Object binding and its exported class.

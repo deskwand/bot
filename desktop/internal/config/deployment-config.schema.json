@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deskwand.dev/contracts/deployment-config.schema.json",
+  "title": "DeskWand Bot deployment configuration",
+  "description": "Versioned non-secret runtime configuration shared by the Worker and the deployment client. Additional top-level properties (for example advanced settings introduced by a newer client) are accepted and preserved verbatim by readers. schemaVersion is required and only version 1 is supported; a different version must be rejected rather than interpreted loosely.",
+  "type": "object",
+  "required": ["schemaVersion", "owner", "models", "mcpServers"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Configuration schema version. Readers reject any other value."
+    },
+    "owner": {
+      "$ref": "#/$defs/Owner"
+    },
+    "models": {
+      "$ref": "#/$defs/Models"
+    },
+    "mcpServers": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/McpServerConfig"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "Owner": {
+      "type": "object",
+      "description": "Telegram users allowed to talk to the bot. An empty list is valid and disables Telegram access; it never falls back to a built-in owner. Additional properties are preserved for round-trip.",
+      "required": ["telegramUserIds"],
+      "properties": {
+        "telegramUserIds": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "Positive Telegram user ID representable exactly as a JavaScript safe integer."
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "Models": {
+      "type": "object",
+      "description": "Model chosen for each role. Additional role entries and advanced settings are accepted and preserved for round-trip.",
+      "required": ["butler", "task"],
+      "properties": {
+        "butler": {
+          "$ref": "#/$defs/ModelRef"
+        },
+        "task": {
+          "$ref": "#/$defs/ModelRef"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ModelRef": {
+      "type": "object",
+      "description": "Provider and model ID understood by the existing pi-ai adapters. Additional provider-specific fields are accepted and preserved for round-trip; no new base URL or credential field is implied by schema v1.",
+      "required": ["provider", "id"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["anthropic", "opencode-go"]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": true
+    },
+    "McpServerConfig": {
+      "type": "object",
+      "description": "MCP server definition. Header values are either literal strings or env:NAME references resolved from Worker secrets; the parser preserves them verbatim and never inlines a referenced secret. Additional properties are accepted and preserved for round-trip.",
+      "required": ["name", "url"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "headers": {
+          "type": "object",
+          "description": "Header map. A value such as env:MCP_TOKEN is an environment reference, not a secret value; literal values are also allowed.",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "requireApproval": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

@@ -63,6 +63,9 @@ export type ReleaseTemplate = {
   durableObjects: Array<{ name: string; className: string }>;
   r2Buckets: Array<{ name: string; parameterKey: string }>;
   versionMetadataBinding: { name: string };
+  configBinding: { name: string; type: "json"; schemaVersion: number };
+  secretNames: string[];
+  plainVars: string[];
   crons: string[];
   vars: Array<{ name: string; parameterKey: string }>;
   migrations: Migration[];
@@ -136,6 +139,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value;
 }
 
+function assertUniqueStrings(values: string[], label: string): void {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) throw new Error(`${label} contains a duplicate: ${value}`);
+    seen.add(value);
+  }
+}
+
 /** Validates the parts of the resource template this builder depends on. */
 export function assertReleaseTemplate(value: unknown): asserts value is ReleaseTemplate {
   const template = requireRecord(value, "release template");
@@ -159,6 +170,25 @@ export function assertReleaseTemplate(value: unknown): asserts value is ReleaseT
     "release template versionMetadataBinding",
   );
   requireString(versionMetadata.name, "release template versionMetadataBinding.name");
+
+  const configBinding = requireRecord(template.configBinding, "release template configBinding");
+  requireString(configBinding.name, "release template configBinding.name");
+  if (configBinding.type !== "json") {
+    throw new Error(`release template configBinding.type must be "json", got ${String(configBinding.type)}`);
+  }
+  if (configBinding.schemaVersion !== SUPPORTED_CONFIG_SCHEMA_VERSION) {
+    throw new Error(
+      `release template configBinding.schemaVersion ${String(configBinding.schemaVersion)} is not the supported version ${SUPPORTED_CONFIG_SCHEMA_VERSION}`,
+    );
+  }
+
+  const secretNames = requireStringArray(template.secretNames, "release template secretNames");
+  assertUniqueStrings(secretNames, "release template secretNames");
+  const plainVars = requireStringArray(template.plainVars, "release template plainVars");
+  assertUniqueStrings(plainVars, "release template plainVars");
+  if (!plainVars.includes("PUBLIC_BASE_URL")) {
+    throw new Error("release template plainVars must include PUBLIC_BASE_URL");
+  }
 
   const durableClasses = new Set<string>();
   for (const [index, binding] of (template.durableObjects as unknown[]).entries()) {

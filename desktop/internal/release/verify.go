@@ -330,6 +330,30 @@ func validateResourceTemplate(template *ResourceTemplate) error {
 	if template.VersionMetadata.Name == "" {
 		return errors.New("release: resource template version metadata binding is empty")
 	}
+	if template.ConfigBinding.Name == "" {
+		return errors.New("release: resource template config binding is empty")
+	}
+	if template.ConfigBinding.Type != "json" {
+		return fmt.Errorf("release: resource template config binding type %q is not json", template.ConfigBinding.Type)
+	}
+	if template.ConfigBinding.SchemaVersion != SupportedConfigSchemaVersion {
+		return fmt.Errorf("release: resource template config binding schema version %d is not supported", template.ConfigBinding.SchemaVersion)
+	}
+	if err := validateUniqueNames(template.SecretNames, "secret names"); err != nil {
+		return err
+	}
+	if err := validateUniqueNames(template.PlainVars, "plain variable names"); err != nil {
+		return err
+	}
+	plainBaseURL := false
+	for _, name := range template.PlainVars {
+		if name == "PUBLIC_BASE_URL" {
+			plainBaseURL = true
+		}
+	}
+	if !plainBaseURL {
+		return errors.New("release: resource template plain variables must include PUBLIC_BASE_URL")
+	}
 	if len(template.Crons) == 0 {
 		return errors.New("release: resource template cron list is empty")
 	}
@@ -379,6 +403,23 @@ func validateResourceTemplate(template *ResourceTemplate) error {
 		if !installKeys[variable.ParameterKey] {
 			return fmt.Errorf("release: variable parameterKey %q is not an install parameter", variable.ParameterKey)
 		}
+	}
+	return nil
+}
+
+func validateUniqueNames(names []string, label string) error {
+	if len(names) == 0 {
+		return fmt.Errorf("release: resource template %s are empty", label)
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		if name == "" {
+			return fmt.Errorf("release: resource template %s contain an empty name", label)
+		}
+		if seen[name] {
+			return fmt.Errorf("release: resource template %s contain duplicate %q", label, name)
+		}
+		seen[name] = true
 	}
 	return nil
 }

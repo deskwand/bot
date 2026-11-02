@@ -14,6 +14,19 @@
     { "name": "ARTIFACTS", "parameterKey": "r2BucketName" }
   ],
   "versionMetadataBinding": { "name": "CF_VERSION_METADATA" },
+  "configBinding": {
+    "name": "DESKWAND_CONFIG",
+    "type": "json",
+    "schemaVersion": 1
+  },
+  "secretNames": [
+    "ANTHROPIC_API_KEY",
+    "OPENCODE_API_KEY",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_WEBHOOK_SECRET",
+    "WECHAT_CREDENTIALS"
+  ],
+  "plainVars": ["ACTIVE_CHANNEL", "PUBLIC_BASE_URL"],
   "crons": ["*/5 * * * *"],
   "vars": [
     { "name": "PUBLIC_BASE_URL", "parameterKey": "PUBLIC_BASE_URL" }

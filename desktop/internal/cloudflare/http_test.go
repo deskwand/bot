@@ -233,7 +233,6 @@ func TestClientValidatesPaths(t *testing.T) {
 
 	bad := []string{
 		"",
-		"/accounts",
 		"/accounts/../user/tokens/verify",
 		"https://evil.example/accounts/abc",
 		"//evil.example/accounts/abc",
@@ -252,6 +251,9 @@ func TestClientValidatesPaths(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("requests made for invalid paths: %d", calls.Load())
+	}
+	if err := client.GetJSON(context.Background(), "/accounts", nil, nil); err != nil {
+		t.Fatalf("account listing path rejected: %v", err)
 	}
 	if err := client.GetJSON(context.Background(), "/accounts/abc/workers/scripts/foo..bar", nil, nil); err != nil {
 		t.Fatalf("double dots inside a segment should be allowed: %v", err)
