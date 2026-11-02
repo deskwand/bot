@@ -330,3 +330,145 @@ func TestExportReportsAdminUnavailable(t *testing.T) {
 		t.Fatalf("archive exists after a failure: %v", statErr)
 	}
 }
+
+func TestExportPaginatesTablesAndObjects(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.versionID = "version-1"
+
+	rows := make([]json.RawMessage, 5)
+	for i := range rows {
+		rows[i] = json.RawMessage(fmt.Sprintf(`{"__rowid":%d,"value":"v%d"}`, i+1, i+1))
+	}
+	worker.setDO(DORef{DO: "butler"}, DBSchema{
+		Tables: []TableSchema{{Name: "memories", Create: `CREATE TABLE memories (id TEXT)`}},
+	}, map[string][]json.RawMessage{"memories": rows})
+	for i := 0; i < 5; i++ {
+		worker.addObject(fmt.Sprintf("a/%d.bin", i), "application/octet-stream", []byte{byte(i)})
+	}
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	path := filepath.Join(t.TempDir(), "backup.zip")
+
+	manifest, err := Export(context.Background(), deps, backupTestTarget, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifest.DurableObjects[0].Rows["memories"]; got != 5 {
+		t.Fatalf("rows = %d, want 5", got)
+	}
+	if len(manifest.R2.Objects) != 5 {
+		t.Fatalf("objects = %d, want 5", len(manifest.R2.Objects))
+	}
+	if got := worker.requestCount("POST", pagePath); got < 3 {
+		t.Fatalf("page calls = %d, want at least 3", got)
+	}
+	if got := worker.requestCount("GET", objectListPath); got < 3 {
+		t.Fatalf("list calls = %d, want at least 3", got)
+	}
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "butler"}, "memories"), rows)
+}
+
+func TestExportRenewsLeaseForLargeObjects(t *testing.T) {
+	previous := renewEveryBytes
+	renewEveryBytes = 4
+	defer func() { renewEveryBytes = previous }()
+
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.versionID = "version-1"
+	worker.addObject("big.bin", "application/octet-stream", []byte("12345"))
+	worker.addObject("small.bin", "application/octet-stream", []byte("123"))
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	path := filepath.Join(t.TempDir(), "backup.zip")
+
+	if _, err := Export(context.Background(), deps, backupTestTarget, path); err != nil {
+		t.Fatal(err)
+	}
+	// One acquire for the lease plus one renewal after the 5-byte object.
+	if got := worker.requestCount("POST", acquirePath); got != 2 {
+		t.Fatalf("acquire calls = %d, want 2", got)
+	}
+}
+
+func TestWaitForAdminRetriesTransientErrors(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.failRoute("GET", infoPath, "", "", 1, 503)
+
+	deps := Deps{ReadyTimeout: time.Second}
+	client := NewAdminClient(worker.URL(), "tok", "op-1", nil)
+	if err := waitForAdmin(context.Background(), deps, client); err != nil {
+		t.Fatal(err)
+	}
+	if got := worker.requestCount("GET", infoPath); got != 2 {
+		t.Fatalf("info calls = %d, want 2", got)
+	}
+}
+
+func TestExportStopsAfterSecondUnauthorized(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.versionID = "version-1"
+	worker.failRoute("POST", acquirePath, "", "", 1, 401)
+	worker.failRoute("POST", acquirePath, "", "", 2, 401)
+
+	deps, publisher := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	path := filepath.Join(t.TempDir(), "backup.zip")
+
+	_, err := Export(context.Background(), deps, backupTestTarget, path)
+	if code := adminErrorCode(t, err); code != CodeAdminUnauthorized {
+		t.Fatalf("code = %q", code)
+	}
+	if len(publisher.changes) != 1 {
+		t.Fatalf("publish calls = %d, want 1", len(publisher.changes))
+	}
+	if got := worker.requestCount("POST", acquirePath); got != 2 {
+		t.Fatalf("acquire calls = %d, want 2", got)
+	}
+}
+
+func TestExportReleasesLeaseWhenCancelled(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.versionID = "version-1"
+	rows := make([]json.RawMessage, 5)
+	for i := range rows {
+		rows[i] = json.RawMessage(fmt.Sprintf(`{"__rowid":%d}`, i+1))
+	}
+	worker.setDO(DORef{DO: "butler"}, DBSchema{
+		Tables: []TableSchema{{Name: "memories", Create: `CREATE TABLE memories (id TEXT)`}},
+	}, map[string][]json.RawMessage{"memories": rows})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	cancelled := false
+	deps.Progress = func(progress Progress) {
+		if !cancelled && progress.Phase == PhaseDatabase && progress.Rows > 0 {
+			cancelled = true
+			cancel()
+		}
+	}
+	path := filepath.Join(t.TempDir(), "backup.zip")
+
+	_, err := Export(ctx, deps, backupTestTarget, path)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if worker.hasLease() {
+		t.Fatal("the lease was not released")
+	}
+	if worker.requestCount("POST", releasePath) == 0 {
+		t.Fatal("the Worker saw no release request")
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("archive exists after a cancellation: %v", statErr)
+	}
+}

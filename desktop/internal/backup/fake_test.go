@@ -79,6 +79,11 @@ type fakeWorker struct {
 	dos     map[string]*fakeDO
 	objects map[string]*fakeObject
 
+	// pageRows and listRows cap one DO page and one R2 list page; zero uses
+	// the default of 2.
+	pageRows int
+	listRows int
+
 	requests []fakeRequest
 	failures []*fakeFailure
 
@@ -91,8 +96,10 @@ type fakeWorker struct {
 func newFakeWorker(t *testing.T) *fakeWorker {
 	t.Helper()
 	worker := &fakeWorker{
-		dos:     map[string]*fakeDO{},
-		objects: map[string]*fakeObject{},
+		dos:      map[string]*fakeDO{},
+		objects:  map[string]*fakeObject{},
+		pageRows: 2,
+		listRows: 2,
 	}
 	worker.server = httptest.NewServer(http.HandlerFunc(worker.serveHTTP))
 	t.Cleanup(worker.server.Close)
@@ -198,9 +205,25 @@ func (f *fakeWorker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	switch record.Path {
+	case infoPath, schemaPath, pagePath, restoreBeginPath, restorePagePath, restoreCommitPath, restoreResetPath, objectListPath, objectPath:
+	default:
+		// Unknown paths answer 404 before the lease check, like the real gateway.
+		http.NotFound(w, r)
+		return
+	}
+
 	if record.OpID == "" || record.OpID != f.leaseOpID {
 		f.writeJSON(w, http.StatusConflict, map[string]string{"code": "MAINTENANCE_REQUIRED"})
 		return
+	}
+
+	switch record.Path {
+	case schemaPath, pagePath, restoreBeginPath, restorePagePath, restoreCommitPath, restoreResetPath:
+		if !validDOKind(record.DO) {
+			f.writeJSON(w, http.StatusBadRequest, map[string]string{"code": "BACKUP_INVALID"})
+			return
+		}
 	}
 
 	switch record.Path {
@@ -223,11 +246,26 @@ func (f *fakeWorker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if !decodeFakeBody(w, body, &payload) {
 			return
 		}
-		rows := f.doFor(record).rows[payload.Table.Name]
-		if rows == nil {
-			rows = []json.RawMessage{}
+		object := f.doFor(record)
+		rows := object.rows[payload.Table.Name]
+		cursor := ""
+		if payload.Cursor != nil {
+			cursor = *payload.Cursor
 		}
-		f.writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "next": nil})
+		offset, ok := fakeOffset(w, cursor, len(rows))
+		if !ok {
+			return
+		}
+		end := offset + f.pageLimit()
+		if end > len(rows) {
+			end = len(rows)
+		}
+		var next any
+		if end < len(rows) {
+			next = strconv.Itoa(end)
+		}
+		page := append([]json.RawMessage(nil), rows[offset:end]...)
+		f.writeJSON(w, http.StatusOK, map[string]any{"rows": page, "next": next})
 	case restoreBeginPath:
 		var payload struct {
 			Schema DBSchema `json:"schema"`
@@ -266,7 +304,7 @@ func (f *fakeWorker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		f.doFor(record).resets++
 		w.WriteHeader(http.StatusNoContent)
 	case objectListPath:
-		f.listObjects(w)
+		f.listObjects(w, record)
 	case objectPath:
 		f.objectRoute(w, record, body)
 	default:
@@ -297,14 +335,27 @@ func (f *fakeWorker) acquire(w http.ResponseWriter, body []byte) {
 	})
 }
 
-func (f *fakeWorker) listObjects(w http.ResponseWriter) {
+func (f *fakeWorker) listObjects(w http.ResponseWriter, record fakeRequest) {
 	keys := make([]string, 0, len(f.objects))
 	for key := range f.objects {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	objects := make([]map[string]any, 0, len(keys))
-	for _, key := range keys {
+	cursor := record.Query.Get("cursor")
+	offset, ok := fakeOffset(w, cursor, len(keys))
+	if !ok {
+		return
+	}
+	end := offset + f.listLimit()
+	if end > len(keys) {
+		end = len(keys)
+	}
+	var next any
+	if end < len(keys) {
+		next = strconv.Itoa(end)
+	}
+	objects := make([]map[string]any, 0, end-offset)
+	for _, key := range keys[offset:end] {
 		object := f.objects[key]
 		objects = append(objects, map[string]any{
 			"key":         key,
@@ -312,7 +363,7 @@ func (f *fakeWorker) listObjects(w http.ResponseWriter) {
 			"contentType": object.contentType,
 		})
 	}
-	f.writeJSON(w, http.StatusOK, map[string]any{"objects": objects, "next": nil})
+	f.writeJSON(w, http.StatusOK, map[string]any{"objects": objects, "next": next})
 }
 
 func (f *fakeWorker) objectRoute(w http.ResponseWriter, record fakeRequest, body []byte) {
@@ -349,7 +400,7 @@ func (f *fakeWorker) objectRoute(w http.ResponseWriter, record fakeRequest, body
 		}
 		f.objects[key] = &fakeObject{
 			body:        append([]byte(nil), body...),
-			contentType: record.Headers.Get("content-type"),
+			contentType: fakeContentType(record.Headers.Get("content-type")),
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodDelete:
@@ -419,6 +470,51 @@ func (o *fakeObject) reportedSize() int64 {
 		return o.size
 	}
 	return int64(len(o.body))
+}
+
+func (f *fakeWorker) pageLimit() int {
+	if f.pageRows > 0 {
+		return f.pageRows
+	}
+	return 2
+}
+
+func (f *fakeWorker) listLimit() int {
+	if f.listRows > 0 {
+		return f.listRows
+	}
+	return 2
+}
+
+// fakeOffset decodes an index cursor and rejects one past the end.
+func fakeOffset(w http.ResponseWriter, cursor string, length int) (int, bool) {
+	if cursor == "" {
+		return 0, true
+	}
+	offset, err := strconv.Atoi(cursor)
+	if err != nil || offset < 0 || offset > length {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"code":"BACKUP_INVALID"}`)
+		return 0, false
+	}
+	return offset, true
+}
+
+func validDOKind(kind string) bool {
+	switch kind {
+	case "butler", "task", "channel":
+		return true
+	default:
+		return false
+	}
+}
+
+func fakeContentType(value string) string {
+	if value == "" {
+		return "application/octet-stream"
+	}
+	return value
 }
 
 // requests returns a copy of the recorded requests.

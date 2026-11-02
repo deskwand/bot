@@ -68,7 +68,8 @@ type R2Item struct {
 }
 
 // R2Manifest records the artifacts in the archive. Oversized holds keys that
-// were exported but exceed MaxR2ObjectBytes.
+// exceed MaxR2ObjectBytes; they are listed in the manifest but their bytes are
+// not stored, so a restore refuses the archive instead of truncating them.
 type R2Manifest struct {
 	Objects   []R2Item `json:"objects"`
 	Bytes     int64    `json:"bytes"`

@@ -23,6 +23,10 @@ const (
 	unknownRelease    = "unknown"
 )
 
+// renewEveryBytes is the artifact size above which a transfer renews the
+// maintenance lease. Tests lower it to avoid allocating a large object.
+var renewEveryBytes int64 = 10 << 20
+
 // Progress phases reported while an operation runs.
 const (
 	PhasePreparing = "preparing"
@@ -108,10 +112,16 @@ func Export(ctx context.Context, deps Deps, target domain.Target, path string) (
 	if err != nil {
 		return Manifest{}, err
 	}
-	client, snapshot, published, err := connectFor(ctx, deps, target, opID)
+	client, snapshot, published, err := connect(ctx, deps, target, opID)
 	if err != nil {
 		return Manifest{}, err
 	}
+
+	writer, err := NewWriter(path)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer writer.Abort()
 
 	client, err = acquireLease(ctx, deps, target, client, published, "export")
 	if err != nil {
@@ -127,24 +137,19 @@ func Export(ctx context.Context, deps Deps, target domain.Target, path string) (
 	}
 	defer release()
 
-	writer, err := NewWriter(path)
-	if err != nil {
-		return Manifest{}, err
-	}
-	defer writer.Abort()
-
 	manifest, err := exportData(ctx, deps, client, snapshot, target, writer)
 	if err != nil {
 		return Manifest{}, err
 	}
 
+	listed := len(manifest.R2.Objects) + len(manifest.R2.Oversized)
 	deps.report(Progress{
 		Op:           "export",
 		Phase:        PhaseFinishing,
 		Tables:       tablesExported(manifest),
 		Rows:         rowsExported(manifest),
-		Objects:      len(manifest.R2.Objects),
-		TotalObjects: len(manifest.R2.Objects),
+		Objects:      listed,
+		TotalObjects: listed,
 	})
 	release()
 	if err := writer.Finish(manifest); err != nil {
@@ -154,13 +159,10 @@ func Export(ctx context.Context, deps Deps, target domain.Target, path string) (
 }
 
 // connect builds the admin client for target and waits for a freshly published
-// ADMIN_TOKEN to reach the Worker.
-func connect(ctx context.Context, deps Deps, target domain.Target, opID string) (*AdminClient, domain.Snapshot, error) {
-	client, snapshot, _, err := connectFor(ctx, deps, target, opID)
-	return client, snapshot, err
-}
-
-func connectFor(ctx context.Context, deps Deps, target domain.Target, opID string) (*AdminClient, domain.Snapshot, bool, error) {
+// ADMIN_TOKEN to reach the Worker. The returned flag reports whether this call
+// published the secret, so the caller knows it may need to wait for a 404 to
+// clear before acquiring the lease.
+func connect(ctx context.Context, deps Deps, target domain.Target, opID string) (*AdminClient, domain.Snapshot, bool, error) {
 	snapshot, err := deps.Token.Snapshots.ReadSnapshot(ctx, target)
 	if err != nil {
 		return nil, domain.Snapshot{}, false, err
@@ -186,14 +188,21 @@ func connectFor(ctx context.Context, deps Deps, target domain.Target, opID strin
 }
 
 // waitForAdmin polls Info until the Worker answers for the new token. A 409
-// MAINTENANCE_REQUIRED already proves the route and token are live.
+// MAINTENANCE_REQUIRED or a 401 already proves the route and token are live;
+// a 404 or a transient failure may still clear before the deadline.
 func waitForAdmin(ctx context.Context, deps Deps, client *AdminClient) error {
 	deadline := time.Now().Add(deps.readyTimeout())
 	interval := deps.pollInterval()
 	for {
 		_, err := client.Info(ctx)
-		if err == nil || errorCode(err) != CodeAdminUnavailable {
+		if err == nil || readyError(err) {
 			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if !retryableReadyError(err) {
+			return err
 		}
 		if !time.Now().Before(deadline) {
 			return err
@@ -201,6 +210,27 @@ func waitForAdmin(ctx context.Context, deps Deps, client *AdminClient) error {
 		if err := sleepContext(ctx, interval); err != nil {
 			return err
 		}
+	}
+}
+
+func readyError(err error) bool {
+	switch errorCode(err) {
+	case CodeAdminUnauthorized, CodeMaintenanceRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func retryableReadyError(err error) bool {
+	switch errorCode(err) {
+	case CodeAdminUnavailable, CodeBackupInvalid:
+		// ADMIN_UNAVAILABLE is the propagation window; BACKUP_INVALID is what
+		// the client reports for an unmapped status, including a 5xx while the
+		// new version starts serving.
+		return true
+	default:
+		return false
 	}
 }
 
@@ -228,6 +258,9 @@ func acquireLease(ctx context.Context, deps Deps, target domain.Target, client *
 				return client, republishErr
 			}
 			client = NewAdminClient(client.baseURL, token, client.opID, deps.HTTP)
+			// The old deadline may have been spent while the secret was
+			// published. Give the new token at least one full window.
+			deadline = time.Now().Add(deps.readyTimeout())
 		case CodeAdminUnavailable:
 			if !retryUnavailable {
 				return client, err
@@ -242,6 +275,13 @@ func acquireLease(ctx context.Context, deps Deps, target domain.Target, client *
 			return client, err
 		}
 	}
+}
+
+// renewLease extends the maintenance lease. A long artifact transfer can
+// outlive the initial lease window, so the export renews after every large
+// object and a restore should do the same around PutObject.
+func renewLease(ctx context.Context, client *AdminClient, op string) error {
+	return client.Acquire(ctx, op)
 }
 
 // releaseLease releases the lease on a context that survives cancellation, so
@@ -288,7 +328,7 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 	progress.TotalObjects = len(objects)
 	deps.report(progress)
 
-	r2, err := exportObjects(ctx, deps, client, writer, objects, &progress)
+	r2, err := exportObjects(ctx, deps, client, writer, objects, &progress, "export")
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -332,10 +372,14 @@ func exportDurableObject(ctx context.Context, client *AdminClient, writer *Write
 				return DOManifest{}, err
 			}
 			progress.Rows += int64(len(rows))
-			cursor = next
-			if cursor == nil {
+			deps.report(*progress)
+			if next == nil {
 				break
 			}
+			if cursor != nil && *next == *cursor {
+				return DOManifest{}, invalidBackupf("page cursor did not advance for table %s", table.Name)
+			}
+			cursor = next
 		}
 		object.Rows[table.Name] = tableWriter.Rows()
 		progress.Tables++
@@ -344,7 +388,7 @@ func exportDurableObject(ctx context.Context, client *AdminClient, writer *Write
 	return object, nil
 }
 
-func exportObjects(ctx context.Context, deps Deps, client *AdminClient, writer *Writer, objects []ObjectInfo, progress *Progress) (R2Manifest, error) {
+func exportObjects(ctx context.Context, deps Deps, client *AdminClient, writer *Writer, objects []ObjectInfo, progress *Progress, op string) (R2Manifest, error) {
 	manifest := R2Manifest{Objects: []R2Item{}, Oversized: []string{}}
 	for _, object := range objects {
 		if object.Size > MaxR2ObjectBytes {
@@ -373,6 +417,11 @@ func exportObjects(ctx context.Context, deps Deps, client *AdminClient, writer *
 		}
 		manifest.Objects = append(manifest.Objects, item)
 		manifest.Bytes += item.Size
+		if item.Size > renewEveryBytes {
+			if err := renewLease(ctx, client, op); err != nil {
+				return R2Manifest{}, err
+			}
+		}
 		progress.Objects++
 		deps.report(*progress)
 	}
