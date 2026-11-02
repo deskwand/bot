@@ -47,6 +47,11 @@ export function modelsConfigValid(models: ModelsConfig): boolean {
   for (const provider of models.customProviders ?? []) {
     if (BUILTIN_PROVIDER_IDS.has(provider.id)) return false;
     if (custom.has(provider.id)) return false;
+    const modelIds = new Set<string>();
+    for (const model of provider.models) {
+      if (modelIds.has(model.id)) return false;
+      modelIds.add(model.id);
+    }
     custom.set(provider.id, provider);
   }
 

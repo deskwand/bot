@@ -88,26 +88,23 @@ func ProbeModel(ctx context.Context, provider, model, key, api, baseURL string) 
 	ctx, cancel := context.WithTimeout(ctx, modelProbeTimeout)
 	defer cancel()
 
+	endpoint, err := probeEndpoint(baseURL, api)
+	if err != nil {
+		return domain.Evidence{}, fmt.Errorf("%w: %s model %q uses unsupported API %q", ErrUnsupportedModelProvider, provider, model, api)
+	}
 	body := modelProbeRequest{Model: model}
-	var path string
 	switch api {
 	case "anthropic-messages":
-		path = "/v1/messages"
 		body.MaxTokens = 1
 		body.Messages = []modelProbeMessage{{Role: "user", Content: "ping"}}
 	case "openai-completions":
-		path = "/v1/chat/completions"
 		body.MaxTokens = 1
 		body.Messages = []modelProbeMessage{{Role: "user", Content: "ping"}}
 	case "openai-responses":
-		path = "/v1/responses"
 		// Responses rejects max_output_tokens below 16.
 		body.MaxOutputTokens = 16
 		body.Input = "ping"
-	default:
-		return domain.Evidence{}, fmt.Errorf("%w: %s model %q uses unsupported API %q", ErrUnsupportedModelProvider, provider, model, api)
 	}
-	endpoint := joinModelPath(baseURL, path)
 
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -157,14 +154,21 @@ func catalogEndpoint(provider modelcatalog.Provider, model string) (string, stri
 	return "", ""
 }
 
-// joinModelPath appends a canonical /v1 path without duplicating a base URL
-// that already ends in /v1.
-func joinModelPath(base, path string) string {
+// probeEndpoint builds the request URL exactly like the Worker SDKs: the base
+// URL is used as-is, so an OpenAI-compatible base must already end in /v1 when
+// the provider requires it. Anthropic's SDK appends /v1 itself.
+func probeEndpoint(base, api string) (string, error) {
 	base = strings.TrimRight(base, "/")
-	if strings.HasSuffix(base, "/v1") && strings.HasPrefix(path, "/v1/") {
-		return base + strings.TrimPrefix(path, "/v1")
+	switch api {
+	case "anthropic-messages":
+		return base + "/v1/messages", nil
+	case "openai-completions":
+		return base + "/chat/completions", nil
+	case "openai-responses":
+		return base + "/responses", nil
+	default:
+		return "", fmt.Errorf("unsupported API %q", api)
 	}
-	return base + path
 }
 
 func probeError(err error, key string) error {

@@ -35,13 +35,6 @@ export function providerOptions(
   return [...builtin, ...customOptions];
 }
 
-export function providerLabel(
-  id: string,
-  options: ReturnType<typeof providerOptions>,
-): string {
-  return options.find((entry) => entry.id === id)?.label ?? id;
-}
-
 export function modelKey(model: ModelDTO | null): string {
   return model ? `${model.provider}/${model.id}` : "";
 }

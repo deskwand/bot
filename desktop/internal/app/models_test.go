@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
+	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 )
 
 const modelKeySentinel = "sk-ant-api03-SENTINEL-model-key-0123456789"
@@ -97,7 +98,7 @@ func TestProbeModelOpenCodeGoUsesBearerKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sawPath != "/v1/chat/completions" {
+	if sawPath != "/chat/completions" {
 		t.Fatalf("path = %q", sawPath)
 	}
 	if sawAuthorization != "Bearer "+modelKeySentinel {
@@ -157,7 +158,7 @@ func TestProbeModelOpenCodeGoResponses(t *testing.T) {
 	if _, err := ProbeModel(context.Background(), "opencode-go", "gpt-5.6-luna", modelKeySentinel, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if sawPath != "/v1/responses" {
+	if sawPath != "/responses" {
 		t.Fatalf("path = %q", sawPath)
 	}
 	if sawAuthorization != "Bearer "+modelKeySentinel {
@@ -185,7 +186,7 @@ func TestProbeModelCustomEndpointUsesSuppliedAPIAndBaseURL(t *testing.T) {
 	if _, err := ProbeModel(context.Background(), "my-proxy", "gpt-5.6", modelKeySentinel, "openai-completions", server.URL); err != nil {
 		t.Fatal(err)
 	}
-	if sawPath != "/v1/chat/completions" {
+	if sawPath != "/chat/completions" {
 		t.Fatalf("path = %q", sawPath)
 	}
 	if sawAuthorization != "Bearer "+modelKeySentinel {
@@ -193,6 +194,50 @@ func TestProbeModelCustomEndpointUsesSuppliedAPIAndBaseURL(t *testing.T) {
 	}
 	if body.Model != "gpt-5.6" || body.MaxTokens != 1 {
 		t.Fatalf("body = %+v", body)
+	}
+}
+
+func TestProbeEndpointMatchesSDKPaths(t *testing.T) {
+	tests := []struct {
+		name string
+		base string
+		api  string
+		want string
+	}{
+		{name: "openai base with v1", base: "https://x/v1", api: "openai-completions", want: "https://x/v1/chat/completions"},
+		{name: "openai base without v1", base: "https://x", api: "openai-completions", want: "https://x/chat/completions"},
+		{name: "openai trailing slash", base: "https://x/v1/", api: "openai-completions", want: "https://x/v1/chat/completions"},
+		{name: "anthropic base without v1", base: "https://x", api: "anthropic-messages", want: "https://x/v1/messages"},
+		{name: "responses base with v1", base: "https://x/v1", api: "openai-responses", want: "https://x/v1/responses"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := probeEndpoint(testCase.base, testCase.api)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != testCase.want {
+				t.Fatalf("probeEndpoint(%q, %q) = %q, want %q", testCase.base, testCase.api, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestProbeEndpointUsesCatalogZaiBaseURL(t *testing.T) {
+	provider, ok := modelcatalog.LookupBuiltin("zai")
+	if !ok {
+		t.Fatal("zai is missing from the catalog")
+	}
+	api, baseURL := catalogEndpoint(provider, "glm-5.2")
+	if api != "openai-completions" || !strings.HasSuffix(baseURL, "/paas/v4") {
+		t.Fatalf("catalog endpoint = %q %q", api, baseURL)
+	}
+	got, err := probeEndpoint(baseURL, api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(got, "/paas/v4/chat/completions") {
+		t.Fatalf("probeEndpoint() = %q, want a /paas/v4/chat/completions suffix", got)
 	}
 }
 

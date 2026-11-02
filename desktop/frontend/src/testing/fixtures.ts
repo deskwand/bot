@@ -32,6 +32,7 @@ type Scenario =
   | "model-key-missing"
   | "client-update-available"
   | "client-update-unavailable"
+  | "catalog-unavailable"
   | "pending-operations"
   | "version-unknown"
   | "install-conflict"
@@ -133,6 +134,7 @@ function scenarioFromLocation(): Scenario {
     case "model-key-missing":
     case "client-update-available":
     case "client-update-unavailable":
+    case "catalog-unavailable":
     case "pending-operations":
     case "version-unknown":
     case "install-conflict":
@@ -732,6 +734,9 @@ export function createMockClient(): ClientService {
     },
 
     async modelCatalog() {
+      if (state.scenario === "catalog-unavailable") {
+        fail("CATALOG_UNAVAILABLE", "无法读取模型目录，请检查网络后重试。");
+      }
       return CATALOG;
     },
 

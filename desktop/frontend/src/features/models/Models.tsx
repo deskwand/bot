@@ -116,9 +116,9 @@ export function Models() {
   const [customProviders, setCustomProviders] = useState<CustomProviderDTO[]>([]);
   const [butler, setButler] = useState(modelKey(DEFAULT_MODEL));
   const [task, setTask] = useState(modelKey(DEFAULT_MODEL));
-  const [keyProvider, setKeyProvider] = useState(DEFAULT_MODEL.provider);
-  const [apiKey, setApiKey] = useState("");
-  const [clearSecret, setClearSecret] = useState(false);
+  const [keyDrafts, setKeyDrafts] = useState<
+    Record<string, { value: string; clear: boolean }>
+  >({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [error, setError] = useState<unknown>(null);
@@ -129,8 +129,9 @@ export function Models() {
   const [result, setResult] = useState<ResultDTO | null>(null);
   const [success, setSuccess] = useState("");
   const [probeOpen, setProbeOpen] = useState(false);
-  const [probeItem, setProbeItem] = useState<StatusItemDTO | null>(null);
-  const [probeError, setProbeError] = useState<unknown>(null);
+  const [probeTarget, setProbeTarget] = useState<string | null>(null);
+  const [probeItem, setProbeItem] = useState<{ provider: string; item: StatusItemDTO } | null>(null);
+  const [probeError, setProbeError] = useState<{ provider: string; error: unknown } | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [customDraft, setCustomDraft] = useState<CustomDraft | null>(null);
 
@@ -149,9 +150,7 @@ export function Models() {
       setCustomProviders(next.customProviders ?? []);
       setButler(modelKey(next.butlerModel) || modelKey(DEFAULT_MODEL));
       setTask(modelKey(next.taskModel) || modelKey(DEFAULT_MODEL));
-      setKeyProvider(next.butlerModel?.provider ?? DEFAULT_MODEL.provider);
-      setApiKey("");
-      setClearSecret(false);
+      setKeyDrafts({});
     } catch (cause) {
       setLoadError(cause);
     } finally {
@@ -168,34 +167,70 @@ export function Models() {
     [catalog, customProviders],
   );
 
-  const secretName = secretNameFor(keyProvider);
-  const secretConfigured =
-    config?.secrets.find((secret) => secret.name === secretName)?.configured ?? false;
+  const keyProviders = useMemo(() => {
+    const ids: string[] = [];
+    for (const value of [butler, task]) {
+      const provider = parseModelKey(value)?.provider;
+      if (provider && !ids.includes(provider)) ids.push(provider);
+    }
+    return ids.map((id) => ({
+      id,
+      option: options.find((provider) => provider.id === id),
+      custom: customProviders.find((provider) => provider.id === id),
+    }));
+  }, [butler, customProviders, options, task]);
+
+  const updateKeyDraft = (
+    id: string,
+    update: Partial<{ value: string; clear: boolean }>,
+  ) => {
+    setKeyDrafts((current) => ({
+      ...current,
+      [id]: { ...(current[id] ?? { value: "", clear: false }), ...update },
+    }));
+  };
+
+  const clearKeyValues = () => {
+    setKeyDrafts((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([id, draft]) => [id, { ...draft, value: "" }]),
+      ),
+    );
+  };
 
   const dirty = useMemo(() => {
     if (!config) return false;
+    const keysDirty = keyProviders.some(({ id }) => {
+      const draft = keyDrafts[id];
+      return Boolean(draft && (draft.value.length > 0 || draft.clear));
+    });
     return (
-      apiKey.length > 0 ||
-      clearSecret ||
+      keysDirty ||
       modelKey(config.butlerModel) !== butler ||
       modelKey(config.taskModel) !== task ||
       JSON.stringify(config.customProviders ?? []) !== JSON.stringify(customProviders)
     );
-  }, [apiKey, butler, clearSecret, config, customProviders, task]);
+  }, [butler, config, customProviders, keyDrafts, keyProviders, task]);
   useDirty(dirty);
 
   const edit = (): ConfigEditDTO => {
     const secrets: SecretEditDTO[] = [];
-    if (clearSecret) {
-      secrets.push({ name: secretName, operation: "clear" });
-    } else if (apiKey.trim()) {
-      secrets.push({ name: secretName, operation: "replace", value: apiKey });
+    for (const { id } of keyProviders) {
+      const draft = keyDrafts[id];
+      if (!draft) continue;
+      if (draft.clear) {
+        secrets.push({ name: secretNameFor(id), operation: "clear" });
+      } else if (draft.value.trim()) {
+        secrets.push({ name: secretNameFor(id), operation: "replace", value: draft.value });
+      }
     }
+    const customChanged =
+      JSON.stringify(config?.customProviders ?? []) !== JSON.stringify(customProviders);
     return {
       baseFingerprint: config?.fingerprint,
       butlerModel: parseModelKey(butler) ?? undefined,
       taskModel: parseModelKey(task) ?? undefined,
-      customProviders,
+      customProviders: customChanged ? customProviders : undefined,
       secrets,
     };
   };
@@ -249,11 +284,7 @@ export function Models() {
   };
 
   const removeCustom = (index: number) => {
-    const removed = customProviders[index];
     setCustomProviders((current) => current.filter((_, entryIndex) => entryIndex !== index));
-    if (removed && keyProvider === removed.id) {
-      setKeyProvider(parseModelKey(butler)?.provider ?? DEFAULT_MODEL.provider);
-    }
   };
 
   const openPreview = async () => {
@@ -269,7 +300,7 @@ export function Models() {
       setPreviewOpen(true);
     } catch (cause) {
       if (toClientError(cause).code === "CONFIG_CONFLICT") setConflict(true);
-      setApiKey("");
+      clearKeyValues();
       setError(cause);
     } finally {
       setRunning(null);
@@ -283,7 +314,6 @@ export function Models() {
       const publishedResult = await client.publishConfig(edit());
       setPreviewOpen(false);
       setResult(publishedResult);
-      setClearSecret(false);
       setSuccess(
         publishedResult.state === "published"
           ? "配置已发布。控制面发布完成，不代表云端消息收发已验证。"
@@ -296,7 +326,7 @@ export function Models() {
       setError(cause);
     } finally {
       // Write-only inputs are cleared after every submit attempt.
-      setApiKey("");
+      clearKeyValues();
       setRunning(null);
     }
   };
@@ -315,29 +345,32 @@ export function Models() {
     }
   };
 
-  const keyOption = options.find((provider) => provider.id === keyProvider);
-  const probeModelId =
-    keyProvider === parseModelKey(butler)?.provider
-      ? (parseModelKey(butler)?.id ?? "")
-      : (keyOption?.models[0]?.id ?? "");
-  const customKeyProvider = customProviders.find((provider) => provider.id === keyProvider);
-
-  const probe = async () => {
+  const probe = async (target: string | null) => {
     setProbeOpen(false);
-    setProbeItem(null);
     setProbeError(null);
     setRunning("probe");
+    const provider = keyProviders.find((entry) => entry.id === target);
+    if (!provider || !target) {
+      setRunning(null);
+      return;
+    }
+    setProbeItem((current) => (current?.provider === target ? null : current));
+    const butlerModel = parseModelKey(butler);
+    const probeModelId =
+      target === butlerModel?.provider
+        ? (butlerModel?.id ?? "")
+        : (provider.option?.models[0]?.id ?? "");
     try {
       const item = await client.probeModel(
-        keyProvider,
+        target,
         probeModelId,
-        apiKey,
-        customKeyProvider?.api ?? "",
-        customKeyProvider?.baseUrl ?? "",
+        keyDrafts[target]?.value ?? "",
+        provider.custom?.api ?? "",
+        provider.custom?.baseUrl ?? "",
       );
-      setProbeItem(item);
+      setProbeItem({ provider: target, item });
     } catch (cause) {
-      setProbeError(cause);
+      setProbeError({ provider: target, error: cause });
     } finally {
       setRunning(null);
     }
@@ -414,96 +447,113 @@ export function Models() {
 
       <Card className="mt-5">
         <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle>模型供应商</CardTitle>
-              <CardDescription>
-                密钥只写入 Cloudflare secret；输入框提交后清空，已有值不可读取。
-              </CardDescription>
-            </div>
-            <Badge variant={secretConfigured ? "secondary" : "outline"}>
-              {secretName} {secretConfigured ? "已配置" : "未配置"}
-            </Badge>
-          </div>
+          <CardTitle>模型供应商</CardTitle>
+          <CardDescription>
+            密钥只写入 Cloudflare secret；输入框提交后清空，已有值不可读取。管家和任务模型用到的每个供应商各需一个 key。
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="key-provider">密钥所属供应商</Label>
-              <Select
-                value={keyProvider}
-                onValueChange={(value) => {
-                  setKeyProvider(value);
-                  setApiKey("");
-                  setClearSecret(false);
-                }}
-              >
-                <SelectTrigger id="key-provider" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {options.map((provider) => (
-                    <SelectItem key={provider.id} value={provider.id}>
-                      {provider.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          {keyProviders.length === 0 ? (
+            <p className="text-sm text-muted-foreground">请先选择管家模型或任务模型。</p>
+          ) : (
+            <div className="space-y-3">
+              {keyProviders.map((provider) => {
+                const secret = secretNameFor(provider.id);
+                const configured =
+                  config?.secrets.find((entry) => entry.name === secret)?.configured ?? false;
+                const draft = keyDrafts[provider.id] ?? { value: "", clear: false };
+                const rowProbeItem =
+                  probeItem?.provider === provider.id ? probeItem.item : null;
+                const rowProbeError =
+                  probeError?.provider === provider.id ? probeError.error : null;
+                return (
+                  <div
+                    key={provider.id}
+                    data-testid={`model-key-row-${provider.id}`}
+                    className="rounded-md border border-border p-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-medium">{provider.option?.label ?? provider.id}</p>
+                      <Badge variant={configured ? "secondary" : "outline"}>
+                        {secret} {configured ? "已配置" : "未配置"}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor={`api-key-${provider.id}`}>API 密钥</Label>
+                        <Input
+                          id={`api-key-${provider.id}`}
+                          type="password"
+                          value={draft.value}
+                          onChange={(event) =>
+                            updateKeyDraft(provider.id, {
+                              value: event.target.value,
+                              ...(event.target.value ? { clear: false } : {}),
+                            })
+                          }
+                          placeholder={configured ? "已配置；输入新值才会替换" : "输入新密钥"}
+                          autoComplete="new-password"
+                          spellCheck={false}
+                        />
+                      </div>
+                      <div className="flex flex-wrap items-end gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setProbeTarget(provider.id);
+                            setProbeOpen(true);
+                          }}
+                          disabled={!draft.value.trim() || running !== null}
+                        >
+                          <Zap aria-hidden />
+                          测试连接
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={draft.clear ? "destructive" : "outline"}
+                          size="sm"
+                          onClick={() =>
+                            updateKeyDraft(provider.id, {
+                              clear: !draft.clear,
+                              ...(draft.clear ? {} : { value: "" }),
+                            })
+                          }
+                          disabled={!configured}
+                        >
+                          {draft.clear ? "已标记清除" : "清除已保存密钥"}
+                        </Button>
+                        {!draft.value.trim() ? (
+                          <span className="text-xs text-muted-foreground">
+                            已有密钥不可读，测试连接需要重新输入密钥。
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    {rowProbeError ? (
+                      <ErrorAlert
+                        error={rowProbeError}
+                        onRetry={() => {
+                          setProbeTarget(provider.id);
+                          setProbeOpen(true);
+                        }}
+                        retryLabel="重新测试"
+                      />
+                    ) : null}
+                    {rowProbeItem ? (
+                      <div className="mt-3 rounded-md border border-border p-3">
+                        <StatusRow item={rowProbeItem} />
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          本机测试只证明该凭据在这台机器上可用，不代表云端已应用或消息收发正常。
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="api-key">API 密钥</Label>
-              <Input
-                id="api-key"
-                type="password"
-                value={apiKey}
-                onChange={(event) => {
-                  setApiKey(event.target.value);
-                  if (event.target.value) setClearSecret(false);
-                }}
-                placeholder={secretConfigured ? "已配置；输入新值才会替换" : "输入新密钥"}
-                autoComplete="new-password"
-                spellCheck={false}
-              />
-            </div>
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setProbeOpen(true)}
-              disabled={!apiKey.trim() || running !== null}
-            >
-              <Zap aria-hidden />
-              测试连接
-            </Button>
-            <Button
-              type="button"
-              variant={clearSecret ? "destructive" : "outline"}
-              size="sm"
-              onClick={() => {
-                setClearSecret((current) => !current);
-                if (!clearSecret) setApiKey("");
-              }}
-              disabled={!secretConfigured}
-            >
-              {clearSecret ? "已标记清除" : "清除已保存密钥"}
-            </Button>
-            {!apiKey.trim() ? (
-              <span className="text-xs text-muted-foreground">
-                已有密钥不可读，测试连接需要重新输入密钥。
-              </span>
-            ) : null}
-          </div>
-          {probeError ? <ErrorAlert error={probeError} onRetry={() => setProbeOpen(true)} retryLabel="重新测试" /> : null}
-          {probeItem ? (
-            <div className="mt-3 rounded-md border border-border p-3">
-              <StatusRow item={probeItem} />
-              <p className="mt-2 text-xs text-muted-foreground">
-                本机测试只证明该凭据在这台机器上可用，不代表云端已应用或消息收发正常。
-              </p>
-            </div>
-          ) : null}
+          )}
         </CardContent>
       </Card>
 
@@ -652,7 +702,7 @@ export function Models() {
             <Button type="button" variant="outline" onClick={() => setProbeOpen(false)}>
               取消
             </Button>
-            <Button type="button" onClick={() => void probe()} disabled={running !== null}>
+            <Button type="button" onClick={() => void probe(probeTarget)} disabled={running !== null}>
               {running === "probe" ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
               确认测试
             </Button>
@@ -741,6 +791,9 @@ export function Models() {
                   placeholder="https://proxy.example.com/v1"
                   spellCheck={false}
                 />
+                <p className="text-xs text-muted-foreground">
+                  OpenAI 兼容地址通常以 /v1 结尾；Anthropic 兼容地址不要带 /v1
+                </p>
               </div>
               <div className="space-y-2 sm:col-span-2">
                 <Label htmlFor="custom-models">模型 ID（用逗号分隔）</Label>

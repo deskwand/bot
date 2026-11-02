@@ -90,7 +90,7 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 			Message: "the merged configuration has unreadable model settings",
 		}
 	}
-	if err := modelcatalog.ValidateModels(modelsDoc); err != nil {
+	if err := modelcatalog.ValidateModels(modelsDoc, !change.AllowReleaseChange); err != nil {
 		return domain.PublishPlan{}, domain.Error{
 			Code:    domain.UNSUPPORTED_SCHEMA,
 			Message: err.Error(),
@@ -165,7 +165,7 @@ func applyPatch(document map[string]any, patch domain.EditablePatch) error {
 		if err != nil {
 			return err
 		}
-		models["customProviders"] = providers
+		models["customProviders"] = mergeCustomProviders(models["customProviders"], providers)
 	}
 	if patch.ButlerModel != nil {
 		value, err := decodeModel(*patch.ButlerModel)
@@ -248,6 +248,103 @@ func decodeCustomProviders(raw json.RawMessage) ([]any, error) {
 		}
 	}
 	return providers, nil
+}
+
+// mergeCustomProviders keeps unknown fields from the existing entry and its
+// models while replacing the fields the desktop UI knows about.
+func mergeCustomProviders(existing any, incoming []any) []any {
+	existingByID := map[string]map[string]any{}
+	if list, ok := existing.([]any); ok {
+		for _, entry := range list {
+			object, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			if id, _ := object["id"].(string); id != "" {
+				existingByID[id] = object
+			}
+		}
+	}
+	merged := make([]any, len(incoming))
+	for index, entry := range incoming {
+		object, ok := entry.(map[string]any)
+		if !ok {
+			merged[index] = entry
+			continue
+		}
+		id, _ := object["id"].(string)
+		previous, ok := existingByID[id]
+		if !ok {
+			merged[index] = entry
+			continue
+		}
+		next := copyObject(previous)
+		for _, field := range []string{"id", "name", "api", "baseUrl"} {
+			if value, ok := object[field]; ok {
+				next[field] = value
+			} else {
+				delete(next, field)
+			}
+		}
+		if models, ok := object["models"]; ok {
+			next["models"] = mergeCustomModels(previous["models"], models)
+		} else {
+			delete(next, "models")
+		}
+		merged[index] = next
+	}
+	return merged
+}
+
+func mergeCustomModels(existing, incoming any) any {
+	existingByID := map[string]map[string]any{}
+	if list, ok := existing.([]any); ok {
+		for _, entry := range list {
+			object, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			if id, _ := object["id"].(string); id != "" {
+				existingByID[id] = object
+			}
+		}
+	}
+	list, ok := incoming.([]any)
+	if !ok {
+		return incoming
+	}
+	merged := make([]any, len(list))
+	for index, entry := range list {
+		object, ok := entry.(map[string]any)
+		if !ok {
+			merged[index] = entry
+			continue
+		}
+		id, _ := object["id"].(string)
+		previous, ok := existingByID[id]
+		if !ok {
+			merged[index] = entry
+			continue
+		}
+		next := copyObject(previous)
+		for _, field := range []string{"id", "contextWindow", "maxTokens"} {
+			if value, ok := object[field]; ok {
+				next[field] = value
+			} else {
+				delete(next, field)
+			}
+		}
+		merged[index] = next
+	}
+	return merged
+}
+
+func copyObject(source map[string]any) map[string]any {
+	clone := make(map[string]any, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
 }
 
 func patchIsEmpty(patch domain.EditablePatch) bool {

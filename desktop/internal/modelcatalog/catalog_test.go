@@ -58,7 +58,7 @@ func validModelsDoc() ModelsDoc {
 }
 
 func TestValidateModelsAcceptsBuiltinAndCustomReferences(t *testing.T) {
-	if err := ValidateModels(validModelsDoc()); err != nil {
+	if err := ValidateModels(validModelsDoc(), true); err != nil {
 		t.Fatalf("ValidateModels() = %v, want nil", err)
 	}
 }
@@ -110,7 +110,7 @@ func TestValidateModelsRejectsInvalidReferences(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			doc := validModelsDoc()
 			testCase.edit(&doc)
-			err := ValidateModels(doc)
+			err := ValidateModels(doc, true)
 			if err == nil {
 				t.Fatal("ValidateModels() = nil, want an error")
 			}
@@ -118,6 +118,14 @@ func TestValidateModelsRejectsInvalidReferences(t *testing.T) {
 				t.Fatalf("error = %v, want it to mention %q", err, testCase.want)
 			}
 		})
+	}
+}
+
+func TestValidateModelsAcceptsBuiltinModelWhenNotCheckingCatalog(t *testing.T) {
+	doc := validModelsDoc()
+	doc.Butler = RoleRef{Provider: "deepseek", ID: "not-in-catalog"}
+	if err := ValidateModels(doc, false); err != nil {
+		t.Fatalf("ValidateModels() = %v, want nil", err)
 	}
 }
 

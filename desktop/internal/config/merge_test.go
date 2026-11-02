@@ -564,3 +564,58 @@ func TestReferenceMigrationsAreLockedDown(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeAllowsUnknownBuiltinModelWhenReleaseChanges(t *testing.T) {
+	base := baseSnapshot(t)
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint:    base.Fingerprint,
+		AllowReleaseChange: true,
+		Patch: domain.EditablePatch{
+			ButlerModel: rawModel(t, `{"provider":"deepseek","id":"not-in-catalog"}`),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(plan.ConfigJSON, []byte(`"id":"not-in-catalog"`)) {
+		t.Fatalf("unknown built-in model was not preserved: %s", plan.ConfigJSON)
+	}
+}
+
+func TestMergeStillRejectsUnknownProviderWhenReleaseChanges(t *testing.T) {
+	base := baseSnapshot(t)
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint:    base.Fingerprint,
+		AllowReleaseChange: true,
+		Patch: domain.EditablePatch{
+			ButlerModel: rawModel(t, `{"provider":"ghost","id":"any-model"}`),
+		},
+	})
+	assertMergeCode(t, err, domain.UNSUPPORTED_SCHEMA)
+	if !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("error does not name the unknown provider: %v", err)
+	}
+}
+
+func TestMergePreservesUnknownCustomProviderFields(t *testing.T) {
+	base := baseSnapshot(t)
+	document := `{"schemaVersion":1,"owner":{"telegramUserIds":[42]},"models":{"butler":{"provider":"my-proxy","id":"gpt-5.6"},"task":{"provider":"my-proxy","id":"gpt-5.6"},"customProviders":[{"id":"my-proxy","name":"Old Proxy","api":"openai-completions","baseUrl":"https://proxy.example.com/v1","headers":{"X-Tenant":"tenant-a"},"models":[{"id":"gpt-5.6","contextWindow":64000,"compat":{"reasoning":true}}]}]},"mcpServers":[]}`
+	canonical, err := domain.CanonicalizeJSON([]byte(document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.ConfigJSON = canonical
+	providers := rawModel(t, `[{"id":"my-proxy","name":"Renamed Proxy","api":"openai-completions","baseUrl":"https://proxy.example.com/v1","models":[{"id":"gpt-5.6","contextWindow":64000}]}]`)
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{CustomProviders: providers},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"Renamed Proxy"`, `"headers"`, `"X-Tenant"`, `"compat"`, `"reasoning"`} {
+		if !bytes.Contains(plan.ConfigJSON, []byte(want)) {
+			t.Fatalf("merged configuration dropped %s: %s", want, plan.ConfigJSON)
+		}
+	}
+}

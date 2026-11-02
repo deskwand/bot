@@ -74,6 +74,18 @@ describe("modelsConfigValid", () => {
     ).toBe(false);
   });
 
+  it("rejects duplicate model ids inside one custom provider", () => {
+    expect(
+      modelsConfigValid(
+        config({
+          customProviders: [
+            { ...myProxy, models: [{ id: "gpt-5.6" }, { id: "gpt-5.6" }] },
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("rejects an undeclared provider", () => {
     expect(
       modelsConfigValid(

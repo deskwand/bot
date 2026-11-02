@@ -119,9 +119,10 @@ func ParseModels(configJSON []byte) (ModelsDoc, error) {
 }
 
 // ValidateModels applies the semantic rules that JSON schema cannot express.
-func ValidateModels(doc ModelsDoc) error {
+// checkBuiltinModels is false during import and upgrade, when a configuration
+// written against a newer pi-ai catalog must still be publishable.
+func ValidateModels(doc ModelsDoc, checkBuiltinModels bool) error {
 	custom := make(map[string]map[string]bool, len(doc.CustomProviders))
-	secretNames := make(map[string]string, len(doc.CustomProviders))
 	for _, provider := range doc.CustomProviders {
 		if _, ok := LookupBuiltin(provider.ID); ok {
 			return fmt.Errorf("custom provider %q conflicts with a built-in provider", provider.ID)
@@ -129,11 +130,6 @@ func ValidateModels(doc ModelsDoc) error {
 		if _, ok := custom[provider.ID]; ok {
 			return fmt.Errorf("custom provider %q is declared more than once", provider.ID)
 		}
-		secret := SecretNameFor(provider.ID)
-		if other, ok := secretNames[secret]; ok {
-			return fmt.Errorf("custom providers %q and %q derive the same secret name %q", other, provider.ID, secret)
-		}
-		secretNames[secret] = provider.ID
 		models := make(map[string]bool, len(provider.Models))
 		for _, model := range provider.Models {
 			if models[model.ID] {
@@ -144,13 +140,13 @@ func ValidateModels(doc ModelsDoc) error {
 		custom[provider.ID] = models
 	}
 
-	if err := validateRole("butler", doc.Butler, custom); err != nil {
+	if err := validateRole("butler", doc.Butler, custom, checkBuiltinModels); err != nil {
 		return err
 	}
-	return validateRole("task", doc.Task, custom)
+	return validateRole("task", doc.Task, custom, checkBuiltinModels)
 }
 
-func validateRole(role string, ref RoleRef, custom map[string]map[string]bool) error {
+func validateRole(role string, ref RoleRef, custom map[string]map[string]bool, checkBuiltinModels bool) error {
 	if models, ok := custom[ref.Provider]; ok {
 		if !models[ref.ID] {
 			return fmt.Errorf("models.%s references model %q that custom provider %q does not declare", role, ref.ID, ref.Provider)
@@ -160,6 +156,9 @@ func validateRole(role string, ref RoleRef, custom map[string]map[string]bool) e
 	provider, ok := LookupBuiltin(ref.Provider)
 	if !ok {
 		return fmt.Errorf("models.%s references unknown provider %q", role, ref.Provider)
+	}
+	if !checkBuiltinModels {
+		return nil
 	}
 	for _, model := range provider.Models {
 		if model.ID == ref.ID {

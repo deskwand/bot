@@ -57,24 +57,35 @@ const PERMISSIONS = [
   ["Workers Observability", "Edit", "读取脱敏运行事件并配置日志（诊断）", true],
 ] as const;
 
-function useCatalogModelOptions(): ProviderOption[] {
+function useCatalogModelOptions(): {
+  options: ProviderOption[];
+  error: unknown;
+  reload: () => void;
+} {
   const { client } = useApp();
   const [options, setOptions] = useState<ProviderOption[]>([]);
+  const [error, setError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setError(null);
     client
       .modelCatalog()
       .then((catalog) => {
         if (!cancelled) setOptions(providerOptions(catalog, []));
       })
-      .catch(() => undefined);
+      .catch((cause) => {
+        if (!cancelled) setError(cause);
+      });
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, attempt]);
 
-  return options;
+  const reload = useCallback(() => setAttempt((current) => current + 1), []);
+
+  return { options, error, reload };
 }
 
 export function Setup({
@@ -368,7 +379,8 @@ function GuardedBack({
 
 function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => void }) {
   const { client } = useApp();
-  const modelOptions = useCatalogModelOptions();
+  const { options: modelOptions, error: catalogError, reload: reloadCatalog } =
+    useCatalogModelOptions();
   const setPage = useUiStore((state) => state.setPage);
   const [workerName, setWorkerName] = useState("deskwand-bot");
   const [bucketName, setBucketName] = useState("deskwand-files");
@@ -466,6 +478,11 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
             </CardDescription>
           </CardHeader>
           <CardContent>
+            <ErrorAlert
+              error={catalogError}
+              onRetry={reloadCatalog}
+              retryLabel="重新读取模型目录"
+            />
             <form
               className="space-y-4"
               onSubmit={(event) => {
@@ -612,7 +629,8 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
 
 function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => void }) {
   const { client } = useApp();
-  const modelOptions = useCatalogModelOptions();
+  const { options: modelOptions, error: catalogError, reload: reloadCatalog } =
+    useCatalogModelOptions();
   const [workers, setWorkers] = useState<WorkerDTO[]>([]);
   const [selected, setSelected] = useState("");
   const [preview, setPreview] = useState<ImportPreviewDTO | null>(null);
@@ -716,6 +734,12 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
       <p className="mt-2 text-sm text-muted-foreground">
         授权后选择要管理的服务。接管时保留已有任务、记忆、文件和 Cloudflare secret。
       </p>
+
+      <ErrorAlert
+        error={catalogError}
+        onRetry={reloadCatalog}
+        retryLabel="重新读取模型目录"
+      />
 
       <Card className="mt-5">
         <CardHeader>
