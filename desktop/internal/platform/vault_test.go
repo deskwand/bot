@@ -389,3 +389,52 @@ func TestVaultDisconnectThenReconnect(t *testing.T) {
 		}
 	}
 }
+
+func TestVaultDeleteKeepsVaultKeyWhenLegacyDeleteFails(t *testing.T) {
+	// A key may only leave the vault once its legacy item is gone; otherwise
+	// the next Get would migrate the legacy value back.
+	b := &fakeSecretBackend{
+		values:    map[string][]byte{"a": []byte("1")},
+		deleteErr: map[string]error{"a": errors.New("denied")},
+	}
+	store := newTestVault(b)
+	ctx := context.Background()
+
+	if _, err := store.Get(ctx, "a"); err != nil { // migrates; legacy delete fails
+		t.Fatalf("Get: %v", err)
+	}
+	if err := store.Delete(ctx, "a"); err == nil {
+		t.Fatal("Delete succeeded while the legacy item could not be removed")
+	}
+	if got := vaultItems(t, b); got["a"] != "1" {
+		t.Fatalf("vault items after failed Delete = %v, want a kept", got)
+	}
+
+	b.deleteErr = nil
+	if err := store.Delete(ctx, "a"); err != nil {
+		t.Fatalf("Delete after recovery: %v", err)
+	}
+	if _, err := store.Get(ctx, "a"); !errors.Is(err, ErrCredentialNotFound) {
+		t.Fatalf("Get after Delete = %v, want ErrCredentialNotFound", err)
+	}
+}
+
+func TestVaultDeleteResetsUnreadableVault(t *testing.T) {
+	// Disconnect must offer a way out of a vault nobody can read.
+	b := &fakeSecretBackend{values: map[string][]byte{vaultKey: []byte(`not json`)}}
+	store := newTestVault(b)
+	ctx := context.Background()
+
+	if err := store.Delete(ctx, "cloudflare.api-token"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok := b.values[vaultKey]; ok {
+		t.Fatal("unreadable vault item was kept")
+	}
+	if err := store.Set(ctx, "cloudflare.api-token", "new"); err != nil {
+		t.Fatalf("Set after reset: %v", err)
+	}
+	if got := vaultItems(t, b); !reflect.DeepEqual(got, map[string]string{"cloudflare.api-token": "new"}) {
+		t.Fatalf("vault items = %v", got)
+	}
+}

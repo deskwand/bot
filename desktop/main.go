@@ -29,6 +29,11 @@ const (
 )
 
 func main() {
+	// One process owns the credential vault cache. A second instance would
+	// write back its stale copy and erase what the first one stored.
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
 	dev := mygo.IsDev()
 	dataDir, err := appDataDir(dev)
 	if err != nil {
@@ -93,8 +98,15 @@ func main() {
 
 	mygo.Bind(service)
 
+	var window *mygo.Window
+	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
+		if window != nil {
+			window.Restore()
+			window.Focus()
+		}
+	})
 	mygo.App.WhenReady(func() {
-		window := mygo.NewWindow(mygo.WindowOptions{
+		window = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "DeskWand Bot",
 			Width:     1024,
 			Height:    720,

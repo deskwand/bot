@@ -107,18 +107,27 @@ func (s *vaultCredentialStore) Delete(ctx context.Context, key string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.load(ctx); err != nil {
-		return err
-	}
-	if _, ok := s.items[key]; ok {
-		next := maps.Clone(s.items)
-		delete(next, key)
-		if err := s.write(ctx, next); err != nil {
+	if err := s.load(ctx); errors.Is(err, errVaultUnreadable) {
+		// Nothing in an unreadable vault can be recovered. Removing it is
+		// the only way Disconnect can get the user out of that state.
+		if err := s.inner.Delete(ctx, vaultKey); err != nil {
 			return err
 		}
+		s.items, s.loaded = map[string]string{}, true
+	} else if err != nil {
+		return err
 	}
-	// Also remove a legacy item that was never migrated.
-	return s.inner.Delete(ctx, key)
+	// Remove the legacy item first: a key that left the vault while its
+	// legacy item survived would be migrated back by the next Get.
+	if err := s.inner.Delete(ctx, key); err != nil {
+		return err
+	}
+	if _, ok := s.items[key]; !ok {
+		return nil
+	}
+	next := maps.Clone(s.items)
+	delete(next, key)
+	return s.write(ctx, next)
 }
 
 func checkVaultKey(ctx context.Context, key string) error {
