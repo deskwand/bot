@@ -17,14 +17,14 @@ const OWNER = "wx-owner";
 
 const CREDS_A = {
   token: "token-a",
-  baseUrl: "https://ilink.example",
+  baseUrl: "https://ilinkai.weixin.qq.com",
   accountId: "account-a",
   userId: OWNER,
 };
 
 const CREDS_B = {
   token: "token-b",
-  baseUrl: "https://ilink.example",
+  baseUrl: "https://ilinkai.weixin.qq.com",
   accountId: "account-b",
   userId: "wx-owner-2",
 };
@@ -291,6 +291,24 @@ describe("ensurePolling", () => {
     await channels().ensurePolling();
 
     expect(await pollSchedules()).toHaveLength(1);
+  });
+
+  it("marks stored credentials with an untrusted origin as expired without polling", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    setWeChatCredentialsOverride(
+      JSON.stringify({ ...CREDS_A, baseUrl: "https://example.com" }),
+    );
+
+    await channels().ensurePolling();
+
+    expect(await pollSchedules()).toEqual([]);
+    expect(await readState()).toMatchObject({
+      status: "expired",
+      expiry_notified: 1,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "channel: WECHAT_CREDENTIALS_UNTRUSTED_BASE_URL",
+    );
   });
 
   it("resets the cursor and contexts when the credentials change", async () => {
@@ -561,7 +579,7 @@ describe("WeChat sending", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe(
-      "https://ilink.example/ilink/bot/sendmessage",
+      "https://ilinkai.weixin.qq.com/ilink/bot/sendmessage",
     );
     expect(calls[0]?.headers.Authorization).toBe("Bearer token-a");
     expect(calls[0]?.body).toMatchObject({

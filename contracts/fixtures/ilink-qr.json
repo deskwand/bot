@@ -1,0 +1,9 @@
+{
+  "qrcode": "fixture-qr-code",
+  "qrcode_img_content": "https://weixin.qq.com/qr/fixture-login",
+  "status": "confirmed",
+  "bot_token": "fixture-bot-token-7d3a",
+  "baseurl": "https://ilinkai.weixin.qq.com",
+  "ilink_bot_id": "fixture-account",
+  "ilink_user_id": "fixture-owner"
+}

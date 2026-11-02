@@ -13,7 +13,7 @@ function harness(statuses: Array<{ status: "wait" | "scaned" | "confirmed" | "ex
       client: {
         async getBotQrCode() {
           issued++;
-          return { qrcode: `qr-${issued}`, imageContent: `https://example.com/qr-${issued}` };
+          return { qrcode: `qr-${issued}`, imageContent: `https://ilinkai.weixin.qq.com/qr-${issued}` };
         },
         async getQrStatus(qrcode: string) {
           expect(qrcode).toBe(`qr-${issued}`);
@@ -36,16 +36,16 @@ describe("WeChat login", () => {
       { status: "wait", raw: { status: "wait" } },
       { status: "scaned", raw: { status: "scaned" } },
       { status: "confirmed", raw: {
-        status: "confirmed", bot_token: "secret-test-token", baseurl: "https://example.com",
+        status: "confirmed", bot_token: "secret-test-token", baseurl: "https://ilinkai.weixin.qq.com",
         ilink_bot_id: "account-1", ilink_user_id: "owner-1",
       } },
     ]);
     expect(await runLogin(h.deps)).toBe("owner-1");
     expect(h.secrets.map((json) => JSON.parse(json))).toEqual([{
-      token: "secret-test-token", baseUrl: "https://example.com", accountId: "account-1", userId: "owner-1",
+      token: "secret-test-token", baseUrl: "https://ilinkai.weixin.qq.com", accountId: "account-1", userId: "owner-1",
     }]);
-    expect(h.codes).toEqual(["https://example.com/qr-1"]);
-    expect(h.logs).toContain("https://example.com/qr-1");
+    expect(h.codes).toEqual(["https://ilinkai.weixin.qq.com/qr-1"]);
+    expect(h.logs).toContain("https://ilinkai.weixin.qq.com/qr-1");
     expect(h.logs).toContain("已扫码，请在手机上确认");
     expect(h.logs).toContain("已登录：owner-1");
     expect(h.logs.join("\n")).not.toContain("secret-test-token");
@@ -68,7 +68,7 @@ describe("WeChat login", () => {
 
   it("does not announce success when uploading the secret fails", async () => {
     const h = harness([{ status: "confirmed", raw: {
-      bot_token: "secret-test-token", baseurl: "https://example.com",
+      bot_token: "secret-test-token", baseurl: "https://ilinkai.weixin.qq.com",
       ilink_bot_id: "account-1", ilink_user_id: "owner-1",
     } }]);
     h.deps.putSecret = async () => { throw new Error("upload failed"); };

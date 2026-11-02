@@ -547,7 +547,7 @@ describe("sendCurrent", () => {
     setWeChatCredentialsOverride(
       JSON.stringify({
         token: "token-a",
-        baseUrl: "https://ilink.example",
+        baseUrl: "https://ilinkai.weixin.qq.com",
         accountId: "account-a",
         userId: "u1",
       }),

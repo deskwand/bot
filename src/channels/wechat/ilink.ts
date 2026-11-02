@@ -50,6 +50,9 @@ function credentialsFromStored(
   const accountId = readString(value, "accountId");
   const userId = readString(value, "userId");
   if (!token || !baseUrl || !accountId || !userId) return null;
+  // Origin is enforced by the caller when it is about to use the token. Keep
+  // an existing stored credential parseable so a bad origin can be shown as a
+  // distinct, recoverable state instead of "invalid credentials".
   return { token, baseUrl, accountId, userId };
 }
 
@@ -61,6 +64,7 @@ export function credentialsFromQrStatus(
   const accountId = readString(status, "ilink_bot_id");
   const userId = readString(status, "ilink_user_id");
   if (!token || !baseUrl || !accountId || !userId) return null;
+  if (!isTrustedBaseUrl(baseUrl)) return null;
   return { token, baseUrl, accountId, userId };
 }
 
@@ -94,9 +98,13 @@ export function createILinkClient(opts: {
     headers: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
+    if (!isTrustedBaseUrl(baseUrl)) {
+      throw new ILinkError("WECHAT_ILINK_UNTRUSTED_BASE_URL", undefined, 0);
+    }
     const response = await fetchImpl(`${baseUrl}${path}`, {
       method: "GET",
       headers,
+      redirect: "manual",
       signal,
     });
     return parseResponse(response);
@@ -108,8 +116,12 @@ export function createILinkClient(opts: {
     body: unknown,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
+    const targetBaseUrl = normalizeBaseUrl(creds.baseUrl || publicBaseUrl);
+    if (!isTrustedBaseUrl(targetBaseUrl)) {
+      throw new ILinkError("WECHAT_ILINK_UNTRUSTED_BASE_URL", undefined, 0);
+    }
     const response = await fetchImpl(
-      `${normalizeBaseUrl(creds.baseUrl || publicBaseUrl)}${path}`,
+      `${targetBaseUrl}${path}`,
       {
         method: "POST",
         headers: {
@@ -119,6 +131,7 @@ export function createILinkClient(opts: {
           "X-WECHAT-UIN": createUin(),
         },
         body: JSON.stringify(body),
+        redirect: "manual",
         signal,
       },
     );
@@ -233,6 +246,9 @@ export function splitWeChatText(text: string, limit = DEFAULT_LIMIT): string[] {
 async function parseResponse(
   response: Response,
 ): Promise<Record<string, unknown>> {
+  if (response.status >= 300 && response.status < 400) {
+    throw new ILinkError("WECHAT_ILINK_REDIRECT", undefined, response.status);
+  }
   const raw = parseRecord(await response.text());
   if (!response.ok) {
     throw new ILinkError(
@@ -314,6 +330,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+/**
+ * The only service origins allowed to receive the bot token. The desktop
+ * client applies the same allowlist before publishing credentials.
+ */
+export function isTrustedBaseUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  if (parsed.username || parsed.password) return false;
+  if (parsed.port && parsed.port !== "443") return false;
+  if (parsed.search || parsed.hash) return false;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  return host === "weixin.qq.com" || host.endsWith(".weixin.qq.com");
 }
 
 function createUin(): string {

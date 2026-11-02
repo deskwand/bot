@@ -239,13 +239,13 @@ describe("ChannelDO.currentRoute", () => {
 describe("resolveRoute wiring (independent env snapshots)", () => {
   const WX_A = JSON.stringify({
     token: "token-a",
-    baseUrl: "https://ilink.example",
+    baseUrl: "https://ilinkai.weixin.qq.com",
     accountId: "account-a",
     userId: "wx-owner",
   });
   const WX_B = JSON.stringify({
     token: "token-b",
-    baseUrl: "https://ilink.example",
+    baseUrl: "https://ilinkai.weixin.qq.com",
     accountId: "account-b",
     userId: "wx-owner",
   });

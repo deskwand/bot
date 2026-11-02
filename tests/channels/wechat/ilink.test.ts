@@ -4,14 +4,16 @@ import {
   createILinkClient,
   credentialsFromQrStatus,
   isSessionExpired,
+  isTrustedBaseUrl,
   parseCredentials,
   splitWeChatText,
   type WeChatCredentials,
 } from "../../../src/channels/wechat/ilink";
+import ilinkQRFixture from "../../../contracts/fixtures/ilink-qr.json";
 
 const CREDS: WeChatCredentials = {
   token: "bot-token",
-  baseUrl: "https://ilink.example/",
+  baseUrl: "https://ilinkai.weixin.qq.com/",
   accountId: "bot-account",
   userId: "owner-user",
 };
@@ -54,7 +56,7 @@ function fakeFetch(responses: Array<Response | Error> = []) {
 }
 
 function client(fetchImpl: typeof fetch) {
-  return createILinkClient({ fetch: fetchImpl, baseUrl: "https://ilink.example" });
+  return createILinkClient({ fetch: fetchImpl, baseUrl: "https://ilinkai.weixin.qq.com" });
 }
 
 describe("getUpdates", () => {
@@ -67,7 +69,7 @@ describe("getUpdates", () => {
 
     expect(calls).toHaveLength(1);
     const call = calls[0];
-    expect(call.url).toBe("https://ilink.example/ilink/bot/getupdates");
+    expect(call.url).toBe("https://ilinkai.weixin.qq.com/ilink/bot/getupdates");
     expect(call.method).toBe("POST");
     expect(call.headers.AuthorizationType).toBe("ilink_bot_token");
     expect(call.headers.Authorization).toBe("Bearer bot-token");
@@ -162,7 +164,7 @@ describe("sendText", () => {
 
     expect(calls).toHaveLength(3);
     for (const call of calls) {
-      expect(call.url).toBe("https://ilink.example/ilink/bot/sendmessage");
+      expect(call.url).toBe("https://ilinkai.weixin.qq.com/ilink/bot/sendmessage");
       expect(call.method).toBe("POST");
       expect(call.headers.Authorization).toBe("Bearer bot-token");
       expect(call.body.msg).toMatchObject({
@@ -270,7 +272,7 @@ describe("QR login", () => {
       imageContent: "data:image/png;base64,AA==",
     });
     expect(calls[0].url).toBe(
-      "https://ilink.example/ilink/bot/get_bot_qrcode?bot_type=3",
+      "https://ilinkai.weixin.qq.com/ilink/bot/get_bot_qrcode?bot_type=3",
     );
     expect(calls[0].method).toBe("GET");
   });
@@ -283,7 +285,7 @@ describe("QR login", () => {
     expect(result.status).toBe("scaned");
     expect(result.raw).toEqual({ status: "scaned" });
     expect(calls[0].url).toBe(
-      "https://ilink.example/ilink/bot/get_qrcode_status?qrcode=qr%2F%2B1",
+      "https://ilinkai.weixin.qq.com/ilink/bot/get_qrcode_status?qrcode=qr%2F%2B1",
     );
     expect(calls[0].method).toBe("GET");
     expect(calls[0].headers["iLink-App-ClientVersion"]).toBe("1");
@@ -293,7 +295,7 @@ describe("QR login", () => {
 describe("credentials", () => {
   const raw = {
     bot_token: "bot-token",
-    baseurl: "https://ilink.example/",
+    baseurl: "https://ilinkai.weixin.qq.com/",
     ilink_bot_id: "bot-account",
     ilink_user_id: "owner-user",
   };
@@ -311,6 +313,71 @@ describe("credentials", () => {
   it("builds credentials from a confirmed QR status", () => {
     expect(credentialsFromQrStatus(raw)).toEqual(CREDS);
     expect(credentialsFromQrStatus({ ...raw, bot_token: undefined })).toBeNull();
+  });
+
+  it("uses the shared iLink fixture and rejects untrusted origins", () => {
+    const fixture = ilinkQRFixture as Record<string, unknown>;
+    expect(credentialsFromQrStatus(fixture)).toEqual({
+      token: fixture.bot_token,
+      baseUrl: fixture.baseurl,
+      accountId: fixture.ilink_bot_id,
+      userId: fixture.ilink_user_id,
+    });
+    expect(
+      credentialsFromQrStatus({ ...fixture, baseurl: "https://example.com" }),
+    ).toBeNull();
+    expect(
+      parseCredentials(
+        JSON.stringify({
+          token: fixture.bot_token,
+          baseUrl: "http://ilinkai.weixin.qq.com",
+          accountId: fixture.ilink_bot_id,
+          userId: fixture.ilink_user_id,
+        }),
+      ),
+    ).toMatchObject({ baseUrl: "http://ilinkai.weixin.qq.com" });
+  });
+
+  it("accepts only WeChat HTTPS service hosts", () => {
+    expect(isTrustedBaseUrl("https://ilinkai.weixin.qq.com")).toBe(true);
+    expect(isTrustedBaseUrl("https://a.b.weixin.qq.com/")).toBe(true);
+    expect(isTrustedBaseUrl("http://ilinkai.weixin.qq.com")).toBe(false);
+    expect(isTrustedBaseUrl("https://example.com")).toBe(false);
+    expect(isTrustedBaseUrl("https://evilweixin.qq.com")).toBe(false);
+    expect(isTrustedBaseUrl("https://weixin.qq.com.evil.example")).toBe(false);
+  });
+});
+
+describe("trusted service origin", () => {
+  it("does not send a token to an untrusted base URL", async () => {
+    const { calls, fetchImpl } = fakeFetch([]);
+
+    const error = await client(fetchImpl)
+      .getUpdates({ ...CREDS, baseUrl: "https://example.com" }, "")
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ILinkError);
+    expect((error as ILinkError).message).toBe(
+      "WECHAT_ILINK_UNTRUSTED_BASE_URL",
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects redirects instead of forwarding the token", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://evil.example/steal" },
+      }),
+    ]);
+
+    const error = await client(fetchImpl)
+      .getUpdates(CREDS, "")
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ILinkError);
+    expect((error as ILinkError).message).toBe("WECHAT_ILINK_REDIRECT");
+    expect(calls).toHaveLength(1);
   });
 });
 

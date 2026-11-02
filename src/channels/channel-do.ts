@@ -32,6 +32,7 @@ import { toWeChatText } from "./wechat/markdown";
 import {
   createILinkClient,
   isSessionExpired,
+  isTrustedBaseUrl,
   parseCredentials,
   type WeChatCredentials,
   type WeChatUpdate,
@@ -373,6 +374,14 @@ export class ChannelDO extends Agent<Env> {
     if (!credentials) {
       this.updateWeChatState({ status: "stopped" });
       console.error("channel: invalid WECHAT_CREDENTIALS");
+      return;
+    }
+    if (!isTrustedBaseUrl(credentials.baseUrl)) {
+      // Keep the credential stored but expose the same visible state as an
+      // expired session. Re-scanning replaces it; no token is ever sent to an
+      // untrusted origin.
+      this.updateWeChatState({ status: "expired", expiry_notified: 1 });
+      console.warn("channel: WECHAT_CREDENTIALS_UNTRUSTED_BASE_URL");
       return;
     }
 
