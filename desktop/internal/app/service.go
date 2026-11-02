@@ -200,6 +200,7 @@ type Service struct {
 
 	backupMu   sync.Mutex
 	backupPath string
+	backupBusy bool
 }
 
 // NewService constructs the application service.

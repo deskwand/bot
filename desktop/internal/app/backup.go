@@ -62,8 +62,30 @@ type PendingRestoreDTO struct {
 	FailureCode  string `json:"failureCode"`
 }
 
+// beginBackupOperation takes the single backup slot. It rejects a second
+// export or restore while one is running.
+func (s *Service) beginBackupOperation() error {
+	s.backupMu.Lock()
+	defer s.backupMu.Unlock()
+	if s.backupBusy {
+		return domain.Error{Code: backup.CodeMaintenanceBusy, Message: "已有备份或恢复任务在进行"}
+	}
+	s.backupBusy = true
+	return nil
+}
+
+func (s *Service) endBackupOperation() {
+	s.backupMu.Lock()
+	s.backupBusy = false
+	s.backupMu.Unlock()
+}
+
 // ExportData exports the managed deployment to a file the user picks.
 func (s *Service) ExportData() (*BackupSummaryDTO, error) {
+	if err := s.beginBackupOperation(); err != nil {
+		return nil, err
+	}
+	defer s.endBackupOperation()
 	ctx := context.Background()
 	target, err := s.managedTarget(ctx)
 	if err != nil {
@@ -92,6 +114,10 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 // path is remembered for RestoreData. A version or size problem is reported in
 // the preview, not as an error.
 func (s *Service) ChooseBackup() (*BackupPreviewDTO, error) {
+	if err := s.beginBackupOperation(); err != nil {
+		return nil, err
+	}
+	defer s.endBackupOperation()
 	ctx := context.Background()
 	target, err := s.managedTarget(ctx)
 	if err != nil {
@@ -107,6 +133,11 @@ func (s *Service) ChooseBackup() (*BackupPreviewDTO, error) {
 	if path == "" {
 		return nil, nil
 	}
+	// A new choice replaces the remembered path before Inspect, so a failed
+	// inspection cannot leave an older file selected for RestoreData.
+	s.backupMu.Lock()
+	s.backupPath = ""
+	s.backupMu.Unlock()
 	manifest, err := s.backup.Inspect(path)
 	if err != nil {
 		return nil, safeAppError(err)
@@ -134,6 +165,10 @@ func (s *Service) ChooseBackup() (*BackupPreviewDTO, error) {
 
 // RestoreData overwrites the deployment with the backup chosen by ChooseBackup.
 func (s *Service) RestoreData() error {
+	if err := s.beginBackupOperation(); err != nil {
+		return err
+	}
+	defer s.endBackupOperation()
 	ctx := context.Background()
 	target, err := s.managedTarget(ctx)
 	if err != nil {
@@ -142,8 +177,11 @@ func (s *Service) RestoreData() error {
 	if s.backup == nil {
 		return serviceUnavailable()
 	}
+	// Consume the remembered path: a failed restore leaves a pending record
+	// for RetryRestore instead of allowing an accidental second run.
 	s.backupMu.Lock()
 	path := s.backupPath
+	s.backupPath = ""
 	s.backupMu.Unlock()
 	if path == "" {
 		return domain.Error{Code: backup.CodeBackupInvalid, Message: "请先选择一个备份文件"}
@@ -174,6 +212,10 @@ func (s *Service) PendingRestore() (*PendingRestoreDTO, error) {
 // RetryRestore finishes an unfinished restore, either from the original backup
 // or from the pre-restore snapshot.
 func (s *Service) RetryRestore(useSnapshot bool) error {
+	if err := s.beginBackupOperation(); err != nil {
+		return err
+	}
+	defer s.endBackupOperation()
 	if s.backup == nil {
 		return serviceUnavailable()
 	}

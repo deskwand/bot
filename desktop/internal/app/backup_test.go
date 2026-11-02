@@ -29,6 +29,10 @@ type fakeBackup struct {
 	restoreTarget domain.Target
 	restorePath   string
 	restoreCalls  int
+	// restoreStarted and restoreBlock let a test hold a restore open while it
+	// probes the busy guard. Both are optional.
+	restoreStarted chan struct{}
+	restoreBlock   chan struct{}
 
 	retryErr         error
 	retryUseSnapshot bool
@@ -61,6 +65,12 @@ func (f *fakeBackup) Restore(_ context.Context, target domain.Target, path strin
 	f.restoreCalls++
 	f.restoreTarget = target
 	f.restorePath = path
+	if f.restoreStarted != nil {
+		f.restoreStarted <- struct{}{}
+	}
+	if f.restoreBlock != nil {
+		<-f.restoreBlock
+	}
 	return f.restoreErr
 }
 
@@ -286,5 +296,75 @@ func TestPublishConfigRejectsAdminTokenEdit(t *testing.T) {
 	}
 	if len(f.publish.changes) != 0 {
 		t.Fatalf("rejected edit reached publish: %#v", f.publish.changes)
+	}
+}
+
+func TestBackupRunsOneOperationAtATime(t *testing.T) {
+	f := newBackupFixture(t)
+	f.dialogs.openPath = "/tmp/chosen.zip"
+	f.backup.inspectManifest = backup.Manifest{Release: "1.0.0"}
+	if _, err := f.service.ChooseBackup(); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	done := make(chan error, 1)
+	f.backup.restoreStarted = started
+	f.backup.restoreBlock = unblock
+	go func() { done <- f.service.RestoreData() }()
+	<-started
+
+	saveCalls := f.dialogs.saveCalls
+	openCalls := f.dialogs.openCalls
+
+	if _, err := f.service.ExportData(); !hasCode(err, backup.CodeMaintenanceBusy) {
+		t.Fatalf("ExportData while busy = %v, want %s", err, backup.CodeMaintenanceBusy)
+	}
+	if err := f.service.RestoreData(); !hasCode(err, backup.CodeMaintenanceBusy) {
+		t.Fatalf("RestoreData while busy = %v, want %s", err, backup.CodeMaintenanceBusy)
+	}
+	if err := f.service.RetryRestore(false); !hasCode(err, backup.CodeMaintenanceBusy) {
+		t.Fatalf("RetryRestore while busy = %v, want %s", err, backup.CodeMaintenanceBusy)
+	}
+	if _, err := f.service.ChooseBackup(); !hasCode(err, backup.CodeMaintenanceBusy) {
+		t.Fatalf("ChooseBackup while busy = %v, want %s", err, backup.CodeMaintenanceBusy)
+	}
+	if f.dialogs.saveCalls != saveCalls || f.dialogs.openCalls != openCalls {
+		t.Fatalf("busy guard opened a dialog: save=%d open=%d", f.dialogs.saveCalls, f.dialogs.openCalls)
+	}
+
+	close(unblock)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.service.RestoreData(); !hasCode(err, backup.CodeBackupInvalid) {
+		t.Fatalf("second RestoreData = %v, want %s", err, backup.CodeBackupInvalid)
+	}
+	if f.backup.restoreCalls != 1 {
+		t.Fatalf("restore called %d times, want 1", f.backup.restoreCalls)
+	}
+}
+
+func TestChooseBackupFailureForgetsPreviousChoice(t *testing.T) {
+	f := newBackupFixture(t)
+	f.dialogs.openPath = "/tmp/first.zip"
+	f.backup.inspectManifest = backup.Manifest{Release: "1.0.0"}
+	if _, err := f.service.ChooseBackup(); err != nil {
+		t.Fatal(err)
+	}
+
+	f.dialogs.openPath = "/tmp/second.zip"
+	f.backup.inspectErr = domain.Error{Code: backup.CodeBackupInvalid, Message: "broken"}
+	if _, err := f.service.ChooseBackup(); !hasCode(err, backup.CodeBackupInvalid) {
+		t.Fatalf("ChooseBackup error = %v, want %s", err, backup.CodeBackupInvalid)
+	}
+
+	if err := f.service.RestoreData(); !hasCode(err, backup.CodeBackupInvalid) {
+		t.Fatalf("RestoreData after failed Inspect = %v, want %s", err, backup.CodeBackupInvalid)
+	}
+	if f.backup.restoreCalls != 0 {
+		t.Fatalf("restore used a stale path %q", f.backup.restorePath)
 	}
 }
