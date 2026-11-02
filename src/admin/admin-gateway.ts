@@ -10,6 +10,7 @@
 import type { ButlerDO } from "../butler/butler-do";
 import type { ChannelDO } from "../channels/channel-do";
 import type { TaskDO } from "../task/task-do";
+import { createR2Routes } from "./r2-routes";
 import type {
   DbSchema,
   DumpPage,
@@ -47,6 +48,7 @@ const RESTORE_BEGIN_PATH = "/admin/restore/begin";
 const RESTORE_PAGE_PATH = "/admin/restore/page";
 const RESTORE_COMMIT_PATH = "/admin/restore/commit";
 const RESTORE_RESET_PATH = "/admin/restore/reset";
+const R2_PREFIX = "/admin/r2/";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -191,12 +193,20 @@ async function release(deps: AdminDeps, req: Request): Promise<Response> {
 export function createAdminGateway(deps: AdminDeps): {
   fetch(req: Request): Promise<Response>;
 } {
+  const r2 = createR2Routes(deps.artifacts);
+
   async function handle(req: Request, url: URL): Promise<Response> {
     if (req.method === "POST" && url.pathname === ACQUIRE_PATH) {
       return acquire(deps, req);
     }
     if (req.method === "POST" && url.pathname === RELEASE_PATH) {
       return release(deps, req);
+    }
+
+    if (url.pathname.startsWith(R2_PREFIX)) {
+      const denied = await requireLease(deps, req);
+      if (denied !== null) return denied;
+      return r2.fetch(req);
     }
 
     const known =
