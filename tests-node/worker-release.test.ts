@@ -123,6 +123,7 @@ describe("Worker release manifest", () => {
       "TELEGRAM_BOT_TOKEN",
       "TELEGRAM_WEBHOOK_SECRET",
       "WECHAT_CREDENTIALS",
+      "ADMIN_TOKEN",
     ]);
     expect(manifest.resourceTemplate.secretNamePatterns).toEqual([
       "^MODEL_KEY_[A-Z0-9_]{1,64}$",

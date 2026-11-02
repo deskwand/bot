@@ -6,6 +6,8 @@ declare namespace Cloudflare {
     TELEGRAM_BOT_TOKEN?: string;
     TELEGRAM_WEBHOOK_SECRET?: string;
     WECHAT_CREDENTIALS?: string;
+    /** Bearer token guarding `/admin/*`; unset disables the routes. */
+    ADMIN_TOKEN?: string;
     /** Deployable non-secret configuration; see contracts/deployment-config.schema.json. */
     DESKWAND_CONFIG?: unknown;
     /** Selected business channel; absent keeps the Telegram default. */

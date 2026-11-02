@@ -7,7 +7,14 @@ import {
   type ReportInfo,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
+import { BackupRpc } from "../admin/backup-rpc";
 import { DEFER_MS } from "../admin/maintenance";
+import type {
+  DbSchema,
+  DumpPage,
+  DumpRow,
+  TableSchema,
+} from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
 import type {
@@ -91,6 +98,8 @@ export class TaskDO extends Agent<Env> {
 
   private readonly db: SqlStorage;
 
+  private readonly backup: BackupRpc;
+
   private spec: TaskSpec | null;
 
   private outbox: Outbox | undefined;
@@ -98,6 +107,8 @@ export class TaskDO extends Agent<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
+    // Task objects have no maintenance lease of their own; the Butler holds it.
+    this.backup = new BackupRpc(ctx, null);
 
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS meta (
@@ -219,6 +230,33 @@ export class TaskDO extends Agent<Env> {
   override async onAlarm(): Promise<void> {
     await super.onAlarm();
     await this.flushOutbox();
+  }
+
+  async backupSchema(): Promise<DbSchema> {
+    return this.backup.backupSchema();
+  }
+
+  async backupPage(
+    table: TableSchema,
+    cursor: string | null,
+  ): Promise<DumpPage> {
+    return this.backup.backupPage(table, cursor);
+  }
+
+  async restoreBegin(schema: DbSchema): Promise<void> {
+    await this.backup.restoreBegin(schema);
+  }
+
+  async restorePage(table: TableSchema, rows: DumpRow[]): Promise<void> {
+    await this.backup.restorePage(table, rows);
+  }
+
+  async restoreCommit(schema: DbSchema): Promise<void> {
+    await this.backup.restoreCommit(schema);
+  }
+
+  async restoreReset(): Promise<void> {
+    this.backup.restoreReset();
   }
 
   /** A live admin lease defers every alarm, including outbox retries. */

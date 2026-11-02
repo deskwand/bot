@@ -662,6 +662,7 @@ var templateSecretNames = []string{
 	"TELEGRAM_BOT_TOKEN",
 	"TELEGRAM_WEBHOOK_SECRET",
 	"WECHAT_CREDENTIALS",
+	"ADMIN_TOKEN",
 }
 
 // templateSecretNamePatterns is the runtime copy of the release template's

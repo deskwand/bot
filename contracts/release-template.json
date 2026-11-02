@@ -30,7 +30,8 @@
   "secretNames": [
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
-    "WECHAT_CREDENTIALS"
+    "WECHAT_CREDENTIALS",
+    "ADMIN_TOKEN"
   ],
   "plainVars": ["ACTIVE_CHANNEL", "PUBLIC_BASE_URL"],
   "crons": ["*/5 * * * *"],

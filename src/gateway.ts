@@ -3,6 +3,7 @@ export type GatewayDeps = {
     handleTelegramWebhook(req: Request): Promise<"accepted" | "maintenance">;
   };
   artifacts: R2Bucket;
+  admin: { fetch(req: Request): Promise<Response> };
 };
 
 const ARTIFACT_PREFIX = "/a/";
@@ -82,6 +83,10 @@ export function createGateway(deps: GatewayDeps): {
   return {
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
+
+      if (url.pathname.startsWith("/admin/")) {
+        return deps.admin.fetch(req);
+      }
 
       if (req.method === "POST" && url.pathname === "/telegram/webhook") {
         return handleWebhook(req);

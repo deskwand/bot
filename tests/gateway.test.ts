@@ -15,6 +15,7 @@ function setup(
   const gateway = createGateway({
     channels: () => ({ handleTelegramWebhook }),
     artifacts: env.ARTIFACTS,
+    admin: { fetch: async () => new Response(null, { status: 404 }) },
   });
   return { gateway };
 }

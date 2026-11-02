@@ -1,3 +1,4 @@
+import { createAdminGateway } from "./admin/admin-gateway";
 import { ChannelDO } from "./channels/channel-do";
 import { createGateway } from "./gateway";
 
@@ -13,11 +14,23 @@ function butler(env: Env) {
   return env.BUTLER.get(env.BUTLER.idFromName("owner"));
 }
 
+function admin(env: Env) {
+  return createAdminGateway({
+    token: env.ADMIN_TOKEN,
+    versionId: env.CF_VERSION_METADATA.id,
+    butler: () => butler(env),
+    channel: () => channels(env),
+    task: (id) => env.TASK.get(env.TASK.idFromName(id)),
+    artifacts: env.ARTIFACTS,
+  });
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const gateway = createGateway({
       channels: () => channels(env),
       artifacts: env.ARTIFACTS,
+      admin: admin(env),
     });
 
     return gateway.fetch(req);

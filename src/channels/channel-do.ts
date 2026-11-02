@@ -1,5 +1,12 @@
 import { Agent, type Schedule } from "agents";
+import { BackupRpc } from "../admin/backup-rpc";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
+import type {
+  DbSchema,
+  DumpPage,
+  DumpRow,
+  TableSchema,
+} from "../admin/sql-dump";
 import { isOwner } from "../config";
 import { readRuntimeConfig } from "../runtime-config";
 import {
@@ -132,10 +139,13 @@ export class ChannelDO extends Agent<Env> {
 
   private readonly lease: MaintenanceStore;
 
+  private readonly backup: BackupRpc;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
     this.lease = new MaintenanceStore(this.db);
+    this.backup = new BackupRpc(ctx, this.lease);
 
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS owner_addresses (
@@ -269,6 +279,33 @@ export class ChannelDO extends Agent<Env> {
 
   async maintenanceActive(): Promise<boolean> {
     return this.lease.current() !== null;
+  }
+
+  async backupSchema(): Promise<DbSchema> {
+    return this.backup.backupSchema();
+  }
+
+  async backupPage(
+    table: TableSchema,
+    cursor: string | null,
+  ): Promise<DumpPage> {
+    return this.backup.backupPage(table, cursor);
+  }
+
+  async restoreBegin(schema: DbSchema): Promise<void> {
+    await this.backup.restoreBegin(schema);
+  }
+
+  async restorePage(table: TableSchema, rows: DumpRow[]): Promise<void> {
+    await this.backup.restorePage(table, rows);
+  }
+
+  async restoreCommit(schema: DbSchema): Promise<void> {
+    await this.backup.restoreCommit(schema);
+  }
+
+  async restoreReset(): Promise<void> {
+    this.backup.restoreReset();
   }
 
   override async alarm(): Promise<void> {

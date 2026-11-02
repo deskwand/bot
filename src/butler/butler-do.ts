@@ -1,7 +1,14 @@
 import { Agent } from "agents";
 import { PiHarness, type PiModel } from "agents/harness/pi";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
+import { BackupRpc } from "../admin/backup-rpc";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
+import type {
+  DbSchema,
+  DumpPage,
+  DumpRow,
+  TableSchema,
+} from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
 import {
@@ -76,6 +83,8 @@ export class ButlerDO extends Agent<Env> {
 
   private readonly lease: MaintenanceStore;
 
+  private readonly backup: BackupRpc;
+
   /** The model last applied to the Butler session (see `ensureModel`). */
   private appliedModel: PiModel | undefined;
 
@@ -144,6 +153,7 @@ export class ButlerDO extends Agent<Env> {
     this.memory = new MemoryStore(this.db);
     this.schedules = new ScheduleStore(this.db);
     this.lease = new MaintenanceStore(this.db);
+    this.backup = new BackupRpc(ctx, this.lease);
 
     // Installed once, at construction: Pi may re-run the harness factory after
     // a storage error, so registry changes must not depend on it.
@@ -228,6 +238,41 @@ export class ButlerDO extends Agent<Env> {
 
   async maintenanceActive(): Promise<boolean> {
     return this.lease.current() !== null;
+  }
+
+  /** The tasks this Butler indexes, in creation order (backup discovery). */
+  listTaskIds(): string[] {
+    return this.db
+      .exec<{ id: string }>(`SELECT id FROM tasks ORDER BY created_at`)
+      .toArray()
+      .map((row) => row.id);
+  }
+
+  async backupSchema(): Promise<DbSchema> {
+    return this.backup.backupSchema();
+  }
+
+  async backupPage(
+    table: TableSchema,
+    cursor: string | null,
+  ): Promise<DumpPage> {
+    return this.backup.backupPage(table, cursor);
+  }
+
+  async restoreBegin(schema: DbSchema): Promise<void> {
+    await this.backup.restoreBegin(schema);
+  }
+
+  async restorePage(table: TableSchema, rows: DumpRow[]): Promise<void> {
+    await this.backup.restorePage(table, rows);
+  }
+
+  async restoreCommit(schema: DbSchema): Promise<void> {
+    await this.backup.restoreCommit(schema);
+  }
+
+  async restoreReset(): Promise<void> {
+    this.backup.restoreReset();
   }
 
   override async alarm(): Promise<void> {
