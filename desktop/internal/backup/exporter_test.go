@@ -149,15 +149,20 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 	if len(manifest.DurableObjects) != 4 {
 		t.Fatalf("durable objects = %d", len(manifest.DurableObjects))
 	}
-	butler := manifest.DurableObjects[0]
-	if butler.DORef != (DORef{DO: "butler"}) || butler.Rows["memories"] != 2 || butler.Rows["schedules"] != 1 {
+	var butler *DOManifest
+	var order []string
+	for i := range manifest.DurableObjects {
+		object := &manifest.DurableObjects[i]
+		order = append(order, object.DO+"/"+object.ID)
+		if object.DO == "butler" {
+			butler = object
+		}
+	}
+	if want := []string{"task/t1", "task/t2", "channel/", "butler/"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("export order = %v, want %v", order, want)
+	}
+	if butler == nil || butler.Rows["memories"] != 2 || butler.Rows["schedules"] != 1 {
 		t.Fatalf("butler manifest = %+v", butler)
-	}
-	if got := manifest.DurableObjects[1].DORef; got != (DORef{DO: "task", ID: "t1"}) {
-		t.Fatalf("second object = %+v", got)
-	}
-	if got := manifest.DurableObjects[3].DORef; got != (DORef{DO: "channel"}) {
-		t.Fatalf("last object = %+v", got)
 	}
 	if len(manifest.R2.Objects) != 3 || len(manifest.R2.Oversized) != 0 {
 		t.Fatalf("r2 manifest = %+v", manifest.R2)
@@ -338,7 +343,7 @@ func TestExportPaginatesTablesAndObjects(t *testing.T) {
 
 	rows := make([]json.RawMessage, 5)
 	for i := range rows {
-		rows[i] = json.RawMessage(fmt.Sprintf(`{"__rowid":%d,"value":"v%d"}`, i+1, i+1))
+		rows[i] = json.RawMessage(fmt.Sprintf(`{"__rowid":%d,"id":"v%d"}`, i+1, i+1))
 	}
 	worker.setDO(DORef{DO: "butler"}, DBSchema{
 		Tables: []TableSchema{{Name: "memories", Create: `CREATE TABLE memories (id TEXT)`}},
@@ -354,8 +359,14 @@ func TestExportPaginatesTablesAndObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := manifest.DurableObjects[0].Rows["memories"]; got != 5 {
-		t.Fatalf("rows = %d, want 5", got)
+	var butler *DOManifest
+	for i := range manifest.DurableObjects {
+		if manifest.DurableObjects[i].DO == "butler" {
+			butler = &manifest.DurableObjects[i]
+		}
+	}
+	if butler == nil || butler.Rows["memories"] != 5 {
+		t.Fatalf("butler manifest = %#v", butler)
 	}
 	if len(manifest.R2.Objects) != 5 {
 		t.Fatalf("objects = %d, want 5", len(manifest.R2.Objects))
@@ -391,9 +402,12 @@ func TestExportRenewsLeaseForLargeObjects(t *testing.T) {
 	if _, err := Export(context.Background(), deps, backupTestTarget, path); err != nil {
 		t.Fatal(err)
 	}
-	// One acquire for the lease plus one renewal after the 5-byte object.
-	if got := worker.requestCount("POST", acquirePath); got != 2 {
-		t.Fatalf("acquire calls = %d, want 2", got)
+	// Renewal must never use Acquire: only the initial readiness uses it.
+	if got := worker.requestCount("POST", acquirePath); got != 1 {
+		t.Fatalf("acquire calls = %d, want 1", got)
+	}
+	if got := worker.requestCount("GET", infoPath); got < 2 {
+		t.Fatalf("info calls = %d, want a lease renewal", got)
 	}
 }
 
@@ -470,5 +484,54 @@ func TestExportReleasesLeaseWhenCancelled(t *testing.T) {
 	}
 	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("archive exists after a cancellation: %v", statErr)
+	}
+}
+
+func TestRenewLeaseDoesNotReacquireExpiredLease(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	client := NewAdminClient(worker.URL(), "tok", "op-renew", worker.server.Client())
+	if err := client.Acquire(context.Background(), "export"); err != nil {
+		t.Fatal(err)
+	}
+	worker.expireLease()
+
+	err := renewLease(context.Background(), client)
+	if code := adminErrorCode(t, err); code != CodeMaintenanceRequired {
+		t.Fatalf("code = %q, want %q", code, CodeMaintenanceRequired)
+	}
+	if worker.hasLease() {
+		t.Fatal("an expired lease was silently reacquired")
+	}
+}
+
+func TestLeaseHeartbeatCancelsWhenRenewalFails(t *testing.T) {
+	previous := leaseHeartbeatInterval
+	leaseHeartbeatInterval = 5 * time.Millisecond
+	defer func() { leaseHeartbeatInterval = previous }()
+
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	client := NewAdminClient(worker.URL(), "tok", "op-heartbeat", worker.server.Client())
+	if err := client.Acquire(context.Background(), "export"); err != nil {
+		t.Fatal(err)
+	}
+	worker.expireLease()
+
+	err := withLeaseHeartbeat(context.Background(), client, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if code := adminErrorCode(t, err); code != CodeMaintenanceRequired {
+		t.Fatalf("code = %q, want %q", code, CodeMaintenanceRequired)
+	}
+}
+
+func TestObjectEntryLimitKeepsSixDigits(t *testing.T) {
+	if got := ObjectEntry(maxArchivedObjects); got != "r2/999999" {
+		t.Fatalf("last entry = %q", got)
+	}
+	if _, err := checkedObjectEntry(maxArchivedObjects + 1); err == nil {
+		t.Fatal("one million artifacts were accepted")
 	}
 }

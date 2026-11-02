@@ -551,6 +551,15 @@ func (f *fakeWorker) lease() (op, opID string) {
 	return f.leaseOp, f.leaseOpID
 }
 
+// expireLease removes the lease as if its 10-minute window elapsed. A strict
+// renewal must fail afterwards instead of silently acquiring a new lease.
+func (f *fakeWorker) expireLease() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.leaseOp = ""
+	f.leaseOpID = ""
+}
+
 // rowsOf returns a copy of one Durable Object's table rows.
 func (f *fakeWorker) rowsOf(ref DORef) map[string][]json.RawMessage {
 	f.mu.Lock()

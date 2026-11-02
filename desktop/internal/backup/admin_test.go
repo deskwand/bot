@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
 )
@@ -388,5 +389,98 @@ func TestAdminClientObjectsRoundTrip(t *testing.T) {
 	}
 	if deleted != item.Key {
 		t.Fatalf("deleted = %q", deleted)
+	}
+}
+
+func TestAdminClientDefaultTimeoutIsFinite(t *testing.T) {
+	client := NewAdminClient("https://example.com", "tok", "op-1", nil)
+	if client.http.Timeout != DefaultAdminTimeout {
+		t.Fatalf("timeout = %v, want %v", client.http.Timeout, DefaultAdminTimeout)
+	}
+	if client.http.Timeout >= 10*time.Minute {
+		t.Fatalf("timeout %v is not shorter than the lease", client.http.Timeout)
+	}
+}
+
+func TestAdminClientStalledServerTimesOut(t *testing.T) {
+	started := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := NewAdminClient(server.URL, "tok", "op-1", &http.Client{Timeout: 50 * time.Millisecond})
+	begin := time.Now()
+	_, err := client.Info(context.Background())
+	if err == nil {
+		t.Fatal("expected the stalled request to fail")
+	}
+	if elapsed := time.Since(begin); elapsed > time.Second {
+		t.Fatalf("stalled request took %v, want a bounded failure", elapsed)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("server request never started")
+	}
+}
+
+func TestAdminClientCancellationStopsLargeTransfer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		chunk := bytes.Repeat([]byte("x"), 64<<10)
+		flusher, _ := w.(http.Flusher)
+		for i := 0; i < 1000; i++ {
+			select {
+			case <-r.Context().Done():
+				return
+			default:
+			}
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	client := NewAdminClient(server.URL, "tok", "op-1", server.Client())
+	body, err := client.GetObject(ctx, "big.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := make([]byte, 1024)
+	if _, err := io.ReadFull(body, first); err != nil {
+		_ = body.Close()
+		t.Fatal(err)
+	}
+	cancel()
+	_, readErr := io.Copy(io.Discard, body)
+	_ = body.Close()
+	if readErr == nil {
+		t.Fatal("cancelled transfer kept reading to completion")
+	}
+}
+
+func TestListObjectsRejectsRepeatedCursor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"objects": []ObjectInfo{{Key: "a.png", Size: 1}},
+			"next":    "stuck",
+		})
+	}))
+	defer server.Close()
+
+	client := NewAdminClient(server.URL, "tok", "op-1", server.Client())
+	_, err := client.ListObjects(context.Background())
+	if code := adminErrorCode(t, err); code != CodeBackupInvalid {
+		t.Fatalf("code = %q, want %q", code, CodeBackupInvalid)
 	}
 }

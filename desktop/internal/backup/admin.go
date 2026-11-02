@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
 )
@@ -37,12 +38,18 @@ type AdminClient struct {
 	http    *http.Client
 }
 
-// NewAdminClient builds a client for baseURL. A nil httpClient gets one with
-// no Timeout: a 100 MiB artifact may stream longer than any fixed deadline, so
-// the caller bounds each operation with the request context instead.
+// DefaultAdminTimeout bounds one admin request, including streaming a large
+// artifact. It is deliberately shorter than the 10-minute maintenance lease:
+// a wedged request must fail and release the local busy guard before the
+// lease could be re-acquired.
+const DefaultAdminTimeout = 5 * time.Minute
+
+// NewAdminClient builds a client for baseURL. A nil httpClient gets the
+// finite default timeout; an injected client keeps its own policy and still
+// honors the caller's context.
 func NewAdminClient(baseURL, token, opID string, httpClient *http.Client) *AdminClient {
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = &http.Client{Timeout: DefaultAdminTimeout}
 	}
 	return &AdminClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -147,6 +154,7 @@ func (c *AdminClient) RestoreReset(ctx context.Context, ref DORef) error {
 func (c *AdminClient) ListObjects(ctx context.Context) ([]ObjectInfo, error) {
 	objects := []ObjectInfo{}
 	cursor := ""
+	seen := map[string]bool{}
 	for {
 		query := url.Values{}
 		if cursor != "" {
@@ -163,6 +171,13 @@ func (c *AdminClient) ListObjects(ctx context.Context) ([]ObjectInfo, error) {
 		if page.Next == nil || *page.Next == "" {
 			return objects, nil
 		}
+		if seen[*page.Next] {
+			return nil, domain.Error{
+				Code:    CodeBackupInvalid,
+				Message: fmt.Sprintf("artifact list cursor did not advance: %q", *page.Next),
+			}
+		}
+		seen[*page.Next] = true
 		cursor = *page.Next
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
@@ -26,6 +27,21 @@ const (
 // renewEveryBytes is the artifact size above which a transfer renews the
 // maintenance lease. Tests lower it to avoid allocating a large object.
 var renewEveryBytes int64 = 10 << 20
+
+// leaseHeartbeatInterval is how often a long export or restore renews the
+// lease in the background. A failed renewal cancels the operation before it
+// can overlap a second client.
+var leaseHeartbeatInterval = time.Minute
+
+// maxArchivedObjects keeps ObjectEntry at six digits. Reaching one million
+// artifacts would produce r2/1000000, which this client refuses to read.
+const maxArchivedObjects = 999_999
+
+// TargetLocker is the shared per-deployment lock used by publish, install,
+// upgrade and the destructive restore path.
+type TargetLocker interface {
+	Lock(ctx context.Context, target domain.Target) (func(), error)
+}
 
 // Progress phases reported while an operation runs.
 const (
@@ -52,6 +68,7 @@ type Progress struct {
 type Deps struct {
 	Token        TokenDeps
 	HTTP         *http.Client
+	Locker       TargetLocker
 	Now          func() time.Time
 	NewOpID      func() (string, error)
 	Progress     func(Progress)
@@ -137,7 +154,21 @@ func Export(ctx context.Context, deps Deps, target domain.Target, path string) (
 	}
 	defer release()
 
-	manifest, err := exportData(ctx, deps, client, snapshot, target, writer)
+	// Serialize with publish/upgrade. The token was established above, so this
+	// lock never wraps Publisher.Apply (which takes the same non-reentrant
+	// lock through the deployment service).
+	unlock, err := lockTarget(ctx, deps, target)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer unlock()
+
+	var manifest Manifest
+	err = withLeaseHeartbeat(ctx, client, func(heartbeatCtx context.Context) error {
+		var exportErr error
+		manifest, exportErr = exportData(heartbeatCtx, deps, client, snapshot, target, writer)
+		return exportErr
+	})
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -277,11 +308,61 @@ func acquireLease(ctx context.Context, deps Deps, target domain.Target, client *
 	}
 }
 
-// renewLease extends the maintenance lease. A long artifact transfer can
-// outlive the initial lease window, so the export renews after every large
-// object and a restore should do the same around PutObject.
-func renewLease(ctx context.Context, client *AdminClient, op string) error {
-	return client.Acquire(ctx, op)
+// renewLease extends an existing lease. It uses a lease-checked Info request
+// rather than Acquire: an expired lease must fail instead of being silently
+// re-taken while another client may already hold it.
+func renewLease(ctx context.Context, client *AdminClient) error {
+	_, err := client.Info(ctx)
+	return err
+}
+
+// withLeaseHeartbeat renews in the background and cancels fn as soon as the
+// lease is lost. A large R2 transfer therefore stops instead of writing into
+// a deployment another operation may have taken over.
+func withLeaseHeartbeat(ctx context.Context, client *AdminClient, fn func(context.Context) error) error {
+	child, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	done := make(chan struct{})
+	var mu sync.Mutex
+	var heartbeatErr error
+	go func() {
+		ticker := time.NewTicker(leaseHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-child.Done():
+				return
+			case <-ticker.C:
+				if err := renewLease(child, client); err != nil {
+					mu.Lock()
+					heartbeatErr = err
+					mu.Unlock()
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	err := fn(child)
+	close(done)
+	mu.Lock()
+	deferred := heartbeatErr
+	mu.Unlock()
+	if deferred != nil {
+		return deferred
+	}
+	return err
+}
+
+func lockTarget(ctx context.Context, deps Deps, target domain.Target) (func(), error) {
+	if deps.Locker == nil {
+		return func() {}, nil
+	}
+	return deps.Locker.Lock(ctx, target)
 }
 
 // releaseLease releases the lease on a context that survives cancellation, so
@@ -336,15 +417,18 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 	return manifest, nil
 }
 
-// exportRefs lists the objects in export order: the Butler, every task, then
-// the channel hub.
+// exportRefs lists the objects in export order: tasks first, then the channel
+// hub, and the Butler last. A delivered task event is therefore either in both
+// the TaskDO and the Butler, or in the TaskDO with delivered = 0 (which the
+// Butler dedupes on restore). The Butler is never archived before the task
+// copy it indexes.
 func exportRefs(taskIDs []string) []DORef {
 	refs := make([]DORef, 0, len(taskIDs)+2)
-	refs = append(refs, DORef{DO: "butler"})
 	for _, id := range taskIDs {
 		refs = append(refs, DORef{DO: "task", ID: id})
 	}
-	return append(refs, DORef{DO: "channel"})
+	refs = append(refs, DORef{DO: "channel"})
+	return append(refs, DORef{DO: "butler"})
 }
 
 func exportDurableObject(ctx context.Context, client *AdminClient, writer *Writer, ref DORef, progress *Progress, deps Deps) (DOManifest, error) {
@@ -404,9 +488,13 @@ func exportObjects(ctx context.Context, deps Deps, client *AdminClient, writer *
 		if err != nil {
 			return R2Manifest{}, err
 		}
+		entry, err := checkedObjectEntry(len(manifest.Objects) + 1)
+		if err != nil {
+			return R2Manifest{}, err
+		}
 		item := R2Item{
 			Key:         object.Key,
-			Entry:       ObjectEntry(len(manifest.Objects) + 1),
+			Entry:       entry,
 			Size:        object.Size,
 			ContentType: object.ContentType,
 		}
@@ -418,7 +506,7 @@ func exportObjects(ctx context.Context, deps Deps, client *AdminClient, writer *
 		manifest.Objects = append(manifest.Objects, item)
 		manifest.Bytes += item.Size
 		if item.Size > renewEveryBytes {
-			if err := renewLease(ctx, client, op); err != nil {
+			if err := renewLease(ctx, client); err != nil {
 				return R2Manifest{}, err
 			}
 		}
