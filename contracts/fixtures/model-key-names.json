@@ -1,0 +1,6 @@
+[
+  { "id": "opencode-go", "secret": "MODEL_KEY_OPENCODE_GO" },
+  { "id": "deepseek", "secret": "MODEL_KEY_DEEPSEEK" },
+  { "id": "my-proxy", "secret": "MODEL_KEY_MY_PROXY" },
+  { "id": "qwen-token-plan-cn", "secret": "MODEL_KEY_QWEN_TOKEN_PLAN_CN" }
+]
