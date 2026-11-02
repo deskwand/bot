@@ -24,6 +24,7 @@ const (
 	CodeSubdomainUnavailable        = "SUBDOMAIN_UNAVAILABLE"
 	CodePlaintextSecretDetected     = "PLAINTEXT_SECRET_DETECTED"
 	CodeVersionUnknown              = "VERSION_UNKNOWN"
+	CodeVersionUnknownReimport      = "VERSION_UNKNOWN_REIMPORT"
 	CodeDowngradeRejected           = "DOWNGRADE_REJECTED"
 	CodeUpgradeRequiresIntermediate = "UPGRADE_REQUIRES_INTERMEDIATE"
 	CodeMigrationHistoryMismatch    = "MIGRATION_HISTORY_MISMATCH"
@@ -190,9 +191,10 @@ func (l *Lifecycle) Install(ctx context.Context, request InstallRequest) (domain
 	return l.runInstall(ctx, &record)
 }
 
-// Abandon cancels an unfinished install record without changing any remote
-// resource. Resources already created by that install remain and must be
-// chosen again or removed by an explicit cleanup flow.
+// Abandon cancels an unfinished install or upgrade record without changing any
+// remote resource. Resources already created by that operation remain; an
+// upgrade whose upload may have been sent requires a reconciliation before
+// another upgrade.
 func (l *Lifecycle) Abandon(ctx context.Context, operationID string) (domain.Result, error) {
 	if l.journal == nil {
 		return domain.Result{OperationID: operationID}, domain.Error{Code: CodeInvalidRequest, Message: "abandon requires an operation journal"}
@@ -201,8 +203,8 @@ func (l *Lifecycle) Abandon(ctx context.Context, operationID string) (domain.Res
 	if err != nil {
 		return domain.Result{OperationID: operationID}, sanitizeError(err, nil)
 	}
-	if record.Kind != KindInstall {
-		return operationResult(record), domain.Error{Code: CodeInvalidRequest, Message: "only install operations can be abandoned here"}
+	if record.Kind != KindInstall && record.Kind != KindUpgrade {
+		return operationResult(record), domain.Error{Code: CodeInvalidRequest, Message: "only install or upgrade operations can be abandoned here"}
 	}
 	unlock, err := l.locker.Lock(ctx, record.Target)
 	if err != nil {
@@ -210,13 +212,17 @@ func (l *Lifecycle) Abandon(ctx context.Context, operationID string) (domain.Res
 	}
 	defer unlock()
 	if record.State == StatePublished {
-		return operationResult(record), errors.New("deployment: cannot abandon a published install")
+		return operationResult(record), errors.New("deployment: cannot abandon a published operation")
 	}
 	if record.State == StateCancelled {
 		return operationResult(record), nil
 	}
 	record.State = StateCancelled
-	setStep(&record, installStepPreflight, StateCancelled, "安装已取消；已创建的资源不会被自动删除", "")
+	if record.Kind == KindUpgrade {
+		setStep(&record, 1, StateCancelled, "升级已取消；若上传已发出，远端状态需要另行核对", "")
+	} else {
+		setStep(&record, installStepPreflight, StateCancelled, "安装已取消；已创建的资源不会被自动删除", "")
+	}
 	if err := l.save(&record); err != nil {
 		return operationResult(record), err
 	}

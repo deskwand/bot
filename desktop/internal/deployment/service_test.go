@@ -674,7 +674,7 @@ func TestApplyRejectsReleaseVersionChanges(t *testing.T) {
 	}{
 		{name: "newer cloud", releaseVersion: "4.0.0", code: CodeDowngradeRejected},
 		{name: "older cloud", releaseVersion: "2.0.0", code: CodeUpgradeRequired},
-		{name: "unknown cloud", releaseVersion: "", code: CodeUpgradeRequired},
+		{name: "unknown cloud", releaseVersion: "", code: CodeVersionUnknownReimport},
 		{name: "unparseable cloud", releaseVersion: "not-a-version", code: CodeUpgradeRequired},
 	}
 	for _, test := range tests {

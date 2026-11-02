@@ -2,6 +2,8 @@
 // loads the MyGo runtime; the production adapter is the only place that does.
 import type {
   AccountDTO,
+  ClientUpdateDTO,
+  ClientUpdateResultDTO,
   ConfigDTO,
   ConfigEditDTO as GeneratedConfigEditDTO,
   ConnectionDTO,
@@ -23,6 +25,8 @@ import type {
 
 export type {
   AccountDTO,
+  ClientUpdateDTO,
+  ClientUpdateResultDTO,
   ConfigDTO,
   ConnectionDTO,
   EntryResultDTO,
@@ -82,10 +86,13 @@ export interface ClientService {
   install(input: InstallInputDTO): Promise<ResultDTO>;
   upgradeAvailable(): Promise<UpgradeDTO>;
   upgrade(): Promise<ResultDTO>;
+  checkClientUpdate(): Promise<ClientUpdateDTO>;
+  installClientUpdate(): Promise<ClientUpdateResultDTO>;
   getConfig(): Promise<ConfigDTO>;
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]>;
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO>;
   resumeOperation(id: string): Promise<ResultDTO>;
+  abandonOperation(id: string): Promise<ResultDTO>;
   pendingOperations(): Promise<OperationDTO[]>;
   startWeChatLogin(): Promise<string>;
   cancelWeChatLogin(opId: string): Promise<void>;

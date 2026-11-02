@@ -10,6 +10,31 @@ export interface AccountDTO {
   name: string;
 }
 
+/**
+ * ClientUpdateDTO is the desktop client update check result. It is separate
+ * from UpgradeDTO: the client version and the deployed cloud version never
+ * advance each other. No download URL, signature or key material is exposed.
+ */
+export interface ClientUpdateDTO {
+  /** not_configured|up_to_date|available */
+  state: string;
+  currentVersion: string;
+  availableVersion?: string;
+  notes?: string;
+  date?: string;
+  reason?: string;
+  message?: string;
+}
+
+/** ClientUpdateResultDTO reports a user-triggered client update installation. */
+export interface ClientUpdateResultDTO {
+  /** installed|failed|not_checked */
+  state: string;
+  currentVersion: string;
+  version?: string;
+  message?: string;
+}
+
 /** ConfigDTO is the editable configuration summary. */
 export interface ConfigDTO {
   accountId: string;
@@ -202,9 +227,26 @@ export interface WorkerDTO {
  * arbitrary URL openers are not exposed.
  */
 export const Service = {
+  /**
+   * AbandonOperation delegates to the state machine that owns the journal
+   * record. A publish abandon deletes its pending credential-store values;
+   * install and upgrade abandons never touch those references.
+   */
+  abandonOperation(id: string): Promise<ResultDTO> {
+    return call("Service.AbandonOperation", id);
+  },
   /** CancelWeChatLogin cancels a running QR login by operation id. */
   cancelWeChatLogin(opID: string): Promise<void> {
     return call("Service.CancelWeChatLogin", opID);
+  },
+  /**
+   * CheckClientUpdate performs a user-triggered check. A configured feed that is
+   * up to date returns state "up_to_date"; a newer client returns "available".
+   * Unconfigured builds return "not_configured" without attempting a network
+   * request. Signature and downgrade failures use fixed error codes.
+   */
+  checkClientUpdate(): Promise<ClientUpdateDTO> {
+    return call("Service.CheckClientUpdate");
   },
   /** CloudflareStatus reports local connection state without an error channel. */
   cloudflareStatus(): Promise<ConnectionDTO> {
@@ -254,6 +296,14 @@ export const Service = {
   install(input: InstallInputDTO): Promise<ResultDTO> {
     return call("Service.Install", input);
   },
+  /**
+   * InstallClientUpdate installs the update found by the most recent
+   * CheckClientUpdate call. It is never automatic and never modifies the cloud
+   * deployment. MyGo stages the update; the new version runs at the next launch.
+   */
+  installClientUpdate(): Promise<ClientUpdateResultDTO> {
+    return call("Service.InstallClientUpdate");
+  },
   /** ListWorkers lists Worker scripts in the connected account. */
   listWorkers(): Promise<WorkerDTO[]> {
     return call("Service.ListWorkers");
@@ -288,7 +338,14 @@ export const Service = {
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO> {
     return call("Service.PublishConfig", input);
   },
-  /** ResumeOperation reconciles a journaled publish before retrying anything. */
+  /**
+   * ResumeOperation reconciles one journaled operation by kind. Installs are
+   * replayed through Lifecycle.Install from the journaled request (idempotent
+   * resource discovery), upgrades reconcile the live release before any retry,
+   * and ordinary publishes use the publish state machine. An install or upgrade
+   * must never enter publish.Resume: that path would treat their record as a
+   * configuration publish and could delete the wrong pending secrets.
+   */
   resumeOperation(id: string): Promise<ResultDTO> {
     return call("Service.ResumeOperation", id);
   },

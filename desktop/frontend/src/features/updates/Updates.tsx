@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowUpCircle, Loader2, RefreshCw } from "lucide-react";
+import { ArrowUpCircle, Download, Loader2, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,12 +21,17 @@ import {
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StateBadge, StepList } from "@/components/feedback";
 import { describeCode } from "@/services/errors";
-import type { ResultDTO, UpgradeDTO } from "@/services/types";
+import type {
+  ClientUpdateDTO,
+  ClientUpdateResultDTO,
+  ResultDTO,
+  UpgradeDTO,
+} from "@/services/types";
 
 declare const __APP_VERSION__: string;
 
 export function Updates() {
-  const { client } = useApp();
+  const { client, navigateImport } = useApp();
   const [upgrade, setUpgrade] = useState<UpgradeDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
@@ -34,6 +39,11 @@ export function Updates() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ResultDTO | null>(null);
   const [runError, setRunError] = useState<unknown>(null);
+  const [clientUpdate, setClientUpdate] = useState<ClientUpdateDTO | null>(null);
+  const [clientLoading, setClientLoading] = useState(true);
+  const [clientError, setClientError] = useState<unknown>(null);
+  const [clientInstalling, setClientInstalling] = useState(false);
+  const [clientResult, setClientResult] = useState<ClientUpdateResultDTO | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -47,9 +57,38 @@ export function Updates() {
     }
   }, [client]);
 
+  const loadClientUpdate = useCallback(async () => {
+    setClientLoading(true);
+    setClientError(null);
+    try {
+      setClientUpdate(await client.checkClientUpdate());
+    } catch (cause) {
+      setClientError(cause);
+    } finally {
+      setClientLoading(false);
+    }
+  }, [client]);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadClientUpdate();
+  }, [loadClientUpdate]);
+
+  const installClientUpdate = async () => {
+    setClientInstalling(true);
+    setClientError(null);
+    setClientResult(null);
+    try {
+      setClientResult(await client.installClientUpdate());
+    } catch (cause) {
+      setClientError(cause);
+    } finally {
+      setClientInstalling(false);
+    }
+  };
 
   const upgradeCloud = async () => {
     setConfirmOpen(false);
@@ -113,6 +152,11 @@ export function Updates() {
                   {upgrade.reason}：{describeCode(upgrade.reason)}
                 </p>
               ) : null}
+              {upgrade.reason === "VERSION_UNKNOWN_REIMPORT" ? (
+                <Button type="button" size="sm" variant="outline" onClick={navigateImport}>
+                  重新导入
+                </Button>
+              ) : null}
               <Alert>
                 <AlertTitle>升级前确认</AlertTitle>
                 <AlertDescription>
@@ -172,16 +216,93 @@ export function Updates() {
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle>桌面客户端</CardTitle>
-              <CardDescription>客户端版本与云端版本独立管理。</CardDescription>
+              <CardTitle className="flex items-center gap-2">
+                <Download className="size-4" aria-hidden />
+                桌面客户端
+              </CardTitle>
+              <CardDescription>
+                客户端版本与云端版本独立管理。只有你点击安装时才会更新客户端，且永远不会自动修改云端服务。
+              </CardDescription>
             </div>
-            <Badge variant="outline">v{__APP_VERSION__}</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              {clientUpdate?.state === "available" ? <Badge>客户端可更新</Badge> : null}
+              <Badge variant="outline">v{clientUpdate?.currentVersion || __APP_VERSION__}</Badge>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">
-            本页只显示当前客户端版本。客户端自动更新不在本次范围内，不会自动修改云端服务。
-          </p>
+          {clientLoading ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+              正在检查客户端更新…
+            </p>
+          ) : clientUpdate?.state === "not_configured" ? (
+            <Alert>
+              <AlertTitle>未配置更新源</AlertTitle>
+              <AlertDescription>
+                此构建没有配置客户端更新源，因此无法检查或安装客户端更新。云端服务仍可正常管理。
+              </AlertDescription>
+            </Alert>
+          ) : clientUpdate?.state === "available" ? (
+            <div className="space-y-2 text-sm">
+              <p>
+                当前 {clientUpdate.currentVersion || "未知"} → 可用{" "}
+                {clientUpdate.availableVersion || "未知"}
+              </p>
+              {clientUpdate.date ? (
+                <p className="text-xs text-muted-foreground">发布于 {clientUpdate.date}</p>
+              ) : null}
+              {clientUpdate.notes ? (
+                <p className="whitespace-pre-wrap text-muted-foreground">{clientUpdate.notes}</p>
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                更新包由独立的客户端更新密钥签名；客户端更新与 Worker 发布包互不替代。安装后重启客户端生效。
+              </p>
+            </div>
+          ) : clientUpdate?.state === "up_to_date" ? (
+            <p className="text-sm text-muted-foreground">客户端已是最新版本。</p>
+          ) : (
+            <p className="text-sm text-muted-foreground">尚未读取客户端更新状态。</p>
+          )}
+
+          {clientResult ? (
+            <Alert className="mt-4">
+              <AlertTitle>{clientResult.state === "installed" ? "客户端更新已安装" : "客户端更新未完成"}</AlertTitle>
+              <AlertDescription>
+                {clientResult.message || clientResult.state}
+                {clientResult.version ? `（版本 ${clientResult.version}）` : ""}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void loadClientUpdate()}
+              disabled={clientLoading || clientInstalling}
+            >
+              {clientLoading ? (
+                <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : (
+                <RefreshCw aria-hidden />
+              )}
+              检查客户端更新
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void installClientUpdate()}
+              disabled={clientUpdate?.state !== "available" || clientInstalling}
+            >
+              {clientInstalling ? (
+                <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : (
+                <Download aria-hidden />
+              )}
+              {clientInstalling ? "正在安装…" : "安装客户端更新"}
+            </Button>
+          </div>
+          <ErrorAlert error={clientError} onRetry={loadClientUpdate} retryLabel="重新检查" />
         </CardContent>
       </Card>
 

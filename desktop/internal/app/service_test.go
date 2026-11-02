@@ -79,15 +79,18 @@ func (f *fakeAuth) Disconnect(context.Context) error {
 type fakePublish struct {
 	mu sync.Mutex
 
-	previewSteps []domain.Step
-	previewErr   error
-	applyResult  domain.Result
-	applyErr     error
-	resumeResult domain.Result
-	resumeErr    error
-	resumeID     string
-	changes      []domain.Change
-	targets      []domain.Target
+	previewSteps  []domain.Step
+	previewErr    error
+	applyResult   domain.Result
+	applyErr      error
+	resumeResult  domain.Result
+	resumeErr     error
+	resumeID      string
+	abandonResult domain.Result
+	abandonErr    error
+	abandonID     string
+	changes       []domain.Change
+	targets       []domain.Target
 }
 
 func (f *fakePublish) Preview(_ context.Context, target domain.Target, change domain.Change) ([]domain.Step, error) {
@@ -121,6 +124,17 @@ func (f *fakePublish) Resume(_ context.Context, operationID string) (domain.Resu
 	return result, f.resumeErr
 }
 
+func (f *fakePublish) Abandon(_ context.Context, operationID string) (domain.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.abandonID = operationID
+	result := f.abandonResult
+	if result.OperationID == "" && f.abandonErr == nil {
+		result = domain.Result{OperationID: operationID, State: deployment.StateCancelled}
+	}
+	return result, f.abandonErr
+}
+
 func (f *fakePublish) lastChange() domain.Change {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -145,6 +159,10 @@ type fakeLifecycle struct {
 	upgradeResult  domain.Result
 	upgradeErr     error
 	upgradeCalled  bool
+	abandonResult  domain.Result
+	abandonErr     error
+	abandonID      string
+	abandonCalls   int
 }
 
 func (f *fakeLifecycle) Install(_ context.Context, request deployment.InstallRequest) (domain.Result, error) {
@@ -173,6 +191,18 @@ func (f *fakeLifecycle) ConfirmImport(_ context.Context, _ domain.Target, input 
 		result = domain.Result{OperationID: "op-import", State: deployment.StatePublished}
 	}
 	return result, f.confirmErr
+}
+
+func (f *fakeLifecycle) Abandon(_ context.Context, operationID string) (domain.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.abandonCalls++
+	f.abandonID = operationID
+	result := f.abandonResult
+	if result.OperationID == "" && f.abandonErr == nil {
+		result = domain.Result{OperationID: operationID, State: deployment.StateCancelled}
+	}
+	return result, f.abandonErr
 }
 
 func (f *fakeLifecycle) Upgrade(_ context.Context, target domain.Target, _ release.Package) (domain.Result, error) {
@@ -278,6 +308,17 @@ func (f *fakeJournal) Load(operationID string) (deployment.OperationRecord, erro
 		return deployment.OperationRecord{}, errors.New("operation not found")
 	}
 	return record, nil
+}
+
+func (f *fakeJournal) Save(record deployment.OperationRecord) error {
+	if f.err != nil {
+		return f.err
+	}
+	if f.records == nil {
+		f.records = map[string]deployment.OperationRecord{}
+	}
+	f.records[record.OperationID] = record
+	return nil
 }
 
 func (f *fakeJournal) List() ([]deployment.OperationRecord, error) {
@@ -724,11 +765,21 @@ func TestServiceResumeAndPendingOperations(t *testing.T) {
 		Kind:           deployment.KindInstall,
 		Target:         domain.Target{AccountID: serviceAccountID, ScriptName: serviceWorkerName},
 		State:          deployment.StateUnknown,
+		BucketName:     "deskwand-bucket",
 		ActiveChannel:  "wechat",
 		ReleaseVersion: "2.0.0",
-		Steps:          []domain.Step{{ID: "upload", State: deployment.StateUnknown, Message: "unknown"}},
-		CreatedAt:      now,
-		UpdatedAt:      now.Add(time.Minute),
+		ConfigJSON: []byte(`{
+			"schemaVersion": 1,
+			"owner": {"telegramUserIds": [7, 8]},
+			"models": {
+				"butler": {"provider": "anthropic", "id": "claude-sonnet-5-5"},
+				"task": {"provider": "opencode-go", "id": "kimi-k3"}
+			},
+			"mcpServers": []
+		}`),
+		Steps:     []domain.Step{{ID: "upload", State: deployment.StateUnknown, Message: "unknown"}},
+		CreatedAt: now,
+		UpdatedAt: now.Add(time.Minute),
 	}
 	f.journal.records["op-done"] = deployment.OperationRecord{
 		OperationID: "op-done",
@@ -743,6 +794,10 @@ func TestServiceResumeAndPendingOperations(t *testing.T) {
 		State:       deployment.StateCancelled,
 		CreatedAt:   now,
 		UpdatedAt:   now.Add(3 * time.Minute),
+	}
+	f.lifecycle.installResult = domain.Result{
+		OperationID: "op-open", State: deployment.StatePublished,
+		DeploymentID: "deployment-2", VersionID: "version-2",
 	}
 
 	operations, err := f.service.PendingOperations()
@@ -760,8 +815,153 @@ func TestServiceResumeAndPendingOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.publish.resumeID != "op-open" || result.OperationID != "op-open" {
-		t.Fatalf("resume id = %q result = %#v", f.publish.resumeID, result)
+	if f.publish.resumeID != "" {
+		t.Fatalf("install resume entered publish.Resume with %q", f.publish.resumeID)
+	}
+	if f.lifecycle.installRequest.WorkerName != serviceWorkerName ||
+		f.lifecycle.installRequest.BucketName != "deskwand-bucket" ||
+		f.lifecycle.installRequest.ActiveChannel != "wechat" {
+		t.Fatalf("install request = %#v", f.lifecycle.installRequest)
+	}
+	if len(f.lifecycle.installRequest.Config.TelegramUserIDs) != 2 ||
+		f.lifecycle.installRequest.Config.TelegramUserIDs[1] != 8 {
+		t.Fatalf("owner = %#v", f.lifecycle.installRequest.Config.TelegramUserIDs)
+	}
+	if result.OperationID != "op-open" || result.State != deployment.StatePublished {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestServiceResumeUpgradeRecognizesLiveReleaseWithoutReupload(t *testing.T) {
+	f := newServiceFixture(t)
+	f.snapshots.snapshot.ReleaseVersion = "2.0.0"
+	f.journal.records["op-upgrade"] = deployment.OperationRecord{
+		OperationID:           "op-upgrade",
+		Kind:                  deployment.KindUpgrade,
+		Target:                domain.Target{AccountID: serviceAccountID, ScriptName: serviceWorkerName},
+		State:                 deployment.StateUnknown,
+		ReleaseVersion:        "2.0.0",
+		ScriptUploadAttempted: true,
+		Steps:                 []domain.Step{{ID: "script", State: deployment.StateUnknown, Message: "unknown"}},
+	}
+
+	result, err := f.service.ResumeOperation("op-upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.lifecycle.upgradeCalled {
+		t.Fatal("a live upgrade release was re-uploaded")
+	}
+	if result.State != deployment.StatePublished || result.OperationID != "op-upgrade" {
+		t.Fatalf("result = %#v", result)
+	}
+	if f.journal.records["op-upgrade"].State != deployment.StatePublished {
+		t.Fatalf("journal = %#v", f.journal.records["op-upgrade"])
+	}
+}
+
+func TestServiceResumeUpgradeRetriesWhenUploadWasNotAttempted(t *testing.T) {
+	f := newServiceFixture(t)
+	f.snapshots.snapshot.ReleaseVersion = "1.0.0"
+	f.journal.records["op-upgrade"] = deployment.OperationRecord{
+		OperationID:    "op-upgrade",
+		Kind:           deployment.KindUpgrade,
+		Target:         domain.Target{AccountID: serviceAccountID, ScriptName: serviceWorkerName},
+		State:          deployment.StateUnknown,
+		ReleaseVersion: "2.0.0",
+		Steps:          []domain.Step{{ID: "script", State: deployment.StateUnknown, Message: "unknown"}},
+	}
+	f.lifecycle.upgradeResult = domain.Result{
+		OperationID: "op-upgrade", State: deployment.StatePublished,
+		DeploymentID: "deployment-2", VersionID: "version-2",
+	}
+
+	result, err := f.service.ResumeOperation("op-upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.lifecycle.upgradeCalled {
+		t.Fatal("resume did not retry an upgrade that never uploaded")
+	}
+	if result.State != deployment.StatePublished || f.journal.records["op-upgrade"].State != deployment.StatePublished {
+		t.Fatalf("result = %#v journal = %#v", result, f.journal.records["op-upgrade"])
+	}
+}
+
+func TestServiceResumeUpgradeWithUnknownUploadNeedsInput(t *testing.T) {
+	f := newServiceFixture(t)
+	f.snapshots.snapshot.ReleaseVersion = "1.0.0"
+	f.journal.records["op-upgrade"] = deployment.OperationRecord{
+		OperationID:           "op-upgrade",
+		Kind:                  deployment.KindUpgrade,
+		Target:                domain.Target{AccountID: serviceAccountID, ScriptName: serviceWorkerName},
+		State:                 deployment.StateUnknown,
+		ReleaseVersion:        "2.0.0",
+		ScriptUploadAttempted: true,
+		Steps:                 []domain.Step{{ID: "script", State: deployment.StateUnknown, Message: "unknown"}},
+	}
+
+	result, err := f.service.ResumeOperation("op-upgrade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.lifecycle.upgradeCalled {
+		t.Fatal("resume re-uploaded an upgrade with an unknown prior upload")
+	}
+	if result.State != deployment.StateNeedsInput || f.journal.records["op-upgrade"].State != deployment.StateNeedsInput {
+		t.Fatalf("result = %#v journal = %#v", result, f.journal.records["op-upgrade"])
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatal("unknown upgrade result did not warn")
+	}
+}
+
+func TestServiceAbandonOperationUsesTheOwningStateMachine(t *testing.T) {
+	for _, kind := range []string{deployment.KindInstall, deployment.KindUpgrade} {
+		t.Run(kind, func(t *testing.T) {
+			f := newServiceFixture(t)
+			f.journal.records["op-"+kind] = deployment.OperationRecord{
+				OperationID: "op-" + kind,
+				Kind:        kind,
+				Target:      domain.Target{AccountID: serviceAccountID, ScriptName: serviceWorkerName},
+				State:       deployment.StateUnknown,
+			}
+			result, err := f.service.AbandonOperation("op-" + kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.lifecycle.abandonID != "op-"+kind || f.lifecycle.abandonCalls != 1 {
+				t.Fatalf("lifecycle abandon = %q calls=%d", f.lifecycle.abandonID, f.lifecycle.abandonCalls)
+			}
+			if f.publish.abandonID != "" {
+				t.Fatalf("wrong publish abandon path for %s", kind)
+			}
+			if result.State != deployment.StateCancelled {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestServiceAbandonOperationUsesPublishOnlyForPublishRecords(t *testing.T) {
+	f := newServiceFixture(t)
+	f.journal.records["op-publish"] = deployment.OperationRecord{
+		OperationID: "op-publish",
+		Target:      domain.Target{AccountID: serviceAccountID, ScriptName: serviceWorkerName},
+		State:       deployment.StateUnknown,
+	}
+	result, err := f.service.AbandonOperation("op-publish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.publish.abandonID != "op-publish" {
+		t.Fatalf("publish abandon = %q", f.publish.abandonID)
+	}
+	if f.lifecycle.abandonCalls != 0 {
+		t.Fatal("publish abandon entered the lifecycle path")
+	}
+	if result.State != deployment.StateCancelled {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -863,6 +1063,15 @@ func TestServiceUpgradeAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if upgrade.Available || upgrade.Reason != deployment.CodeDowngradeRejected {
+		t.Fatalf("upgrade = %#v", upgrade)
+	}
+
+	f.snapshots.snapshot.ReleaseVersion = ""
+	upgrade, err = f.service.UpgradeAvailable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upgrade.Available || upgrade.Reason != deployment.CodeVersionUnknownReimport {
 		t.Fatalf("upgrade = %#v", upgrade)
 	}
 

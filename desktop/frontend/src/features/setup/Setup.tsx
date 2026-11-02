@@ -60,13 +60,15 @@ export function Setup({
   connectionError,
   onSessionChange,
   onReady,
+  initialStep = "welcome",
 }: {
   phase: SetupPhase;
   connectionError?: unknown;
   onSessionChange: () => void;
   onReady: () => void;
+  initialStep?: "welcome" | "deploy" | "import";
 }) {
-  const [step, setStep] = useState<"welcome" | "deploy" | "import">("welcome");
+  const [step, setStep] = useState<"welcome" | "deploy" | "import">(initialStep);
 
   if (phase === "disconnected") {
     return (

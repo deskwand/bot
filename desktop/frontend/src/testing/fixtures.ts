@@ -26,6 +26,10 @@ type Scenario =
   | "config-conflict"
   | "multi-version"
   | "upgrade-required"
+  | "client-update-available"
+  | "client-update-unavailable"
+  | "pending-operations"
+  | "version-unknown"
   | "install-conflict"
   | "import-resume"
   | "import-secret-retry"
@@ -78,6 +82,10 @@ function scenarioFromLocation(): Scenario {
     case "config-conflict":
     case "multi-version":
     case "upgrade-required":
+    case "client-update-available":
+    case "client-update-unavailable":
+    case "pending-operations":
+    case "version-unknown":
     case "install-conflict":
     case "import-resume":
     case "import-secret-retry":
@@ -102,6 +110,10 @@ function initialState(): MockState {
     "config-conflict",
     "multi-version",
     "upgrade-required",
+    "client-update-available",
+    "client-update-unavailable",
+    "pending-operations",
+    "version-unknown",
     "configured",
     "qr-expired",
     "qr-publish-failed",
@@ -134,7 +146,24 @@ function initialState(): MockState {
       WECHAT_CREDENTIALS: scenario === "user-evidence",
     },
     installAttempts: 0,
-    pending: [],
+    pending:
+      scenario === "pending-operations"
+        ? [
+            {
+              operationId: "op-pending-1",
+              kind: "install",
+              accountId: "a".repeat(32),
+              workerName: "deskwand-bot",
+              state: "unknown",
+              steps: [
+                { id: "stage", state: "completed", message: "已上传配置版本", evidence: "mock" },
+                { id: "activate", state: "unknown", message: "激活响应丢失", evidence: "mock" },
+              ],
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ]
+        : [],
     loginTimers: new Map(),
   };
 }
@@ -409,6 +438,14 @@ export function createMockClient(): ClientService {
     },
 
     async upgradeAvailable() {
+      if (state.scenario === "version-unknown") {
+        return {
+          available: false,
+          currentVersion: "",
+          availableVersion: "1.1.0",
+          reason: "VERSION_UNKNOWN_REIMPORT",
+        };
+      }
       return {
         available: true,
         currentVersion: "1.0.0",
@@ -418,6 +455,36 @@ export function createMockClient(): ClientService {
 
     async upgrade() {
       return published("op-upgrade-1");
+    },
+
+    async checkClientUpdate() {
+      if (state.scenario === "client-update-unavailable") {
+        return {
+          state: "not_configured",
+          currentVersion: "0.1.0",
+          reason: "CLIENT_UPDATE_NOT_CONFIGURED",
+          message: "未配置更新源",
+        };
+      }
+      return {
+        state: "available",
+        currentVersion: "0.1.0",
+        availableVersion: "0.2.0",
+        notes: "客户端更新测试发行说明",
+        date: NOW,
+      };
+    },
+
+    async installClientUpdate() {
+      if (state.scenario === "client-update-unavailable") {
+        fail("CLIENT_UPDATE_NOT_CONFIGURED", "未配置更新源");
+      }
+      return {
+        state: "installed",
+        currentVersion: "0.1.0",
+        version: "0.2.0",
+        message: "客户端更新已安装，重启客户端后生效",
+      };
     },
 
     async getConfig() {
@@ -461,6 +528,18 @@ export function createMockClient(): ClientService {
       state.target = state.target ?? "deskwand-bot";
       state.configPresent = true;
       return published("op-install-1");
+    },
+
+    async abandonOperation(id: string) {
+      state.pending = state.pending.filter((operation) => operation.operationId !== id);
+      return {
+        operationId: id,
+        state: "cancelled",
+        workerName: state.target ?? "deskwand-bot",
+        steps: [
+          { id: "cancel", state: "cancelled", message: "操作已取消", evidence: "mock" },
+        ],
+      };
     },
 
     async pendingOperations() {

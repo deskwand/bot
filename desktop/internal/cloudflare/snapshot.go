@@ -269,8 +269,9 @@ func reduceSettings(raw json.RawMessage) ([]byte, []byte, []string, string, erro
 		return nil, nil, nil, "", fmt.Errorf("cloudflare: encode settings: %w", err)
 	}
 	releaseVersion := ""
-	// `workers/tag` in settings annotations is not verified live. Task 6 writes
-	// the tag; verify the actual readback there and keep this empty on unknown.
+	// `workers/tag` readback in settings annotations is verified by the live
+	// lifecycle test: script uploads write the tag, imports/upgrades verify it,
+	// and a CLI deploy that omits it leaves this empty (VERSION_UNKNOWN_REIMPORT).
 	if tag, ok := document.Annotations["workers/tag"].(string); ok {
 		releaseVersion = tag
 	}

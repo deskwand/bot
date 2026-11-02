@@ -193,7 +193,7 @@ Telegram 需要公网 HTTPS 地址，所以本地调试需用隧道地址执行 
 3. 确认远端值可读且正确后，再部署新代码。首次部署后发送一条测试消息，确认业务未因配置缺失而拒绝。
 4. 之后 CLI 与桌面客户端可以共存，但远端 `DESKWAND_CONFIG` 是唯一权威；在任一侧修改后都要重新发布才会生效。不要把同一份配置再写回 `src/config.ts`，也不要在两处各维护一份草稿。
 
-`wrangler.jsonc` 故意不声明 `DESKWAND_CONFIG`，并保留 `keep_vars: true`，因此命令行部署会保留控制台或客户端写入的远端值。注意：显式写进模板的其他 vars 仍会覆盖远端同名值。
+`wrangler.jsonc` 故意不声明 `DESKWAND_CONFIG`，并保留 `keep_vars: true`，因此命令行部署会保留控制台或客户端写入的远端值。注意：显式写进模板的其他 vars 仍会覆盖远端同名值。`npm run deploy` 会自动运行 `predeploy` 检查远端是否已有 `DESKWAND_CONFIG`；缺少 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` 时会警告跳过。命令行部署不会写入客户端使用的 release tag，因此部署后云端版本会显示为未知，直到在桌面客户端重新导入或执行一次客户端升级。
 
 ## 升级与迁移说明
 
@@ -214,6 +214,17 @@ Telegram 需要公网 HTTPS 地址，所以本地调试需用隧道地址执行 
 - 发布配置必须保留 `version_metadata: { "binding": "CF_VERSION_METADATA" }`，否则 Channel DO 拒绝业务处理并记录固定配置错误；生产使用 `keep_vars: true` 保留客户端设置的其他 vars。
 - 变更必须发布新版本才生效；没有状态查询路由，也没有能力协商端点。健康检查 200 不代表微信轮询就绪；诊断用现有 Cloudflare 日志（只读查看版本与 `ACTIVE_CHANNEL`，不输出 secret）。
 - 发布时保留其他 vars、secrets、bindings 和 DO 数据；`npm run wechat-login` 不修改 `ACTIVE_CHANNEL`。
+
+## 桌面客户端
+
+仓库同时包含 macOS / Windows 桌面客户端（Go + MyGo + React），让用户无需 Node.js、Git、Wrangler 或 Go 即可通过 Cloudflare API 部署和管理本项目：
+
+- 用户安装、API Token 权限、部署 / 接管、消息入口、保存并发布、状态含义、CLI 共存与重新授权：[`docs/desktop-client.md`](docs/desktop-client.md)
+- 维护者密钥、macOS / Windows 打包、签名与公证、客户端更新源：[`docs/desktop-client.md`](docs/desktop-client.md) 的维护者章节
+- 平台验收、PASS / FAIL / NOT RUN 证据：[`docs/verification/desktop-acceptance.md`](docs/verification/desktop-acceptance.md)
+- 本机构建：`npm run build:desktop`（需要 Worker 发布签名私钥；产物在 `desktop/build/`）
+
+桌面客户端更新与 Worker 发布包使用不同密钥（`deskwand-client-1` / `deskwand-release-1`）。客户端更新默认未配置更新源，且永远不会自动升级云端服务。
 
 ## 测试
 

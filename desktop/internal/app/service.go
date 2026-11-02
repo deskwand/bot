@@ -58,6 +58,7 @@ type PublishService interface {
 	Preview(ctx context.Context, target domain.Target, change domain.Change) ([]domain.Step, error)
 	Apply(ctx context.Context, target domain.Target, change domain.Change) (domain.Result, error)
 	Resume(ctx context.Context, operationID string) (domain.Result, error)
+	Abandon(ctx context.Context, operationID string) (domain.Result, error)
 }
 
 // LifecycleService is install, import and upgrade.
@@ -66,6 +67,7 @@ type LifecycleService interface {
 	InspectImport(ctx context.Context, target domain.Target) (deployment.ImportPreview, error)
 	ConfirmImport(ctx context.Context, target domain.Target, confirmation deployment.ImportConfirmation) (domain.Result, error)
 	Upgrade(ctx context.Context, target domain.Target, pkg release.Package) (domain.Result, error)
+	Abandon(ctx context.Context, operationID string) (domain.Result, error)
 }
 
 // EntriesService is WeChat login and Telegram / ACTIVE_CHANNEL configuration.
@@ -90,6 +92,7 @@ type ScriptLister interface {
 type OperationJournal interface {
 	Load(operationID string) (deployment.OperationRecord, error)
 	List() ([]deployment.OperationRecord, error)
+	Save(record deployment.OperationRecord) error
 }
 
 // TargetStore persists the non-secret managed deployment target.
@@ -135,6 +138,8 @@ type ServiceOptions struct {
 	Store       TargetStore
 	Browser     platform.BrowserOpener
 	Release     ReleaseSource
+	// ClientUpdates defaults to the pinned MyGo updater with an empty feed.
+	ClientUpdates ClientUpdateProvider
 	// EmitLoginStatus defaults to LoginStatusEvent.Broadcast.
 	EmitLoginStatus func(LoginStatusDTO)
 	NewOperationID  func() (string, error)
@@ -145,24 +150,28 @@ type ServiceOptions struct {
 // frontend-safe DTO operation; raw clients, tokens, secret getters and
 // arbitrary URL openers are not exposed.
 type Service struct {
-	auth        AuthService
-	publish     PublishService
-	lifecycle   LifecycleService
-	entries     EntriesService
-	diagnostics StatusService
-	snapshots   SnapshotReader
-	scripts     ScriptLister
-	journal     OperationJournal
-	store       TargetStore
-	browser     platform.BrowserOpener
-	release     ReleaseSource
-	emitLogin   func(LoginStatusDTO)
-	newOpID     func() (string, error)
-	now         func() time.Time
+	auth          AuthService
+	publish       PublishService
+	lifecycle     LifecycleService
+	entries       EntriesService
+	diagnostics   StatusService
+	snapshots     SnapshotReader
+	scripts       ScriptLister
+	journal       OperationJournal
+	store         TargetStore
+	browser       platform.BrowserOpener
+	release       ReleaseSource
+	clientUpdates ClientUpdateProvider
+	emitLogin     func(LoginStatusDTO)
+	newOpID       func() (string, error)
+	now           func() time.Time
 
 	loginMu     sync.Mutex
 	logins      map[string]context.CancelFunc
 	loginActive bool
+
+	clientUpdateMu      sync.Mutex
+	checkedClientUpdate *ClientUpdateInfo
 }
 
 // NewService constructs the application service.
@@ -179,22 +188,27 @@ func NewService(options ServiceOptions) *Service {
 	if now == nil {
 		now = time.Now
 	}
+	clientUpdates := options.ClientUpdates
+	if clientUpdates == nil {
+		clientUpdates = NewMyGoClientUpdateProvider(ClientUpdateFeedURL)
+	}
 	return &Service{
-		auth:        options.Auth,
-		publish:     options.Publish,
-		lifecycle:   options.Lifecycle,
-		entries:     options.Entries,
-		diagnostics: options.Diagnostics,
-		snapshots:   options.Snapshots,
-		scripts:     options.Scripts,
-		journal:     options.Journal,
-		store:       options.Store,
-		browser:     options.Browser,
-		release:     options.Release,
-		emitLogin:   emit,
-		newOpID:     newOpID,
-		now:         now,
-		logins:      map[string]context.CancelFunc{},
+		auth:          options.Auth,
+		publish:       options.Publish,
+		lifecycle:     options.Lifecycle,
+		entries:       options.Entries,
+		diagnostics:   options.Diagnostics,
+		snapshots:     options.Snapshots,
+		scripts:       options.Scripts,
+		journal:       options.Journal,
+		store:         options.Store,
+		browser:       options.Browser,
+		release:       options.Release,
+		clientUpdates: clientUpdates,
+		emitLogin:     emit,
+		newOpID:       newOpID,
+		now:           now,
+		logins:        map[string]context.CancelFunc{},
 	}
 }
 
@@ -440,7 +454,7 @@ func (s *Service) UpgradeAvailable() (UpgradeDTO, error) {
 		AvailableVersion: availableVersion,
 	}
 	if snapshot.ReleaseVersion == "" {
-		dto.Reason = deployment.CodeVersionUnknown
+		dto.Reason = deployment.CodeVersionUnknownReimport
 		return dto, nil
 	}
 	comparison, comparable := deployment.CompareVersions(snapshot.ReleaseVersion, availableVersion)
@@ -569,14 +583,16 @@ func (s *Service) PublishConfig(input ConfigEditDTO) (ResultDTO, error) {
 	return s.summaryFromResult(result, target.ScriptName), safeAppError(err, secretInputValues(input.Secrets)...)
 }
 
-// ResumeOperation reconciles a journaled publish before retrying anything.
+// ResumeOperation reconciles one journaled operation by kind. Installs are
+// replayed through Lifecycle.Install from the journaled request (idempotent
+// resource discovery), upgrades reconcile the live release before any retry,
+// and ordinary publishes use the publish state machine. An install or upgrade
+// must never enter publish.Resume: that path would treat their record as a
+// configuration publish and could delete the wrong pending secrets.
 func (s *Service) ResumeOperation(id string) (ResultDTO, error) {
 	ctx := context.Background()
 	if _, err := s.releasePackage(); err != nil {
 		return ResultDTO{}, err
-	}
-	if s.publish == nil {
-		return ResultDTO{}, serviceUnavailable()
 	}
 	target, err := s.managedTarget(ctx)
 	if err != nil {
@@ -596,8 +612,216 @@ func (s *Service) ResumeOperation(id string) (ResultDTO, error) {
 			Message: "该操作属于另一个部署；请先选择对应部署再恢复",
 		}
 	}
-	result, err := s.publish.Resume(ctx, operationID)
-	return s.summaryFromResult(result, target.ScriptName), safeAppError(err)
+	switch record.Kind {
+	case deployment.KindInstall:
+		return s.resumeInstall(ctx, record, target)
+	case deployment.KindUpgrade:
+		return s.resumeUpgrade(ctx, record, target)
+	default:
+		if s.publish == nil {
+			return ResultDTO{}, serviceUnavailable()
+		}
+		result, err := s.publish.Resume(ctx, operationID)
+		return s.summaryFromResult(result, target.ScriptName), safeAppError(err)
+	}
+}
+
+func (s *Service) resumeInstall(ctx context.Context, record deployment.OperationRecord, target domain.Target) (ResultDTO, error) {
+	if s.lifecycle == nil {
+		return ResultDTO{}, serviceUnavailable()
+	}
+	request, err := installRequestFromRecord(record)
+	if err != nil {
+		return s.summaryFromRecord(record, target.ScriptName), safeAppError(err)
+	}
+	result, err := s.lifecycle.Install(ctx, request)
+	summary := s.summaryFromResult(result, target.ScriptName)
+	if err == nil && summary.State == deployment.StatePublished && s.store != nil {
+		_ = s.store.Save(target)
+	}
+	return summary, safeAppError(err)
+}
+
+func (s *Service) resumeUpgrade(ctx context.Context, record deployment.OperationRecord, target domain.Target) (ResultDTO, error) {
+	pkg, err := s.releasePackage()
+	if err != nil {
+		return s.summaryFromRecord(record, target.ScriptName), err
+	}
+	if s.snapshots == nil {
+		return ResultDTO{}, serviceUnavailable()
+	}
+	snapshot, err := s.snapshots.ReadSnapshot(ctx, target)
+	if err != nil {
+		return s.summaryFromRecord(record, target.ScriptName), safeAppError(err)
+	}
+	desiredVersion := record.ReleaseVersion
+	if desiredVersion == "" {
+		desiredVersion = pkg.Version()
+	}
+	if desiredVersion != "" && snapshot.ReleaseVersion == desiredVersion &&
+		snapshot.ActiveVersionCount == 1 && snapshot.VersionID != "" {
+		if identityErr := deployment.VerifyUpgradeIdentity(
+			snapshot.SettingsJSON, pkg.Manifest().ResourceTemplate, record.BucketName,
+		); identityErr == nil {
+			record.State = deployment.StatePublished
+			record.DeploymentID = snapshot.DeploymentID
+			record.StagedVersionID = snapshot.VersionID
+			record.ReleaseVersion = desiredVersion
+			record.UpdatedAt = s.now()
+			markStepsPublished(record.Steps)
+			if saveErr := s.journal.Save(record); saveErr != nil {
+				return s.summaryFromRecord(record, target.ScriptName), safeAppError(saveErr)
+			}
+			return s.summaryFromRecord(record, target.ScriptName), nil
+		}
+	}
+	if !record.ScriptUploadAttempted {
+		if s.lifecycle == nil {
+			return ResultDTO{}, serviceUnavailable()
+		}
+		// A new Upgrade would see this unknown record as an unresolved
+		// operation. No upload was sent, so it is safe to close the record as
+		// NOT_SENT before starting the one allowed retry.
+		record.State = deployment.StateFailed
+		record.FailureCode = domain.NOT_SENT
+		record.UpdatedAt = s.now()
+		setLastStepNeedsInput(record.Steps, "升级尚未上传；正在重新执行一次")
+		if saveErr := s.journal.Save(record); saveErr != nil {
+			return s.summaryFromRecord(record, target.ScriptName), safeAppError(saveErr)
+		}
+		result, upgradeErr := s.lifecycle.Upgrade(ctx, target, pkg)
+		if upgradeErr == nil && result.State == deployment.StatePublished {
+			record.State = deployment.StatePublished
+			record.DeploymentID = result.DeploymentID
+			record.StagedVersionID = result.VersionID
+			record.ReleaseVersion = desiredVersion
+			record.UpdatedAt = s.now()
+			markStepsPublished(record.Steps)
+			if saveErr := s.journal.Save(record); saveErr != nil {
+				return s.summaryFromRecord(record, target.ScriptName), safeAppError(saveErr)
+			}
+			return s.summaryFromRecord(record, target.ScriptName), nil
+		}
+		return s.summaryFromResult(result, target.ScriptName), safeAppError(upgradeErr)
+	}
+	record.State = deployment.StateNeedsInput
+	record.UpdatedAt = s.now()
+	setLastStepNeedsInput(record.Steps, "升级上传结果未知；请核对 Cloudflare 部署后再继续")
+	if saveErr := s.journal.Save(record); saveErr != nil {
+		return s.summaryFromRecord(record, target.ScriptName), safeAppError(saveErr)
+	}
+	summary := s.summaryFromRecord(record, target.ScriptName)
+	summary.Warnings = append(summary.Warnings, "已上传的升级结果无法确认；客户端不会自动重试。")
+	return summary, nil
+}
+
+// AbandonOperation delegates to the state machine that owns the journal
+// record. A publish abandon deletes its pending credential-store values;
+// install and upgrade abandons never touch those references.
+func (s *Service) AbandonOperation(id string) (ResultDTO, error) {
+	ctx := context.Background()
+	target, err := s.managedTarget(ctx)
+	if err != nil {
+		return ResultDTO{}, err
+	}
+	if s.journal == nil {
+		return ResultDTO{}, serviceUnavailable()
+	}
+	operationID := strings.TrimSpace(id)
+	record, err := s.journal.Load(operationID)
+	if err != nil {
+		return ResultDTO{OperationID: operationID}, safeAppError(err)
+	}
+	if record.Target != target {
+		return ResultDTO{OperationID: operationID}, domain.Error{
+			Code:    CodeTargetMismatch,
+			Message: "该操作属于另一个部署；请先选择对应部署再放弃",
+		}
+	}
+	switch record.Kind {
+	case deployment.KindInstall, deployment.KindUpgrade:
+		if s.lifecycle == nil {
+			return ResultDTO{}, serviceUnavailable()
+		}
+		result, abandonErr := s.lifecycle.Abandon(ctx, operationID)
+		return s.summaryFromResult(result, target.ScriptName), safeAppError(abandonErr)
+	default:
+		if s.publish == nil {
+			return ResultDTO{}, serviceUnavailable()
+		}
+		result, abandonErr := s.publish.Abandon(ctx, operationID)
+		return s.summaryFromResult(result, target.ScriptName), safeAppError(abandonErr)
+	}
+}
+
+func installRequestFromRecord(record deployment.OperationRecord) (deployment.InstallRequest, error) {
+	if len(record.ConfigJSON) == 0 {
+		return deployment.InstallRequest{}, domain.Error{
+			Code:    deployment.CodeConfigMissing,
+			Message: "安装操作缺少已保存的配置，无法按原请求继续",
+		}
+	}
+	var document struct {
+		Owner struct {
+			TelegramUserIDs []int64 `json:"telegramUserIds"`
+		} `json:"owner"`
+		Models struct {
+			Butler json.RawMessage `json:"butler"`
+			Task   json.RawMessage `json:"task"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(record.ConfigJSON, &document); err != nil {
+		return deployment.InstallRequest{}, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "安装操作保存的配置不是有效 JSON",
+		}
+	}
+	config := deployment.InstallConfig{
+		TelegramUserIDs: append([]int64(nil), document.Owner.TelegramUserIDs...),
+	}
+	if len(document.Models.Butler) > 0 {
+		config.ButlerModel = append(json.RawMessage(nil), document.Models.Butler...)
+	}
+	if len(document.Models.Task) > 0 {
+		config.TaskModel = append(json.RawMessage(nil), document.Models.Task...)
+	}
+	return deployment.InstallRequest{
+		AccountID:     record.Target.AccountID,
+		WorkerName:    record.Target.ScriptName,
+		BucketName:    record.BucketName,
+		Config:        config,
+		ActiveChannel: record.ActiveChannel,
+	}, nil
+}
+
+func markStepsPublished(steps []domain.Step) {
+	for index := range steps {
+		if steps[index].State != deployment.StatePublished {
+			steps[index].State = deployment.StatePublished
+		}
+	}
+}
+
+func setLastStepNeedsInput(steps []domain.Step, message string) {
+	if len(steps) == 0 {
+		return
+	}
+	last := len(steps) - 1
+	steps[last].State = deployment.StateNeedsInput
+	steps[last].Message = message
+}
+
+func (s *Service) summaryFromRecord(record deployment.OperationRecord, workerName string) ResultDTO {
+	return ResultDTO{
+		OperationID:    record.OperationID,
+		DeploymentID:   record.DeploymentID,
+		VersionID:      record.StagedVersionID,
+		State:          record.State,
+		WorkerName:     workerName,
+		ReleaseVersion: record.ReleaseVersion,
+		ActiveChannel:  record.ActiveChannel,
+		Steps:          stepDTOs(record.Steps),
+	}
 }
 
 // PendingOperations lists unfinished journaled operations, newest first.

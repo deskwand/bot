@@ -886,7 +886,7 @@ func TestUpgradeUnknownVersionNeedsInput(t *testing.T) {
 	f.API.scripts = []cloudflare.ScriptSummary{{ID: "deskwand-bot", MigrationTag: "v2"}}
 
 	result, err := f.Lifecycle.Upgrade(context.Background(), f.target(), pkg)
-	assertCode(t, err, CodeVersionUnknown)
+	assertCode(t, err, CodeVersionUnknownReimport)
 	assertLifecycleState(t, result, StateNeedsInput)
 }
 

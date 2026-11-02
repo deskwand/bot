@@ -27,10 +27,11 @@ export function ErrorAlert({
   onReload?: () => void;
   reloadLabel?: string;
 }) {
-  const { navigate } = useApp();
+  const { navigate, navigateImport } = useApp();
   if (!error) return null;
   const parsed = toClientError(error);
-  const goUpdates = parsed.code === "UPGRADE_REQUIRED" || parsed.code === "UPGRADE_REQUIRED_FIRST";
+  const goUpdates = parsed.code === "UPGRADE_REQUIRED";
+  const importAgain = parsed.code === "VERSION_UNKNOWN_REIMPORT";
   const waitForPending =
     parsed.code === "OPERATION_IN_PROGRESS" || parsed.code === "INSTALL_CONFLICT";
   return (
@@ -47,11 +48,16 @@ export function ErrorAlert({
         {parsed.message !== describeCode(parsed.code) ? (
           <span className="mt-1 block text-xs opacity-80">{describeCode(parsed.code)}</span>
         ) : null}
-        {onRetry || onReload || goUpdates || waitForPending ? (
+        {onRetry || onReload || goUpdates || importAgain || waitForPending ? (
           <span className="mt-3 flex flex-wrap gap-2">
             {goUpdates ? (
               <Button type="button" size="sm" onClick={() => navigate("updates")}>
                 前往更新页
+              </Button>
+            ) : null}
+            {importAgain ? (
+              <Button type="button" size="sm" onClick={navigateImport}>
+                重新导入
               </Button>
             ) : null}
             {waitForPending ? (

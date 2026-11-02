@@ -78,13 +78,15 @@ export function describeCode(code: string): string {
     case "UPGRADE_REQUIRED":
       return "云端版本与客户端不一致。请先在“更新”页升级云端服务。";
     case "UPGRADE_REQUIRED_FIRST":
-      return "该已有部署需要先完成兼容升级。请前往“更新”页升级后再继续。";
+      return "该已有部署的 Durable Object 迁移版本较旧，当前客户端不能直接接管。请让维护者先用命令行部署与当前客户端匹配的版本，然后重新导入。";
     case "DOWNGRADE_REJECTED":
       return "云端版本比客户端新，不能降级。请先升级客户端。";
     case "UPGRADE_REQUIRES_INTERMEDIATE":
       return "该版本不能直接升级，需要先升级到中间版本。请按“更新”页提示逐步升级。";
     case "VERSION_UNKNOWN":
       return "无法识别当前或目标版本。请刷新后重试，或安装与云端匹配的客户端。";
+    case "VERSION_UNKNOWN_REIMPORT":
+      return "云端版本未知（可能用命令行部署过）。请在“连接已有服务”中重新导入";
     case "MIGRATION_HISTORY_MISMATCH":
       return "部署的迁移历史与发布包不匹配。为避免数据风险，客户端不会覆盖它；请先核对 Cloudflare 部署。";
     case "IRREVERSIBLE_MIGRATION":
@@ -95,6 +97,16 @@ export function describeCode(code: string): string {
       return "无法确认现有存储资源身份。为避免覆盖数据，客户端已停止操作；请检查部署绑定。";
     case "UP_TO_DATE":
       return "云端服务已是客户端内置的最新版本。";
+    case "CLIENT_UPDATE_NOT_CONFIGURED":
+      return "此客户端构建未配置更新源，无法检查或安装客户端更新。";
+    case "CLIENT_UPDATE_SIGNATURE_INVALID":
+      return "客户端更新包签名无效，已拒绝安装。请只使用官方更新源。";
+    case "CLIENT_UPDATE_DOWNGRADE_REJECTED":
+      return "更新源提供的版本低于当前客户端，已拒绝降级。";
+    case "CLIENT_UPDATE_NOT_CHECKED":
+      return "请先检查客户端更新，再点击安装。";
+    case "CLIENT_UPDATE_FAILED":
+      return "客户端更新失败。现有客户端仍可继续使用，请稍后重试。";
 
     // Installation and resources.
     case "NAME_TAKEN":

@@ -14,6 +14,7 @@ export const PAGE_LABELS: Record<Page, string> = {
 export interface AppContextValue {
   client: ClientService;
   navigate: (page: Page) => void;
+  navigateImport: () => void;
   setDirty: (dirty: boolean) => void;
 }
 

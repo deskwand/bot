@@ -83,8 +83,8 @@ func (l *Lifecycle) Upgrade(ctx context.Context, target domain.Target, pkg relea
 	}
 	if snapshot.ReleaseVersion == "" {
 		return domain.Result{State: StateNeedsInput}, domain.Error{
-			Code:    CodeVersionUnknown,
-			Message: "the current release version is unknown; refresh after the deployment reports a version",
+			Code:    CodeVersionUnknownReimport,
+			Message: "the current release version is unknown; import the existing service again",
 		}
 	}
 
@@ -477,6 +477,30 @@ func inspectUpgradeBindings(settingsJSON []byte, template release.ResourceTempla
 		}
 	}
 	return inspection, nil
+}
+
+// VerifyUpgradeIdentity checks that a live deployment still has the bindings
+// and resource identifiers an upgrade promised to preserve. It is used when a
+// resumed upgrade has to decide whether an earlier upload is already live.
+func VerifyUpgradeIdentity(settingsJSON []byte, template release.ResourceTemplate, bucketName string) error {
+	inspection, err := inspectUpgradeBindings(settingsJSON, template)
+	if err != nil {
+		return err
+	}
+	if _, err := resourceIdentity(settingsJSON); err != nil {
+		return err
+	}
+	currentBucket, err := bucketNameForUpgrade(inspection, template)
+	if err != nil {
+		return err
+	}
+	if bucketName != "" && currentBucket != "" && currentBucket != bucketName {
+		return domain.Error{
+			Code:    CodeResourceIdentityChanged,
+			Message: "the upgrade changed the R2 bucket binding",
+		}
+	}
+	return nil
 }
 
 func templateDOClass(template release.ResourceTemplate, name string) string {

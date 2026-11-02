@@ -266,6 +266,26 @@ test("OPERATION_IN_PROGRESS does not re-run install and points to pending resume
 });
 
 
+test("a pending operation can be abandoned after confirmation", async ({ page }) => {
+  await page.goto("/test.html?fixture=pending-operations");
+  await expect(page.getByText("有未完成的部署操作")).toBeVisible();
+  await page.getByRole("button", { name: "放弃", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "确认放弃操作" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/不会删除已创建的 Cloudflare 资源/)).toBeVisible();
+  await dialog.getByRole("button", { name: "确认放弃" }).click();
+  await expect(page.getByText("有未完成的部署操作")).toHaveCount(0);
+});
+
+test("unknown cloud release points to the import flow", async ({ page }) => {
+  await page.goto("/test.html?fixture=version-unknown");
+  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await expect(page.getByText(/VERSION_UNKNOWN_REIMPORT/)).toBeVisible();
+  await expect(page.getByText(/可能用命令行部署过/)).toBeVisible();
+  await page.getByRole("button", { name: "重新导入" }).click();
+  await expect(page.getByRole("heading", { name: "连接已有服务", exact: true })).toBeVisible();
+});
+
 test("credential store unavailability is shown on the welcome page", async ({ page }) => {
   await page.goto("/test.html?fixture=store-unavailable");
   await expect(page.getByRole("heading", { name: "部署一次，随时管理。" })).toBeVisible();
@@ -397,6 +417,30 @@ test("user-confirmed evidence is labelled separately from cloud verification", a
   await expect(page.getByText("运行中", { exact: true })).toHaveCount(0);
   await expect(page.getByText("服务可连接", { exact: true })).toHaveCount(0);
   await expect(page.getByText("收发已验证", { exact: true })).toHaveCount(0);
+});
+
+test("client update is installed only on request and stays separate from the cloud", async ({ page }) => {
+  await page.goto("/test.html?fixture=client-update-available");
+  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "更新", exact: true })).toBeVisible();
+  await expect(page.getByText("客户端可更新")).toBeVisible();
+  await expect(page.getByText(/当前 0\.1\.0 → 可用 0\.2\.0/)).toBeVisible();
+  await expect(page.getByText("云端服务").first()).toBeVisible();
+  await expect(page.getByText("升级结果")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "安装客户端更新" }).click();
+  await expect(page.getByText("客户端更新已安装", { exact: true })).toBeVisible();
+  await expect(page.getByText(/重启客户端后生效/)).toBeVisible();
+  await expect(page.getByText("升级结果")).toHaveCount(0);
+  await screenshot(page, "05-client-update.png");
+});
+
+test("client update shows the unconfigured feed state", async ({ page }) => {
+  await page.goto("/test.html?fixture=client-update-unavailable");
+  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "更新", exact: true })).toBeVisible();
+  await expect(page.getByText("未配置更新源")).toBeVisible();
+  await expect(page.getByRole("button", { name: "安装客户端更新" })).toBeDisabled();
 });
 
 test("cloud upgrade requires confirmation and reports the control-plane result", async ({ page }) => {

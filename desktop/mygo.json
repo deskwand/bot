@@ -8,5 +8,13 @@
   "buildCommand": "npm --prefix frontend run build",
   "frontendDist": "frontend/dist",
   "bindings": "frontend/src/mygo.ts",
-  "out": "build"
+  "out": "build",
+  "macos": {
+    "minimumSystemVersion": "12.0",
+    "dmgTitle": "DeskWand Bot"
+  },
+  "windows": {
+    "displayName": "DeskWand Bot",
+    "installDirName": "DeskWand Bot"
+  }
 }

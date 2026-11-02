@@ -149,7 +149,13 @@ func (s *Service) checkReleaseVersion(snapshot domain.Snapshot, allowChange bool
 		return nil
 	}
 	clientVersion := s.pkg.Version()
-	if clientVersion == "" || snapshot.ReleaseVersion == "" {
+	if snapshot.ReleaseVersion == "" {
+		return domain.Error{
+			Code:    CodeVersionUnknownReimport,
+			Message: "云端版本未知（可能用命令行部署过）；请在“连接已有服务”中重新导入",
+		}
+	}
+	if clientVersion == "" {
 		return domain.Error{Code: CodeUpgradeRequired, Message: "请先在“更新”页升级云端服务"}
 	}
 	comparison, comparable := CompareVersions(snapshot.ReleaseVersion, clientVersion)

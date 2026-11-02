@@ -54,6 +54,7 @@ export function App({ client }: { client: ClientService }) {
   const [pending, setPending] = useState<OperationDTO[]>([]);
   const [dirty, setDirtyState] = useState(false);
   const [pendingNav, setPendingNav] = useState<Page | null>(null);
+  const [setupImport, setSetupImport] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const { page, setPage } = useUiStore();
 
@@ -148,9 +149,21 @@ export function App({ client }: { client: ClientService }) {
     return result;
   };
 
+  const abandon = async (operation: OperationDTO) => {
+    const result = await client.abandonOperation(operation.operationId);
+    if (result.state === "cancelled") {
+      setPending((current) => current.filter((item) => item.operationId !== operation.operationId));
+    }
+    return result;
+  };
+
+  const navigateImport = useCallback(() => {
+    setSetupImport(true);
+  }, []);
+
   const appValue = useMemo(
-    () => ({ client, navigate, setDirty: setDirtyState }),
-    [client, navigate],
+    () => ({ client, navigate, navigateImport, setDirty: setDirtyState }),
+    [client, navigate, navigateImport],
   );
 
   const shell = session.kind === "ready";
@@ -214,11 +227,22 @@ export function App({ client }: { client: ClientService }) {
                 <Loader2 className="size-5 animate-spin motion-reduce:animate-none" aria-hidden />
                 正在读取客户端状态…
               </div>
+            ) : shell && setupImport ? (
+              <Setup
+                phase="choose"
+                initialStep="import"
+                onSessionChange={() => refresh(false)}
+                onReady={() => {
+                  setSetupImport(false);
+                  void refresh(false);
+                }}
+              />
             ) : shell ? (
               <>
                 <PendingOperations
                   operations={pending}
                   onResume={resume}
+                  onAbandon={abandon}
                   onDismiss={(id) =>
                     setPending((current) => current.filter((item) => item.operationId !== id))
                   }
@@ -286,19 +310,40 @@ function PageLoading({ label }: { label: string }) {
 function PendingOperations({
   operations,
   onResume,
+  onAbandon,
   onDismiss,
 }: {
   operations: OperationDTO[];
   onResume: (operation: OperationDTO) => Promise<unknown>;
+  onAbandon: (operation: OperationDTO) => Promise<unknown>;
   onDismiss: (id: string) => void;
 }) {
   const [running, setRunning] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [result, setResult] = useState<{ id: string; state: string; steps: OperationDTO["steps"] } | null>(null);
+  const [abandonTarget, setAbandonTarget] = useState<OperationDTO | null>(null);
+
+  const runAbandon = async () => {
+    const operation = abandonTarget;
+    if (!operation) return;
+    setAbandonTarget(null);
+    setError(null);
+    setRunning(operation.operationId);
+    try {
+      const value = await onAbandon(operation);
+      const typed = value as { state?: string; steps?: OperationDTO["steps"] };
+      setResult({ id: operation.operationId, state: typed.state ?? "", steps: typed.steps });
+    } catch (cause) {
+      setError(cause);
+    } finally {
+      setRunning(null);
+    }
+  };
 
   if (operations.length === 0) return null;
 
   return (
+    <>
     <Card className="mb-6 border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
       <CardContent className="pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -356,6 +401,15 @@ function PendingOperations({
                 </Button>
                 <Button
                   type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={running === operation.operationId}
+                  onClick={() => setAbandonTarget(operation)}
+                >
+                  放弃
+                </Button>
+                <Button
+                  type="button"
                   size="sm"
                   disabled={running === operation.operationId}
                   onClick={() => {
@@ -381,6 +435,25 @@ function PendingOperations({
         </ul>
       </CardContent>
     </Card>
+    <Dialog open={abandonTarget !== null} onOpenChange={(open) => !open && setAbandonTarget(null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>确认放弃操作</DialogTitle>
+          <DialogDescription>
+            放弃只会取消客户端的待处理记录，不会删除已创建的 Cloudflare 资源、云端数据或 secrets。若上传结果未知，远端状态仍需核对。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setAbandonTarget(null)}>
+            继续处理
+          </Button>
+          <Button type="button" variant="destructive" onClick={() => void runAbandon()}>
+            确认放弃
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 
