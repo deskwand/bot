@@ -30,10 +30,15 @@
     <g transform="translate(50 52) rotate(-22)" fill="none" stroke-width="5" stroke-linecap="round">
       <path stroke="url(#cold)" stroke-opacity="0.45" d="M-42 0 A42 13 0 0 1 42 0"/>
     </g>
-    <circle cx="50" cy="52" r="21" fill="url(#gold)"/>
-    <!-- Orbit, front half: a base-coloured gap, then the ring over the planet. -->
+    <!-- The planet is masked along the front half of the orbit, so the gap
+         shows the real base underneath instead of painting a rim of its own. -->
+    <mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+      <rect width="100" height="100" fill="#fff"/>
+      <path transform="translate(50 52) rotate(-22)" fill="none" stroke="#000" stroke-width="11" stroke-linecap="round" d="M-42 0 A42 13 0 0 0 42 0"/>
+    </mask>
+    <circle cx="50" cy="52" r="21" fill="url(#gold)" mask="url(#gap)"/>
+    <!-- Orbit, front half: over the planet. -->
     <g transform="translate(50 52) rotate(-22)" fill="none" stroke-linecap="round">
-      <path stroke="url(#base)" stroke-width="11" d="M-42 0 A42 13 0 0 0 42 0"/>
       <path stroke="url(#cold)" stroke-width="5" d="M-42 0 A42 13 0 0 0 42 0"/>
     </g>
     <circle cx="87.9" cy="57.8" r="5.5" fill="url(#cold)"/>

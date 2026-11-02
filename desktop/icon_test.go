@@ -49,6 +49,31 @@ func TestAppIconPNG(t *testing.T) {
 	}
 }
 
+// The gap under the front of the orbit must reveal the base, not paint a
+// rim of its own: next to the ring's left tip it matches the base beside it.
+func TestAppIconRingHasNoHalo(t *testing.T) {
+	f, err := os.Open(filepath.Join("resources", "icon.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gap := color.NRGBAModel.Convert(img.At(192, 640)).(color.NRGBA)
+	base := color.NRGBAModel.Convert(img.At(175, 640)).(color.NRGBA)
+	diff := func(a, b uint8) int {
+		if a > b {
+			return int(a - b)
+		}
+		return int(b - a)
+	}
+	if diff(gap.R, base.R) > 6 || diff(gap.G, base.G) > 6 || diff(gap.B, base.B) > 6 {
+		t.Errorf("gap at (192,640) = %v, base at (175,640) = %v: the ring has a visible rim", gap, base)
+	}
+}
+
 func TestAppIconSVG(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("resources", "icon.svg"))
 	if err != nil {
