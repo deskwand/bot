@@ -52,10 +52,14 @@ type systemCredentialStore struct {
 
 // NewSystemCredentialStore returns a credential store backed by the MyGo
 // system secret service for service. An empty service uses MyGo's app
-// identifier. Values are limited to mygo.MaxSecretSize bytes and keys to 256
-// bytes, matching the Windows Credential Manager's portable limits.
+// identifier. Keys are kept together in one "vault" item so macOS asks for
+// Keychain access at most once per launch; keys under PassthroughKeyPrefix
+// keep their own items. Items stored per key by earlier versions move into
+// the vault when first read. The whole vault and each pass-through value are
+// limited to mygo.MaxSecretSize bytes, and keys to 256 bytes, matching the
+// Windows Credential Manager's portable limits.
 func NewSystemCredentialStore(service string) CredentialStore {
-	return newSystemCredentialStore(service, mygoSecretBackend{module: mygo.Secrets.Service(service)})
+	return newVaultCredentialStore(newSystemCredentialStore(service, mygoSecretBackend{module: mygo.Secrets.Service(service)}))
 }
 
 func newSystemCredentialStore(_ string, backend secretBackend) CredentialStore {

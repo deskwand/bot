@@ -57,9 +57,26 @@ func (s *vaultCredentialStore) Get(ctx context.Context, key string) (string, err
 	if err := s.load(ctx); err != nil {
 		return "", err
 	}
-	value, ok := s.items[key]
-	if !ok {
-		return "", ErrCredentialNotFound
+	if value, ok := s.items[key]; ok {
+		return value, nil
+	}
+	return s.migrate(ctx, key)
+}
+
+// migrate moves a key from its own credential item, as stored before the
+// vault existed, into the vault. The value is returned even when the vault
+// write fails; the legacy item is then kept so a later read can try again.
+// The caller holds s.mu.
+func (s *vaultCredentialStore) migrate(ctx context.Context, key string) (string, error) {
+	value, err := s.inner.Get(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	next := maps.Clone(s.items)
+	next[key] = value
+	if s.write(ctx, next) == nil {
+		// The vault now holds the key, so a stale legacy item is never read.
+		_ = s.inner.Delete(ctx, key)
 	}
 	return value, nil
 }
@@ -93,12 +110,15 @@ func (s *vaultCredentialStore) Delete(ctx context.Context, key string) error {
 	if err := s.load(ctx); err != nil {
 		return err
 	}
-	if _, ok := s.items[key]; !ok {
-		return nil
+	if _, ok := s.items[key]; ok {
+		next := maps.Clone(s.items)
+		delete(next, key)
+		if err := s.write(ctx, next); err != nil {
+			return err
+		}
 	}
-	next := maps.Clone(s.items)
-	delete(next, key)
-	return s.write(ctx, next)
+	// Also remove a legacy item that was never migrated.
+	return s.inner.Delete(ctx, key)
 }
 
 func checkVaultKey(ctx context.Context, key string) error {

@@ -268,3 +268,124 @@ func TestVaultCancelledContextSkipsBackend(t *testing.T) {
 		t.Fatalf("backend touched: get=%d set=%d delete=%d", b.getCalls, b.setCalls, b.deleteCalls)
 	}
 }
+
+func TestVaultMigratesLegacyItemOnMiss(t *testing.T) {
+	b := &fakeSecretBackend{values: map[string][]byte{"cloudflare.api-token": []byte("tok")}}
+	store := newTestVault(b)
+	ctx := context.Background()
+
+	if got, err := store.Get(ctx, "cloudflare.api-token"); err != nil || got != "tok" {
+		t.Fatalf("Get = %q, %v", got, err)
+	}
+	if got := vaultItems(t, b); !reflect.DeepEqual(got, map[string]string{"cloudflare.api-token": "tok"}) {
+		t.Fatalf("vault items = %v", got)
+	}
+	if _, ok := b.values["cloudflare.api-token"]; ok {
+		t.Fatal("legacy item was not deleted")
+	}
+	calls := b.getCalls
+	if got, err := store.Get(ctx, "cloudflare.api-token"); err != nil || got != "tok" {
+		t.Fatalf("second Get = %q, %v", got, err)
+	}
+	if b.getCalls != calls {
+		t.Fatalf("second Get read the backend (%d → %d calls)", calls, b.getCalls)
+	}
+}
+
+func TestVaultMigrationKeepsValueWhenLegacyDeleteFails(t *testing.T) {
+	b := &fakeSecretBackend{
+		values:    map[string][]byte{"a": []byte("1")},
+		deleteErr: map[string]error{"a": errors.New("denied")},
+	}
+	store := newTestVault(b)
+
+	if got, err := store.Get(context.Background(), "a"); err != nil || got != "1" {
+		t.Fatalf("Get = %q, %v", got, err)
+	}
+	if got := vaultItems(t, b); got["a"] != "1" {
+		t.Fatalf("vault items = %v", got)
+	}
+}
+
+func TestVaultMigrationKeepsLegacyWhenVaultWriteFails(t *testing.T) {
+	b := &fakeSecretBackend{
+		values: map[string][]byte{"a": []byte("1")},
+		setErr: errors.New("denied"),
+	}
+	store := newTestVault(b)
+
+	if got, err := store.Get(context.Background(), "a"); err != nil || got != "1" {
+		t.Fatalf("Get = %q, %v", got, err)
+	}
+	if string(b.values["a"]) != "1" {
+		t.Fatalf("legacy item = %q, want it kept", b.values["a"])
+	}
+	if b.deleteCalls != 0 {
+		t.Fatalf("backend Delete calls = %d, want 0", b.deleteCalls)
+	}
+}
+
+func TestVaultMissingEverywhereIsNotFound(t *testing.T) {
+	store := newTestVault(&fakeSecretBackend{})
+	if _, err := store.Get(context.Background(), "a"); !errors.Is(err, ErrCredentialNotFound) {
+		t.Fatalf("Get = %v, want ErrCredentialNotFound", err)
+	}
+}
+
+func TestVaultDeleteRemovesVaultAndLegacy(t *testing.T) {
+	b := &fakeSecretBackend{values: map[string][]byte{
+		vaultKey: []byte(`{"v":1,"items":{"a":"1"}}`),
+		"a":      []byte("old"),
+	}}
+	store := newTestVault(b)
+	ctx := context.Background()
+
+	if err := store.Delete(ctx, "a"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok := vaultItems(t, b)["a"]; ok {
+		t.Fatal("vault still holds a")
+	}
+	if _, ok := b.values["a"]; ok {
+		t.Fatal("legacy item a still exists")
+	}
+	if err := store.Delete(ctx, "never"); err != nil {
+		t.Fatalf("Delete missing key: %v", err)
+	}
+}
+
+func TestVaultDisconnectThenReconnect(t *testing.T) {
+	b := &fakeSecretBackend{values: map[string][]byte{
+		"cloudflare.api-token":  []byte("old-tok"),
+		"cloudflare.account-id": []byte("old-acc"),
+	}}
+	store := newTestVault(b)
+	ctx := context.Background()
+	keys := []string{"cloudflare.api-token", "cloudflare.account-id"}
+
+	for _, key := range keys {
+		if _, err := store.Get(ctx, key); err != nil {
+			t.Fatalf("Get %s: %v", key, err)
+		}
+	}
+	for _, key := range keys {
+		if err := store.Delete(ctx, key); err != nil {
+			t.Fatalf("Delete %s: %v", key, err)
+		}
+	}
+	if err := store.Set(ctx, "cloudflare.api-token", "new-tok"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(ctx, "cloudflare.account-id", "new-acc"); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"cloudflare.api-token": "new-tok", "cloudflare.account-id": "new-acc"}
+	if got := vaultItems(t, b); !reflect.DeepEqual(got, want) {
+		t.Fatalf("vault items = %v, want %v", got, want)
+	}
+	for _, key := range keys {
+		if _, ok := b.values[key]; ok {
+			t.Fatalf("legacy item %s reappeared", key)
+		}
+	}
+}
