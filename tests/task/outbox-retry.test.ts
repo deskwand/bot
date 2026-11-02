@@ -33,7 +33,11 @@ describe("TaskDO outbox retry", () => {
     const first = await runInDurableObject(stub, async (instance) => {
       const target = instance as unknown as {
         setMeta(key: string, value: string): void;
-        emitProgress(body: { type: "progress"; text: string }): Promise<void>;
+        emitProgress(body: {
+          type: "failed";
+          reason: string;
+          retryable: boolean;
+        }): Promise<void>;
         retryOutbox(): Promise<void>;
         deliver(event: unknown): Promise<void>;
         listSchedules(): Promise<{ id: string; callback: string }[]>;
@@ -46,9 +50,9 @@ describe("TaskDO outbox retry", () => {
         throw new Error("butler down");
       };
 
-      await target.emitProgress({ type: "progress", text: "hello" });
+      await target.emitProgress({ type: "failed", reason: "hello", retryable: true });
       // A second failed flush must not enqueue a duplicate retry.
-      await target.emitProgress({ type: "progress", text: "again" });
+      await target.emitProgress({ type: "failed", reason: "again", retryable: true });
 
       const retries = (await target.listSchedules()).filter(
         (schedule) => schedule.callback === "retryOutbox",
@@ -75,12 +79,12 @@ describe("TaskDO outbox retry", () => {
 
     const events = await butler().debugEvents(taskId);
     expect(events.map((event) => event.type)).toEqual([
-      "progress",
-      "progress",
+      "failed",
+      "failed",
     ]);
     expect(events.map((event) => event.payload)).toMatchObject([
-      { text: "hello" },
-      { text: "again" },
+      { reason: "hello" },
+      { reason: "again" },
     ]);
   });
 
@@ -116,7 +120,11 @@ describe("TaskDO outbox retry", () => {
       await runInDurableObject(stub, async (instance) => {
         const target = instance as unknown as {
           setMeta(key: string, value: string): void;
-          emitProgress(body: { type: "progress"; text: string }): Promise<void>;
+          emitProgress(body: {
+          type: "failed";
+          reason: string;
+          retryable: boolean;
+        }): Promise<void>;
           deliver(event: unknown): Promise<void>;
         };
         target.setMeta("task_id", taskId);
@@ -135,7 +143,7 @@ describe("TaskDO outbox retry", () => {
           await original(event);
         };
 
-        await target.emitProgress({ type: "progress", text: "survives" });
+        await target.emitProgress({ type: "failed", reason: "survives", retryable: true });
       });
 
       // First failure: one retry is pending after 30 seconds.
@@ -169,7 +177,7 @@ describe("TaskDO outbox retry", () => {
       expect(afterSecondAlarm.attempt).toBe(0);
       const events = await butler().debugEvents(taskId);
       expect(events.map((event) => event.payload)).toMatchObject([
-        { text: "survives" },
+        { reason: "survives" },
       ]);
     } finally {
       // Do not leave the test's retry alarm behind for later tests.

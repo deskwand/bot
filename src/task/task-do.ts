@@ -53,6 +53,27 @@ const FinishTask = Type.Object({
 });
 
 /**
+ * Drops pi's non-unique secondary indexes after its migrations ran. Every
+ * index update bills as an extra SQLite row written, and pi upserts its task
+ * records many times per model step. A Task DO holds one short task, so its
+ * pi tables stay tiny and full scans cost next to nothing. Constraint indexes
+ * (no `sql`, or UNIQUE) are kept. Idempotent: pi may reopen the harness.
+ */
+function dropPiSecondaryIndexes(sql: SqlStorage): void {
+  const names = sql
+    .exec<{ name: string }>(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'index' AND tbl_name LIKE 'pi\\_%' ESCAPE '\\'
+         AND sql IS NOT NULL AND sql NOT LIKE 'CREATE UNIQUE%'`,
+    )
+    .toArray()
+    .map((row) => row.name);
+  for (const name of names) {
+    sql.exec(`DROP INDEX IF EXISTS "${name}"`);
+  }
+}
+
+/**
  * Execution-plane object: one instance per task, hosting a Pi sub-agent.
  * It never talks to a channel; everything is reported to the Butler through
  * the durable `Outbox`.
@@ -150,8 +171,8 @@ export class TaskDO extends Agent<Env> {
     // the constructor config-free lets alarms and control RPCs run without a
     // readable DESKWAND_CONFIG.
     this.harness = new PiHarness({
-      harness: ({ storage, context, onWake }) =>
-        Harness.open(
+      harness: async ({ storage, context, onWake }) => {
+        const harness = await Harness.open(
           storage,
           {
             models: createModelsForEnv(this.env),
@@ -162,7 +183,10 @@ export class TaskDO extends Agent<Env> {
             },
           },
           context,
-        ),
+        );
+        dropPiSecondaryIndexes(this.db);
+        return harness;
+      },
     });
 
     // `Agent` already installed the lifecycle; adding to it is required.
@@ -568,6 +592,12 @@ export class TaskDO extends Agent<Env> {
   private async emitProgress(body: TaskEventBody): Promise<void> {
     const taskId = this.currentTaskId();
     if (!taskId) return;
+    if (body.type === "progress") {
+      // Display-only: bypass the outbox so tool steps write no event rows.
+      const butler = this.env.BUTLER.get(this.env.BUTLER.idFromName("owner"));
+      await butler.reportTaskProgress(taskId, body.text);
+      return;
+    }
     await this.outboxFor(taskId).emit(body);
   }
 

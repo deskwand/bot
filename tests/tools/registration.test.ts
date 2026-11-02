@@ -1,5 +1,6 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ButlerDO } from "../../src/butler/butler-do";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import { fakeChannel } from "../helpers/fake-channel";
@@ -16,6 +17,7 @@ beforeEach(() => {
 afterEach(() => {
   setModelOverride(null);
   setChannelOverride("telegram", null);
+  vi.restoreAllMocks();
 });
 
 function butler() {
@@ -43,7 +45,8 @@ describe("TaskDO execution tools", () => {
     );
   });
 
-  it("emits progress when a task calls save_artifact", async () => {
+  it("reports save_artifact progress to the Butler without the outbox", async () => {
+    const progress = vi.spyOn(ButlerDO.prototype, "reportTaskProgress");
     setModelOverride(
       scriptedModel([
         {
@@ -71,20 +74,24 @@ describe("TaskDO execution tools", () => {
         const events = await butler().debugEvents(taskId);
         expect(events.map((event) => event.type)).toEqual([
           "started",
-          "progress",
-          "progress",
           "completed",
         ]);
-        expect(events[1]?.payload).toMatchObject({
-          type: "progress",
-          text: "保存：report.md",
-        });
-        expect(events[2]?.payload).toMatchObject({
-          type: "progress",
-          text: "保存：report.md ✓",
-        });
       },
       { timeout: 10_000 },
     );
+    expect(progress.mock.calls).toEqual([
+      [taskId, "保存：report.md"],
+      [taskId, "保存：report.md ✓"],
+    ]);
+
+    // Progress is display-only: it leaves no durable rows in the Task DO.
+    const stored = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM events WHERE type = 'progress'`,
+        )
+        .toArray()[0]?.count,
+    );
+    expect(stored).toBe(0);
   });
 });

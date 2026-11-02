@@ -330,6 +330,16 @@ export class ButlerDO extends Agent<Env> {
     }
   }
 
+  /**
+   * Display-only progress from a Task DO. Unlike `report` it is neither
+   * sequenced nor stored: a lost update is harmless, and skipping the event
+   * log saves the rows each durable event writes on both sides.
+   */
+  async reportTaskProgress(taskId: string, text: string): Promise<void> {
+    if (!this.repo.get(taskId)) return;
+    await this.handleProgress(taskId, text, getClock().now());
+  }
+
   async report(event: TaskEvent): Promise<void> {
     const now = getClock().now();
 
