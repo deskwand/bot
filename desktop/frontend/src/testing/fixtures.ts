@@ -25,6 +25,8 @@ type Scenario =
   | "default"
   | "cf-denied"
   | "cf-timeout"
+  | "cf-slow-apply"
+  | "cf-slow-apply-fail"
   | "multi-account"
   | "credential-denied"
   | "store-unavailable"
@@ -129,6 +131,8 @@ function scenarioFromLocation(): Scenario {
   switch (value) {
     case "cf-denied":
     case "cf-timeout":
+    case "cf-slow-apply":
+    case "cf-slow-apply-fail":
     case "multi-account":
     case "credential-denied":
     case "store-unavailable":
@@ -366,6 +370,16 @@ export function createMockClient(): ClientService {
 
     async cloudflareStatus() {
       if (state.scenario === "store-unavailable") return { state: "unavailable" };
+      // A real status read has to ask Cloudflare for the deployment, which
+      // takes visible time right after login.
+      const slow = state.connected && state.scenario === "cf-slow-apply";
+      const slowAndFailing = state.connected && state.scenario === "cf-slow-apply-fail";
+      if (slow || slowAndFailing) {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      }
+      if (slowAndFailing) {
+        return { state: "unavailable" };
+      }
       return state.connected
         ? { state: "connected", accountId: state.accountId, accountName: "测试账户" }
         : { state: "disconnected" };

@@ -232,7 +232,7 @@ function ConnectCard({
   onConnected: () => void;
 }) {
   const { client } = useApp();
-  const [state, setState] = useState<"idle" | "waiting" | "select">("idle");
+  const [state, setState] = useState<"idle" | "waiting" | "select" | "connected">("idle");
   const [accounts, setAccounts] = useState<AccountDTO[]>([]);
   const [selected, setSelected] = useState("");
   const [error, setError] = useState<unknown>(null);
@@ -259,8 +259,11 @@ function ConnectCard({
             setState("select");
             break;
           case "connected":
+            // Stay in a success state: the parent keeps rendering this card
+            // until its status read finishes, and flipping back to the login
+            // button here makes a successful login look like a failure.
             opIDRef.current = "";
-            setState("idle");
+            setState("connected");
             onConnected();
             break;
           case "cancelled":
@@ -320,6 +323,11 @@ function ConnectCard({
     }
   };
 
+  // A success that the parent has already contradicted must not keep claiming
+  // success: fall back to the login button so the user still has a way in.
+  const showSuccess = state === "connected" && !connectionError;
+  const showLogin = state === "idle" || (state === "connected" && Boolean(connectionError));
+
   return (
     <Card className="mt-7">
       <CardHeader>
@@ -334,7 +342,7 @@ function ConnectCard({
       <CardContent>
         <ErrorAlert error={connectionError} />
 
-        {state === "idle" ? (
+        {showLogin ? (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">浏览器里完成授权，不需要填写 token。</p>
             <Button type="button" onClick={() => void start()}>
@@ -349,6 +357,18 @@ function ConnectCard({
             <p className="text-sm">已在浏览器打开 Cloudflare 授权页，完成后会自动继续</p>
             <Button type="button" variant="outline" onClick={cancel}>
               取消
+            </Button>
+          </div>
+        ) : null}
+
+        {showSuccess ? (
+          <div className="space-y-3">
+            <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Check className="size-4" aria-hidden />
+              Cloudflare 已连接，正在读取云端服务。
+            </p>
+            <Button type="button" variant="outline" onClick={() => onConnected()}>
+              重新检查
             </Button>
           </div>
         ) : null}

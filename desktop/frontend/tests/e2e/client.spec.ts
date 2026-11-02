@@ -300,6 +300,27 @@ test("a denied authorization explains itself and offers a retry", async ({ page 
   await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
 });
 
+test("a finished login never falls back to the login button", async ({ page }) => {
+  await page.goto("/test.html?fixture=cf-slow-apply");
+  await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
+  // The status read is slow: the card must keep saying "connected", not offer
+  // to log in again as if nothing happened.
+  await expect(page.getByText("Cloudflare 已连接，正在读取云端服务。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "部署新服务" })).toBeVisible();
+});
+
+test("a login the client cannot confirm returns to a usable login card", async ({ page }) => {
+  await page.goto("/test.html?fixture=cf-slow-apply-fail");
+  await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
+  // The status read failed: the card must stop claiming success and give the
+  // login button back instead of leaving a spinner and an error side by side.
+  const alert = page.getByTestId("error-alert");
+  await expect(alert.getByText("CREDENTIAL_STORE_UNAVAILABLE")).toBeVisible();
+  await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
+  await expect(page.getByText("Cloudflare 已连接，正在读取云端服务。")).toHaveCount(0);
+});
+
 test("a timed-out authorization is reported as such", async ({ page }) => {
   await page.goto("/test.html?fixture=cf-timeout");
   await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
