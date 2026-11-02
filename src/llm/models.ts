@@ -6,7 +6,7 @@ import type { PiModel } from "agents/harness/pi";
 
 export type Role = "butler" | "task";
 
-export type ModelRef = { provider: "anthropic" | "opencode-go"; id: string };
+export type ModelRef = { provider: string; id: string };
 
 /**
  * Test-only model override. When set, `resolveModel` returns it regardless of

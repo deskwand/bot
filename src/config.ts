@@ -1,3 +1,4 @@
+import type { CustomProviderConfig } from "./llm/providers";
 import type { ModelRef, Role } from "./llm/models";
 
 export type McpServerConfig = {
@@ -7,9 +8,13 @@ export type McpServerConfig = {
   requireApproval?: string[];
 };
 
+export type ModelsConfig = Record<Role, ModelRef> & {
+  customProviders?: CustomProviderConfig[];
+};
+
 export type AppConfig = {
   owner: { telegramUserIds: number[] };
-  models: Record<Role, ModelRef>;
+  models: ModelsConfig;
   mcpServers: McpServerConfig[];
 };
 

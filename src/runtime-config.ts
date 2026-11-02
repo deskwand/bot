@@ -1,12 +1,14 @@
 import { Validator, type Schema } from "@cfworker/json-schema";
 import schema from "../contracts/deployment-config.schema.json";
 import type { AppConfig } from "./config";
+import { modelsConfigValid } from "./llm/providers";
 
 export type RuntimeConfigErrorCode =
   | "CONFIG_MISSING"
   | "CONFIG_INVALID_JSON"
   | "CONFIG_INVALID_SHAPE"
-  | "CONFIG_SCHEMA_INVALID";
+  | "CONFIG_SCHEMA_INVALID"
+  | "CONFIG_MODELS_INVALID";
 
 const MESSAGES: Record<RuntimeConfigErrorCode, string> = {
   CONFIG_MISSING: "DESKWAND_CONFIG is not set",
@@ -15,6 +17,8 @@ const MESSAGES: Record<RuntimeConfigErrorCode, string> = {
     "DESKWAND_CONFIG must be a JSON object or a string containing one",
   CONFIG_SCHEMA_INVALID:
     "DESKWAND_CONFIG does not match the deployment configuration schema",
+  CONFIG_MODELS_INVALID:
+    "DESKWAND_CONFIG models reference an unknown or conflicting provider",
 };
 
 /** Fixed, sanitized configuration error: never carries raw binding values. */
@@ -59,5 +63,10 @@ export function readRuntimeConfig(env: Env): AppConfig {
     throw new RuntimeConfigError("CONFIG_SCHEMA_INVALID");
   }
 
-  return value as AppConfig;
+  const config = value as AppConfig;
+  if (!modelsConfigValid(config.models)) {
+    throw new RuntimeConfigError("CONFIG_MODELS_INVALID");
+  }
+
+  return config;
 }

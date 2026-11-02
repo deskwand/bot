@@ -56,6 +56,29 @@ describe("readRuntimeConfig", () => {
     expect(error.message).toContain("CONFIG_SCHEMA_INVALID");
   });
 
+  it("rejects a role that references an unknown provider", () => {
+    const invalid = {
+      ...validConfig,
+      models: {
+        ...validConfig.models,
+        butler: { provider: "ghost", id: "ghost-model" },
+      },
+    };
+
+    let caught: unknown;
+    try {
+      readRuntimeConfig(envWith(invalid));
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(RuntimeConfigError);
+    const error = caught as RuntimeConfigError;
+    expect(error.code).toBe("CONFIG_MODELS_INVALID");
+    expect(error.message).not.toContain("ghost");
+    expect(error.message).not.toContain("ghost-model");
+  });
+
   for (const testCase of cases as ConfigCase[]) {
     it(`${testCase.valid ? "accepts" : "rejects"} ${testCase.name}`, () => {
       const env = envWith(testCase.input);

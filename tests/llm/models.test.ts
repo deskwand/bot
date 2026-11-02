@@ -17,7 +17,7 @@ describe("createModelsForEnv", () => {
       envWith({ OPENCODE_API_KEY: "oc-test-key" }),
     );
 
-    for (const ref of Object.values(cfg.models)) {
+    for (const ref of [cfg.models.butler, cfg.models.task]) {
       const model = models.getModel(ref.provider, ref.id);
       expect(model).toBeDefined();
       expect(model).toMatchObject({
