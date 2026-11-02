@@ -9,12 +9,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
 )
-
-const adminRequestTimeout = 5 * time.Minute
 
 const (
 	acquirePath       = "/admin/maintenance/acquire"
@@ -40,11 +37,12 @@ type AdminClient struct {
 	http    *http.Client
 }
 
-// NewAdminClient builds a client for baseURL. A nil httpClient uses a client
-// with a bounded timeout.
+// NewAdminClient builds a client for baseURL. A nil httpClient gets one with
+// no Timeout: a 100 MiB artifact may stream longer than any fixed deadline, so
+// the caller bounds each operation with the request context instead.
 func NewAdminClient(baseURL, token, opID string, httpClient *http.Client) *AdminClient {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: adminRequestTimeout}
+		httpClient = &http.Client{}
 	}
 	return &AdminClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -180,6 +178,9 @@ func (c *AdminClient) GetObject(ctx context.Context, key string) (io.ReadCloser,
 	if err != nil {
 		return nil, err
 	}
+	// A 404 only reaches here after a lease-checked list succeeded, so the
+	// artifact disappeared between listing and reading rather than the
+	// deployment lacking admin support; report it as a damaged backup.
 	if response.StatusCode == http.StatusNotFound {
 		_ = response.Body.Close()
 		return nil, domain.Error{
@@ -197,7 +198,14 @@ func (c *AdminClient) GetObject(ctx context.Context, key string) (io.ReadCloser,
 // reported, so the Worker can reject an object that exceeds its body limit.
 func (c *AdminClient) PutObject(ctx context.Context, item ObjectInfo, body io.Reader) error {
 	query := url.Values{"key": {item.Key}}
-	req, err := c.newRequest(ctx, http.MethodPut, objectPath, query, body)
+	// http.NoBody keeps a zero-length upload framed as Content-Length: 0;
+	// net/http treats a non-nil body with ContentLength 0 as unknown length,
+	// switches to chunked encoding, and the Worker answers 411 instead.
+	requestBody := body
+	if item.Size == 0 {
+		requestBody = http.NoBody
+	}
+	req, err := c.newRequest(ctx, http.MethodPut, objectPath, query, requestBody)
 	if err != nil {
 		return err
 	}

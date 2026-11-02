@@ -8,6 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
@@ -65,6 +68,9 @@ func TestAdminClientMapsStatusCodes(t *testing.T) {
 		{"unavailable", http.StatusNotFound, `Not found`, CodeAdminUnavailable},
 		{"busy", http.StatusConflict, `{"code":"MAINTENANCE_BUSY"}`, CodeMaintenanceBusy},
 		{"required", http.StatusConflict, `{"code":"MAINTENANCE_REQUIRED"}`, CodeMaintenanceRequired},
+		{"conflict_without_code", http.StatusConflict, `{"message":"try later"}`, CodeMaintenanceRequired},
+		{"too_large", http.StatusRequestEntityTooLarge, `{"code":"BACKUP_OBJECT_TOO_LARGE"}`, CodeBackupObjectTooLarge},
+		{"server_error", http.StatusInternalServerError, `{"code":"BACKUP_INVALID","message":"backup request failed"}`, CodeBackupInvalid},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -104,14 +110,162 @@ func TestAdminClientResetTreatsNoContentAsSuccess(t *testing.T) {
 	}
 }
 
-func TestAdminClientObjectsRoundTrip(t *testing.T) {
+func TestAdminClientRedactsTokenInServerMessage(t *testing.T) {
+	const token = "secret-token-value"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"code":"MAINTENANCE_BUSY","message":"lease held by ` + token + `"}`))
+	}))
+	defer server.Close()
+
+	client := NewAdminClient(server.URL, token, "op-1", server.Client())
+	_, err := client.Info(context.Background())
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("error leaked the token: %v", err)
+	}
+	if !strings.Contains(err.Error(), domain.RedactedValue) {
+		t.Fatalf("error does not mention the redaction marker: %v", err)
+	}
+}
+
+func TestAdminClientSendsWireFormat(t *testing.T) {
+	table := TableSchema{
+		Name:         "notes",
+		Create:       `CREATE TABLE "notes" (id INTEGER PRIMARY KEY, body TEXT)`,
+		WithoutRowid: false,
+	}
+	schema := DBSchema{
+		Tables:  []TableSchema{table},
+		Indexes: []string{`CREATE INDEX "notes_body" ON "notes" (body)`},
+	}
 	var (
-		putKey    string
-		putType   string
-		putLength int64
-		putBody   []byte
-		deleted   string
+		acquireBody []byte
+		pageBody    []byte
+		pageQuery   url.Values
+		beginBody   []byte
+		commitBody  []byte
+		pageRestore []byte
 	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read %s body: %v", r.URL.Path, err)
+		}
+		switch r.URL.Path {
+		case "/admin/maintenance/acquire":
+			acquireBody = body
+			_, _ = w.Write([]byte(`{"until":1700000000000}`))
+		case "/admin/backup/page":
+			pageBody = body
+			pageQuery = r.URL.Query()
+			_, _ = w.Write([]byte(`{"rows":[{"id":1}],"next":null}`))
+		case "/admin/restore/begin":
+			beginBody = body
+			w.WriteHeader(http.StatusNoContent)
+		case "/admin/restore/commit":
+			commitBody = body
+			w.WriteHeader(http.StatusNoContent)
+		case "/admin/restore/page":
+			pageRestore = body
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewAdminClient(server.URL, "tok", "op-1", server.Client())
+	ctx := context.Background()
+	ref := DORef{DO: "task", ID: "task-1"}
+
+	if err := client.Acquire(ctx, "export"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(acquireBody), `{"op":"export","opId":"op-1"}`; got != want {
+		t.Fatalf("acquire body = %s, want %s", got, want)
+	}
+
+	rows, next, err := client.Page(ctx, ref, table, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next != nil || len(rows) != 1 || string(rows[0]) != `{"id":1}` {
+		t.Fatalf("page = %s, next = %v", rows, next)
+	}
+	if got := pageQuery.Get("do"); got != "task" {
+		t.Fatalf("page do = %q", got)
+	}
+	if got := pageQuery.Get("id"); got != "task-1" {
+		t.Fatalf("page id = %q", got)
+	}
+	var pageObject map[string]json.RawMessage
+	if err := json.Unmarshal(pageBody, &pageObject); err != nil {
+		t.Fatal(err)
+	}
+	if len(pageObject) != 2 {
+		t.Fatalf("page body keys = %v", pageObject)
+	}
+	if got := string(pageObject["cursor"]); got != "null" {
+		t.Fatalf("page cursor = %s", got)
+	}
+	var pageTable TableSchema
+	if err := json.Unmarshal(pageObject["table"], &pageTable); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(pageTable, table) {
+		t.Fatalf("page table = %+v", pageTable)
+	}
+
+	if err := client.RestoreBegin(ctx, ref, schema); err != nil {
+		t.Fatal(err)
+	}
+	wantSchema, err := json.Marshal(struct {
+		Schema DBSchema `json:"schema"`
+	}{Schema: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(beginBody) != string(wantSchema) {
+		t.Fatalf("begin body = %s, want %s", beginBody, wantSchema)
+	}
+
+	restoreRows := []json.RawMessage{json.RawMessage(`{"id":1}`)}
+	if err := client.RestorePage(ctx, ref, table, restoreRows); err != nil {
+		t.Fatal(err)
+	}
+	var pagePayload struct {
+		Table TableSchema       `json:"table"`
+		Rows  []json.RawMessage `json:"rows"`
+	}
+	if err := json.Unmarshal(pageRestore, &pagePayload); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(pagePayload.Table, table) || len(pagePayload.Rows) != 1 || string(pagePayload.Rows[0]) != `{"id":1}` {
+		t.Fatalf("restore page = %s", pageRestore)
+	}
+
+	if err := client.RestoreCommit(ctx, ref, schema); err != nil {
+		t.Fatal(err)
+	}
+	if string(commitBody) != string(wantSchema) {
+		t.Fatalf("commit body = %s, want %s", commitBody, wantSchema)
+	}
+}
+
+func TestAdminClientObjectsRoundTrip(t *testing.T) {
+	type upload struct {
+		key         string
+		contentType string
+		length      int64
+		transfer    []string
+		body        []byte
+	}
+	var uploads []upload
+	var deleted string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/admin/r2/list" && r.Method == http.MethodGet:
@@ -131,14 +285,17 @@ func TestAdminClientObjectsRoundTrip(t *testing.T) {
 				"next":    nil,
 			})
 		case r.URL.Path == "/admin/r2/object" && r.Method == http.MethodPut:
-			putKey = r.URL.Query().Get("key")
-			putType = r.Header.Get("content-type")
-			putLength = r.ContentLength
-			var err error
-			putBody, err = io.ReadAll(r.Body)
+			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				t.Errorf("read body: %v", err)
 			}
+			uploads = append(uploads, upload{
+				key:         r.URL.Query().Get("key"),
+				contentType: r.Header.Get("content-type"),
+				length:      r.ContentLength,
+				transfer:    append([]string(nil), r.TransferEncoding...),
+				body:        body,
+			})
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/admin/r2/object" && r.Method == http.MethodGet:
 			if got := r.URL.Query().Get("key"); got != "a/b c?.png" {
@@ -186,20 +343,44 @@ func TestAdminClientObjectsRoundTrip(t *testing.T) {
 	}
 
 	item := ObjectInfo{Key: "a/b c?.png", Size: 5, ContentType: "image/png"}
-	if err := client.PutObject(ctx, item, bytes.NewReader([]byte("hello"))); err != nil {
+	if err := client.PutObject(ctx, item, io.MultiReader(bytes.NewReader([]byte("hello")))); err != nil {
 		t.Fatal(err)
 	}
-	if putKey != item.Key {
-		t.Fatalf("put key = %q", putKey)
+	empty := ObjectInfo{Key: "empty.bin", Size: 0, ContentType: "application/octet-stream"}
+	if err := client.PutObject(ctx, empty, io.MultiReader(bytes.NewReader(nil))); err != nil {
+		t.Fatal(err)
 	}
-	if putType != "image/png" {
-		t.Fatalf("put content type = %q", putType)
+
+	if len(uploads) != 2 {
+		t.Fatalf("uploads = %+v", uploads)
 	}
-	if putLength != 5 {
-		t.Fatalf("put content length = %d", putLength)
+	first, second := uploads[0], uploads[1]
+	if first.key != item.Key {
+		t.Fatalf("put key = %q", first.key)
 	}
-	if string(putBody) != "hello" {
-		t.Fatalf("put body = %q", putBody)
+	if first.contentType != "image/png" {
+		t.Fatalf("put content type = %q", first.contentType)
+	}
+	if first.length != 5 {
+		t.Fatalf("put content length = %d", first.length)
+	}
+	if len(first.transfer) != 0 {
+		t.Fatalf("put used transfer encoding %v", first.transfer)
+	}
+	if string(first.body) != "hello" {
+		t.Fatalf("put body = %q", first.body)
+	}
+	if second.key != empty.Key {
+		t.Fatalf("empty put key = %q", second.key)
+	}
+	if second.length != 0 {
+		t.Fatalf("empty put content length = %d", second.length)
+	}
+	if len(second.transfer) != 0 {
+		t.Fatalf("empty put used transfer encoding %v", second.transfer)
+	}
+	if len(second.body) != 0 {
+		t.Fatalf("empty put body = %q", second.body)
 	}
 
 	if err := client.DeleteObject(ctx, item.Key); err != nil {
