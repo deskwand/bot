@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/deskwand/bot/desktop/internal/app"
 	"github.com/deskwand/bot/desktop/internal/auth"
+	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
@@ -44,6 +45,10 @@ func main() {
 		log.Fatal(err)
 	}
 	targets, err := app.NewFileTargetStore(dataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	restoreJournal, err := backup.NewRestoreJournal(filepath.Join(dataDir, "restore"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -94,6 +99,17 @@ func main() {
 		Store:       targets,
 		Browser:     platform.NewSystemBrowserOpener(),
 		Release:     app.EmbeddedRelease{Pkg: pkg, Err: releaseErr},
+		Backup: app.NewBackupRunner(backup.Deps{
+			Token: backup.TokenDeps{
+				Snapshots:   api,
+				Publisher:   publish,
+				Credentials: credentials,
+			},
+			Progress: func(progress backup.Progress) {
+				_ = app.BackupProgressEvent.Broadcast(progress)
+			},
+		}, restoreJournal, filepath.Join(dataDir, "backups")),
+		FileDialogs: mygoFileDialogs{},
 	})
 
 	mygo.Bind(service)
@@ -143,6 +159,36 @@ func credentialServiceName(dev bool) string {
 		return devCredentialService
 	}
 	return credentialService
+}
+
+// backupFilters limits the backup dialogs to the archive format this client
+// writes.
+var backupFilters = []mygo.FileFilter{{Name: "DeskWand 备份", Extensions: []string{"zip"}}}
+
+// mygoFileDialogs implements app.FileDialogs with the native dialogs.
+type mygoFileDialogs struct{}
+
+func (mygoFileDialogs) SaveBackup(defaultName string) (string, error) {
+	return mygo.Dialog.Save(mygo.SaveDialogOptions{
+		Title:             "保存数据备份",
+		DefaultPath:       defaultName,
+		Filters:           backupFilters,
+		CreateDirectories: true,
+	})
+}
+
+func (mygoFileDialogs) OpenBackup() (string, error) {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Title:   "选择数据备份",
+		Filters: backupFilters,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", nil
+	}
+	return paths[0], nil
 }
 
 // restrictNavigation keeps the privileged window on the bundled frontend. An

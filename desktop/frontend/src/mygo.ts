@@ -11,6 +11,28 @@ export interface AccountDTO {
 }
 
 /**
+ * BackupPreviewDTO is the manifest summary shown before a restore. Problem is
+ * the error code that blocks the restore, empty when the backup is usable.
+ */
+export interface BackupPreviewDTO {
+  summary: BackupSummaryDTO;
+  currentRelease: string;
+  problem?: string;
+}
+
+/** BackupSummaryDTO describes one backup file without exposing its contents. */
+export interface BackupSummaryDTO {
+  path: string;
+  exportedAt: string;
+  release: string;
+  rows: number;
+  tasks: number;
+  objects: number;
+  bytes: number;
+  oversized: string[];
+}
+
+/**
  * ClientUpdateDTO is the desktop client update check result. It is separate
  * from UpgradeDTO: the client version and the deployed cloud version never
  * advance each other. No download URL, signature or key material is exposed.
@@ -208,6 +230,14 @@ export interface OperationDTO {
   updatedAt?: string;
 }
 
+/** PendingRestoreDTO describes an unfinished restore found at startup. */
+export interface PendingRestoreDTO {
+  operationId: string;
+  backupPath: string;
+  snapshotPath: string;
+  failureCode: string;
+}
+
 /**
  * PlaintextSecretDTO names an inline credential migration. It never carries
  * the discovered value.
@@ -216,6 +246,19 @@ export interface PlaintextSecretDTO {
   field: string;
   secretName: string;
   reference: string;
+}
+
+/**
+ * Progress is one snapshot of an export or restore operation, passed only to
+ * the local UI.
+ */
+export interface Progress {
+  op: string;
+  phase: string;
+  tables: number;
+  rows: number;
+  objects: number;
+  totalObjects: number;
 }
 
 /** ResultDTO is the outcome of one deployment operation. */
@@ -304,6 +347,14 @@ export const Service = {
   checkClientUpdate(): Promise<ClientUpdateDTO> {
     return call("Service.CheckClientUpdate");
   },
+  /**
+   * ChooseBackup asks the user for a backup file and returns its summary. The
+   * path is remembered for RestoreData. A version or size problem is reported in
+   * the preview, not as an error.
+   */
+  chooseBackup(): Promise<BackupPreviewDTO | null> {
+    return call("Service.ChooseBackup");
+  },
   /** CloudflareStatus reports local connection state without an error channel. */
   cloudflareStatus(): Promise<ConnectionDTO> {
     return call("Service.CloudflareStatus");
@@ -329,6 +380,10 @@ export const Service = {
   /** DisconnectCloudflare revokes the authorization and removes local credentials. */
   disconnectCloudflare(): Promise<void> {
     return call("Service.DisconnectCloudflare");
+  },
+  /** ExportData exports the managed deployment to a file the user picks. */
+  exportData(): Promise<BackupSummaryDTO | null> {
+    return call("Service.ExportData");
   },
   /** ExportDiagnostics returns the allowlisted, sanitized JSON export. */
   exportDiagnostics(): Promise<string> {
@@ -373,6 +428,10 @@ export const Service = {
   pendingOperations(): Promise<OperationDTO[]> {
     return call("Service.PendingOperations");
   },
+  /** PendingRestore reports an unfinished restore, or nil when there is none. */
+  pendingRestore(): Promise<PendingRestoreDTO | null> {
+    return call("Service.PendingRestore");
+  },
   /** PreviewConfig validates and describes a publish without writing. */
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]> {
     return call("Service.PreviewConfig", input);
@@ -388,6 +447,10 @@ export const Service = {
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO> {
     return call("Service.PublishConfig", input);
   },
+  /** RestoreData overwrites the deployment with the backup chosen by ChooseBackup. */
+  restoreData(): Promise<void> {
+    return call("Service.RestoreData");
+  },
   /**
    * ResumeOperation reconciles one journaled operation by kind. Installs are
    * replayed through Lifecycle.Install from the journaled request (idempotent
@@ -398,6 +461,13 @@ export const Service = {
    */
   resumeOperation(id: string): Promise<ResultDTO> {
     return call("Service.ResumeOperation", id);
+  },
+  /**
+   * RetryRestore finishes an unfinished restore, either from the original backup
+   * or from the pre-restore snapshot.
+   */
+  retryRestore(useSnapshot: boolean): Promise<void> {
+    return call("Service.RetryRestore", useSnapshot);
   },
   /**
    * SelectDeployment persists the managed Worker target in app data. The target
@@ -447,6 +517,11 @@ export const Service = {
 
 /** Events sent by the Go side. Subscribe with `events.name.on(listener)`. */
 export const events = {
+  /**
+   * BackupProgressEvent carries export and restore progress to the frontend.
+   * `mygo generate` turns it into `events.backupProgress`.
+   */
+  backupProgress: event<Progress>("backup-progress"),
   /**
    * LoginStatusEvent carries sanitized QR login progress to the frontend.
    * `mygo generate` turns it into `events.loginStatus`.

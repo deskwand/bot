@@ -150,6 +150,8 @@ type ServiceOptions struct {
 	Store       TargetStore
 	Browser     platform.BrowserOpener
 	Release     ReleaseSource
+	Backup      BackupService
+	FileDialogs FileDialogs
 	// ClientUpdates defaults to the pinned MyGo updater with an empty feed.
 	ClientUpdates ClientUpdateProvider
 	// EmitLoginStatus defaults to LoginStatusEvent.Broadcast.
@@ -175,6 +177,8 @@ type Service struct {
 	store          TargetStore
 	browser        platform.BrowserOpener
 	release        ReleaseSource
+	backup         BackupService
+	dialogs        FileDialogs
 	clientUpdates  ClientUpdateProvider
 	emitLogin      func(LoginStatusDTO)
 	emitCloudflare func(CloudflareLoginDTO)
@@ -193,6 +197,9 @@ type Service struct {
 
 	clientUpdateMu      sync.Mutex
 	checkedClientUpdate *ClientUpdateInfo
+
+	backupMu   sync.Mutex
+	backupPath string
 }
 
 // NewService constructs the application service.
@@ -229,6 +236,8 @@ func NewService(options ServiceOptions) *Service {
 		store:          options.Store,
 		browser:        options.Browser,
 		release:        options.Release,
+		backup:         options.Backup,
+		dialogs:        options.FileDialogs,
 		clientUpdates:  clientUpdates,
 		emitLogin:      emit,
 		emitCloudflare: emitCloudflare,
@@ -1352,6 +1361,9 @@ func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, inpu
 	}
 	edited := make(map[string]bool, len(input.Secrets))
 	for _, secret := range input.Secrets {
+		if strings.TrimSpace(secret.Name) == hiddenSecretName {
+			return domain.Change{}, domain.Error{Code: domain.INVALID_SECRET_EDIT, Message: "ADMIN_TOKEN 由客户端自动管理，不能手动修改"}
+		}
 		operation := strings.TrimSpace(secret.Operation)
 		switch operation {
 		case domain.SecretKeep, domain.SecretReplace, domain.SecretClear:
@@ -1426,10 +1438,16 @@ func (s *Service) secretStatuses(snapshot domain.Snapshot) []SecretNameDTO {
 	}
 	names := make(map[string]bool, len(existing))
 	for name := range existing {
+		if name == hiddenSecretName {
+			continue
+		}
 		names[name] = true
 	}
 	if s.release != nil {
 		for _, name := range s.release.Manifest().ResourceTemplate.SecretNames {
+			if name == hiddenSecretName {
+				continue
+			}
 			names[name] = true
 		}
 	}
