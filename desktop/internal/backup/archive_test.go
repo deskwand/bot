@@ -1,12 +1,14 @@
 package backup
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -267,5 +269,293 @@ func TestTableEntryNames(t *testing.T) {
 	}
 	if got := ObjectEntry(12); got != "r2/000012" {
 		t.Fatalf("ObjectEntry(12) = %q", got)
+	}
+}
+
+type rawEntry struct {
+	name string
+	data []byte
+}
+
+// writeRawArchive writes entries without Writer validation, so tests can
+// describe archives a strict reader must refuse.
+func writeRawArchive(t *testing.T, path string, manifest Manifest, entries []rawEntry) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := append([]rawEntry{{name: manifestEntry, data: manifestData}}, entries...)
+	for _, entry := range all {
+		entryWriter, err := writer.Create(entry.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entryWriter.Write(entry.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func minimalManifest() Manifest {
+	return Manifest{
+		Format:     FormatVersion,
+		ExportedAt: time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC),
+		Release:    "1.2.0",
+		VersionID:  "version-1",
+		WorkerName: "deskwand-bot",
+	}
+}
+
+func TestOpenRejectsInvalidJSONRow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := minimalManifest()
+	manifest.DurableObjects = []DOManifest{{
+		DORef:  DORef{DO: "butler"},
+		Schema: DBSchema{Tables: []TableSchema{{Name: "memories"}}},
+		Rows:   map[string]int64{"memories": 1},
+	}}
+	writeRawArchive(t, path, manifest, []rawEntry{{
+		name: "do/butler/memories.jsonl",
+		data: []byte("not-json\n"),
+	}})
+
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestOpenRejectsBlankLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := minimalManifest()
+	manifest.DurableObjects = []DOManifest{{
+		DORef:  DORef{DO: "butler"},
+		Schema: DBSchema{Tables: []TableSchema{{Name: "memories"}}},
+		Rows:   map[string]int64{"memories": 1},
+	}}
+	writeRawArchive(t, path, manifest, []rawEntry{{
+		name: "do/butler/memories.jsonl",
+		data: []byte("{\"__rowid\":1}\n\n"),
+	}})
+
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestOpenRejectsBadObjectEntryName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := minimalManifest()
+	manifest.R2.Objects = []R2Item{{Key: "x.png", Entry: "r2/1", Size: 1, ContentType: "image/png"}}
+	writeRawArchive(t, path, manifest, []rawEntry{{name: "r2/1", data: []byte("a")}})
+
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestOpenRejectsDuplicateObjectEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := minimalManifest()
+	manifest.R2.Objects = []R2Item{
+		{Key: "a.png", Entry: ObjectEntry(1), Size: 1, ContentType: "image/png"},
+		{Key: "b.png", Entry: ObjectEntry(1), Size: 1, ContentType: "image/png"},
+	}
+	writeRawArchive(t, path, manifest, []rawEntry{{name: ObjectEntry(1), data: []byte("a")}})
+
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestOpenRejectsDuplicateZipEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := minimalManifest()
+	manifest.DurableObjects = []DOManifest{{
+		DORef:  DORef{DO: "butler"},
+		Schema: DBSchema{Tables: []TableSchema{{Name: "memories"}}},
+		Rows:   map[string]int64{"memories": 1},
+	}}
+	entry := rawEntry{name: "do/butler/memories.jsonl", data: []byte("{\"__rowid\":1}\n")}
+	writeRawArchive(t, path, manifest, []rawEntry{entry, entry})
+
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestOpenRejectsUnknownDOKind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := minimalManifest()
+	manifest.DurableObjects = []DOManifest{{
+		DORef:  DORef{DO: "mystery"},
+		Schema: DBSchema{Tables: []TableSchema{{Name: "memories"}}},
+		Rows:   map[string]int64{"memories": 1},
+	}}
+	writeRawArchive(t, path, manifest, []rawEntry{{
+		name: "do/mystery//memories.jsonl",
+		data: []byte("{\"__rowid\":1}\n"),
+	}})
+
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestOpenRejectsTaskWithoutID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := minimalManifest()
+	manifest.DurableObjects = []DOManifest{{
+		DORef:  DORef{DO: "task"},
+		Schema: DBSchema{Tables: []TableSchema{{Name: "events"}}},
+		Rows:   map[string]int64{"events": 1},
+	}}
+	writeRawArchive(t, path, manifest, []rawEntry{{
+		name: "do/task//events.jsonl",
+		data: []byte("{\"__rowid\":1}\n"),
+	}})
+
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestOpenRejectsObjectSizeMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := minimalManifest()
+	manifest.R2.Objects = []R2Item{{Key: "a.png", Entry: ObjectEntry(1), Size: 4, ContentType: "image/png"}}
+	writeRawArchive(t, path, manifest, []rawEntry{{name: ObjectEntry(1), data: []byte("abc")}})
+
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestOpenRejectsOversizedManifest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	entry, err := writer.Create(manifestEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the declared uncompressed size has to exceed the cap.
+	if _, err := entry.Write(make([]byte, maxManifestBytes+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestWriterObjectRejectsSizeMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Abort()
+	err = writer.Object(R2Item{Key: "a.png", Entry: ObjectEntry(1), Size: 4}, bytes.NewReader([]byte("abc")))
+	if err == nil {
+		t.Fatal("expected size mismatch error")
+	}
+}
+
+func TestWriterTableRejectsTraversalName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Abort()
+	for _, name := range []string{"a/b", "..", "x..y"} {
+		if _, err := writer.Table(DORef{DO: "butler"}, name); err == nil {
+			t.Fatalf("table name %q was accepted", name)
+		}
+	}
+}
+
+func TestLargeRowRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	payload := strings.Repeat("x", 2<<20)
+	row, err := json.Marshal(map[string]string{"payload": payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	butler := DORef{DO: "butler"}
+	writeTestArchive(t, path, []testTable{{
+		ref:    butler,
+		schema: TableSchema{Name: "memories", Create: "CREATE TABLE memories (payload TEXT)"},
+		rows:   []json.RawMessage{row},
+	}}, nil, nil)
+
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	var got []json.RawMessage
+	if err := reader.Rows(butler, "memories", 1<<20, func(batch []json.RawMessage) error {
+		got = append(got, batch...)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("rows = %d, want 1", len(got))
+	}
+	if !bytes.Equal(got[0], row) {
+		t.Fatalf("large row did not round-trip")
+	}
+}
+
+func TestFinishWritesEmptyArrays(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	writeTestArchive(t, path, nil, nil, nil)
+
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	var data []byte
+	for _, file := range archive.File {
+		if file.Name != manifestEntry {
+			continue
+		}
+		reader, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err = io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if data == nil {
+		t.Fatal("manifest.json is missing")
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, data); err != nil {
+		t.Fatal(err)
+	}
+	text := compact.String()
+	for _, want := range []string{`"objects":[]`, `"oversized":[]`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("manifest = %s, want %s", text, want)
+		}
 	}
 }

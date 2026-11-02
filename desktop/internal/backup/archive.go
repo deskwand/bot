@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
@@ -22,7 +24,12 @@ const (
 	// scannerLimit accommodates a single row larger than the Worker's 1 MiB
 	// page size without rejecting a valid backup.
 	scannerLimit = 64 << 20
+	// maxManifestBytes bounds the manifest read so a corrupt archive cannot
+	// exhaust memory through a huge compressed entry.
+	maxManifestBytes = 64 << 20
 )
+
+var objectEntryPattern = regexp.MustCompile(`^r2/[0-9]{6}$`)
 
 // TableSchema describes one exported SQLite table. Create is empty for the
 // DO KV pseudo-table.
@@ -132,6 +139,9 @@ func (w *Writer) Table(ref DORef, table string) (*TableWriter, error) {
 	if w.closed {
 		return nil, fmt.Errorf("backup: archive is closed")
 	}
+	if strings.Contains(table, "/") || strings.Contains(table, "..") {
+		return nil, fmt.Errorf("backup: invalid table name %q", table)
+	}
 	if err := w.closeTable(); err != nil {
 		return nil, err
 	}
@@ -158,8 +168,12 @@ func (w *Writer) Object(item R2Item, body io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("backup: create object entry: %w", err)
 	}
-	if _, err := io.Copy(entry, body); err != nil {
+	written, err := io.Copy(entry, body)
+	if err != nil {
 		return fmt.Errorf("backup: write object entry: %w", err)
+	}
+	if written != item.Size {
+		return fmt.Errorf("backup: object %s has %d bytes, manifest says %d", item.Entry, written, item.Size)
 	}
 	return nil
 }
@@ -180,6 +194,20 @@ func (w *Writer) Finish(manifest Manifest) (err error) {
 
 	if err := w.closeTable(); err != nil {
 		return err
+	}
+	if manifest.R2.Objects == nil {
+		manifest.R2.Objects = []R2Item{}
+	}
+	if manifest.R2.Oversized == nil {
+		manifest.R2.Oversized = []string{}
+	}
+	for i := range manifest.DurableObjects {
+		if manifest.DurableObjects[i].Schema.Tables == nil {
+			manifest.DurableObjects[i].Schema.Tables = []TableSchema{}
+		}
+		if manifest.DurableObjects[i].Schema.Indexes == nil {
+			manifest.DurableObjects[i].Schema.Indexes = []string{}
+		}
 	}
 	entry, err := w.zip.Create(manifestEntry)
 	if err != nil {
@@ -206,9 +234,9 @@ func (w *Writer) Finish(manifest Manifest) (err error) {
 		return fmt.Errorf("backup: replace archive: %w", err)
 	}
 	w.closed = true
-	if err := syncDir(filepath.Dir(w.finalPath)); err != nil {
-		return fmt.Errorf("backup: sync archive directory: %w", err)
-	}
+	// Once the final file exists the archive is complete; syncing the
+	// directory is best-effort durability on crash.
+	_ = syncDir(filepath.Dir(w.finalPath))
 	return nil
 }
 
@@ -252,6 +280,9 @@ func (t *TableWriter) Append(rows []json.RawMessage) error {
 		if err := json.Compact(&compact, row); err != nil {
 			return fmt.Errorf("backup: encode row: %w", err)
 		}
+		if compact.Len() >= scannerLimit {
+			return fmt.Errorf("backup: row is larger than %d bytes", scannerLimit-1)
+		}
 		compact.WriteByte('\n')
 		if _, err := t.writer.Write(compact.Bytes()); err != nil {
 			return fmt.Errorf("backup: write row: %w", err)
@@ -287,6 +318,10 @@ func Open(path string) (*Reader, error) {
 	}
 	files := make(map[string]*zip.File, len(archive.File))
 	for _, file := range archive.File {
+		if _, exists := files[file.Name]; exists {
+			_ = archive.Close()
+			return nil, invalidBackupf("duplicate zip entry %s", file.Name)
+		}
 		files[file.Name] = file
 	}
 	manifestFile, ok := files[manifestEntry]
@@ -294,7 +329,7 @@ func Open(path string) (*Reader, error) {
 		_ = archive.Close()
 		return nil, invalidBackupf("manifest.json is missing")
 	}
-	data, err := readZipFile(manifestFile)
+	data, err := readManifestFile(manifestFile)
 	if err != nil {
 		_ = archive.Close()
 		return nil, invalidBackupf("read manifest: %v", err)
@@ -309,6 +344,10 @@ func Open(path string) (*Reader, error) {
 		return nil, invalidBackupf("unsupported format %d", manifest.Format)
 	}
 	for _, object := range manifest.DurableObjects {
+		if err := validateDORef(object.DORef); err != nil {
+			_ = archive.Close()
+			return nil, invalidBackupf("%v", err)
+		}
 		for _, table := range object.Schema.Tables {
 			entry := TableEntry(object.DORef, table.Name)
 			file, ok := files[entry]
@@ -316,10 +355,10 @@ func Open(path string) (*Reader, error) {
 				_ = archive.Close()
 				return nil, invalidBackupf("table entry %s is missing", entry)
 			}
-			count, err := countLines(file)
+			count, err := validateTableEntry(file)
 			if err != nil {
 				_ = archive.Close()
-				return nil, invalidBackupf("read table entry %s: %v", entry, err)
+				return nil, invalidBackupf("table entry %s: %v", entry, err)
 			}
 			if want := object.Rows[table.Name]; count != want {
 				_ = archive.Close()
@@ -327,10 +366,25 @@ func Open(path string) (*Reader, error) {
 			}
 		}
 	}
+	seenObjects := make(map[string]struct{}, len(manifest.R2.Objects))
 	for _, object := range manifest.R2.Objects {
-		if _, ok := files[object.Entry]; !ok {
+		if !objectEntryPattern.MatchString(object.Entry) {
+			_ = archive.Close()
+			return nil, invalidBackupf("object entry %s is invalid", object.Entry)
+		}
+		if _, exists := seenObjects[object.Entry]; exists {
+			_ = archive.Close()
+			return nil, invalidBackupf("object entry %s is duplicated", object.Entry)
+		}
+		seenObjects[object.Entry] = struct{}{}
+		file, ok := files[object.Entry]
+		if !ok {
 			_ = archive.Close()
 			return nil, invalidBackupf("object entry %s is missing", object.Entry)
+		}
+		if object.Size < 0 || uint64(object.Size) != file.UncompressedSize64 {
+			_ = archive.Close()
+			return nil, invalidBackupf("object entry %s has %d bytes, manifest says %d", object.Entry, file.UncompressedSize64, object.Size)
 		}
 	}
 	return &Reader{archive: archive, manifest: manifest, files: files}, nil
@@ -373,7 +427,7 @@ func (r *Reader) Rows(ref DORef, table string, maxBytes int, fn func(batch []jso
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
-			continue
+			return invalidBackupf("table entry %s contains a blank line", entry)
 		}
 		if !json.Valid(line) {
 			return invalidBackupf("table entry %s contains invalid JSON", entry)
@@ -410,16 +464,28 @@ func (r *Reader) Object(item R2Item) (io.ReadCloser, error) {
 // Close closes the underlying archive.
 func (r *Reader) Close() error { return r.archive.Close() }
 
-func readZipFile(file *zip.File) ([]byte, error) {
+func readManifestFile(file *zip.File) ([]byte, error) {
+	if file.UncompressedSize64 > maxManifestBytes {
+		return nil, fmt.Errorf("manifest is larger than %d bytes", maxManifestBytes)
+	}
 	reader, err := file.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
-	return io.ReadAll(reader)
+	data, err := io.ReadAll(io.LimitReader(reader, maxManifestBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxManifestBytes {
+		return nil, fmt.Errorf("manifest is larger than %d bytes", maxManifestBytes)
+	}
+	return data, nil
 }
 
-func countLines(file *zip.File) (int64, error) {
+// validateTableEntry counts one table's rows and rejects blank or malformed
+// lines so an invalid backup never reaches a restore step.
+func validateTableEntry(file *zip.File) (int64, error) {
 	reader, err := file.Open()
 	if err != nil {
 		return 0, err
@@ -429,9 +495,33 @@ func countLines(file *zip.File) (int64, error) {
 	scanner.Buffer(make([]byte, 64*1024), scannerLimit)
 	var count int64
 	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			return 0, fmt.Errorf("blank line at row %d", count+1)
+		}
+		if !json.Valid(line) {
+			return 0, fmt.Errorf("invalid JSON at row %d", count+1)
+		}
 		count++
 	}
-	return count, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func validateDORef(ref DORef) error {
+	switch ref.DO {
+	case "butler", "channel":
+		return nil
+	case "task":
+		if ref.ID == "" {
+			return fmt.Errorf("task id is empty")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown durable object %q", ref.DO)
+	}
 }
 
 func invalidBackupf(format string, args ...any) domain.Error {
