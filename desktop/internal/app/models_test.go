@@ -112,6 +112,59 @@ func TestProbeModelOpenCodeGoUsesBearerKey(t *testing.T) {
 	}
 }
 
+func TestProbeModelOpenCodeGoSendsRoutingSession(t *testing.T) {
+	var sawSession string
+	server := useProbeServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawSession = r.Header.Get("x-opencode-session")
+		w.WriteHeader(http.StatusOK)
+	}))
+	overrideProbeBaseURL(t, server.URL)
+
+	if _, err := ProbeModel(context.Background(), "opencode-go", "deepseek-v4.1-flash", modelKeySentinel, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if sawSession == "" {
+		t.Fatal("probe did not send x-opencode-session; the gateway answers HTTP 400 MissingSessionID")
+	}
+}
+
+func TestProbeModelAnthropicSendsNoOpenCodeSession(t *testing.T) {
+	var sawSession string
+	server := useProbeServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawSession = r.Header.Get("x-opencode-session")
+		w.WriteHeader(http.StatusOK)
+	}))
+	overrideProbeBaseURL(t, server.URL)
+
+	if _, err := ProbeModel(context.Background(), "anthropic", "claude-sonnet-5-5", modelKeySentinel, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if sawSession != "" {
+		t.Fatalf("x-opencode-session = %q, want none", sawSession)
+	}
+}
+
+func TestIsOpenCodeTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		baseURL  string
+		want     bool
+	}{
+		{name: "catalog go provider", provider: "opencode-go", baseURL: "https://opencode.ai/inference/go/v1", want: true},
+		{name: "catalog zen provider", provider: "opencode", baseURL: "https://opencode.ai/inference/zen/v1", want: true},
+		{name: "custom provider pointed at opencode", provider: "my-proxy", baseURL: "https://opencode.ai/inference/go/v1", want: true},
+		{name: "other provider", provider: "anthropic", baseURL: "https://api.anthropic.com", want: false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := isOpenCodeTarget(testCase.provider, testCase.baseURL); got != testCase.want {
+				t.Fatalf("isOpenCodeTarget(%q, %q) = %t, want %t", testCase.provider, testCase.baseURL, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestProbeModelOpenCodeGoAnthropicMessages(t *testing.T) {
 	var sawPath, sawKey, sawVersion string
 	var body countBody

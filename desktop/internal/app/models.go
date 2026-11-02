@@ -3,11 +3,14 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -28,6 +31,13 @@ var (
 var modelProbeBaseURLOverride string
 
 var modelProbeTimeout = 15 * time.Second
+
+const (
+	// openCodeSessionHeader is the per-conversation routing header the OpenCode
+	// gateway requires; without it the gateway answers HTTP 400 MissingSessionID.
+	openCodeSessionHeader = "x-opencode-session"
+	openCodeHost          = "opencode.ai"
+)
 
 var modelProbeHTTPClient = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -122,6 +132,13 @@ func ProbeModel(ctx context.Context, provider, model, key, api, baseURL string) 
 	default:
 		request.Header.Set("Authorization", "Bearer "+key)
 	}
+	if isOpenCodeTarget(provider, baseURL) {
+		sessionID, err := newProbeSessionID()
+		if err != nil {
+			return domain.Evidence{}, fmt.Errorf("%w: create session id", ErrModelProbe)
+		}
+		request.Header.Set(openCodeSessionHeader, sessionID)
+	}
 
 	response, err := modelProbeHTTPClient.Do(request)
 	if err != nil {
@@ -142,6 +159,28 @@ func ProbeModel(ctx context.Context, provider, model, key, api, baseURL string) 
 		ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Detail:     "probe_ok",
 	}, nil
+}
+
+// isOpenCodeTarget reports whether a probe goes to the OpenCode gateway, which
+// rejects requests without the per-conversation routing header. It mirrors the
+// pi-ai SDK: the built-in providers, or any base URL on the OpenCode host.
+func isOpenCodeTarget(provider, baseURL string) bool {
+	switch provider {
+	case "opencode", "opencode-go":
+		return true
+	}
+	parsed, err := url.Parse(baseURL)
+	return err == nil && parsed.Hostname() == openCodeHost
+}
+
+// newProbeSessionID returns a fresh routing id for one probe request. Nothing is
+// persisted: a probe is its own one-request conversation.
+func newProbeSessionID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 // catalogEndpoint finds the wire API and base URL for one catalog model.
