@@ -39,7 +39,7 @@ function invalid(message: string): Response {
 
 function objectKey(url: URL): string | Response {
   const key = url.searchParams.get("key");
-  if (key === null) return invalid("object needs a key");
+  if (key === null || key === "") return invalid("object needs a key");
   return key;
 }
 
@@ -75,6 +75,8 @@ export function createR2Routes(
       headers: {
         "content-type":
           object.httpMetadata?.contentType ?? DEFAULT_CONTENT_TYPE,
+        "content-length": String(object.size),
+        etag: object.httpEtag,
       },
     });
   }
@@ -84,16 +86,18 @@ export function createR2Routes(
     if (key instanceof Response) return key;
 
     const declared = req.headers.get("content-length");
-    if (declared !== null && Number(declared) > MAX_R2_OBJECT_BYTES) {
+    if (declared === null || !/^\d+$/.test(declared)) {
+      return json(
+        { code: "BACKUP_INVALID", message: "content-length required" },
+        411,
+      );
+    }
+    const length = Number(declared);
+    if (length > MAX_R2_OBJECT_BYTES) {
       return errorCode("BACKUP_OBJECT_TOO_LARGE", 413);
     }
 
-    const body = await req.arrayBuffer();
-    if (body.byteLength > MAX_R2_OBJECT_BYTES) {
-      return errorCode("BACKUP_OBJECT_TOO_LARGE", 413);
-    }
-
-    await bucket.put(key, body, {
+    await bucket.put(key, req.body, {
       httpMetadata: {
         contentType:
           req.headers.get("content-type") ?? DEFAULT_CONTENT_TYPE,

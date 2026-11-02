@@ -4,7 +4,10 @@ import {
   createAdminGateway,
   type AdminDeps,
 } from "../../src/admin/admin-gateway";
-import { createR2Routes } from "../../src/admin/r2-routes";
+import {
+  createR2Routes,
+  MAX_R2_OBJECT_BYTES,
+} from "../../src/admin/r2-routes";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -35,6 +38,7 @@ function adminRequest(
     method?: string;
     body?: BodyInit;
     contentType?: string;
+    headers?: Record<string, string>;
   } = {},
 ): Request {
   const headers = new Headers({
@@ -43,6 +47,9 @@ function adminRequest(
   });
   if (init.contentType !== undefined) {
     headers.set("content-type", init.contentType);
+  }
+  for (const [name, value] of Object.entries(init.headers ?? {})) {
+    headers.set(name, value);
   }
   return new Request(`https://example.com${path}`, {
     method: init.method ?? "GET",
@@ -140,6 +147,10 @@ describe("/admin/r2/*", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/plain");
+    expect(response.headers.get("content-length")).toBe("8");
+    expect(response.headers.get("etag")).toBe(
+      (await env.ARTIFACTS.head("stream/notes.txt"))!.httpEtag,
+    );
     expect(await response.text()).toBe("hello R2");
 
     const missing = await gateway(name).fetch(
@@ -158,6 +169,7 @@ describe("/admin/r2/*", () => {
         method: "PUT",
         body,
         contentType: "image/png",
+        headers: { "content-length": String(body.byteLength) },
       }),
     );
 
@@ -166,6 +178,67 @@ describe("/admin/r2/*", () => {
     expect(stored).not.toBeNull();
     expect(stored!.httpMetadata?.contentType).toBe("image/png");
     expect(await stored!.bytes()).toEqual(body);
+  });
+
+  it("rejects an upload larger than the object limit", async () => {
+    const routes = createR2Routes(env.ARTIFACTS);
+    const key = "oversized/rejected.png";
+
+    const response = await routes.fetch(
+      new Request(`https://example.com/admin/r2/object?${query(key)}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "image/png",
+          "content-length": String(MAX_R2_OBJECT_BYTES + 1),
+        },
+        body: new Uint8Array([1]),
+      }),
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({
+      code: "BACKUP_OBJECT_TOO_LARGE",
+    });
+    expect(await env.ARTIFACTS.get(key)).toBeNull();
+  });
+
+  it("requires content-length for uploads", async () => {
+    const routes = createR2Routes(env.ARTIFACTS);
+    const key = "unframed/upload.png";
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.close();
+      },
+    });
+
+    const response = await routes.fetch(
+      new Request(`https://example.com/admin/r2/object?${query(key)}`, {
+        method: "PUT",
+        headers: { "content-type": "image/png" },
+        body: stream,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+    );
+
+    expect(response.status).toBe(411);
+    expect(await response.json()).toEqual({
+      code: "BACKUP_INVALID",
+      message: "content-length required",
+    });
+    expect(await env.ARTIFACTS.get(key)).toBeNull();
+  });
+
+  it("rejects an empty key", async () => {
+    const name = "r2-empty-key";
+    await acquire(name);
+
+    const response = await gateway(name).fetch(
+      adminRequest(`/admin/r2/object?key=`),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "BACKUP_INVALID" });
   });
 
   it("handles keys containing slashes, spaces and question marks", async () => {
@@ -179,6 +252,7 @@ describe("/admin/r2/*", () => {
         method: "PUT",
         body,
         contentType: "image/png",
+        headers: { "content-length": String(body.byteLength) },
       }),
     );
     expect(stored.status).toBe(204);
