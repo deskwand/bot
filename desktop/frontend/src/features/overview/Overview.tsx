@@ -12,13 +12,17 @@ import {
 } from "@/components/ui/card";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StatusRow, StateBadge, formatObserved, sourceLabel } from "@/components/feedback";
-import type { ConfigDTO, ConnectionDTO, StatusItemDTO } from "@/services/types";
+import type { ConfigDTO, ConnectionDTO, PendingRestoreDTO, StatusItemDTO } from "@/services/types";
 
 export function Overview({ initialError }: { initialError?: unknown }) {
   const { client, navigate } = useApp();
   const [config, setConfig] = useState<ConfigDTO | null>(null);
   const [status, setStatus] = useState<StatusItemDTO[]>([]);
   const [connection, setConnection] = useState<ConnectionDTO | null>(null);
+  const [pendingRestore, setPendingRestore] = useState<PendingRestoreDTO | null>(null);
+  const [retrying, setRetrying] = useState<"backup" | "snapshot" | null>(null);
+  const [retryError, setRetryError] = useState<unknown>(null);
+  const [retryMessage, setRetryMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(initialError ?? null);
 
@@ -26,14 +30,16 @@ export function Overview({ initialError }: { initialError?: unknown }) {
     setLoading(true);
     setError(null);
     try {
-      const [nextConfig, nextStatus, nextConnection] = await Promise.all([
+      const [nextConfig, nextStatus, nextConnection, nextPendingRestore] = await Promise.all([
         client.getConfig(),
         client.status(),
         client.cloudflareStatus(),
+        client.pendingRestore(),
       ]);
       setConfig(nextConfig);
       setStatus(nextStatus);
       setConnection(nextConnection);
+      setPendingRestore(nextPendingRestore);
     } catch (cause) {
       setError(cause);
     } finally {
@@ -47,6 +53,21 @@ export function Overview({ initialError }: { initialError?: unknown }) {
 
   const entryStatus = status.find((item) => item.kind === config?.activeChannel);
   const modelsConfigured = Boolean(config?.butlerModel && config?.taskModel);
+
+  const retryRestore = async (useSnapshot: boolean) => {
+    setRetrying(useSnapshot ? "snapshot" : "backup");
+    setRetryError(null);
+    setRetryMessage("");
+    try {
+      await client.retryRestore(useSnapshot);
+      setRetryMessage("数据恢复已重新执行。");
+      await load();
+    } catch (cause) {
+      setRetryError(cause);
+    } finally {
+      setRetrying(null);
+    }
+  };
 
   return (
     <div>
@@ -70,6 +91,53 @@ export function Overview({ initialError }: { initialError?: unknown }) {
       </div>
 
       <ErrorAlert error={error} onRetry={load} />
+
+      {pendingRestore ? (
+        <Card className="mt-4 border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
+          <CardContent className="pt-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-semibold">数据恢复未完成</h2>
+              <Badge variant="outline">{pendingRestore.failureCode}</Badge>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              上次恢复在中途失败。云端可能只写入了部分数据；可以从原备份重试，或回到恢复前的快照。
+            </p>
+            <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+              <p className="break-all">备份：{pendingRestore.backupPath}</p>
+              <p className="break-all">恢复前快照：{pendingRestore.snapshotPath || "无"}</p>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                disabled={retrying !== null}
+                onClick={() => void retryRestore(false)}
+              >
+                {retrying === "backup" ? (
+                  <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+                ) : null}
+                用该文件重试
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={retrying !== null || !pendingRestore.snapshotPath}
+                onClick={() => void retryRestore(true)}
+              >
+                {retrying === "snapshot" ? (
+                  <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+                ) : null}
+                恢复到恢复前快照
+              </Button>
+            </div>
+            {retryMessage ? (
+              <p className="mt-2 text-xs text-muted-foreground">{retryMessage}</p>
+            ) : null}
+            <ErrorAlert error={retryError} onRetry={() => void retryRestore(false)} />
+          </CardContent>
+        </Card>
+      ) : null}
 
       {connection?.state === "reauth_required" ? (
         <Alert className="mt-4">

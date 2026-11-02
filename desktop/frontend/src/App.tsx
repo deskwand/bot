@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  Archive,
   ArrowUpCircle,
   Bot,
   LayoutDashboard,
@@ -26,6 +27,7 @@ import { toClientError } from "@/services/errors";
 import type { ClientService, ConnectionDTO, OperationDTO } from "@/services/types";
 import { useUiStore } from "@/store/ui";
 import { Diagnostics } from "@/features/diagnostics/Diagnostics";
+import { Backup } from "@/features/backup/Backup";
 import { Models } from "@/features/models/Models";
 import { Overview } from "@/features/overview/Overview";
 import { Setup } from "@/features/setup/Setup";
@@ -46,6 +48,7 @@ const NAV: { page: Page; icon: typeof LayoutDashboard }[] = [
   { page: "models", icon: Bot },
   { page: "entries", icon: MessageSquare },
   { page: "diagnostics", icon: Activity },
+  { page: "backup", icon: Archive },
   { page: "updates", icon: ArrowUpCircle },
 ];
 
@@ -276,6 +279,7 @@ export function App({ client }: { client: ClientService }) {
                     </Suspense>
                   ) : null}
                   {page === "diagnostics" ? <Diagnostics /> : null}
+                  {page === "backup" ? <Backup /> : null}
                   {page === "updates" ? <Updates /> : null}
                 </div>
               </>

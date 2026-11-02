@@ -2,6 +2,8 @@
 // production entry never imports this module; a Playwright test asserts the
 // built bundle contains no fixture router.
 import type {
+  BackupPreviewDTO,
+  BackupSummaryDTO,
   CloudflareLoginDTO,
   ConfigDTO,
   ConfigEditDTO,
@@ -14,6 +16,8 @@ import type {
   ModelCatalogDTO,
   ModelDTO,
   OperationDTO,
+  PendingRestoreDTO,
+  Progress,
   ResultDTO,
   StatusItemDTO,
   StepDTO,
@@ -52,7 +56,11 @@ type Scenario =
   | "entry-unknown"
   | "entry-unchanged"
   | "diagnostics-unknown"
-  | "user-evidence";
+  | "user-evidence"
+  | "backup"
+  | "backup-progress"
+  | "backup-version-mismatch"
+  | "backup-pending";
 
 interface MockState {
   scenario: Scenario;
@@ -73,6 +81,17 @@ interface MockState {
 }
 
 const NOW = "2026-11-02T09:00:00Z";
+
+const BACKUP_SUMMARY: BackupSummaryDTO = {
+  path: "deskwand-backup-deskwand-bot-20261102-090000.zip",
+  exportedAt: "2026-11-02T09:00:00Z",
+  release: "1.1.0",
+  rows: 1280,
+  tasks: 4,
+  objects: 12,
+  bytes: 1234567,
+  oversized: [],
+};
 
 const MODELS: Record<string, string[]> = {
   anthropic: ["claude-sonnet-5-5", "claude-haiku-5-5"],
@@ -161,6 +180,10 @@ function scenarioFromLocation(): Scenario {
     case "entry-unchanged":
     case "diagnostics-unknown":
     case "user-evidence":
+    case "backup":
+    case "backup-progress":
+    case "backup-version-mismatch":
+    case "backup-pending":
       return value;
     default:
       return "default";
@@ -190,6 +213,10 @@ function initialState(): MockState {
     "diagnostics-unknown",
     "user-evidence",
     "cf-signout-failed",
+    "backup",
+    "backup-progress",
+    "backup-version-mismatch",
+    "backup-pending",
   ].includes(scenario);
   return {
     scenario,
@@ -284,6 +311,13 @@ export function createMockClient(): ClientService {
   const state = initialState();
   const listeners = new Set<(status: LoginStatusDTO) => void>();
   const cfListeners = new Set<(status: CloudflareLoginDTO) => void>();
+  const backupListeners = new Set<(progress: Progress) => void>();
+  const backupCalls = { restore: 0, retry: [] as boolean[] };
+  (
+    window as unknown as {
+      __backupCalls?: { restore: number; retry: boolean[] };
+    }
+  ).__backupCalls = backupCalls;
   let cfOperationID = "";
   const emitCloudflare = (status: CloudflareLoginDTO) => {
     for (const listener of cfListeners) listener(status);
@@ -828,6 +862,62 @@ export function createMockClient(): ClientService {
       listeners.add(listener);
       return () => {
         listeners.delete(listener);
+      };
+    },
+
+    async exportData(): Promise<BackupSummaryDTO | null> {
+      if (!state.target) fail("TARGET_NOT_SELECTED", "请先选择一个 Worker 部署");
+      if (state.scenario === "backup-progress") {
+        for (const listener of backupListeners) {
+          listener({
+            op: "export",
+            phase: "database",
+            tables: 3,
+            rows: 120,
+            objects: 0,
+            totalObjects: 0,
+          });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      return BACKUP_SUMMARY;
+    },
+
+    async chooseBackup(): Promise<BackupPreviewDTO | null> {
+      if (!state.target) fail("TARGET_NOT_SELECTED", "请先选择一个 Worker 部署");
+      if (state.scenario === "backup-version-mismatch") {
+        return {
+          summary: { ...BACKUP_SUMMARY, release: "1.2.0" },
+          currentRelease: "1.3.0",
+          problem: "BACKUP_VERSION_MISMATCH",
+        };
+      }
+      return { summary: BACKUP_SUMMARY, currentRelease: "1.1.0" };
+    },
+
+    async restoreData() {
+      if (!state.target) fail("TARGET_NOT_SELECTED", "请先选择一个 Worker 部署");
+      backupCalls.restore += 1;
+    },
+
+    async pendingRestore(): Promise<PendingRestoreDTO | null> {
+      if (state.scenario !== "backup-pending") return null;
+      return {
+        operationId: "op-restore-pending",
+        backupPath: "/tmp/deskwand-backup-deskwand-bot-20261102-090000.zip",
+        snapshotPath: "/tmp/backups/pre-restore-20261102-090500.zip",
+        failureCode: "MAINTENANCE_REQUIRED",
+      };
+    },
+
+    async retryRestore(useSnapshot: boolean) {
+      backupCalls.retry.push(useSnapshot);
+    },
+
+    subscribeBackupProgress(listener) {
+      backupListeners.add(listener);
+      return () => {
+        backupListeners.delete(listener);
       };
     },
   };

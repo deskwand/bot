@@ -688,3 +688,77 @@ test("cloud upgrade requires confirmation and reports the control-plane result",
   await expect(page.getByText("升级结果")).toBeVisible();
   await expect(page.getByText("已发布").first()).toBeVisible();
 });
+
+const BACKUP_NOTICE =
+  "备份已保存。文件未加密，包含记忆、对话和微信会话上下文，请妥善保管。";
+const OVERWRITE_NOTICE =
+  "将清空当前部署的全部业务数据并替换为备份内容；恢复前会自动保存当前数据快照；备份时正在运行的任务恢复后可能重复执行外部动作。";
+
+type BackupCalls = { restore: number; retry: boolean[] };
+
+async function backupCalls(page: Page): Promise<BackupCalls> {
+  return page.evaluate(() => {
+    const calls = (window as unknown as { __backupCalls?: BackupCalls }).__backupCalls;
+    return calls ?? { restore: 0, retry: [] };
+  });
+}
+
+test("exports a backup and shows the sensitivity notice", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "数据备份", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "导出到本地", exact: true }).click();
+  await expect(page.getByText(BACKUP_NOTICE)).toBeVisible();
+});
+
+test("shows progress while exporting", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup-progress");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "导出到本地", exact: true }).click();
+  const progress = page.getByTestId("backup-progress");
+  await expect(progress).toContainText("导出数据库");
+  await expect(progress).toContainText("120");
+  await expect(page.getByText(BACKUP_NOTICE)).toBeVisible();
+});
+
+test("restores only after confirming the overwrite", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
+  await expect(page.getByText("恢复摘要")).toBeVisible();
+  await expect(page.getByText("deskwand-backup-deskwand-bot-20261102-090000.zip")).toBeVisible();
+
+  await page.getByRole("button", { name: "覆盖并恢复", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "确认覆盖恢复" });
+  await expect(dialog.getByText(OVERWRITE_NOTICE)).toBeVisible();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(async () => (await backupCalls(page)).restore).toBe(0);
+
+  await page.getByRole("button", { name: "覆盖并恢复", exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "确认覆盖恢复", exact: true }).click();
+  await expect(page.getByText("数据已恢复。")).toBeVisible();
+  await expect.poll(async () => (await backupCalls(page)).restore).toBe(1);
+});
+
+test("blocks restore on a version mismatch", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup-version-mismatch");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
+  await expect(
+    page.getByText(
+      "备份来自版本 1.2.0，当前部署是 1.3.0。请先把云端升级或降级到 1.2.0 再恢复。",
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "覆盖并恢复", exact: true })).toBeDisabled();
+});
+
+test("overview offers retry for an unfinished restore", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup-pending");
+  await expect(page.getByText("数据恢复未完成")).toBeVisible();
+  await page.getByRole("button", { name: "用该文件重试", exact: true }).click();
+  await expect.poll(async () => (await backupCalls(page)).retry).toEqual([false]);
+  await page.getByRole("button", { name: "恢复到恢复前快照", exact: true }).click();
+  await expect.poll(async () => (await backupCalls(page)).retry).toEqual([false, true]);
+});

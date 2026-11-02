@@ -170,6 +170,26 @@ export function describeCode(code: string): string {
     case "NOT_SENT":
       return "请求在写入云端前被拒绝。请修正参数后重试，不会产生部分写入。";
 
+    // Data backup and restore.
+    case "ADMIN_UNAVAILABLE":
+      return "云端服务尚不支持数据备份，请先在更新页升级。";
+    case "ADMIN_UNAUTHORIZED":
+      return "云端拒绝了数据备份凭据。请重新登录后重试。";
+    case "MAINTENANCE_REQUIRED":
+      return "云端维护租约已失效。请重新执行本次操作。";
+    case "MAINTENANCE_BUSY":
+      return "另一个导出或恢复正在进行。请等待它完成，或最多 10 分钟后再试。";
+    case "BACKUP_INVALID":
+      return "备份文件无效或已损坏。请选择由本客户端导出的备份。";
+    case "BACKUP_VERSION_MISMATCH":
+      return "备份与当前云端版本不一致，只能恢复到同一版本。";
+    case "BACKUP_OBJECT_TOO_LARGE":
+      return "备份中有超过 100 MiB 的产物，无法恢复。请先导出新的备份或手动处理该对象。";
+    case "RESTORE_SNAPSHOT_FAILED":
+      return "恢复前快照失败，云端数据未改动。请检查网络和磁盘空间后重试。";
+    case "RESTORE_PENDING":
+      return "还有未完成的数据恢复。请先在概览页完成恢复，或回到恢复前快照。";
+
     default:
       return FALLBACK_CODE_MESSAGE;
   }

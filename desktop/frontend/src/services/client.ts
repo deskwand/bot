@@ -37,5 +37,11 @@ export function createProductionClient(): ClientService {
     probeModel: (provider, model, key, api, baseUrl) =>
       Service.probeModel(provider, model, key, api, baseUrl),
     subscribeLoginStatus: (listener) => events.loginStatus.on(listener),
+    exportData: () => Service.exportData(),
+    chooseBackup: () => Service.chooseBackup(),
+    restoreData: () => Service.restoreData(),
+    pendingRestore: () => Service.pendingRestore(),
+    retryRestore: (useSnapshot) => Service.retryRestore(useSnapshot),
+    subscribeBackupProgress: (listener) => events.backupProgress.on(listener),
   };
 }

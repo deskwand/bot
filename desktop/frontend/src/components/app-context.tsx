@@ -1,13 +1,14 @@
 import { createContext, useContext } from "react";
 import type { ClientService } from "@/services/types";
 
-export type Page = "overview" | "models" | "entries" | "diagnostics" | "updates";
+export type Page = "overview" | "models" | "entries" | "diagnostics" | "backup" | "updates";
 
 export const PAGE_LABELS: Record<Page, string> = {
   overview: "服务概览",
   models: "模型",
   entries: "消息入口",
   diagnostics: "诊断",
+  backup: "数据备份",
   updates: "更新",
 };
 
