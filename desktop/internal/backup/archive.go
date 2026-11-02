@@ -105,6 +105,14 @@ func ObjectEntry(index int) string {
 	return fmt.Sprintf("r2/%06d", index)
 }
 
+// checkedObjectEntry rejects the index that would break the six-digit format.
+func checkedObjectEntry(index int) (string, error) {
+	if index < 1 || index > maxArchivedObjects {
+		return "", invalidBackupf("artifact index %d is outside 1..%d", index, maxArchivedObjects)
+	}
+	return ObjectEntry(index), nil
+}
+
 // Writer writes a backup archive through a temporary file in the destination
 // directory and renames it into place on Finish.
 type Writer struct {
@@ -344,40 +352,40 @@ func Open(path string) (*Reader, error) {
 		_ = archive.Close()
 		return nil, invalidBackupf("unsupported format %d", manifest.Format)
 	}
+	if err := validateManifestStructure(manifest); err != nil {
+		_ = archive.Close()
+		return nil, invalidBackupf("%v", err)
+	}
 	for _, object := range manifest.DurableObjects {
-		if err := validateDORef(object.DORef); err != nil {
+		// Execute the schema and every row against a scratch database before
+		// any destructive RPC. This catches broken CREATE SQL, constraint
+		// violations and unknown columns while the deployment is untouched.
+		if err := preflightObject(object, files); err != nil {
 			_ = archive.Close()
-			return nil, invalidBackupf("%v", err)
-		}
-		for _, table := range object.Schema.Tables {
-			entry := TableEntry(object.DORef, table.Name)
-			file, ok := files[entry]
-			if !ok {
-				_ = archive.Close()
-				return nil, invalidBackupf("table entry %s is missing", entry)
-			}
-			count, err := validateTableEntry(file)
-			if err != nil {
-				_ = archive.Close()
-				return nil, invalidBackupf("table entry %s: %v", entry, err)
-			}
-			if want := object.Rows[table.Name]; count != want {
-				_ = archive.Close()
-				return nil, invalidBackupf("table entry %s has %d rows, manifest says %d", entry, count, want)
-			}
+			return nil, invalidBackupf("%s: %v", object.DO+" "+object.ID, err)
 		}
 	}
 	seenObjects := make(map[string]struct{}, len(manifest.R2.Objects))
+	seenKeys := make(map[string]struct{}, len(manifest.R2.Objects))
 	for _, object := range manifest.R2.Objects {
 		if !objectEntryPattern.MatchString(object.Entry) {
 			_ = archive.Close()
 			return nil, invalidBackupf("object entry %s is invalid", object.Entry)
 		}
+		if object.Key == "" {
+			_ = archive.Close()
+			return nil, invalidBackupf("object entry %s has an empty key", object.Entry)
+		}
 		if _, exists := seenObjects[object.Entry]; exists {
 			_ = archive.Close()
 			return nil, invalidBackupf("object entry %s is duplicated", object.Entry)
 		}
+		if _, exists := seenKeys[object.Key]; exists {
+			_ = archive.Close()
+			return nil, invalidBackupf("object key %s is duplicated", object.Key)
+		}
 		seenObjects[object.Entry] = struct{}{}
+		seenKeys[object.Key] = struct{}{}
 		file, ok := files[object.Entry]
 		if !ok {
 			_ = archive.Close()
@@ -386,6 +394,23 @@ func Open(path string) (*Reader, error) {
 		if object.Size < 0 || uint64(object.Size) != file.UncompressedSize64 {
 			_ = archive.Close()
 			return nil, invalidBackupf("object entry %s has %d bytes, manifest says %d", object.Entry, file.UncompressedSize64, object.Size)
+		}
+		// Read through EOF so zip verifies the CRC before a restore deletes
+		// the current artifacts. Merely opening the entry does not.
+		body, err := file.Open()
+		if err != nil {
+			_ = archive.Close()
+			return nil, invalidBackupf("open object entry %s: %v", object.Entry, err)
+		}
+		_, readErr := io.Copy(io.Discard, body)
+		closeErr := body.Close()
+		if readErr != nil {
+			_ = archive.Close()
+			return nil, invalidBackupf("verify object entry %s: %v", object.Entry, readErr)
+		}
+		if closeErr != nil {
+			_ = archive.Close()
+			return nil, invalidBackupf("verify object entry %s: %v", object.Entry, closeErr)
 		}
 	}
 	return &Reader{archive: archive, manifest: manifest, files: files}, nil
@@ -482,33 +507,6 @@ func readManifestFile(file *zip.File) ([]byte, error) {
 		return nil, fmt.Errorf("manifest is larger than %d bytes", maxManifestBytes)
 	}
 	return data, nil
-}
-
-// validateTableEntry counts one table's rows and rejects blank or malformed
-// lines so an invalid backup never reaches a restore step.
-func validateTableEntry(file *zip.File) (int64, error) {
-	reader, err := file.Open()
-	if err != nil {
-		return 0, err
-	}
-	defer reader.Close()
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), scannerLimit)
-	var count int64
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			return 0, fmt.Errorf("blank line at row %d", count+1)
-		}
-		if !json.Valid(line) {
-			return 0, fmt.Errorf("invalid JSON at row %d", count+1)
-		}
-		count++
-	}
-	if err := scanner.Err(); err != nil {
-		return 0, err
-	}
-	return count, nil
 }
 
 func validateDORef(ref DORef) error {

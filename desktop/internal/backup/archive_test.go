@@ -71,6 +71,16 @@ func writeTestArchive(t *testing.T, path string, tables []testTable, objects []t
 		manifest.R2.Objects = append(manifest.R2.Objects, object.item)
 		manifest.R2.Bytes += int64(len(object.body))
 	}
+	// A valid archive always carries exactly one Butler and one Channel.
+	for _, ref := range []DORef{{DO: "butler"}, {DO: "channel"}} {
+		if _, ok := positions[ref]; ok {
+			continue
+		}
+		manifest.DurableObjects = append(manifest.DurableObjects, DOManifest{
+			DORef: ref,
+			Rows:  map[string]int64{},
+		})
+	}
 	if mutate != nil {
 		mutate(&manifest)
 	}
@@ -122,11 +132,15 @@ func TestWriterReaderRoundTrip(t *testing.T) {
 	if manifest.Format != FormatVersion || manifest.Release != "1.2.0" || manifest.VersionID != "version-1" {
 		t.Fatalf("manifest = %#v", manifest)
 	}
-	if len(manifest.DurableObjects) != 1 || len(manifest.DurableObjects[0].Schema.Tables) != 2 {
+	if len(manifest.DurableObjects) != 2 {
 		t.Fatalf("durable objects = %#v", manifest.DurableObjects)
 	}
-	if manifest.DurableObjects[0].Rows["memories"] != int64(len(rows)) {
-		t.Fatalf("rows = %#v", manifest.DurableObjects[0].Rows)
+	butlerObject := manifest.DurableObjects[0]
+	if butlerObject.DO != "butler" || len(butlerObject.Schema.Tables) != 2 {
+		t.Fatalf("durable objects = %#v", manifest.DurableObjects)
+	}
+	if butlerObject.Rows["memories"] != int64(len(rows)) {
+		t.Fatalf("rows = %#v", butlerObject.Rows)
 	}
 	if manifest.R2.Bytes != int64(len(objectBody)) || len(manifest.R2.Objects) != 1 {
 		t.Fatalf("r2 = %#v", manifest.R2)
@@ -315,6 +329,10 @@ func minimalManifest() Manifest {
 		Release:    "1.2.0",
 		VersionID:  "version-1",
 		WorkerName: "deskwand-bot",
+		DurableObjects: []DOManifest{
+			{DORef: DORef{DO: "butler"}, Rows: map[string]int64{}},
+			{DORef: DORef{DO: "channel"}, Rows: map[string]int64{}},
+		},
 	}
 }
 
@@ -558,4 +576,152 @@ func TestFinishWritesEmptyArrays(t *testing.T) {
 			t.Fatalf("manifest = %s, want %s", text, want)
 		}
 	}
+}
+
+func manifestWithTables(tables ...DOManifest) Manifest {
+	m := minimalManifest()
+	m.DurableObjects = append(m.DurableObjects, tables...)
+	return m
+}
+
+func TestOpenRejectsMissingRequiredDOs(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*Manifest)
+	}{
+		{
+			name: "missing butler",
+			mutate: func(m *Manifest) {
+				var kept []DOManifest
+				for _, object := range m.DurableObjects {
+					if object.DO != "butler" {
+						kept = append(kept, object)
+					}
+				}
+				m.DurableObjects = kept
+			},
+		},
+		{
+			name: "missing channel",
+			mutate: func(m *Manifest) {
+				var kept []DOManifest
+				for _, object := range m.DurableObjects {
+					if object.DO != "channel" {
+						kept = append(kept, object)
+					}
+				}
+				m.DurableObjects = kept
+			},
+		},
+		{
+			name: "duplicate task id",
+			mutate: func(m *Manifest) {
+				m.DurableObjects = append(m.DurableObjects,
+					DOManifest{DORef: DORef{DO: "task", ID: "t1"}, Rows: map[string]int64{}},
+					DOManifest{DORef: DORef{DO: "task", ID: "t1"}, Rows: map[string]int64{}},
+				)
+			},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "backup.zip")
+			writeTestArchive(t, path, nil, nil, testCase.mutate)
+			_, err := Open(path)
+			requireCode(t, err, CodeBackupInvalid)
+		})
+	}
+}
+
+func TestOpenRejectsMalformedSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := manifestWithTables(DOManifest{
+		DORef: DORef{DO: "butler"},
+		Schema: DBSchema{Tables: []TableSchema{{
+			Name:   "broken",
+			Create: "CREATE TABLE broken (",
+		}}},
+		Rows: map[string]int64{"broken": 1},
+	})
+	writeRawArchive(t, path, manifest, []rawEntry{{
+		name: "do/butler/broken.jsonl",
+		data: []byte("{\"__rowid\":1}\n"),
+	}})
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestOpenRejectsMalformedBlob(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := manifestWithTables(DOManifest{
+		DORef: DORef{DO: "butler"},
+		Schema: DBSchema{Tables: []TableSchema{{
+			Name:   "blobs",
+			Create: "CREATE TABLE blobs (b BLOB)",
+		}}},
+		Rows: map[string]int64{"blobs": 1},
+	})
+	writeRawArchive(t, path, manifest, []rawEntry{{
+		name: "do/butler/blobs.jsonl",
+		data: []byte("{\"__rowid\":1,\"b\":{\"$blob\":\"!!!\"}}\n"),
+	}})
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func TestOpenRejectsMalformedKVValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest := manifestWithTables(DOManifest{
+		DORef:  DORef{DO: "channel"},
+		Schema: DBSchema{Tables: []TableSchema{{Name: "__kv", WithoutRowid: true}}},
+		Rows:   map[string]int64{"__kv": 1},
+	})
+	writeRawArchive(t, path, manifest, []rawEntry{{
+		name: "do/channel/__kv.jsonl",
+		data: []byte("{\"key\":\"x\",\"value\":\"{not json\"}\n"),
+	}})
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func corruptZipEntry(t *testing.T, path, name string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	for _, file := range archive.File {
+		if file.Name != name {
+			continue
+		}
+		offset, err := file.DataOffset()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if offset < 0 || offset >= int64(len(data)) {
+			t.Fatalf("invalid data offset %d", offset)
+		}
+		data[offset] ^= 0xff
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	t.Fatalf("entry %s not found", name)
+}
+
+func TestOpenRejectsObjectCRCMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	body := []byte("artifact bytes")
+	item := R2Item{Key: "a.png", Entry: ObjectEntry(1), Size: int64(len(body)), ContentType: "image/png"}
+	writeTestArchive(t, path, nil, []testObject{{item: item, body: body}}, nil)
+	corruptZipEntry(t, path, item.Entry)
+
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
 }
