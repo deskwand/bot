@@ -1270,3 +1270,11 @@ func TestJournalEvidenceNeverContainsRawServerBody(t *testing.T) {
 	}
 	assertNoSentinel(t, f.Dir, f.Logs)
 }
+
+func TestPendingSecretKeyUsesPassthroughPrefix(t *testing.T) {
+	// The vault credential store keeps keys with this prefix in their own
+	// items; pending secret values are too large to share one item.
+	if key := pendingSecretKey("op", "NAME"); !strings.HasPrefix(key, platform.PassthroughKeyPrefix) {
+		t.Fatalf("pendingSecretKey = %q, want prefix %q", key, platform.PassthroughKeyPrefix)
+	}
+}
