@@ -417,19 +417,14 @@ func (c *cfClient) createDeployment(t *testing.T, ctx context.Context, name, ver
 func (c *cfClient) deployVersion(t *testing.T, ctx context.Context, name, versionID string) {
 	t.Helper()
 	data := c.createDeployment(t, ctx, name, versionID)
+	// The create response carries only the deployment id; the version split is
+	// confirmed afterwards from the deployments list (waitForActiveVersion).
 	var deployment struct {
-		ID       string `json:"id"`
-		Versions []struct {
-			VersionID  string  `json:"version_id"`
-			Percentage float64 `json:"percentage"`
-		} `json:"versions"`
+		ID string `json:"id"`
 	}
 	c.decodeResult(t, data, &deployment)
 	if deployment.ID == "" {
-		t.Fatal("deployment creation returned no deployment id")
-	}
-	if len(deployment.Versions) != 1 || deployment.Versions[0].VersionID != versionID || deployment.Versions[0].Percentage != 100 {
-		t.Fatalf("deployment versions = %+v, want only %s at 100%%", deployment.Versions, versionID)
+		t.Fatalf("deployment creation returned no deployment id: %s", c.safeBody(data))
 	}
 	t.Logf("deployed version %s as deployment %s", versionID, deployment.ID)
 }
