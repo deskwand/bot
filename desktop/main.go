@@ -1,34 +1,159 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"path/filepath"
 
 	"github.com/egoist/mygo"
+	"github.com/deskwand/bot/desktop/internal/app"
+	"github.com/deskwand/bot/desktop/internal/auth"
+	"github.com/deskwand/bot/desktop/internal/cloudflare"
+	"github.com/deskwand/bot/desktop/internal/deployment"
+	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/navigation"
+	"github.com/deskwand/bot/desktop/internal/platform"
+	"github.com/deskwand/bot/desktop/internal/release"
 )
 
-// AppInfo is the only service exposed to the page: the shell needs to prove
-// that Go methods reach React through the generated TypeScript client.
-type AppInfo struct{}
+// appVersion is the client version reported in the Cloudflare User-Agent. Keep
+// it in sync with desktop/mygo.json.
+const appVersion = "0.1.0"
 
-// Name returns the product name.
-func (AppInfo) Name() string { return "DeskWand Bot" }
+const (
+	credentialService    = "com.deskwand.bot"
+	devCredentialService = "com.deskwand.bot.dev"
+	appDataName          = "DeskWand Bot"
+	devAppDataName       = "DeskWand Bot Dev"
+)
 
 func main() {
-	mygo.Bind(AppInfo{})
+	dev := mygo.IsDev()
+	dataDir, err := appDataDir(dev)
+	if err != nil {
+		log.Fatal(err)
+	}
+	journal, err := deployment.NewJournal(filepath.Join(dataDir, "journal"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	targets, err := app.NewFileTargetStore(dataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	credentials := platform.NewSystemCredentialStore(credentialServiceName(dev))
+	tokens := auth.NewTokenService(credentials)
+
+	// A missing or untrusted bundle must not prevent the app from starting.
+	// Install and Upgrade report RELEASE_NOT_BUNDLED / RELEASE_UNTRUSTED.
+	keys, keyErr := release.TrustedReleaseKeys()
+	if keyErr != nil {
+		// A malformed production key cannot validate any bundle. Treat it
+		// like a missing key so the UI receives RELEASE_UNTRUSTED.
+		keys = release.TrustedKeys{}
+	}
+	pkg, releaseErr := release.LoadEmbedded(keys)
+
+	api := cloudflare.New(cloudflare.Options{
+		Token:   tokens.Token,
+		Version: appVersion,
+	})
+	locker := deployment.NewTargetLocker()
+	lifecycle := deployment.NewLifecycleWithLocker(api, journal, pkg, credentials, nil, locker)
+	publish := deployment.NewServiceWithLocker(api, journal, credentials, pkg, nil, locker)
+	entries := app.NewEntryService(app.EntryOptions{
+		Publisher:   publish,
+		Snapshots:   api,
+		Selector:    app.NewActiveChannelSelector(publish, api),
+		Credentials: credentials,
+		PublicBaseURLFor: func(ctx context.Context, target domain.Target) (string, error) {
+			snapshot, err := api.ReadSnapshot(ctx, target)
+			if err != nil {
+				return "", err
+			}
+			return app.ReadPlainVar(snapshot.SettingsJSON, "PUBLIC_BASE_URL"), nil
+		},
+	})
+
+	service := app.NewService(app.ServiceOptions{
+		Auth:        tokens,
+		Publish:     publish,
+		Lifecycle:   lifecycle,
+		Entries:     entries,
+		Diagnostics: app.NewDiagnosticsService(api, api),
+		Snapshots:   api,
+		Scripts:     api,
+		Journal:     journal,
+		Store:       targets,
+		Browser:     platform.NewSystemBrowserOpener(),
+		Release:     app.EmbeddedRelease{Pkg: pkg, Err: releaseErr},
+	})
+
+	mygo.Bind(service)
 
 	mygo.App.WhenReady(func() {
-		mygo.NewWindow(mygo.WindowOptions{
+		window := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "DeskWand Bot",
-			Width:     960,
-			Height:    640,
-			MinWidth:  480,
-			MinHeight: 360,
+			Width:     1024,
+			Height:    720,
+			MinWidth:  640,
+			MinHeight: 480,
 			StateKey:  "main",
 			URL:       "/",
 		})
+		restrictNavigation(window)
 	})
 
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// appDataDir is the per-user application data directory. Development builds
+// use a separate directory and credential service so they cannot read or
+// change a production installation. Neither file contains credentials.
+func appDataDir(dev bool) (string, error) {
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	name := appDataName
+	if dev {
+		name = devAppDataName
+	}
+	return filepath.Join(base, name), nil
+}
+
+func credentialServiceName(dev bool) string {
+	if dev {
+		return devCredentialService
+	}
+	return credentialService
+}
+
+// restrictNavigation keeps the privileged window on the bundled frontend. An
+// external http(s) link a user clicked opens in the system browser instead of
+// loading a remote page that would lose the app's bindings.
+func restrictNavigation(window *mygo.Window) {
+	page := window.Page()
+	dev := mygo.IsDev()
+	page.OnWillNavigate(func(event *mygo.NavigateEvent) {
+		if navigation.IsBundledFrontendURL(event.URL, dev) {
+			return
+		}
+		event.PreventDefault()
+		if event.UserInitiated && navigation.IsExternalHTTPURL(event.URL) {
+			target := event.URL
+			go func() { _ = mygo.Shell.OpenExternal(target) }()
+		}
+	})
+	page.SetWindowOpenHandler(func(request mygo.WindowOpenRequest) *mygo.WindowOptions {
+		if request.UserInitiated && navigation.IsExternalHTTPURL(request.URL) {
+			target := request.URL
+			go func() { _ = mygo.Shell.OpenExternal(target) }()
+		}
+		return nil
+	})
 }

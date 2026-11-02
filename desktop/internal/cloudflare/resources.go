@@ -337,6 +337,12 @@ func (c *Client) UploadScript(ctx context.Context, target domain.Target, manifes
 			"workers/message": message,
 		},
 	}
+	// Install and upgrade use the non-versioned script upload, so the
+	// script-level observability settings must travel in this metadata. The
+	// values come from the signed release template, never from user input.
+	if template.Observability != nil {
+		metadata["observability"] = *template.Observability
+	}
 	if len(template.Compatibility.Flags) > 0 {
 		metadata["compatibility_flags"] = append([]string(nil), template.Compatibility.Flags...)
 	}

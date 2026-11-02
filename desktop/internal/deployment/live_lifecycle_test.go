@@ -143,6 +143,21 @@ func TestLiveLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish config change: %v", err)
 	}
+
+	// Observation only: report whether a version upload preserves the
+	// script-level observability settings. This must not fail the lifecycle.
+	var scriptSettings struct {
+		Observability struct {
+			Enabled bool `json:"enabled"`
+		} `json:"observability"`
+	}
+	settingsPath := "/accounts/" + accountID + "/workers/scripts/" + workerName + "/script-settings"
+	if err := client.GetJSON(ctx, settingsPath, nil, &scriptSettings); err != nil {
+		t.Logf("RESULT observability after version publish: enabled=unknown (read failed)")
+	} else {
+		t.Logf("RESULT observability after version publish: enabled=%v", scriptSettings.Observability.Enabled)
+	}
+
 	updated, err := client.ReadSnapshot(ctx, target)
 	if err != nil {
 		t.Fatalf("read updated snapshot: %v", err)

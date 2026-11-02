@@ -38,6 +38,7 @@ const (
 	CodeConfigMissing               = "CONFIG_MISSING"
 	CodeServiceNotFound             = "SERVICE_NOT_FOUND"
 	CodeUpgradeRequiredFirst        = "UPGRADE_REQUIRED_FIRST"
+	CodeUpgradeRequired             = "UPGRADE_REQUIRED"
 	CodeOperationInProgress         = "OPERATION_IN_PROGRESS"
 	CodeUploadRejected              = "UPLOAD_REJECTED"
 	CodeIdentityUnverifiable        = "RESOURCE_IDENTITY_UNVERIFIABLE"
@@ -112,10 +113,20 @@ type Lifecycle struct {
 // NewLifecycle constructs the lifecycle service. The package must already be
 // verified; a zero package is rejected by every operation that needs it.
 func NewLifecycle(api LifecycleAPI, journal *Journal, pkg release.Package, creds platform.CredentialStore, clock func() time.Time) *Lifecycle {
+	return NewLifecycleWithLocker(api, journal, pkg, creds, clock, NewTargetLocker())
+}
+
+// NewLifecycleWithLocker constructs the lifecycle service with a target lock
+// shared with the configuration publish service, so install, import, upgrade
+// and publish cannot interleave for the same Worker.
+func NewLifecycleWithLocker(api LifecycleAPI, journal *Journal, pkg release.Package, creds platform.CredentialStore, clock func() time.Time, locker *TargetLocker) *Lifecycle {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Lifecycle{api: api, journal: journal, pkg: pkg, creds: creds, clock: clock, locker: NewTargetLocker()}
+	if locker == nil {
+		locker = NewTargetLocker()
+	}
+	return &Lifecycle{api: api, journal: journal, pkg: pkg, creds: creds, clock: clock, locker: locker}
 }
 
 // Install creates a new deployment. Every step is idempotent and journaled, so

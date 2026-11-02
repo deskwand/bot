@@ -8,3 +8,6 @@ release-key*
 !contracts/fixtures/release/TEST-ONLY-*.pem
 .DS_Store
 .superpowers/
+desktop/internal/release/bundle/*
+!desktop/internal/release/bundle/.gitkeep
+!desktop/internal/release/keys/*.pub.pem

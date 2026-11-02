@@ -38,6 +38,9 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 	if err := validateReferences(base.SecretNames, change.References, change.Secrets); err != nil {
 		return domain.PublishPlan{}, err
 	}
+	if err := validateVars(change.Vars, base.SettingsJSON); err != nil {
+		return domain.PublishPlan{}, err
+	}
 
 	document, empty, err := baseDocument(base.ConfigJSON)
 	if err != nil {
@@ -84,6 +87,7 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 		BaseVersionID: base.VersionID,
 		ConfigJSON:    canonical,
 		Secrets:       cloneSecretEdits(change.Secrets),
+		Vars:          cloneVars(change.Vars),
 	}, nil
 }
 
@@ -429,6 +433,61 @@ func invalidSecretEdit(message string) error {
 	return domain.Error{Code: domain.INVALID_SECRET_EDIT, Message: message}
 }
 
+// validateVars restricts variable overrides to the release template's
+// plainVars and rejects a name that the current settings already bind as a
+// different type. CreateVersion repeats the allowlist check against the signed
+// manifest before uploading.
+func validateVars(vars map[string]string, settingsJSON []byte) error {
+	if len(vars) == 0 {
+		return nil
+	}
+	bindingTypes := map[string]string{}
+	if len(settingsJSON) > 0 {
+		var document struct {
+			Bindings []struct {
+				Name string `json:"name"`
+				Type string `json:"type"`
+			} `json:"bindings"`
+		}
+		if err := json.Unmarshal(settingsJSON, &document); err != nil {
+			return invalidVar("the current settings bindings are not readable")
+		}
+		for _, binding := range document.Bindings {
+			bindingTypes[binding.Name] = binding.Type
+		}
+	}
+	for name, value := range vars {
+		if name == "" {
+			return invalidVar("a plain variable override has an empty name")
+		}
+		if strings.ContainsRune(name, 0) || strings.ContainsRune(value, 0) {
+			return invalidVar("a plain variable override contains NUL")
+		}
+		if !templatePlainVarSet[name] {
+			return invalidVar(fmt.Sprintf("plain variable %q is not declared by the release template", name))
+		}
+		if bindingType, ok := bindingTypes[name]; ok && bindingType != "plain_text" {
+			return invalidVar(fmt.Sprintf("binding %q is not a plain-text variable", name))
+		}
+	}
+	return nil
+}
+
+func invalidVar(message string) error {
+	return domain.Error{Code: domain.INVALID_VAR, Message: message}
+}
+
+func cloneVars(vars map[string]string) map[string]string {
+	if vars == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(vars))
+	for name, value := range vars {
+		cloned[name] = value
+	}
+	return cloned
+}
+
 func cloneSecretEdits(edits []domain.SecretEdit) []domain.SecretEdit {
 	if edits == nil {
 		return nil
@@ -437,6 +496,21 @@ func cloneSecretEdits(edits []domain.SecretEdit) []domain.SecretEdit {
 	copy(cloned, edits)
 	return cloned
 }
+
+// templatePlainVars is the runtime copy of the release template's plainVars.
+// plain_vars_test.go asserts it matches the contract file.
+var templatePlainVars = []string{
+	"ACTIVE_CHANNEL",
+	"PUBLIC_BASE_URL",
+}
+
+var templatePlainVarSet = func() map[string]bool {
+	set := make(map[string]bool, len(templatePlainVars))
+	for _, name := range templatePlainVars {
+		set[name] = true
+	}
+	return set
+}()
 
 // templateSecretNames is the runtime copy of the release template's
 // secretNames. secret_names_test.go asserts it matches the contract file.

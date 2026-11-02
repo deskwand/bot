@@ -60,6 +60,7 @@ func versionManifest(t *testing.T) release.Manifest {
 			VersionMetadata: release.BindingRef{Name: "CF_VERSION_METADATA"},
 			ConfigBinding:   release.ConfigBinding{Name: "DESKWAND_CONFIG", Type: "json", SchemaVersion: 1},
 			SecretNames:     []string{"KEEP", "REPLACE", "CLEAR"},
+			PlainVars:       []string{"ACTIVE_CHANNEL", "PUBLIC_BASE_URL"},
 		},
 	}
 }
@@ -216,6 +217,52 @@ func TestCreateVersionBuildsPreservingMetadata(t *testing.T) {
 	}
 	if !bytes.Contains(upload.parts["chunks/extra.js"], []byte("extra")) || !bytes.Contains(upload.parts["index.js"], []byte("export")) {
 		t.Fatalf("module parts = %#v", upload.parts)
+	}
+}
+
+func TestCreateVersionAppliesPlainVarOverrides(t *testing.T) {
+	var uploads []capturedVersionUpload
+	client, _ := cloudflaretest.NewServerClient(t, versionServer(t, versionBaseID, &uploads))
+	manifestJSON, _ := json.Marshal(versionManifest(t))
+
+	_, err := client.CreateVersion(context.Background(), versionBase(), manifestJSON, map[string][]byte{"index.js": []byte("x")}, domain.PublishPlan{
+		BaseVersionID: versionBaseID,
+		ConfigJSON:    []byte(`{"schemaVersion":1}`),
+		Vars:          map[string]string{"ACTIVE_CHANNEL": "wechat"},
+	}, cloudflare.PreservePolicy{OperationID: "op-vars"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(uploads) != 1 {
+		t.Fatalf("uploads = %d", len(uploads))
+	}
+	byName := map[string]map[string]any{}
+	for _, raw := range uploads[0].metadata["bindings"].([]any) {
+		binding := raw.(map[string]any)
+		byName[binding["name"].(string)] = binding
+	}
+	if byName["ACTIVE_CHANNEL"]["text"] != "wechat" {
+		t.Fatalf("ACTIVE_CHANNEL = %#v", byName["ACTIVE_CHANNEL"])
+	}
+	if byName["PUBLIC_BASE_URL"]["text"] != "https://bot.example" ||
+		byName["UNKNOWN_VAR"]["text"] != "keep-me" {
+		t.Fatalf("unrelated plain vars changed: %#v", byName)
+	}
+}
+
+func TestCreateVersionRejectsVarOutsideTemplateAllowlist(t *testing.T) {
+	var uploads []capturedVersionUpload
+	client, _ := cloudflaretest.NewServerClient(t, versionServer(t, versionBaseID, &uploads))
+	manifestJSON, _ := json.Marshal(versionManifest(t))
+
+	_, err := client.CreateVersion(context.Background(), versionBase(), manifestJSON, map[string][]byte{"index.js": []byte("x")}, domain.PublishPlan{
+		BaseVersionID: versionBaseID,
+		ConfigJSON:    []byte(`{"schemaVersion":1}`),
+		Vars:          map[string]string{"AUTH_BYPASS": "1"},
+	}, cloudflare.PreservePolicy{OperationID: "op-vars"})
+	assertDomainCode(t, err, domain.NOT_SENT)
+	if len(uploads) != 0 {
+		t.Fatalf("disallowed var still uploaded %d versions", len(uploads))
 	}
 }
 

@@ -113,6 +113,50 @@ func TestMergeAppliesOwnerPatchAndPreservesUnknownFields(t *testing.T) {
 	}
 }
 
+func TestMergeRejectsVariableOutsideTemplatePlainVars(t *testing.T) {
+	base := baseSnapshot(t)
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Vars:            map[string]string{"AUTH_BYPASS": "1"},
+	})
+	assertMergeCode(t, err, domain.INVALID_VAR)
+}
+
+func TestMergeRejectsVariableBoundAsNonPlainText(t *testing.T) {
+	base := baseSnapshot(t)
+	settings, _ := json.Marshal(map[string]any{
+		"bindings": []any{
+			map[string]any{"type": "secret_text", "name": "ACTIVE_CHANNEL"},
+		},
+	})
+	base.SettingsJSON = settings
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Vars:            map[string]string{"ACTIVE_CHANNEL": "wechat"},
+	})
+	assertMergeCode(t, err, domain.INVALID_VAR)
+}
+
+func TestMergeAcceptsDeclaredPlainVariable(t *testing.T) {
+	base := baseSnapshot(t)
+	settings, _ := json.Marshal(map[string]any{
+		"bindings": []any{
+			map[string]any{"type": "plain_text", "name": "ACTIVE_CHANNEL", "text": "telegram"},
+		},
+	})
+	base.SettingsJSON = settings
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Vars:            map[string]string{"ACTIVE_CHANNEL": "wechat"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Vars["ACTIVE_CHANNEL"] != "wechat" {
+		t.Fatalf("plan vars = %#v", plan.Vars)
+	}
+}
+
 func TestMergeExplicitEmptyOwnerClearsAllowlist(t *testing.T) {
 	base := baseSnapshot(t)
 	empty := []int64{}

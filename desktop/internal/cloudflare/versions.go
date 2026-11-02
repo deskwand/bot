@@ -287,21 +287,50 @@ func buildVersionMetadata(base domain.Snapshot, manifest release.Manifest, plan 
 		}
 	}
 
+	// Validate variable overrides before building anything that could be
+	// uploaded. Only names the signed release template declares as plain
+	// variables may be changed by a publish.
+	allowedVars := make(map[string]bool, len(template.PlainVars))
+	for _, name := range template.PlainVars {
+		allowedVars[name] = true
+	}
+	for name := range plan.Vars {
+		if !allowedVars[name] {
+			return versionMetadata{}, domain.Error{
+				Code:    domain.NOT_SENT,
+				Message: fmt.Sprintf("variable %q is not declared by the release template", name),
+			}
+		}
+	}
+
 	// Copy every plain-text variable from the current settings. This keeps
-	// variables the UI never exposes (for example ACTIVE_CHANNEL) intact even
-	// when they are not listed in the release template.
+	// variables the UI never exposes intact even when they are not listed in
+	// the release template, then applies the explicit overrides from the
+	// publish plan (for example ACTIVE_CHANNEL).
 	plainNames := make([]string, 0)
+	plainSeen := make(map[string]bool, len(baseBindings)+len(plan.Vars))
 	for name, binding := range baseBindings {
 		if binding.Type == "plain_text" && name != template.ConfigBinding.Name {
 			plainNames = append(plainNames, name)
+			plainSeen[name] = true
+		}
+	}
+	for name := range plan.Vars {
+		if !plainSeen[name] {
+			plainNames = append(plainNames, name)
+			plainSeen[name] = true
 		}
 	}
 	sort.Strings(plainNames)
 	for _, name := range plainNames {
+		text := baseBindings[name].Text
+		if value, ok := plan.Vars[name]; ok {
+			text = value
+		}
 		metadata.Bindings = append(metadata.Bindings, map[string]any{
 			"type": "plain_text",
 			"name": name,
-			"text": baseBindings[name].Text,
+			"text": text,
 		})
 	}
 

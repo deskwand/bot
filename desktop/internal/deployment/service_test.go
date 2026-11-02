@@ -52,13 +52,14 @@ type fakeVersion struct {
 type fakeAPI struct {
 	mu sync.Mutex
 
-	baseVersion   string
-	stagedVersion string
-	activeVersion string
-	latestVersion string
-	fingerprint   string
-	secretNames   []string
-	configJSON    []byte
+	baseVersion    string
+	stagedVersion  string
+	activeVersion  string
+	latestVersion  string
+	fingerprint    string
+	releaseVersion string
+	secretNames    []string
+	configJSON     []byte
 
 	versions []fakeVersion
 
@@ -77,13 +78,14 @@ type fakeAPI struct {
 
 func newFakeAPI() *fakeAPI {
 	return &fakeAPI{
-		baseVersion:   "version-base",
-		stagedVersion: "version-staged",
-		activeVersion: "version-base",
-		latestVersion: "version-base",
-		fingerprint:   "fingerprint-base",
-		secretNames:   []string{"ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WECHAT_CREDENTIALS"},
-		configJSON:    append([]byte(nil), validConfigJSON...),
+		baseVersion:    "version-base",
+		stagedVersion:  "version-staged",
+		activeVersion:  "version-base",
+		latestVersion:  "version-base",
+		fingerprint:    "fingerprint-base",
+		releaseVersion: "3.0.0",
+		secretNames:    []string{"ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WECHAT_CREDENTIALS"},
+		configJSON:     append([]byte(nil), validConfigJSON...),
 	}
 }
 
@@ -103,6 +105,7 @@ func (f *fakeAPI) ReadSnapshot(context.Context, domain.Target) (domain.Snapshot,
 		ConfigJSON:      append([]byte(nil), f.configJSON...),
 		SecretNames:     append([]string(nil), f.secretNames...),
 		Fingerprint:     f.fingerprint,
+		ReleaseVersion:  f.releaseVersion,
 		ActiveVersionCount: func() int {
 			if f.activeVersion == "" {
 				return 0
@@ -377,6 +380,28 @@ func TestApplyPublishesAndRedacts(t *testing.T) {
 	assertNoSentinel(t, f.Dir, f.Logs)
 }
 
+func TestApplyCarriesPlainVarOverridesIntoPlanAndJournal(t *testing.T) {
+	f := newPublishFixture(t)
+	change := f.change()
+	change.Vars = map[string]string{"ACTIVE_CHANNEL": "wechat"}
+
+	result, err := f.Service.Apply(context.Background(), f.target(), change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertState(t, result, StatePublished)
+	if got := f.API.creates[0].Plan.Vars["ACTIVE_CHANNEL"]; got != "wechat" {
+		t.Fatalf("plan vars = %#v", f.API.creates[0].Plan.Vars)
+	}
+	record, err := f.Journal.Load(result.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := record.Vars["ACTIVE_CHANNEL"]; got != "wechat" {
+		t.Fatalf("journal vars = %#v", record.Vars)
+	}
+}
+
 func TestResumeVerifiesBeforeRepublishing(t *testing.T) {
 	f := newPublishFixture(t)
 	f.API.activateErr = fmt.Errorf("activation response lost %s", serviceSecretSentinel)
@@ -621,14 +646,89 @@ func TestPreviewReturnsPlanAndConflictNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(steps) < 4 {
+	if len(steps) < 5 {
 		t.Fatalf("steps = %#v", steps)
 	}
-	if !strings.Contains(steps[3].Message, "无法检测") {
-		t.Fatalf("conflict note = %q", steps[3].Message)
+	if steps[0].ID != "release" || !strings.Contains(steps[0].Message, "云端版本") {
+		t.Fatalf("release step = %#v", steps[0])
+	}
+	conflict := ""
+	for _, step := range steps {
+		if step.ID == "conflict-note" {
+			conflict = step.Message
+		}
+	}
+	if !strings.Contains(conflict, "无法检测") {
+		t.Fatalf("conflict note = %q", conflict)
 	}
 	if f.API.createCount() != 0 {
 		t.Fatal("Preview mutated remote state")
+	}
+}
+
+func TestApplyRejectsReleaseVersionChanges(t *testing.T) {
+	tests := []struct {
+		name           string
+		releaseVersion string
+		code           string
+	}{
+		{name: "newer cloud", releaseVersion: "4.0.0", code: CodeDowngradeRejected},
+		{name: "older cloud", releaseVersion: "2.0.0", code: CodeUpgradeRequired},
+		{name: "unknown cloud", releaseVersion: "", code: CodeUpgradeRequired},
+		{name: "unparseable cloud", releaseVersion: "not-a-version", code: CodeUpgradeRequired},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newPublishFixture(t)
+			f.API.releaseVersion = test.releaseVersion
+			result, err := f.Service.Apply(context.Background(), f.target(), f.change())
+			assertCode(t, err, test.code)
+			if result.State != StateFailed {
+				t.Fatalf("state = %q, want failed", result.State)
+			}
+			if f.API.createCount() != 0 || f.API.activateCount() != 0 {
+				t.Fatalf("version gate still created/activated: %d/%d", f.API.createCount(), f.API.activateCount())
+			}
+		})
+	}
+}
+
+func TestApplyAllowsExplicitReleaseChange(t *testing.T) {
+	f := newPublishFixture(t)
+	f.API.releaseVersion = "2.0.0"
+	change := f.change()
+	change.AllowReleaseChange = true
+
+	result, err := f.Service.Apply(context.Background(), f.target(), change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertState(t, result, StatePublished)
+	if f.API.createCount() != 1 {
+		t.Fatalf("create calls = %d", f.API.createCount())
+	}
+	record, err := f.Journal.Load(result.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.AllowReleaseChange {
+		t.Fatal("journal did not retain the explicit release change")
+	}
+}
+
+func TestPreviewShowsDeployedAndClientVersions(t *testing.T) {
+	f := newPublishFixture(t)
+	f.API.releaseVersion = "2.0.0"
+	steps, err := f.Service.Preview(context.Background(), f.target(), f.change())
+	assertCode(t, err, CodeUpgradeRequired)
+	if len(steps) == 0 || steps[0].ID != "release" {
+		t.Fatalf("steps = %#v", steps)
+	}
+	if !strings.Contains(steps[0].Message, "2.0.0") || !strings.Contains(steps[0].Message, "3.0.0") {
+		t.Fatalf("release step = %#v", steps[0])
+	}
+	if f.API.createCount() != 0 {
+		t.Fatal("preview mutated remote state")
 	}
 }
 

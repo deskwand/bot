@@ -30,6 +30,7 @@ const (
 	// registered; retrying finishes the same ordered workflow.
 	StatePublished = "published"
 	StatePartial   = "partial"
+	StateUnchanged = "unchanged"
 
 	webhookSecretBytes = 32
 	telegramBotIDKey   = "telegram.bot-id"
@@ -74,19 +75,59 @@ type SnapshotReader interface {
 	ReadSnapshot(ctx context.Context, target domain.Target) (domain.Snapshot, error)
 }
 
-// ChannelSelector writes ACTIVE_CHANNEL. Task 8 intentionally ships a stub;
-// the concrete implementation is composed in Task 10.
+// ChannelSelector writes ACTIVE_CHANNEL. The composition root supplies
+// NewActiveChannelSelector; NotWiredSelector remains the zero-dependency
+// default for tests that only exercise credential publishing.
 type ChannelSelector interface {
 	SetActiveChannel(ctx context.Context, target domain.Target, channel string) (domain.Result, error)
 }
 
-// NotWiredSelector is the deliberate Task 8 stub. It is not a fallback and it
-// never writes a different channel than the one the user chose.
+// NotWiredSelector is the explicit not-wired default. It is not a fallback and
+// it never writes a different channel than the one the user chose.
 type NotWiredSelector struct{}
 
 // SetActiveChannel returns the typed not-wired sentinel.
 func (NotWiredSelector) SetActiveChannel(context.Context, domain.Target, string) (domain.Result, error) {
 	return domain.Result{}, ErrNotWired
+}
+
+// ActiveChannelSelector implements the real ACTIVE_CHANNEL writer. It publishes
+// a version whose only change is the ACTIVE_CHANNEL plain-text variable, using
+// the same conflict-checked publish path as configuration changes.
+type ActiveChannelSelector struct {
+	Publisher EntryPublisher
+	Snapshots SnapshotReader
+}
+
+// NewActiveChannelSelector composes the publish service and snapshot reader.
+func NewActiveChannelSelector(publisher EntryPublisher, snapshots SnapshotReader) *ActiveChannelSelector {
+	return &ActiveChannelSelector{Publisher: publisher, Snapshots: snapshots}
+}
+
+// SetActiveChannel writes ACTIVE_CHANNEL. It never writes any other variable,
+// never changes secrets and never selects a different channel on failure.
+func (s *ActiveChannelSelector) SetActiveChannel(ctx context.Context, target domain.Target, channel string) (domain.Result, error) {
+	normalized := strings.ToLower(strings.TrimSpace(channel))
+	if normalized != EntryTelegram && normalized != EntryWeChat {
+		return domain.Result{}, ErrInvalidEntry
+	}
+	if s == nil || s.Publisher == nil {
+		return domain.Result{}, ErrPublisherNotWired
+	}
+	if s.Snapshots == nil {
+		return domain.Result{}, ErrSnapshotReaderNotWired
+	}
+	snapshot, err := s.Snapshots.ReadSnapshot(ctx, target)
+	if err != nil {
+		return domain.Result{}, err
+	}
+	if current := ReadPlainVar(snapshot.SettingsJSON, "ACTIVE_CHANNEL"); current == normalized {
+		return domain.Result{State: StateUnchanged}, nil
+	}
+	return s.Publisher.Apply(ctx, target, domain.Change{
+		BaseFingerprint: snapshot.Fingerprint,
+		Vars:            map[string]string{"ACTIVE_CHANNEL": normalized},
+	})
 }
 
 // TelegramAPI is the Telegram surface used by ConnectTelegram.
@@ -104,21 +145,26 @@ type EntryOptions struct {
 	Selector      ChannelSelector
 	Credentials   platform.CredentialStore
 	PublicBaseURL string
-	Login         func(ctx context.Context, onStatus func(wechat.LoginStatus)) (wechat.Credentials, error)
-	Telegram      func(token string) TelegramAPI
-	Random        io.Reader
+	// PublicBaseURLFor overrides PublicBaseURL per deployment. The desktop
+	// composition root reads the selected Worker's PUBLIC_BASE_URL so the
+	// Telegram webhook URL matches the deployment being configured.
+	PublicBaseURLFor func(ctx context.Context, target domain.Target) (string, error)
+	Login            func(ctx context.Context, onStatus func(wechat.LoginStatus)) (wechat.Credentials, error)
+	Telegram         func(token string) TelegramAPI
+	Random           io.Reader
 }
 
 // EntryService implements the message-entry operations.
 type EntryService struct {
-	publisher     EntryPublisher
-	snapshots     SnapshotReader
-	selector      ChannelSelector
-	credentials   platform.CredentialStore
-	publicBaseURL string
-	login         func(ctx context.Context, onStatus func(wechat.LoginStatus)) (wechat.Credentials, error)
-	telegram      func(token string) TelegramAPI
-	random        io.Reader
+	publisher        EntryPublisher
+	snapshots        SnapshotReader
+	selector         ChannelSelector
+	credentials      platform.CredentialStore
+	publicBaseURL    string
+	publicBaseURLFor func(ctx context.Context, target domain.Target) (string, error)
+	login            func(ctx context.Context, onStatus func(wechat.LoginStatus)) (wechat.Credentials, error)
+	telegram         func(token string) TelegramAPI
+	random           io.Reader
 }
 
 // NewEntryService builds the entry service. Missing optional dependencies get
@@ -141,14 +187,15 @@ func NewEntryService(options EntryOptions) *EntryService {
 		options.Selector = NotWiredSelector{}
 	}
 	return &EntryService{
-		publisher:     options.Publisher,
-		snapshots:     options.Snapshots,
-		selector:      options.Selector,
-		credentials:   options.Credentials,
-		publicBaseURL: strings.TrimRight(options.PublicBaseURL, "/"),
-		login:         options.Login,
-		telegram:      options.Telegram,
-		random:        options.Random,
+		publisher:        options.Publisher,
+		snapshots:        options.Snapshots,
+		selector:         options.Selector,
+		credentials:      options.Credentials,
+		publicBaseURL:    strings.TrimRight(options.PublicBaseURL, "/"),
+		publicBaseURLFor: options.PublicBaseURLFor,
+		login:            options.Login,
+		telegram:         options.Telegram,
+		random:           options.Random,
 	}
 }
 
@@ -172,11 +219,28 @@ func (s *EntryService) ConnectWeChatWithStatus(ctx context.Context, target domai
 	if s.publisher == nil {
 		return domain.Result{}, ErrPublisherNotWired
 	}
-	credentials, err := s.login(ctx, onStatus)
+	confirmed := false
+	loginStatus := func(status wechat.LoginStatus) {
+		if status.State == wechat.LoginConfirmed {
+			confirmed = true
+		}
+		if onStatus != nil {
+			onStatus(status)
+		}
+	}
+	credentials, err := s.login(ctx, loginStatus)
 	if err != nil {
 		return domain.Result{}, err
 	}
-	if err := ctx.Err(); err != nil {
+	publishCtx := ctx
+	if confirmed {
+		// The QR login is complete. Publishing the confirmed credential is an
+		// independent operation: a cancel arriving after confirmation must not
+		// discard it.
+		publishCtx = context.WithoutCancel(ctx)
+	} else if err := ctx.Err(); err != nil {
+		// No confirmed status was observed, so this is a late response after
+		// cancellation. Never publish it.
 		return domain.Result{}, err
 	}
 	if credentials.Token == "" || credentials.BaseURL == "" ||
@@ -198,13 +262,13 @@ func (s *EntryService) ConnectWeChatWithStatus(ctx context.Context, target domai
 		},
 	}
 	if s.snapshots != nil {
-		snapshot, err := s.snapshots.ReadSnapshot(ctx, target)
+		snapshot, err := s.snapshots.ReadSnapshot(publishCtx, target)
 		if err != nil {
 			return domain.Result{}, redactedError(err, credentials.Token, string(secretJSON))
 		}
 		change.BaseFingerprint = snapshot.Fingerprint
 	}
-	result, err := s.publisher.Apply(ctx, target, change)
+	result, err := s.publisher.Apply(publishCtx, target, change)
 	return result, redactedError(err, credentials.Token, string(secretJSON))
 }
 
@@ -226,7 +290,7 @@ func (s *EntryService) ConnectTelegramWithOptions(ctx context.Context, target do
 	if botToken == "" {
 		return domain.Result{}, telegram.ErrInvalidToken
 	}
-	webhookURL, err := s.webhookURL()
+	webhookURL, err := s.webhookURLFor(ctx, target)
 	if err != nil {
 		return domain.Result{}, err
 	}
@@ -434,12 +498,24 @@ func (s *EntryService) generateWebhookSecret() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-func (s *EntryService) webhookURL() (string, error) {
-	parsed, err := url.Parse(s.publicBaseURL)
+func (s *EntryService) webhookURLFor(ctx context.Context, target domain.Target) (string, error) {
+	base := s.publicBaseURL
+	if s.publicBaseURLFor != nil {
+		resolved, err := s.publicBaseURLFor(ctx, target)
+		if err != nil {
+			return "", err
+		}
+		base = resolved
+	}
+	return webhookURL(base)
+}
+
+func webhookURL(base string) (string, error) {
+	parsed, err := url.Parse(base)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		return "", ErrInvalidPublicBaseURL
 	}
-	return strings.TrimRight(s.publicBaseURL, "/") + "/telegram/webhook", nil
+	return strings.TrimRight(base, "/") + "/telegram/webhook", nil
 }
 
 func telegramWebhookPendingKey(target domain.Target) string {

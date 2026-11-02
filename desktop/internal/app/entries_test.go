@@ -267,6 +267,36 @@ func TestCancelledLoginCannotPublish(t *testing.T) {
 	}
 }
 
+func TestConfirmedLoginPublishesAfterCancellation(t *testing.T) {
+	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1"}}
+	selector := &fakeSelector{}
+	ctx, cancel := context.WithCancel(context.Background())
+	credentials := wechat.Credentials{
+		Token:     wechatTokenSentinel,
+		BaseURL:   "https://ilinkai.weixin.qq.com",
+		AccountID: "account-1",
+		UserID:    "owner-1",
+	}
+	service := newTestService(publisher, selector, platform.NewMemoryCredentialStore(),
+		func(_ context.Context, onStatus func(wechat.LoginStatus)) (wechat.Credentials, error) {
+			onStatus(wechat.LoginStatus{OperationID: "login-1", State: wechat.LoginConfirmed, Message: "已确认登录"})
+			// A cancel arriving after confirmed must not discard the credential.
+			cancel()
+			return credentials, nil
+		}, &fakeTelegram{})
+
+	result, err := service.ConnectWeChatWithStatus(ctx, domain.Target{AccountID: "a", ScriptName: "bot"}, nil)
+	if err != nil {
+		t.Fatalf("ConnectWeChatWithStatus: %v", err)
+	}
+	if result.State != StatePublished {
+		t.Fatalf("result = %#v", result)
+	}
+	if publisher.callCount() != 1 {
+		t.Fatalf("publish calls = %d, want 1", publisher.callCount())
+	}
+}
+
 func TestConnectWeChatRejectsUntrustedCredentials(t *testing.T) {
 	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1"}}
 	service := newTestService(publisher, &fakeSelector{}, platform.NewMemoryCredentialStore(),
@@ -767,6 +797,69 @@ func TestSelectEntryKeepsUnavailableChoiceOnRepeatedSelection(t *testing.T) {
 	}
 	if len(selector.calls) != 2 || selector.calls[0] != EntryWeChat || selector.calls[1] != EntryWeChat {
 		t.Fatalf("selector calls = %v", selector.calls)
+	}
+}
+
+func TestActiveChannelSelectorPublishesOnlyTheVariable(t *testing.T) {
+	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1", VersionID: "v1"}}
+	selector := NewActiveChannelSelector(publisher, publisher)
+
+	result, err := selector.SetActiveChannel(context.Background(), domain.Target{AccountID: "a", ScriptName: "bot"}, "WECHAT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != StatePublished {
+		t.Fatalf("result = %#v", result)
+	}
+	change := publisher.lastChange(t)
+	if change.BaseFingerprint != "fp-1" {
+		t.Fatalf("base fingerprint = %q", change.BaseFingerprint)
+	}
+	if len(change.Vars) != 1 || change.Vars["ACTIVE_CHANNEL"] != "wechat" {
+		t.Fatalf("vars = %#v", change.Vars)
+	}
+	if len(change.Secrets) != 0 {
+		t.Fatalf("secret edits = %#v, want none", change.Secrets)
+	}
+	if change.Patch.TelegramUserIDs != nil || change.Patch.ButlerModel != nil || change.Patch.TaskModel != nil {
+		t.Fatalf("patch = %#v, want no configuration change", change.Patch)
+	}
+}
+
+func TestActiveChannelSelectorShortCircuitsUnchangedChannel(t *testing.T) {
+	settings, _ := json.Marshal(map[string]any{
+		"bindings": []any{
+			map[string]any{"type": "plain_text", "name": "ACTIVE_CHANNEL", "text": "wechat"},
+		},
+	})
+	publisher := &fakePublisher{snapshot: domain.Snapshot{
+		Fingerprint:  "fp-1",
+		VersionID:    "v1",
+		SettingsJSON: settings,
+	}}
+	selector := NewActiveChannelSelector(publisher, publisher)
+
+	result, err := selector.SetActiveChannel(context.Background(), domain.Target{AccountID: "a", ScriptName: "bot"}, "WECHAT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != StateUnchanged {
+		t.Fatalf("result = %#v", result)
+	}
+	if publisher.callCount() != 0 {
+		t.Fatal("unchanged ACTIVE_CHANNEL still published a version")
+	}
+}
+
+func TestActiveChannelSelectorRejectsUnknownChannelBeforeReading(t *testing.T) {
+	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1"}}
+	selector := NewActiveChannelSelector(publisher, publisher)
+
+	if _, err := selector.SetActiveChannel(context.Background(), domain.Target{AccountID: "a", ScriptName: "bot"}, "slack"); !errors.Is(err, ErrInvalidEntry) {
+		t.Fatalf("error = %v, want ErrInvalidEntry", err)
+	}
+	if publisher.callCount() != 0 {
+		t.Fatal("invalid channel reached the publisher")
 	}
 }
 

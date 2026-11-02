@@ -11,6 +11,7 @@
     "test:node": "vitest run --config vitest.node.config.ts",
     "release:worker": "node --experimental-strip-types scripts/build-worker-release.ts",
     "release:sign": "node --experimental-strip-types scripts/sign-worker-release.ts",
+    "generate:release-key": "node --experimental-strip-types scripts/generate-release-key.ts",
     "set-webhook": "node --use-env-proxy --experimental-strip-types scripts/set-webhook.ts",
     "typecheck": "tsc --noEmit",
     "cf-typegen": "wrangler types",

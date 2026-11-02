@@ -23,21 +23,23 @@ var operationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // only names and operations; SecretRefs name the credential-store keys that
 // hold pending values.
 type OperationRecord struct {
-	OperationID     string              `json:"operationId"`
-	Kind            string              `json:"kind,omitempty"`
-	Target          domain.Target       `json:"target"`
-	State           string              `json:"state"`
-	Steps           []domain.Step       `json:"steps"`
-	BaseFingerprint string              `json:"baseFingerprint"`
-	BaseVersionID   string              `json:"baseVersionId"`
-	StagedVersionID string              `json:"stagedVersionId"`
-	DeploymentID    string              `json:"deploymentId,omitempty"`
-	SecretRefs      []string            `json:"secretRefs"`
-	ConfigJSON      json.RawMessage     `json:"configJson,omitempty"`
-	SecretEdits     []domain.SecretEdit `json:"secretEdits,omitempty"`
-	StageAttempted  bool                `json:"stageAttempted"`
-	CleanupPending  bool                `json:"cleanupPending,omitempty"`
-	FailureCode     string              `json:"failureCode,omitempty"`
+	OperationID        string              `json:"operationId"`
+	Kind               string              `json:"kind,omitempty"`
+	Target             domain.Target       `json:"target"`
+	State              string              `json:"state"`
+	Steps              []domain.Step       `json:"steps"`
+	BaseFingerprint    string              `json:"baseFingerprint"`
+	BaseVersionID      string              `json:"baseVersionId"`
+	StagedVersionID    string              `json:"stagedVersionId"`
+	DeploymentID       string              `json:"deploymentId,omitempty"`
+	SecretRefs         []string            `json:"secretRefs"`
+	ConfigJSON         json.RawMessage     `json:"configJson,omitempty"`
+	Vars               map[string]string   `json:"vars,omitempty"`
+	AllowReleaseChange bool                `json:"allowReleaseChange,omitempty"`
+	SecretEdits        []domain.SecretEdit `json:"secretEdits,omitempty"`
+	StageAttempted     bool                `json:"stageAttempted"`
+	CleanupPending     bool                `json:"cleanupPending,omitempty"`
+	FailureCode        string              `json:"failureCode,omitempty"`
 	// Install-only fields. They let a resumed install prove which remote
 	// resources belong to this operation without storing any secret.
 	BucketName            string    `json:"bucketName,omitempty"`

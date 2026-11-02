@@ -130,11 +130,58 @@ func (s *Service) Preview(ctx context.Context, target domain.Target, change doma
 	if err != nil {
 		return nil, sanitizeError(err, nil)
 	}
+	steps := previewStepsFor(snapshot, s.pkg.Version())
+	if err := s.checkReleaseVersion(snapshot, change.AllowReleaseChange); err != nil {
+		return steps, sanitizeError(err, secretValues(change.Secrets))
+	}
 	_, err = config.Merge(snapshot, change)
 	if err != nil {
-		return nil, sanitizeError(err, secretValues(change.Secrets))
+		return steps, sanitizeError(err, secretValues(change.Secrets))
 	}
-	return previewSteps(), nil
+	return steps, nil
+}
+
+// checkReleaseVersion prevents an ordinary configuration publish from silently
+// changing the deployed release: every versioned upload carries the embedded
+// Worker code. Import and upgrade set AllowReleaseChange explicitly.
+func (s *Service) checkReleaseVersion(snapshot domain.Snapshot, allowChange bool) error {
+	if allowChange {
+		return nil
+	}
+	clientVersion := s.pkg.Version()
+	if clientVersion == "" || snapshot.ReleaseVersion == "" {
+		return domain.Error{Code: CodeUpgradeRequired, Message: "请先在“更新”页升级云端服务"}
+	}
+	comparison, comparable := CompareVersions(snapshot.ReleaseVersion, clientVersion)
+	if !comparable {
+		return domain.Error{Code: CodeUpgradeRequired, Message: "请先在“更新”页升级云端服务"}
+	}
+	if comparison > 0 {
+		return domain.Error{Code: CodeDowngradeRejected, Message: "云端版本较新，请先升级客户端"}
+	}
+	if comparison < 0 {
+		return domain.Error{Code: CodeUpgradeRequired, Message: "请先在“更新”页升级云端服务"}
+	}
+	return nil
+}
+
+func previewStepsFor(snapshot domain.Snapshot, clientVersion string) []domain.Step {
+	cloudVersion := snapshot.ReleaseVersion
+	if cloudVersion == "" {
+		cloudVersion = "未知"
+	}
+	if clientVersion == "" {
+		clientVersion = "未知"
+	}
+	steps := make([]domain.Step, 0, len(previewSteps())+1)
+	steps = append(steps, domain.Step{
+		ID:       "release",
+		State:    "info",
+		Message:  fmt.Sprintf("云端版本 %s；客户端版本 %s", cloudVersion, clientVersion),
+		Evidence: snapshot.VersionID,
+	})
+	steps = append(steps, previewSteps()...)
+	return steps
 }
 
 // Apply always allocates an operation id first, journals the operation, then
@@ -153,12 +200,13 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 	defer unlock()
 
 	record := OperationRecord{
-		OperationID: opID,
-		Target:      target,
-		State:       StatePlanned,
-		Steps:       applySteps(),
-		CreatedAt:   s.clock(),
-		UpdatedAt:   s.clock(),
+		OperationID:        opID,
+		Target:             target,
+		State:              StatePlanned,
+		Steps:              applySteps(),
+		AllowReleaseChange: change.AllowReleaseChange,
+		CreatedAt:          s.clock(),
+		UpdatedAt:          s.clock(),
 	}
 	if err := s.journal.Save(record); err != nil {
 		return operationResult(record), sanitizeError(err, secretValues(change.Secrets))
@@ -166,6 +214,9 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 
 	snapshot, err := s.api.ReadSnapshot(ctx, target)
 	if err != nil {
+		return s.fail(&record, stepStage, err, secretValues(change.Secrets))
+	}
+	if err := s.checkReleaseVersion(snapshot, change.AllowReleaseChange); err != nil {
 		return s.fail(&record, stepStage, err, secretValues(change.Secrets))
 	}
 	plan, err := config.Merge(snapshot, change)
@@ -176,6 +227,7 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 	record.BaseFingerprint = snapshot.Fingerprint
 	record.BaseVersionID = snapshot.VersionID
 	record.ConfigJSON = append(json.RawMessage(nil), plan.ConfigJSON...)
+	record.Vars = cloneVars(plan.Vars)
 	record.SecretEdits = cloneSecretEdits(plan.Secrets)
 
 	if err := ctx.Err(); err != nil {
@@ -251,6 +303,10 @@ func (s *Service) Resume(ctx context.Context, operationID string) (domain.Result
 	// activation. This short-circuit precedes the base-version check below.
 	if record.StagedVersionID != "" && snapshot.VersionID == record.StagedVersionID {
 		return s.markPublished(&record, snapshot)
+	}
+
+	if err := s.checkReleaseVersion(snapshot, record.AllowReleaseChange); err != nil {
+		return s.fail(&record, stepStage, err, s.pendingValues(context.Background(), record))
 	}
 
 	// I1: only activate from the version this operation was based on. Any
@@ -545,6 +601,7 @@ func (s *Service) planFromJournal(ctx context.Context, record OperationRecord) (
 		BaseVersionID: record.BaseVersionID,
 		ConfigJSON:    append([]byte(nil), record.ConfigJSON...),
 		Secrets:       edits,
+		Vars:          cloneVars(record.Vars),
 	}, nil
 }
 
@@ -706,6 +763,17 @@ func operationResult(record OperationRecord) domain.Result {
 		VersionID:    record.StagedVersionID,
 		State:        record.State,
 	}
+}
+
+func cloneVars(vars map[string]string) map[string]string {
+	if vars == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(vars))
+	for name, value := range vars {
+		cloned[name] = value
+	}
+	return cloned
 }
 
 func cloneSecretEdits(edits []domain.SecretEdit) []domain.SecretEdit {

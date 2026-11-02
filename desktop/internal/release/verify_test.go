@@ -33,12 +33,17 @@ func validResourceTemplate() ResourceTemplate {
 		DurableObjects:  []DOBinding{{Name: "BUTLER", ClassName: "ButlerDO"}, {Name: "TASK", ClassName: "TaskDO"}, {Name: "CHANNELS", ClassName: "ChannelDO"}},
 		R2Buckets:       []R2Binding{{Name: "ARTIFACTS", ParameterKey: "r2BucketName"}},
 		VersionMetadata: BindingRef{Name: "CF_VERSION_METADATA"},
-		ConfigBinding:   ConfigBinding{Name: "DESKWAND_CONFIG", Type: "json", SchemaVersion: 1},
-		SecretNames:     []string{"ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WECHAT_CREDENTIALS"},
-		PlainVars:       []string{"ACTIVE_CHANNEL", "PUBLIC_BASE_URL"},
-		Crons:           []string{"*/5 * * * *"},
-		Vars:            []VarBinding{{Name: "PUBLIC_BASE_URL", ParameterKey: "PUBLIC_BASE_URL"}},
-		Migrations:      migrations,
+		Observability: &Observability{
+			Enabled:          true,
+			HeadSamplingRate: 1,
+			Logs:             ObservabilityLogs{InvocationLogs: false},
+		},
+		ConfigBinding: ConfigBinding{Name: "DESKWAND_CONFIG", Type: "json", SchemaVersion: 1},
+		SecretNames:   []string{"ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WECHAT_CREDENTIALS"},
+		PlainVars:     []string{"ACTIVE_CHANNEL", "PUBLIC_BASE_URL"},
+		Crons:         []string{"*/5 * * * *"},
+		Vars:          []VarBinding{{Name: "PUBLIC_BASE_URL", ParameterKey: "PUBLIC_BASE_URL"}},
+		Migrations:    migrations,
 		InstallParams: []InstallParameter{
 			{Key: "workerName", Source: "user"},
 			{Key: "r2BucketName", Source: "user"},
@@ -546,7 +551,7 @@ func TestCrossLanguageFixture(t *testing.T) {
 		HeadSamplingRate: 1,
 		Logs:             ObservabilityLogs{InvocationLogs: false},
 	}
-	if manifest.ResourceTemplate.Observability != wantObservability {
+	if manifest.ResourceTemplate.Observability == nil || *manifest.ResourceTemplate.Observability != wantObservability {
 		t.Fatalf("fixture observability = %+v, want %+v", manifest.ResourceTemplate.Observability, wantObservability)
 	}
 

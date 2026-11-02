@@ -258,7 +258,10 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 
 func (l *Lifecycle) upgradeWithVersion(ctx context.Context, target domain.Target, pkg release.Package, snapshot domain.Snapshot, beforeIdentity resourceIDs) (domain.Result, error) {
 	service := NewServiceWithLocker(l.api, l.journal, l.creds, pkg, l.clock, l.locker)
-	result, err := service.Apply(ctx, target, domain.Change{BaseFingerprint: snapshot.Fingerprint})
+	result, err := service.Apply(ctx, target, domain.Change{
+		BaseFingerprint:    snapshot.Fingerprint,
+		AllowReleaseChange: true,
+	})
 	if err != nil {
 		return result, err
 	}
@@ -506,6 +509,12 @@ func cloudflareScriptPlan(configJSON []byte, bucketName string, plainVars map[st
 		BaseTag:    baseTag,
 		Message:    message,
 	}
+}
+
+// CompareVersions compares two semver-like release versions. It returns
+// comparable=false when either value is not a version this client understands.
+func CompareVersions(left, right string) (int, bool) {
+	return compareVersions(left, right)
 }
 
 // compareVersions compares semver-like versions, including prerelease

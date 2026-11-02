@@ -40,12 +40,17 @@ func resourceManifest(t *testing.T) release.Manifest {
 			DurableObjects:  []release.DOBinding{{Name: "BUTLER", ClassName: "ButlerDO"}, {Name: "TASK", ClassName: "TaskDO"}, {Name: "CHANNELS", ClassName: "ChannelDO"}},
 			R2Buckets:       []release.R2Binding{{Name: "ARTIFACTS", ParameterKey: "r2BucketName"}},
 			VersionMetadata: release.BindingRef{Name: "CF_VERSION_METADATA"},
-			ConfigBinding:   release.ConfigBinding{Name: "DESKWAND_CONFIG", Type: "json", SchemaVersion: 1},
-			SecretNames:     []string{"WECHAT_CREDENTIALS"},
-			PlainVars:       []string{"ACTIVE_CHANNEL", "PUBLIC_BASE_URL"},
-			Crons:           []string{"*/5 * * * *"},
-			Vars:            []release.VarBinding{{Name: "PUBLIC_BASE_URL", ParameterKey: "PUBLIC_BASE_URL"}},
-			Migrations:      migrations,
+			Observability: &release.Observability{
+				Enabled:          true,
+				HeadSamplingRate: 1,
+				Logs:             release.ObservabilityLogs{InvocationLogs: false},
+			},
+			ConfigBinding: release.ConfigBinding{Name: "DESKWAND_CONFIG", Type: "json", SchemaVersion: 1},
+			SecretNames:   []string{"WECHAT_CREDENTIALS"},
+			PlainVars:     []string{"ACTIVE_CHANNEL", "PUBLIC_BASE_URL"},
+			Crons:         []string{"*/5 * * * *"},
+			Vars:          []release.VarBinding{{Name: "PUBLIC_BASE_URL", ParameterKey: "PUBLIC_BASE_URL"}},
+			Migrations:    migrations,
 			InstallParams: []release.InstallParameter{
 				{Key: "workerName", Source: "user"},
 				{Key: "r2BucketName", Source: "user"},
@@ -163,12 +168,65 @@ func TestUploadScriptFirstInstallMetadata(t *testing.T) {
 			"workers/tag":     "1.0.0",
 			"workers/message": "DeskWand Bot install op-1",
 		},
+		"observability": map[string]any{
+			"enabled":            true,
+			"head_sampling_rate": json.Number("1"),
+			"logs":               map[string]any{"invocation_logs": false},
+		},
 	}
 	if !reflect.DeepEqual(captured.metadata, expected) {
 		t.Fatalf("metadata mismatch\n got: %#v\nwant: %#v", captured.metadata, expected)
 	}
 	if captured.modules["index.js"] != "export default {};\n" {
 		t.Fatalf("modules = %#v", captured.modules)
+	}
+}
+
+func TestUploadScriptIncludesTemplateObservability(t *testing.T) {
+	var captured uploadedScript
+	client, _ := cloudflaretest.NewServerClient(t, uploadScriptHandler(t, &captured))
+	manifest := resourceManifest(t)
+	manifest.ResourceTemplate.Observability = &release.Observability{
+		Enabled:          true,
+		HeadSamplingRate: 0.25,
+		Logs:             release.ObservabilityLogs{InvocationLogs: true},
+	}
+	manifestJSON, _ := json.Marshal(manifest)
+
+	_, err := client.UploadScript(context.Background(), domain.Target{AccountID: resourceAccountID, ScriptName: "deskwand-bot"}, manifestJSON, map[string][]byte{"index.js": []byte("x")}, cloudflare.ScriptUploadPlan{
+		ConfigJSON: json.RawMessage(`{"schemaVersion":1}`),
+		BucketName: "deskwand-probe-bucket",
+		PlainVars:  map[string]string{"ACTIVE_CHANNEL": "telegram"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := map[string]any{
+		"enabled":            true,
+		"head_sampling_rate": json.Number("0.25"),
+		"logs":               map[string]any{"invocation_logs": true},
+	}
+	if !reflect.DeepEqual(captured.metadata["observability"], expected) {
+		t.Fatalf("observability = %#v", captured.metadata["observability"])
+	}
+}
+
+func TestUploadScriptOmitsZeroObservability(t *testing.T) {
+	var captured uploadedScript
+	client, _ := cloudflaretest.NewServerClient(t, uploadScriptHandler(t, &captured))
+	manifest := resourceManifest(t)
+	manifest.ResourceTemplate.Observability = nil
+	manifestJSON, _ := json.Marshal(manifest)
+
+	_, err := client.UploadScript(context.Background(), domain.Target{AccountID: resourceAccountID, ScriptName: "deskwand-bot"}, manifestJSON, map[string][]byte{"index.js": []byte("x")}, cloudflare.ScriptUploadPlan{
+		ConfigJSON: json.RawMessage(`{"schemaVersion":1}`),
+		BucketName: "deskwand-probe-bucket",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := captured.metadata["observability"]; ok {
+		t.Fatalf("zero observability was written: %#v", captured.metadata["observability"])
 	}
 }
 

@@ -23,6 +23,7 @@ const (
 	LATEST_NOT_BASE          = "LATEST_NOT_BASE"
 	NO_ACTIVE_VERSION        = "NO_ACTIVE_VERSION"
 	INVALID_SECRET_EDIT      = "INVALID_SECRET_EDIT"
+	INVALID_VAR              = "INVALID_VAR"
 	// NOT_SENT means a mutation was rejected or failed before any remote write
 	// could have happened. It is retryable without reconciliation.
 	NOT_SENT = "NOT_SENT"
@@ -179,26 +180,39 @@ type Change struct {
 	Patch           EditablePatch
 	Secrets         []SecretEdit
 	References      []ConfigReference
+	// Vars overrides plain-text variables such as ACTIVE_CHANNEL. Names must
+	// be declared by the release template's plainVars; CreateVersion enforces
+	// the allowlist before uploading. Values are never secret.
+	Vars map[string]string
+	// AllowReleaseChange bypasses the deployed-vs-client release check. Only
+	// import and upgrade set it: every versioned publish uploads the embedded
+	// Worker code, so ordinary configuration changes must not silently change
+	// the cloud release version.
+	AllowReleaseChange bool
 }
 
 type changeJSON struct {
-	BaseFingerprint string            `json:"baseFingerprint"`
-	Patch           EditablePatch     `json:"patch"`
-	Secrets         []SecretEdit      `json:"secrets"`
-	References      []ConfigReference `json:"references,omitempty"`
+	BaseFingerprint    string            `json:"baseFingerprint"`
+	Patch              EditablePatch     `json:"patch"`
+	Secrets            []SecretEdit      `json:"secrets"`
+	References         []ConfigReference `json:"references,omitempty"`
+	Vars               map[string]string `json:"vars,omitempty"`
+	AllowReleaseChange bool              `json:"allowReleaseChange,omitempty"`
 }
 
 func (c Change) MarshalJSON() ([]byte, error) {
 	return json.Marshal(changeJSON{
-		BaseFingerprint: c.BaseFingerprint,
-		Patch:           c.Patch,
-		Secrets:         c.Secrets,
-		References:      c.References,
+		BaseFingerprint:    c.BaseFingerprint,
+		Patch:              c.Patch,
+		Secrets:            c.Secrets,
+		References:         c.References,
+		Vars:               c.Vars,
+		AllowReleaseChange: c.AllowReleaseChange,
 	})
 }
 
 func (c Change) String() string {
-	return fmt.Sprintf("Change{base=%q patch=%s secrets=%v references=%v}", c.BaseFingerprint, patchString(c.Patch), c.Secrets, c.References)
+	return fmt.Sprintf("Change{base=%q patch=%s secrets=%v references=%v vars=%v allowReleaseChange=%v}", c.BaseFingerprint, patchString(c.Patch), c.Secrets, c.References, c.Vars, c.AllowReleaseChange)
 }
 
 func (c Change) GoString() string {
@@ -215,6 +229,8 @@ func (c Change) LogValue() slog.Value {
 		slog.String("patch", patchString(c.Patch)),
 		slog.Any("secrets", c.Secrets),
 		slog.Any("references", c.References),
+		slog.Any("vars", c.Vars),
+		slog.Bool("allowReleaseChange", c.AllowReleaseChange),
 	)
 }
 
@@ -240,12 +256,16 @@ type PublishPlan struct {
 	BaseVersionID string
 	ConfigJSON    []byte
 	Secrets       []SecretEdit
+	// Vars are plain-text variable overrides validated by CreateVersion
+	// against the release template's plainVars allowlist.
+	Vars map[string]string
 }
 
 type publishPlanJSON struct {
-	BaseVersionID string          `json:"baseVersionId"`
-	ConfigJSON    json.RawMessage `json:"configJson"`
-	Secrets       []SecretEdit    `json:"secrets"`
+	BaseVersionID string            `json:"baseVersionId"`
+	ConfigJSON    json.RawMessage   `json:"configJson"`
+	Secrets       []SecretEdit      `json:"secrets"`
+	Vars          map[string]string `json:"vars,omitempty"`
 }
 
 func (p PublishPlan) MarshalJSON() ([]byte, error) {
@@ -253,11 +273,11 @@ func (p PublishPlan) MarshalJSON() ([]byte, error) {
 	if len(config) == 0 {
 		config = json.RawMessage("null")
 	}
-	return json.Marshal(publishPlanJSON{BaseVersionID: p.BaseVersionID, ConfigJSON: config, Secrets: p.Secrets})
+	return json.Marshal(publishPlanJSON{BaseVersionID: p.BaseVersionID, ConfigJSON: config, Secrets: p.Secrets, Vars: p.Vars})
 }
 
 func (p PublishPlan) String() string {
-	return fmt.Sprintf("PublishPlan{baseVersionId=%q configBytes=%d secrets=%v}", p.BaseVersionID, len(p.ConfigJSON), p.Secrets)
+	return fmt.Sprintf("PublishPlan{baseVersionId=%q configBytes=%d secrets=%v vars=%v}", p.BaseVersionID, len(p.ConfigJSON), p.Secrets, p.Vars)
 }
 
 func (p PublishPlan) GoString() string { return p.String() }
@@ -272,6 +292,7 @@ func (p PublishPlan) LogValue() slog.Value {
 		slog.Int("configBytes", len(p.ConfigJSON)),
 		slog.String("configJson", string(p.ConfigJSON)),
 		slog.Any("secrets", p.Secrets),
+		slog.Any("vars", p.Vars),
 	)
 }
 

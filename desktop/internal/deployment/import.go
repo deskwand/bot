@@ -202,10 +202,11 @@ func (l *Lifecycle) ConfirmImport(ctx context.Context, target domain.Target, con
 		baseFingerprint = preview.BaseFingerprint
 	}
 	change := domain.Change{
-		BaseFingerprint: baseFingerprint,
-		Patch:           patch,
-		Secrets:         edits,
-		References:      references,
+		BaseFingerprint:    baseFingerprint,
+		Patch:              patch,
+		Secrets:            edits,
+		References:         references,
+		AllowReleaseChange: true,
 	}
 	service := NewServiceWithLocker(l.api, l.journal, l.creds, l.pkg, l.clock, l.locker)
 	result, applyErr := service.Apply(ctx, target, change)

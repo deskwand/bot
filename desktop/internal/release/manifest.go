@@ -84,7 +84,7 @@ type ResourceTemplate struct {
 	DurableObjects  []DOBinding        `json:"durableObjects"`
 	R2Buckets       []R2Binding        `json:"r2Buckets"`
 	VersionMetadata BindingRef         `json:"versionMetadataBinding"`
-	Observability   Observability      `json:"observability"`
+	Observability   *Observability     `json:"observability"`
 	ConfigBinding   ConfigBinding      `json:"configBinding"`
 	SecretNames     []string           `json:"secretNames"`
 	PlainVars       []string           `json:"plainVars"`
