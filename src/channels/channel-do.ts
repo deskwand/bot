@@ -440,6 +440,10 @@ export class ChannelDO extends Agent<Env> {
 
     if (state.status !== "running") return;
 
+    // Tests drive pollWeChat explicitly. Scheduling here would start a live
+    // chain that can fire before the test installs its scripted fetch.
+    if (getPollTimingOverride()?.manualStart) return;
+
     const now = Date.now();
     if (
       state.last_poll_at !== null &&

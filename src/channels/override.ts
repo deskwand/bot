@@ -35,8 +35,19 @@ export function getILinkFetchOverride(): typeof fetch | null {
   return ilinkFetchOverride;
 }
 
-/** Test-only shortened polling durations. */
-export type PollTiming = { runMs: number; baseBackoffMs: number };
+/**
+ * Test-only shortened polling durations.
+ *
+ * `manualStart` makes `ensurePolling` initialise state without scheduling a
+ * zero-delay poll. Tests that drive `pollWeChat` themselves must set it: the
+ * scheduled chain would otherwise start between two test RPCs and race with the
+ * fetch override installed for the manual poll.
+ */
+export type PollTiming = {
+  runMs: number;
+  baseBackoffMs: number;
+  manualStart?: boolean;
+};
 
 let pollTimingOverride: PollTiming | null = null;
 

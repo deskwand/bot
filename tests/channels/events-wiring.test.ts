@@ -133,7 +133,7 @@ beforeEach(async () => {
   setEnv({ ACTIVE_CHANNEL: "wechat" });
   setChannelOverride("telegram", null);
   setChannelOverride("wechat", null);
-  setPollTimingOverride({ runMs: 0, baseBackoffMs: 1 });
+  setPollTimingOverride({ runMs: 0, baseBackoffMs: 1, manualStart: true });
   setWeChatCredentialsOverride(null);
   await cancelSchedules();
   await runInDurableObject(channels(), (_instance, state) => {

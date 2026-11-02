@@ -243,17 +243,19 @@ function textActionUpdate(text: string, from = OWNER) {
 beforeEach(async () => {
   hubName = `wechat-poll-${++hubCounter}`;
   setEnv({ ACTIVE_CHANNEL: "wechat" });
+  // Install the test-only overrides before the DO is first constructed: its
+  // onStart calls ensurePolling, which must not start a real polling chain.
+  setChannelOverride("telegram", null);
+  setChannelOverride("wechat", null);
+  setILinkFetchOverride(scriptedILink().fetchImpl);
+  setPollTimingOverride({ runMs: 0, baseBackoffMs: 1, manualStart: true });
+  setWeChatCredentialsOverride(null);
   await cancelSchedules();
   await runInDurableObject(channels(), (_instance, state) => {
     state.storage.sql.exec("DELETE FROM owner_addresses");
     state.storage.sql.exec("DELETE FROM wechat_state");
     state.storage.sql.exec("DELETE FROM wechat_contexts");
   });
-  setChannelOverride("telegram", null);
-  setChannelOverride("wechat", null);
-  setILinkFetchOverride(scriptedILink().fetchImpl);
-  setPollTimingOverride({ runMs: 0, baseBackoffMs: 1 });
-  setWeChatCredentialsOverride(null);
 });
 
 afterEach(async () => {
@@ -277,6 +279,8 @@ describe("ensurePolling", () => {
   });
 
   it("starts one polling chain for new credentials and does not duplicate it", async () => {
+    // This test exercises the initial schedule, so allow the automatic start.
+    setPollTimingOverride({ runMs: 0, baseBackoffMs: 1 });
     setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
 
     await channels().ensurePolling();
@@ -342,7 +346,13 @@ describe("ensurePolling", () => {
     });
     expect(state?.credentials_hash).not.toBe(oldHash);
     expect(await readContexts()).toEqual([]);
+
+    // The reset itself scheduled nothing while manual start is enabled. Let the
+    // real scheduler run to prove the new credentials start one poll chain.
+    setPollTimingOverride({ runMs: 0, baseBackoffMs: 1 });
+    await channels().ensurePolling();
     expect(await pollSchedules()).toHaveLength(1);
+    await cancelSchedules();
   });
 
   it("does not restart polling after the session expired", async () => {
@@ -440,6 +450,7 @@ describe("channel selection", () => {
     setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
     const hub = channels();
     await hub.ensurePolling();
+    await cancelSchedules();
     await runInDurableObject(hub, (_instance, state) => {
       state.storage.sql.exec(
         `UPDATE wechat_state SET cursor = ?, status = 'stopped', last_poll_at = NULL`,
@@ -447,6 +458,8 @@ describe("channel selection", () => {
       );
     });
 
+    // Enable the automatic start so resuming is observable as a scheduled poll.
+    setPollTimingOverride({ runMs: 0, baseBackoffMs: 1 });
     await hub.ensurePolling();
 
     expect(await readState()).toMatchObject({
@@ -454,6 +467,7 @@ describe("channel selection", () => {
       cursor: "kept-cursor",
     });
     expect(await pollSchedules()).toHaveLength(1);
+    await cancelSchedules();
   });
 });
 
