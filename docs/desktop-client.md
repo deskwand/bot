@@ -211,6 +211,8 @@ macOS 默认 ad-hoc 签名，仅适合本机或内部测试。Windows 安装器�
 
 Windows 交叉构建可以编译出 `.exe`，但本仓库的 macOS 环境在执行 NSIS 时因本机 `makensis` 崩溃而未生成安装器；该路径未通过验收，不提供 `build:desktop:windows` 脚本冒充可用。正式 Windows 包应在 `windows-latest` 上构建。
 
+**应用图标**：母版是 `desktop/resources/icon.svg`（轨道星球，设计见 `docs/superpowers/specs/2026-11-02-app-icon-design.md`）。MyGo 在 `mygo.json` 未设 `icon` 时默认读取 `desktop/resources/icon.png`，并由它生成 macOS `.icns` 与 Windows `.ico`。修改图标：改 SVG → 运行 `bash desktop/scripts/render-icon.sh` → 同时提交 SVG 与 PNG。渲染需要本机 Google Chrome（可用 `CHROME=` 指定路径）；构建只读已提交的 PNG，不需要 Chrome。`desktop/icon_test.go` 校验 PNG 尺寸、透明角和关键配色。
+
 ### 9.3 macOS 签名与公证
 
 在 `desktop/mygo.json` 中配置（示例，未写入仓库）：
