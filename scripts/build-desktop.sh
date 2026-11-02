@@ -23,7 +23,7 @@ cleanup_bundle_on_error() {
 trap cleanup_bundle_on_error ERR
 
 for cmd in go node npm; do
-  command -v "$cmd" >/dev/null || { echo "缺少 $cmd，请先安装" >&2; exit 1; }
+  command -v "$cmd" >/dev/null || { echo "缺少 ${cmd}，请先安装" >&2; exit 1; }
 done
 
 if [ ! -f "$key_file" ]; then
@@ -44,7 +44,7 @@ if [ ! -d "$frontend/node_modules" ] || [ "$frontend/package-lock.json" -nt "$fr
   npm --prefix "$frontend" ci
 fi
 
-echo "==> 生成 Worker 发布包（版本 $version）"
+echo "==> 生成 Worker 发布包（版本 ${version}）"
 rm -rf "$release_dir"
 (cd "$root" && npm run release:worker -- --version "$version" --key-id deskwand-release-1)
 DESKWAND_RELEASE_SIGNING_KEY_FILE="$key_file" \
