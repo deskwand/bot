@@ -12,6 +12,25 @@ declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
+const ENV = env as unknown as Record<string, unknown>;
+const savedEnv = new Map<string, unknown>();
+
+/** Mutates the env seen by Durable Objects created after this call. */
+function setEnv(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
+    ENV[key] = value;
+  }
+}
+
+function restoreEnv(): void {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete ENV[key];
+    else ENV[key] = value;
+  }
+  savedEnv.clear();
+}
+
 beforeEach(() => {
   setChannelOverride("telegram", fakeChannel().adapter);
 });
@@ -20,6 +39,7 @@ afterEach(() => {
   setModelOverride(null);
   setChannelOverride("telegram", null);
   vi.restoreAllMocks();
+  restoreEnv();
 });
 
 function butler() {
@@ -35,6 +55,35 @@ function spec(taskId: string, instructions = "do the thing"): TaskSpec {
 }
 
 describe("TaskDO lifecycle", () => {
+  it("fails non-retryably when the model key is missing", async () => {
+    setEnv({
+      DESKWAND_CONFIG: {
+        schemaVersion: 1,
+        owner: { telegramUserIds: [100000001] },
+        models: {
+          butler: { provider: "deepseek", id: "deepseek-flash" },
+          task: { provider: "deepseek", id: "deepseek-flash" },
+        },
+        mcpServers: [],
+      },
+      MODEL_KEY_DEEPSEEK: undefined,
+    });
+    const taskId = "t-missing-key";
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    const events = await butler().debugEvents(taskId);
+    expect(events.map((event) => event.type)).toEqual(["started", "failed"]);
+    expect(events[1]?.payload).toEqual({
+      type: "failed",
+      reason:
+        "模型 deepseek 没有配置 key（MODEL_KEY_DEEPSEEK），请在桌面端模型页填写",
+      retryable: false,
+    });
+    expect(await stub.status()).toMatchObject({ state: "failed" });
+  });
+
   it("reports started and completed when the agent calls finish_task", async () => {
     setModelOverride(
       scriptedModel([

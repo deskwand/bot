@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { Provider } from "@earendil-works/pi-ai/models";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
-import type { PiModel } from "agents/harness/pi";
+import { PiHarness, type PiModel } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
@@ -51,6 +51,25 @@ function channels() {
 }
 
 let route: RouteSnapshot;
+
+const ENV = env as unknown as Record<string, unknown>;
+const savedEnv = new Map<string, unknown>();
+
+/** Mutates the env seen by Durable Objects created after this call. */
+function setEnv(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
+    ENV[key] = value;
+  }
+}
+
+function restoreEnv(): void {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete ENV[key];
+    else ENV[key] = value;
+  }
+  savedEnv.clear();
+}
 
 function message(evt: {
   text: string | null;
@@ -162,6 +181,7 @@ afterEach(() => {
   setModelOverride(null);
   setChannelOverride("telegram", null);
   setChannelOverride("wechat", null);
+  restoreEnv();
 });
 
 describe("butler chat", () => {
@@ -175,6 +195,36 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([{ chatId: "42", text: "你好！" }]);
+  });
+
+  it("tells the owner which model key is missing before submitting", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setEnv({
+      DESKWAND_CONFIG: {
+        schemaVersion: 1,
+        owner: { telegramUserIds: [100000001] },
+        models: {
+          butler: { provider: "deepseek", id: "deepseek-flash" },
+          task: { provider: "deepseek", id: "deepseek-flash" },
+        },
+        mcpServers: [],
+      },
+      MODEL_KEY_DEEPSEEK: undefined,
+    });
+    const submit = vi.spyOn(PiHarness.prototype, "submit");
+
+    await butler("chat-missing-key").handleMessage(
+      message({ text: "你好", eventId: "tg:109" }),
+    );
+
+    expect(channel.sent).toEqual([
+      {
+        chatId: "42",
+        text: "模型 deepseek 没有配置 key（MODEL_KEY_DEEPSEEK），请在桌面端模型页填写",
+      },
+    ]);
+    expect(submit).not.toHaveBeenCalled();
   });
 
   it("does not answer a redelivered event twice", async () => {

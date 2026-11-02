@@ -2,7 +2,7 @@ import { Agent } from "agents";
 import { PiHarness, type PiModel } from "agents/harness/pi";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
-import { createModelsForEnv, resolveModel } from "../llm/models";
+import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
 import {
   encodeAction,
   type Address,
@@ -816,6 +816,19 @@ export class ButlerDO extends Agent<Env> {
 
     // Processing starts at `submit`; a stale input never reaches it.
     if (!(await this.admissionHolds(evt))) return;
+
+    // Answer a missing key or an unavailable model here instead of letting pi
+    // fail the run after the input was accepted.
+    const notReady = modelReadiness(
+      this.env,
+      createModelsForEnv(this.env),
+      readRuntimeConfig(this.env).models.butler,
+    );
+    if (notReady) {
+      await this.sendBestEffort({ text: notReady });
+      this.kickReconcile();
+      return;
+    }
 
     const operationId = evt.eventId;
     const receipt = await this.harness.submit(evt.text, { operationId });

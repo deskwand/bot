@@ -8,7 +8,7 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
-import { createModelsForEnv, resolveModel } from "../llm/models";
+import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
 import type {
   ActionEvent,
   Artifact,
@@ -267,6 +267,19 @@ export class TaskDO extends Agent<Env> {
 
     // A cancel can land while this start is setting up.
     if (this.readMeta("state") === "cancelled") return;
+
+    // Refuse before any tool setup or model work: a missing key or an
+    // unavailable model is a permanent failure, not a retryable one.
+    const ref = effective.model ?? readRuntimeConfig(this.env).models.task;
+    const notReady = modelReadiness(
+      this.env,
+      createModelsForEnv(this.env),
+      ref,
+    );
+    if (notReady) {
+      await this.failWith(notReady, false);
+      return;
+    }
 
     // MCP tools are loaded outside the harness factory so a restart never
     // rebuilds them mid-run; install them before the model can ask for one.
