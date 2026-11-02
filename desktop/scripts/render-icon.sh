@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Rasterise the app-icon master resources/icon.svg into resources/icon.png.
+# Rasterise the app-icon master icon/icon.svg into icon/icon.png.
 #
 # Run this BY HAND after editing the SVG and commit both files. It is NOT part
-# of the build: mygo reads the committed resources/icon.png and derives the
-# .icns and .ico from it, so a build never needs Chrome.
+# of the build: mygo reads the committed icon/icon.png (named by mygo.json) and derives the
+# .icns and .ico from it, so a build never needs Chrome. The sources stay out
+# of resources/: mygo ships everything in that directory inside the app.
 #
 # macOS has no built-in SVG rasteriser (`sips` cannot read SVG); Chrome renders
 # the paths and gradients exactly as the browser previews them.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
-SRC="$ROOT/resources/icon.svg"
-DEST="$ROOT/resources/icon.png"
+SRC="$ROOT/icon/icon.svg"
+DEST="$ROOT/icon/icon.png"
 [[ -x "$CHROME" ]] || { echo "missing Chrome at $CHROME (override with CHROME=...)" >&2; exit 1; }
 [[ -f "$SRC" ]] || { echo "missing $SRC" >&2; exit 1; }
 

@@ -2,7 +2,7 @@
 <!--
   DeskWand Bot — orbit planet (gold planet, cold-light orbit).
   Master artwork. After editing, run `bash desktop/scripts/render-icon.sh`
-  and commit the regenerated resources/icon.png; builds only read the PNG.
+  and commit the regenerated icon/icon.png; builds only read the PNG.
   Same family as DeskWand Voice (Lingque): jewel-tone base + warm-gold glyph.
   Keep the transparent canvas inset; do not bake a square background in.
 -->

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -10,11 +11,14 @@ import (
 	"testing"
 )
 
+// The icon sources; mygo.json names iconPNG.
+const iconPNG, iconSVG = "icon/icon.png", "icon/icon.svg"
+
 // Satellite centre in 1024 space: 150 + 7.24*(87.9, 57.8).
 const satelliteX, satelliteY = 786, 568
 
 func TestAppIconPNG(t *testing.T) {
-	f, err := os.Open(filepath.Join("resources", "icon.png"))
+	f, err := os.Open(iconPNG)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +56,7 @@ func TestAppIconPNG(t *testing.T) {
 // The gap under the front of the orbit must reveal the base, not paint a
 // rim of its own: next to the ring's left tip it matches the base beside it.
 func TestAppIconRingHasNoHalo(t *testing.T) {
-	f, err := os.Open(filepath.Join("resources", "icon.png"))
+	f, err := os.Open(iconPNG)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +78,31 @@ func TestAppIconRingHasNoHalo(t *testing.T) {
 	}
 }
 
+// mygo ships everything in resources/ inside the app, so the icon sources
+// live elsewhere and mygo.json names the PNG explicitly.
+func TestAppIconStaysOutOfShippedResources(t *testing.T) {
+	for _, name := range []string{"icon.png", "icon.svg"} {
+		if _, err := os.Stat(filepath.Join("resources", name)); err == nil {
+			t.Errorf("resources/%s would ship inside the app", name)
+		}
+	}
+	raw, err := os.ReadFile("mygo.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Icon string `json:"icon"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Icon != iconPNG {
+		t.Errorf("mygo.json icon = %q, want %q", config.Icon, iconPNG)
+	}
+}
+
 func TestAppIconSVG(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("resources", "icon.svg"))
+	raw, err := os.ReadFile(iconSVG)
 	if err != nil {
 		t.Fatal(err)
 	}

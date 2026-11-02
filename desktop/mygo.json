@@ -2,6 +2,7 @@
   "name": "DeskWand Bot",
   "slug": "deskwand-bot",
   "identifier": "com.deskwand.bot",
+  "icon": "icon/icon.png",
   "version": "0.1.0",
   "devUrl": "http://localhost:5173",
   "devCommand": "npm --prefix frontend run dev",
