@@ -33,7 +33,7 @@ describe("readRuntimeConfig", () => {
   });
 
   it("reports a fixed code instead of the raw configuration", () => {
-    const secretish = "sk-do-not-echo-this-value";
+    const secretish = "SK_do_not_echo";
     const invalid = {
       ...validConfig,
       models: {

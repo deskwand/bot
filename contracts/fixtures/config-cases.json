@@ -125,27 +125,6 @@
     "valid": false
   },
   {
-    "name": "unknown provider",
-    "input": {
-      "schemaVersion": 1,
-      "owner": {
-        "telegramUserIds": []
-      },
-      "models": {
-        "butler": {
-          "provider": "gemini",
-          "id": "gemini-2.5-pro"
-        },
-        "task": {
-          "provider": "opencode-go",
-          "id": "deepseek-v4.1-flash"
-        }
-      },
-      "mcpServers": []
-    },
-    "valid": false
-  },
-  {
     "name": "MCP env:NAME header preserved",
     "input": {
       "schemaVersion": 1,
@@ -202,5 +181,391 @@
       }
     },
     "valid": true
+  },
+  {
+    "name": "any lowercase provider id",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "deepseek",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "deepseek",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": true
+  },
+  {
+    "name": "custom OpenAI-compatible provider",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "my-proxy",
+          "id": "gpt-5.6"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "customProviders": [
+          {
+            "id": "my-proxy",
+            "name": "我的中转",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [
+              {
+                "id": "gpt-5.6",
+                "contextWindow": 128000,
+                "maxTokens": 16384
+              }
+            ]
+          }
+        ]
+      },
+      "mcpServers": []
+    },
+    "valid": true
+  },
+  {
+    "name": "custom provider on loopback over plain http",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "customProviders": [
+          {
+            "id": "local-proxy",
+            "api": "anthropic-messages",
+            "baseUrl": "http://localhost:8080/v1",
+            "models": [
+              {
+                "id": "claude-sonnet-4-5"
+              }
+            ]
+          }
+        ]
+      },
+      "mcpServers": []
+    },
+    "valid": true
+  },
+  {
+    "name": "provider id with uppercase letters",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "DeepSeek",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "provider id with an underscore",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "my_proxy",
+          "id": "gpt-5.6"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "custom provider with a non-generic api",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "customProviders": [
+          {
+            "id": "my-proxy",
+            "api": "google-generative-ai",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
+          }
+        ]
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "custom provider with remote plain http",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "customProviders": [
+          {
+            "id": "my-proxy",
+            "api": "openai-completions",
+            "baseUrl": "http://proxy.example.com",
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
+          }
+        ]
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "custom provider without models",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "customProviders": [
+          {
+            "id": "my-proxy",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": []
+          }
+        ]
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "too many custom providers",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "customProviders": [
+          {
+            "id": "proxy-1",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-2",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-3",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-4",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-5",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-6",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-7",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-8",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-9",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-10",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-11",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-12",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-13",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-14",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-15",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-16",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          },
+          {
+            "id": "proxy-17",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [{ "id": "gpt-5.6" }]
+          }
+        ]
+      },
+      "mcpServers": []
+    },
+    "valid": false
+  },
+  {
+    "name": "custom model with zero maxTokens",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "customProviders": [
+          {
+            "id": "my-proxy",
+            "api": "openai-completions",
+            "baseUrl": "https://proxy.example.com/v1",
+            "models": [
+              {
+                "id": "gpt-5.6",
+                "maxTokens": 0
+              }
+            ]
+          }
+        ]
+      },
+      "mcpServers": []
+    },
+    "valid": false
   }
 ]

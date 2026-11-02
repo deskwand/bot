@@ -55,6 +55,13 @@
         },
         "task": {
           "$ref": "#/$defs/ModelRef"
+        },
+        "customProviders": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/CustomProvider"
+          }
         }
       },
       "additionalProperties": true
@@ -66,12 +73,68 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["anthropic", "opencode-go"]
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
         },
         "id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        }
+      },
+      "additionalProperties": true
+    },
+    "CustomProvider": {
+      "type": "object",
+      "description": "OpenAI- or Anthropic-compatible endpoint declared by the deployment. The provider ID follows the same pattern as ModelRef.provider and gets its own MODEL_KEY_<ID> secret. Additional properties are accepted and preserved for round-trip.",
+      "required": ["id", "api", "baseUrl", "models"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "api": {
+          "type": "string",
+          "enum": ["openai-completions", "anthropic-messages"]
+        },
+        "baseUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^(https://|http://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/|$))"
+        },
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/CustomModel"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "CustomModel": {
+      "type": "object",
+      "description": "Model served by a custom provider. contextWindow and maxTokens default to 128000 and 8192 when omitted. Additional properties are accepted and preserved for round-trip.",
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "contextWindow": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "additionalProperties": true
