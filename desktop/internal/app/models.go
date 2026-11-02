@@ -13,33 +13,19 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
 	"github.com/deskwand/bot/desktop/internal/domain"
-)
-
-// Model providers the Worker supports. Keep these in sync with
-// contracts/deployment-config.schema.json and src/llm/models.ts.
-const (
-	ProviderAnthropic  = "anthropic"
-	ProviderOpenCodeGo = "opencode-go"
+	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 )
 
 var (
 	// ErrModelProbe means the provider request did not complete successfully.
 	ErrModelProbe = errors.New("app: model probe failed")
-	// ErrUnsupportedModelProvider rejects providers the Worker cannot use.
+	// ErrUnsupportedModelProvider rejects providers the catalog does not list.
 	ErrUnsupportedModelProvider = errors.New("app: unsupported model provider")
 )
 
-// Package variables allow tests to point probes at a loopback server. The
-// production values are the base URLs used by the Worker's pi-ai adapters.
-// OpenCode Go model-specific base URLs and wire APIs live in
-// opencode_models_generated.go.
-const openCodeGoProductionBaseURL = "https://opencode.ai/inference/go"
-
-var modelProviderBaseURLs = map[string]string{
-	// https://api.anthropic.com/v1/messages
-	ProviderAnthropic:  "https://api.anthropic.com",
-	ProviderOpenCodeGo: openCodeGoProductionBaseURL,
-}
+// modelProbeBaseURLOverride lets tests point probes at a loopback server. The
+// production base URL comes from the shared catalog or the custom provider.
+var modelProbeBaseURLOverride string
 
 var modelProbeTimeout = 15 * time.Second
 
@@ -63,42 +49,44 @@ type modelProbeRequest struct {
 }
 
 // ProbeModel makes one minimal, user-triggered request with the supplied key.
-// It never runs automatically, keeps the key only in memory, and returns
-// evidence labelled local. A successful probe proves the provider accepted the
+// When api and baseURL are both empty it looks the model up in the shared
+// catalog; custom providers pass their wire API and endpoint explicitly. It
+// never runs automatically, keeps the key only in memory, and returns evidence
+// labelled local. A successful probe proves the provider accepted the
 // credential from this machine; it does not verify the deployed Worker.
-func ProbeModel(ctx context.Context, provider, model, key string) (domain.Evidence, error) {
+func ProbeModel(ctx context.Context, provider, model, key, api, baseURL string) (domain.Evidence, error) {
 	provider = strings.TrimSpace(provider)
 	model = strings.TrimSpace(model)
+	api = strings.TrimSpace(api)
+	baseURL = strings.TrimSpace(baseURL)
 	if strings.TrimSpace(key) == "" {
 		return domain.Evidence{}, fmt.Errorf("%w: API key is empty", ErrModelProbe)
 	}
-
-	baseURL, ok := modelProviderBaseURLs[provider]
-	if !ok {
-		return domain.Evidence{}, fmt.Errorf("%w: %q", ErrUnsupportedModelProvider, provider)
-	}
 	if model == "" {
 		return domain.Evidence{}, fmt.Errorf("%w: model id is empty", ErrModelProbe)
+	}
+
+	if api == "" && baseURL == "" {
+		catalogProvider, ok := modelcatalog.LookupBuiltin(provider)
+		if !ok {
+			return domain.Evidence{}, fmt.Errorf("%w: %q", ErrUnsupportedModelProvider, provider)
+		}
+		api, baseURL = catalogEndpoint(catalogProvider, model)
+		if api == "" {
+			return domain.Evidence{}, fmt.Errorf("%w: unknown %s model %q", ErrUnsupportedModelProvider, provider, model)
+		}
+	}
+	if api == "" || baseURL == "" {
+		return domain.Evidence{}, fmt.Errorf("%w: %s model %q needs an api and baseUrl", ErrUnsupportedModelProvider, provider, model)
+	}
+	if override := modelProbeBaseURLOverride; override != "" {
+		baseURL = override
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(ctx, modelProbeTimeout)
 	defer cancel()
-
-	api := "anthropic-messages"
-	base := baseURL
-	if provider == ProviderOpenCodeGo {
-		endpoint, ok := openCodeGoModelEndpoints[model]
-		if !ok {
-			return domain.Evidence{}, fmt.Errorf("%w: unknown %s model %q", ErrUnsupportedModelProvider, provider, model)
-		}
-		api = endpoint.API
-		base = endpoint.BaseURL
-		if override := modelProviderBaseURLs[ProviderOpenCodeGo]; override != openCodeGoProductionBaseURL {
-			base = override
-		}
-	}
 
 	body := modelProbeRequest{Model: model}
 	var path string
@@ -119,7 +107,7 @@ func ProbeModel(ctx context.Context, provider, model, key string) (domain.Eviden
 	default:
 		return domain.Evidence{}, fmt.Errorf("%w: %s model %q uses unsupported API %q", ErrUnsupportedModelProvider, provider, model, api)
 	}
-	endpoint := joinModelPath(base, path)
+	endpoint := joinModelPath(baseURL, path)
 
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -157,6 +145,16 @@ func ProbeModel(ctx context.Context, provider, model, key string) (domain.Eviden
 		ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Detail:     "probe_ok",
 	}, nil
+}
+
+// catalogEndpoint finds the wire API and base URL for one catalog model.
+func catalogEndpoint(provider modelcatalog.Provider, model string) (string, string) {
+	for _, entry := range provider.Models {
+		if entry.ID == model {
+			return entry.API, entry.BaseURL
+		}
+	}
+	return "", ""
 }
 
 // joinModelPath appends a canonical /v1 path without duplicating a base URL

@@ -37,6 +37,41 @@ type ModelDTO struct {
 	ID       string `json:"id"`
 }
 
+// ModelEntryDTO is one model listed by a built-in provider.
+type ModelEntryDTO struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ModelProviderDTO is one built-in provider from the shared catalog.
+type ModelProviderDTO struct {
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Models []ModelEntryDTO `json:"models"`
+}
+
+// ModelCatalogDTO is the built-in provider and model list shown in the UI.
+type ModelCatalogDTO struct {
+	Providers []ModelProviderDTO `json:"providers"`
+}
+
+// CustomModelDTO is one model declared by a custom provider.
+type CustomModelDTO struct {
+	ID            string `json:"id"`
+	ContextWindow int    `json:"contextWindow,omitempty"`
+	MaxTokens     int    `json:"maxTokens,omitempty"`
+}
+
+// CustomProviderDTO is a deployment's OpenAI- or Anthropic-compatible
+// endpoint. It carries no key value.
+type CustomProviderDTO struct {
+	ID      string           `json:"id"`
+	Name    string           `json:"name,omitempty"`
+	API     string           `json:"api"`
+	BaseURL string           `json:"baseUrl"`
+	Models  []CustomModelDTO `json:"models"`
+}
+
 // SecretNameDTO reports whether a named secret exists. Values never leave Go.
 type SecretNameDTO struct {
 	Name       string `json:"name"`
@@ -45,17 +80,18 @@ type SecretNameDTO struct {
 
 // ConfigDTO is the editable configuration summary.
 type ConfigDTO struct {
-	AccountID          string          `json:"accountId"`
-	WorkerName         string          `json:"workerName"`
-	Fingerprint        string          `json:"fingerprint"`
-	ReleaseVersion     string          `json:"releaseVersion,omitempty"`
-	ActiveVersionCount int             `json:"activeVersionCount"`
-	ConfigPresent      bool            `json:"configPresent"`
-	ActiveChannel      string          `json:"activeChannel,omitempty"`
-	OwnerUserIDs       []int64         `json:"ownerUserIds"`
-	ButlerModel        *ModelDTO       `json:"butlerModel"`
-	TaskModel          *ModelDTO       `json:"taskModel"`
-	Secrets            []SecretNameDTO `json:"secrets"`
+	AccountID          string              `json:"accountId"`
+	WorkerName         string              `json:"workerName"`
+	Fingerprint        string              `json:"fingerprint"`
+	ReleaseVersion     string              `json:"releaseVersion,omitempty"`
+	ActiveVersionCount int                 `json:"activeVersionCount"`
+	ConfigPresent      bool                `json:"configPresent"`
+	ActiveChannel      string              `json:"activeChannel,omitempty"`
+	OwnerUserIDs       []int64             `json:"ownerUserIds"`
+	ButlerModel        *ModelDTO           `json:"butlerModel"`
+	TaskModel          *ModelDTO           `json:"taskModel"`
+	CustomProviders    []CustomProviderDTO `json:"customProviders"`
+	Secrets            []SecretNameDTO     `json:"secrets"`
 }
 
 // SecretEditDTO is a write-only secret edit. Value is accepted from the
@@ -102,11 +138,12 @@ func (s SecretEditDTO) LogValue() slog.Value {
 // ConfigEditDTO is the 保存并发布 input. A nil owner or model means unchanged;
 // an empty owner slice clears the allowlist. Secrets are write-only.
 type ConfigEditDTO struct {
-	BaseFingerprint string          `json:"baseFingerprint,omitempty"`
-	OwnerUserIDs    *[]int64        `json:"ownerUserIds,omitempty"`
-	ButlerModel     *ModelDTO       `json:"butlerModel,omitempty"`
-	TaskModel       *ModelDTO       `json:"taskModel,omitempty"`
-	Secrets         []SecretEditDTO `json:"secrets,omitempty"`
+	BaseFingerprint string               `json:"baseFingerprint,omitempty"`
+	OwnerUserIDs    *[]int64             `json:"ownerUserIds,omitempty"`
+	ButlerModel     *ModelDTO            `json:"butlerModel,omitempty"`
+	TaskModel       *ModelDTO            `json:"taskModel,omitempty"`
+	CustomProviders *[]CustomProviderDTO `json:"customProviders,omitempty"`
+	Secrets         []SecretEditDTO      `json:"secrets,omitempty"`
 }
 
 // StepDTO is one planned or journaled publish step.
@@ -231,10 +268,11 @@ type InstallInputDTO struct {
 
 // UpgradeDTO reports whether the embedded release is newer than the deployment.
 type UpgradeDTO struct {
-	Available        bool   `json:"available"`
-	CurrentVersion   string `json:"currentVersion,omitempty"`
-	AvailableVersion string `json:"availableVersion,omitempty"`
-	Reason           string `json:"reason,omitempty"`
+	Available        bool     `json:"available"`
+	CurrentVersion   string   `json:"currentVersion,omitempty"`
+	AvailableVersion string   `json:"availableVersion,omitempty"`
+	Reason           string   `json:"reason,omitempty"`
+	ModelKeysMissing []string `json:"modelKeysMissing,omitempty"`
 }
 
 // ClientUpdateDTO is the desktop client update check result. It is separate

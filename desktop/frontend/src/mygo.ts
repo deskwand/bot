@@ -47,6 +47,7 @@ export interface ConfigDTO {
   ownerUserIds: number[];
   butlerModel: ModelDTO | null;
   taskModel: ModelDTO | null;
+  customProviders: CustomProviderDTO[];
   secrets: SecretNameDTO[];
 }
 
@@ -59,6 +60,7 @@ export interface ConfigEditDTO {
   ownerUserIds?: number[];
   butlerModel?: ModelDTO;
   taskModel?: ModelDTO;
+  customProviders?: CustomProviderDTO[];
   secrets?: unknown[];
 }
 
@@ -69,6 +71,25 @@ export interface ConfigEditDTO {
 export interface ConnectionDTO {
   state: string;
   accountId?: string;
+}
+
+/** CustomModelDTO is one model declared by a custom provider. */
+export interface CustomModelDTO {
+  id: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+/**
+ * CustomProviderDTO is a deployment's OpenAI- or Anthropic-compatible
+ * endpoint. It carries no key value.
+ */
+export interface CustomProviderDTO {
+  id: string;
+  name?: string;
+  api: string;
+  baseUrl: string;
+  models: CustomModelDTO[];
 }
 
 /** EntryResultDTO reports the selected entry and whether it has credentials. */
@@ -134,6 +155,11 @@ export interface LoginStatusDTO {
   code?: string;
 }
 
+/** ModelCatalogDTO is the built-in provider and model list shown in the UI. */
+export interface ModelCatalogDTO {
+  providers: ModelProviderDTO[];
+}
+
 /**
  * ModelDTO is the provider and model id shown in the UI. Provider-specific
  * settings in the stored JSON are preserved but not exposed.
@@ -141,6 +167,19 @@ export interface LoginStatusDTO {
 export interface ModelDTO {
   provider: string;
   id: string;
+}
+
+/** ModelEntryDTO is one model listed by a built-in provider. */
+export interface ModelEntryDTO {
+  id: string;
+  name: string;
+}
+
+/** ModelProviderDTO is one built-in provider from the shared catalog. */
+export interface ModelProviderDTO {
+  id: string;
+  name: string;
+  models: ModelEntryDTO[];
 }
 
 /** OperationDTO is one journaled operation summary for the resume view. */
@@ -210,6 +249,7 @@ export interface UpgradeDTO {
   currentVersion?: string;
   availableVersion?: string;
   reason?: string;
+  modelKeysMissing?: string[];
 }
 
 /** WorkerDTO is one Worker script summary. */
@@ -308,6 +348,13 @@ export const Service = {
   listWorkers(): Promise<WorkerDTO[]> {
     return call("Service.ListWorkers");
   },
+  /**
+   * ModelCatalog returns the built-in providers and models shared with the
+   * Worker and the desktop client.
+   */
+  modelCatalog(): Promise<ModelCatalogDTO> {
+    return call("Service.ModelCatalog");
+  },
   /** Name returns the product name for the shell header. */
   name(): Promise<string> {
     return call("Service.Name");
@@ -331,8 +378,8 @@ export const Service = {
    * ProbeModel makes one user-triggered local model request. The key is used in
    * memory only and never returned in the status item or an error.
    */
-  probeModel(provider: string, model: string, key: string): Promise<StatusItemDTO> {
-    return call("Service.ProbeModel", provider, model, key);
+  probeModel(provider: string, model: string, key: string, api: string, baseURL: string): Promise<StatusItemDTO> {
+    return call("Service.ProbeModel", provider, model, key, api, baseURL);
   },
   /** PublishConfig merges and publishes the editable configuration (保存并发布). */
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO> {

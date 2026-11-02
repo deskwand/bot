@@ -16,7 +16,7 @@ func TestSecretInputDTOsMarshalWithoutValues(t *testing.T) {
 	config := ConfigEditDTO{
 		BaseFingerprint: "fp",
 		Secrets: []SecretEditDTO{{
-			Name: "ANTHROPIC_API_KEY", Operation: "replace", Value: dtoSentinel,
+			Name: "MODEL_KEY_ANTHROPIC", Operation: "replace", Value: dtoSentinel,
 		}},
 	}
 	importInput := ImportInputDTO{
@@ -45,7 +45,7 @@ func TestSecretInputDTOsFormatAndLogWithoutValues(t *testing.T) {
 	config := ConfigEditDTO{
 		BaseFingerprint: "fp",
 		Secrets: []SecretEditDTO{{
-			Name: "ANTHROPIC_API_KEY", Operation: "replace", Value: dtoSentinel,
+			Name: "MODEL_KEY_ANTHROPIC", Operation: "replace", Value: dtoSentinel,
 		}},
 	}
 	importInput := ImportInputDTO{
@@ -77,7 +77,7 @@ func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 		"ConfirmImport": true, "ConnectCloudflare": true, "ConnectTelegram": true,
 		"DisconnectCloudflare": true, "ExportDiagnostics": true, "GetConfig": true,
 		"InspectImport": true, "Install": true, "InstallClientUpdate": true,
-		"ListWorkers": true, "Name": true, "OpenTokenPage": true,
+		"ListWorkers": true, "ModelCatalog": true, "Name": true, "OpenTokenPage": true,
 		"PendingOperations": true, "PreviewConfig": true, "ProbeModel": true,
 		"PublishConfig": true, "ResumeOperation": true, "SelectDeployment": true,
 		"SelectEntry": true, "StartWeChatLogin": true, "Status": true,

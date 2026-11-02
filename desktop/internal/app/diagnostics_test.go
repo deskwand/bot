@@ -45,8 +45,8 @@ func diagnosticsSnapshot() domain.Snapshot {
 			"WECHAT_CREDENTIALS",
 			"TELEGRAM_BOT_TOKEN",
 			"TELEGRAM_WEBHOOK_SECRET",
-			"ANTHROPIC_API_KEY",
-			"OPENCODE_API_KEY",
+			"MODEL_KEY_ANTHROPIC",
+			"MODEL_KEY_OPENCODE_GO",
 		},
 		ConfigJSON: []byte(`{"schemaVersion":1,"models":{"butler":{"provider":"anthropic","id":"claude-sonnet-5-5"},"task":{"provider":"opencode-go","id":"deepseek-v4.1-flash"}},"_note":"` + diagnosticsConfigSentinel + `"}`),
 	}
@@ -113,6 +113,26 @@ func TestConfiguredRequiresRequiredSecrets(t *testing.T) {
 	}
 	if item := findItem(t, report.Items, "wechat"); item.State != diagnostics.StateConfigured {
 		t.Fatalf("wechat = %+v", item)
+	}
+}
+
+func TestConfiguredModelIgnoresLegacySecretNames(t *testing.T) {
+	snapshot := diagnosticsSnapshot()
+	snapshot.SecretNames = []string{
+		"WECHAT_CREDENTIALS",
+		"TELEGRAM_BOT_TOKEN",
+		"TELEGRAM_WEBHOOK_SECRET",
+		"ANTHROPIC_API_KEY",
+		"OPENCODE_API_KEY",
+	}
+	service := newTestDiagnostics(snapshot, &fakeChannelEventReader{})
+
+	report, err := service.Status(context.Background(), snapshot.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item := findItem(t, report.Items, "model"); item.State != diagnostics.StateUnknown {
+		t.Fatalf("model with only legacy secrets = %+v", item)
 	}
 }
 

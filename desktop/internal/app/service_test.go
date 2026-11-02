@@ -18,6 +18,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 	"github.com/deskwand/bot/desktop/internal/release"
 	"github.com/deskwand/bot/desktop/internal/wechat"
 )
@@ -1339,9 +1340,9 @@ func TestServiceStatusExportAndProbeModel(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
-	overrideProviderBase(t, ProviderAnthropic, server.URL)
+	overrideProbeBaseURL(t, server.URL)
 
-	item, err := f.service.ProbeModel(ProviderAnthropic, "claude-sonnet-5-5", serviceModelKey)
+	item, err := f.service.ProbeModel("anthropic", "claude-sonnet-5-5", serviceModelKey, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1361,9 +1362,9 @@ func TestServiceProbeModelErrorDoesNotLeakKey(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"error":"invalid %s"}`, serviceModelKey)
 	}))
 	t.Cleanup(server.Close)
-	overrideProviderBase(t, ProviderAnthropic, server.URL)
+	overrideProbeBaseURL(t, server.URL)
 
-	_, err := f.service.ProbeModel(ProviderAnthropic, "claude-sonnet-5-5", serviceModelKey)
+	_, err := f.service.ProbeModel("anthropic", "claude-sonnet-5-5", serviceModelKey, "", "")
 	if err == nil {
 		t.Fatal("expected probe error")
 	}
@@ -1441,6 +1442,147 @@ func TestServiceFileTargetStorePersistsNonSecretSettings(t *testing.T) {
 // the store wrote without importing os in several places.
 func osReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+func TestServiceChangeFromEditClearsLegacyModelSecrets(t *testing.T) {
+	f := newServiceFixture(t)
+	f.snapshots.snapshot.SecretNames = []string{"ANTHROPIC_API_KEY", "MODEL_KEY_DEEPSEEK"}
+
+	if _, err := f.service.PublishConfig(ConfigEditDTO{BaseFingerprint: "fingerprint-1"}); err != nil {
+		t.Fatal(err)
+	}
+	change := f.publish.lastChange()
+	if len(change.Secrets) != 1 || change.Secrets[0].Name != "ANTHROPIC_API_KEY" ||
+		change.Secrets[0].Operation != domain.SecretClear {
+		t.Fatalf("secrets = %#v", change.Secrets)
+	}
+
+	if _, err := f.service.PublishConfig(ConfigEditDTO{
+		BaseFingerprint: "fingerprint-1",
+		Secrets: []SecretEditDTO{{
+			Name: "ANTHROPIC_API_KEY", Operation: domain.SecretReplace, Value: serviceSecret,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	change = f.publish.lastChange()
+	if len(change.Secrets) != 1 || change.Secrets[0].Name != "ANTHROPIC_API_KEY" ||
+		change.Secrets[0].Operation != domain.SecretReplace {
+		t.Fatalf("secrets = %#v", change.Secrets)
+	}
+}
+
+func TestServiceGetConfigReadsCustomProviders(t *testing.T) {
+	f := newServiceFixture(t)
+	f.snapshots.snapshot.ConfigJSON = []byte(`{
+		"schemaVersion": 1,
+		"models": {
+			"butler": {"provider": "my-proxy", "id": "gpt-5.6"},
+			"task": {"provider": "deepseek", "id": "deepseek-flash"},
+			"customProviders": [{
+				"id": "my-proxy",
+				"name": "我的中转",
+				"api": "openai-completions",
+				"baseUrl": "https://proxy.example.com/v1",
+				"models": [{"id": "gpt-5.6", "contextWindow": 128000, "maxTokens": 16384}]
+			}]
+		}
+	}`)
+
+	config, err := f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.CustomProviders) != 1 {
+		t.Fatalf("custom providers = %#v", config.CustomProviders)
+	}
+	provider := config.CustomProviders[0]
+	if provider.ID != "my-proxy" || provider.Name != "我的中转" || provider.API != "openai-completions" ||
+		provider.BaseURL != "https://proxy.example.com/v1" {
+		t.Fatalf("provider = %#v", provider)
+	}
+	if len(provider.Models) != 1 || provider.Models[0].ID != "gpt-5.6" ||
+		provider.Models[0].ContextWindow != 128000 || provider.Models[0].MaxTokens != 16384 {
+		t.Fatalf("models = %#v", provider.Models)
+	}
+}
+
+func TestServiceConfigEditWritesCustomProvidersPatch(t *testing.T) {
+	f := newServiceFixture(t)
+	custom := []CustomProviderDTO{{
+		ID: "my-proxy", Name: "我的中转", API: "openai-completions",
+		BaseURL: "https://proxy.example.com/v1",
+		Models:  []CustomModelDTO{{ID: "gpt-5.6", ContextWindow: 128000, MaxTokens: 16384}},
+	}}
+	if _, err := f.service.PublishConfig(ConfigEditDTO{
+		BaseFingerprint: "fingerprint-1",
+		CustomProviders: &custom,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	change := f.publish.lastChange()
+	if change.Patch.CustomProviders == nil {
+		t.Fatal("patch has no custom providers")
+	}
+	var patched []CustomProviderDTO
+	if err := json.Unmarshal(*change.Patch.CustomProviders, &patched); err != nil {
+		t.Fatal(err)
+	}
+	if len(patched) != 1 || patched[0].ID != "my-proxy" ||
+		patched[0].BaseURL != "https://proxy.example.com/v1" ||
+		len(patched[0].Models) != 1 || patched[0].Models[0].ID != "gpt-5.6" {
+		t.Fatalf("patched = %#v", patched)
+	}
+}
+
+func TestServiceUpgradeAvailableReportsMissingModelKeys(t *testing.T) {
+	f := newServiceFixture(t)
+	f.snapshots.snapshot.ReleaseVersion = "1.0.0"
+	f.snapshots.snapshot.SecretNames = []string{"OPENCODE_API_KEY"}
+	f.snapshots.snapshot.ConfigJSON = []byte(`{
+		"schemaVersion": 1,
+		"models": {
+			"butler": {"provider": "opencode-go", "id": "deepseek-v4.1-flash"},
+			"task": {"provider": "opencode-go", "id": "kimi-k3"}
+		}
+	}`)
+
+	upgrade, err := f.service.UpgradeAvailable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !upgrade.Available {
+		t.Fatalf("upgrade = %#v", upgrade)
+	}
+	if len(upgrade.ModelKeysMissing) != 1 || upgrade.ModelKeysMissing[0] != "MODEL_KEY_OPENCODE_GO" {
+		t.Fatalf("missing keys = %#v", upgrade.ModelKeysMissing)
+	}
+
+	f.snapshots.snapshot.SecretNames = append(f.snapshots.snapshot.SecretNames, "MODEL_KEY_OPENCODE_GO")
+	upgrade, err = f.service.UpgradeAvailable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(upgrade.ModelKeysMissing) != 0 {
+		t.Fatalf("missing keys = %#v", upgrade.ModelKeysMissing)
+	}
+}
+
+func TestServiceModelCatalogMatchesBuiltinCatalog(t *testing.T) {
+	f := newServiceFixture(t)
+	catalog, err := f.service.ModelCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	builtin := modelcatalog.Builtin()
+	if len(catalog.Providers) != len(builtin) {
+		t.Fatalf("providers = %d, want %d", len(catalog.Providers), len(builtin))
+	}
+	for index, provider := range catalog.Providers {
+		if provider.ID != builtin[index].ID || len(provider.Models) != len(builtin[index].Models) {
+			t.Fatalf("provider %d = %#v", index, provider)
+		}
+	}
 }
 
 func hasCode(err error, code string) bool {

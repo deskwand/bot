@@ -21,6 +21,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/release"
 	"github.com/deskwand/bot/desktop/internal/wechat"
@@ -41,6 +42,10 @@ const (
 	CodeLoginInProgress     = "LOGIN_IN_PROGRESS"
 	CodeInvalidEntryChannel = "INVALID_ENTRY_CHANNEL"
 )
+
+// legacyModelSecretNames are the pre-MODEL_KEY_* names. A publish clears any
+// that are still deployed, because the Worker no longer reads them.
+var legacyModelSecretNames = []string{"ANTHROPIC_API_KEY", "OPENCODE_API_KEY"}
 
 // LoginStatusEvent carries sanitized QR login progress to the frontend.
 // `mygo generate` turns it into `events.loginStatus`.
@@ -452,6 +457,7 @@ func (s *Service) UpgradeAvailable() (UpgradeDTO, error) {
 	dto := UpgradeDTO{
 		CurrentVersion:   snapshot.ReleaseVersion,
 		AvailableVersion: availableVersion,
+		ModelKeysMissing: missingModelKeys(snapshot),
 	}
 	if snapshot.ReleaseVersion == "" {
 		dto.Reason = deployment.CodeVersionUnknownReimport
@@ -471,6 +477,29 @@ func (s *Service) UpgradeAvailable() (UpgradeDTO, error) {
 		dto.Reason = deployment.CodeDowngradeRejected
 	}
 	return dto, nil
+}
+
+// missingModelKeys lists the MODEL_KEY_* secrets the deployed configuration
+// needs but the deployment does not have.
+func missingModelKeys(snapshot domain.Snapshot) []string {
+	if len(snapshot.ConfigJSON) == 0 {
+		return nil
+	}
+	doc, err := modelcatalog.ParseModels(snapshot.ConfigJSON)
+	if err != nil {
+		return nil
+	}
+	existing := make(map[string]bool, len(snapshot.SecretNames))
+	for _, name := range snapshot.SecretNames {
+		existing[name] = true
+	}
+	missing := make([]string, 0)
+	for _, name := range modelcatalog.RequiredSecretNames(doc) {
+		if !existing[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // Upgrade applies the embedded release to the managed deployment.
@@ -514,6 +543,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		ConfigPresent:      len(snapshot.ConfigJSON) > 0,
 		ActiveChannel:      ReadPlainVar(snapshot.SettingsJSON, "ACTIVE_CHANNEL"),
 		OwnerUserIDs:       []int64{},
+		CustomProviders:    []CustomProviderDTO{},
 		Secrets:            s.secretStatuses(snapshot),
 	}
 	if len(snapshot.ConfigJSON) > 0 {
@@ -522,8 +552,9 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 				TelegramUserIDs []int64 `json:"telegramUserIds"`
 			} `json:"owner"`
 			Models struct {
-				Butler *ModelDTO `json:"butler"`
-				Task   *ModelDTO `json:"task"`
+				Butler          *ModelDTO           `json:"butler"`
+				Task            *ModelDTO           `json:"task"`
+				CustomProviders []CustomProviderDTO `json:"customProviders"`
 			} `json:"models"`
 		}
 		if err := json.Unmarshal(snapshot.ConfigJSON, &document); err != nil {
@@ -534,6 +565,9 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		}
 		dto.ButlerModel = summarizeModel(document.Models.Butler)
 		dto.TaskModel = summarizeModel(document.Models.Task)
+		if document.Models.CustomProviders != nil {
+			dto.CustomProviders = document.Models.CustomProviders
+		}
 	}
 	return dto, nil
 }
@@ -1048,8 +1082,8 @@ func (s *Service) ExportDiagnostics() (string, error) {
 
 // ProbeModel makes one user-triggered local model request. The key is used in
 // memory only and never returned in the status item or an error.
-func (s *Service) ProbeModel(provider, model, key string) (StatusItemDTO, error) {
-	evidence, err := ProbeModel(context.Background(), provider, model, key)
+func (s *Service) ProbeModel(provider, model, key, api, baseURL string) (StatusItemDTO, error) {
+	evidence, err := ProbeModel(context.Background(), provider, model, key, api, baseURL)
 	if err != nil {
 		return StatusItemDTO{}, safeAppError(err, key)
 	}
@@ -1058,6 +1092,25 @@ func (s *Service) ProbeModel(provider, model, key string) (StatusItemDTO, error)
 		return StatusItemDTO{}, domain.Error{Code: CodeServiceUnavailable, Message: "模型探测没有返回状态"}
 	}
 	return statusItemDTO(items[0]), nil
+}
+
+// ModelCatalog returns the built-in providers and models shared with the
+// Worker and the desktop client.
+func (s *Service) ModelCatalog() (ModelCatalogDTO, error) {
+	builtin := modelcatalog.Builtin()
+	providers := make([]ModelProviderDTO, 0, len(builtin))
+	for _, provider := range builtin {
+		models := make([]ModelEntryDTO, 0, len(provider.Models))
+		for _, model := range provider.Models {
+			models = append(models, ModelEntryDTO{ID: model.ID, Name: model.Name})
+		}
+		providers = append(providers, ModelProviderDTO{
+			ID:     provider.ID,
+			Name:   provider.Name,
+			Models: models,
+		})
+	}
+	return ModelCatalogDTO{Providers: providers}, nil
 }
 
 func (s *Service) releaseVersionStep(ctx context.Context, target domain.Target) (StepDTO, bool) {
@@ -1095,14 +1148,14 @@ func hasStepID(steps []StepDTO, id string) bool {
 
 func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, input ConfigEditDTO) (domain.Change, error) {
 	change := domain.Change{BaseFingerprint: strings.TrimSpace(input.BaseFingerprint)}
+	if s.snapshots == nil {
+		return domain.Change{}, serviceUnavailable()
+	}
+	snapshot, err := s.snapshots.ReadSnapshot(ctx, target)
+	if err != nil {
+		return domain.Change{}, err
+	}
 	if change.BaseFingerprint == "" {
-		if s.snapshots == nil {
-			return domain.Change{}, serviceUnavailable()
-		}
-		snapshot, err := s.snapshots.ReadSnapshot(ctx, target)
-		if err != nil {
-			return domain.Change{}, err
-		}
 		change.BaseFingerprint = snapshot.Fingerprint
 	}
 	if input.OwnerUserIDs != nil {
@@ -1123,6 +1176,15 @@ func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, inpu
 		}
 		change.Patch.TaskModel = &raw
 	}
+	if input.CustomProviders != nil {
+		raw, err := json.Marshal(*input.CustomProviders)
+		if err != nil {
+			return domain.Change{}, fmt.Errorf("app: encode custom providers: %w", err)
+		}
+		message := json.RawMessage(raw)
+		change.Patch.CustomProviders = &message
+	}
+	edited := make(map[string]bool, len(input.Secrets))
 	for _, secret := range input.Secrets {
 		operation := strings.TrimSpace(secret.Operation)
 		switch operation {
@@ -1130,7 +1192,17 @@ func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, inpu
 		default:
 			return domain.Change{}, domain.Error{Code: domain.INVALID_SECRET_EDIT, Message: "secret 操作必须是 keep、replace 或 clear"}
 		}
+		edited[secret.Name] = true
 		change.Secrets = append(change.Secrets, domain.NewSecretEdit(secret.Name, operation, secret.Value))
+	}
+	deployed := make(map[string]bool, len(snapshot.SecretNames))
+	for _, name := range snapshot.SecretNames {
+		deployed[name] = true
+	}
+	for _, name := range legacyModelSecretNames {
+		if deployed[name] && !edited[name] {
+			change.Secrets = append(change.Secrets, domain.NewSecretEdit(name, domain.SecretClear, ""))
+		}
 	}
 	return change, nil
 }

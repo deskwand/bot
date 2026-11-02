@@ -2,13 +2,13 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 )
 
 const defaultDiagnosticsWindow = 6 * time.Hour
@@ -192,41 +192,14 @@ func modelsConfigured(configJSON []byte, secrets map[string]bool) bool {
 	if len(configJSON) == 0 {
 		return false
 	}
-	var document struct {
-		Models map[string]json.RawMessage `json:"models"`
-	}
-	if err := json.Unmarshal(configJSON, &document); err != nil {
+	doc, err := modelcatalog.ParseModels(configJSON)
+	if err != nil {
 		return false
 	}
-	for _, role := range []string{"butler", "task"} {
-		raw, ok := document.Models[role]
-		if !ok || len(raw) == 0 {
-			continue
-		}
-		var model struct {
-			Provider string `json:"provider"`
-			ID       string `json:"id"`
-		}
-		if err := json.Unmarshal(raw, &model); err != nil {
-			continue
-		}
-		if model.Provider == "" || model.ID == "" {
-			continue
-		}
-		if secret := modelProviderSecretName(model.Provider); secret != "" && secrets[secret] {
+	for _, name := range modelcatalog.RequiredSecretNames(doc) {
+		if secrets[name] {
 			return true
 		}
 	}
 	return false
-}
-
-func modelProviderSecretName(provider string) string {
-	switch provider {
-	case ProviderAnthropic:
-		return "ANTHROPIC_API_KEY"
-	case ProviderOpenCodeGo:
-		return "OPENCODE_API_KEY"
-	default:
-		return ""
-	}
 }

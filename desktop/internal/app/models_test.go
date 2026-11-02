@@ -23,17 +23,11 @@ func useProbeServer(t *testing.T, handler http.Handler) *httptest.Server {
 	return server
 }
 
-func overrideProviderBase(t *testing.T, provider, baseURL string) {
+func overrideProbeBaseURL(t *testing.T, baseURL string) {
 	t.Helper()
-	previous, existed := modelProviderBaseURLs[provider]
-	modelProviderBaseURLs[provider] = baseURL
-	t.Cleanup(func() {
-		if existed {
-			modelProviderBaseURLs[provider] = previous
-		} else {
-			delete(modelProviderBaseURLs, provider)
-		}
-	})
+	previous := modelProbeBaseURLOverride
+	modelProbeBaseURLOverride = baseURL
+	t.Cleanup(func() { modelProbeBaseURLOverride = previous })
 }
 
 type countBody struct {
@@ -61,9 +55,9 @@ func TestProbeModelAnthropicUsesMinimalRequest(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","content":[{"type":"text","text":"ok"}]}`))
 	}))
-	overrideProviderBase(t, ProviderAnthropic, server.URL)
+	overrideProbeBaseURL(t, server.URL)
 
-	evidence, err := ProbeModel(context.Background(), ProviderAnthropic, "claude-sonnet-5-5", modelKeySentinel)
+	evidence, err := ProbeModel(context.Background(), "anthropic", "claude-sonnet-5-5", modelKeySentinel, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,9 +91,9 @@ func TestProbeModelOpenCodeGoUsesBearerKey(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	overrideProviderBase(t, ProviderOpenCodeGo, server.URL)
+	overrideProbeBaseURL(t, server.URL)
 
-	evidence, err := ProbeModel(context.Background(), ProviderOpenCodeGo, "deepseek-v4.1-flash", modelKeySentinel)
+	evidence, err := ProbeModel(context.Background(), "opencode-go", "deepseek-v4.1-flash", modelKeySentinel, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,9 +124,9 @@ func TestProbeModelOpenCodeGoAnthropicMessages(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	overrideProviderBase(t, ProviderOpenCodeGo, server.URL)
+	overrideProbeBaseURL(t, server.URL)
 
-	if _, err := ProbeModel(context.Background(), ProviderOpenCodeGo, "claude-haiku-5-5", modelKeySentinel); err != nil {
+	if _, err := ProbeModel(context.Background(), "opencode-go", "claude-haiku-5-5", modelKeySentinel, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if sawPath != "/v1/messages" {
@@ -158,9 +152,9 @@ func TestProbeModelOpenCodeGoResponses(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	overrideProviderBase(t, ProviderOpenCodeGo, server.URL)
+	overrideProbeBaseURL(t, server.URL)
 
-	if _, err := ProbeModel(context.Background(), ProviderOpenCodeGo, "gpt-5.6-luna", modelKeySentinel); err != nil {
+	if _, err := ProbeModel(context.Background(), "opencode-go", "gpt-5.6-luna", modelKeySentinel, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if sawPath != "/v1/responses" {
@@ -175,10 +169,37 @@ func TestProbeModelOpenCodeGoResponses(t *testing.T) {
 	}
 }
 
-func TestProbeModelRejectsGoogleGenerativeAI(t *testing.T) {
-	overrideProviderBase(t, ProviderOpenCodeGo, "https://should-not-be-called.test")
+func TestProbeModelCustomEndpointUsesSuppliedAPIAndBaseURL(t *testing.T) {
+	var sawPath, sawAuthorization string
+	var body countBody
+	server := useProbeServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawPath = r.URL.Path
+		sawAuthorization = r.Header.Get("Authorization")
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
 
-	_, err := ProbeModel(context.Background(), ProviderOpenCodeGo, "gemini-4-argon-contributor", modelKeySentinel)
+	if _, err := ProbeModel(context.Background(), "my-proxy", "gpt-5.6", modelKeySentinel, "openai-completions", server.URL); err != nil {
+		t.Fatal(err)
+	}
+	if sawPath != "/v1/chat/completions" {
+		t.Fatalf("path = %q", sawPath)
+	}
+	if sawAuthorization != "Bearer "+modelKeySentinel {
+		t.Fatalf("authorization = %q", sawAuthorization)
+	}
+	if body.Model != "gpt-5.6" || body.MaxTokens != 1 {
+		t.Fatalf("body = %+v", body)
+	}
+}
+
+func TestProbeModelRejectsGoogleGenerativeAI(t *testing.T) {
+	overrideProbeBaseURL(t, "https://should-not-be-called.test")
+
+	_, err := ProbeModel(context.Background(), "opencode-go", "gemini-4-argon-contributor", modelKeySentinel, "", "")
 	if !errors.Is(err, ErrUnsupportedModelProvider) {
 		t.Fatalf("err = %v, want ErrUnsupportedModelProvider", err)
 	}
@@ -193,9 +214,9 @@ func TestProbeModelDoesNotFollowRedirects(t *testing.T) {
 	redirector := useProbeServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target.URL+"/stolen", http.StatusTemporaryRedirect)
 	}))
-	overrideProviderBase(t, ProviderAnthropic, redirector.URL)
+	overrideProbeBaseURL(t, redirector.URL)
 
-	if _, err := ProbeModel(context.Background(), ProviderAnthropic, "claude-sonnet-5-5", modelKeySentinel); !errors.Is(err, ErrModelProbe) {
+	if _, err := ProbeModel(context.Background(), "anthropic", "claude-sonnet-5-5", modelKeySentinel, "", ""); !errors.Is(err, ErrModelProbe) {
 		t.Fatalf("err = %v", err)
 	}
 	if followed {
@@ -209,9 +230,9 @@ func TestProbeModelProviderErrorDoesNotLeakKey(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":{"message":"invalid key ` + modelKeySentinel + `"}}`))
 	}))
-	overrideProviderBase(t, ProviderAnthropic, server.URL)
+	overrideProbeBaseURL(t, server.URL)
 
-	_, err := ProbeModel(context.Background(), ProviderAnthropic, "claude-sonnet-5-5", modelKeySentinel)
+	_, err := ProbeModel(context.Background(), "anthropic", "claude-sonnet-5-5", modelKeySentinel, "", "")
 	if !errors.Is(err, ErrModelProbe) {
 		t.Fatalf("err = %v, want ErrModelProbe", err)
 	}
@@ -237,9 +258,9 @@ func TestProbeModelTransportErrorIsRedacted(t *testing.T) {
 		err: errors.New("dial failed for Authorization: Bearer " + modelKeySentinel),
 	}}
 	t.Cleanup(func() { modelProbeHTTPClient = previousClient })
-	overrideProviderBase(t, ProviderAnthropic, "https://api.anthropic.test")
+	overrideProbeBaseURL(t, "https://api.anthropic.test")
 
-	_, err := ProbeModel(context.Background(), ProviderAnthropic, "claude-sonnet-5-5", modelKeySentinel)
+	_, err := ProbeModel(context.Background(), "anthropic", "claude-sonnet-5-5", modelKeySentinel, "", "")
 	if !errors.Is(err, ErrModelProbe) {
 		t.Fatalf("err = %v", err)
 	}
@@ -257,9 +278,9 @@ func TestProbeModelTimesOutAndIsRedacted(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	}))
-	overrideProviderBase(t, ProviderAnthropic, server.URL)
+	overrideProbeBaseURL(t, server.URL)
 
-	_, err := ProbeModel(context.Background(), ProviderAnthropic, "claude-sonnet-5-5", modelKeySentinel)
+	_, err := ProbeModel(context.Background(), "anthropic", "claude-sonnet-5-5", modelKeySentinel, "", "")
 	if !errors.Is(err, ErrModelProbe) {
 		t.Fatalf("err = %v", err)
 	}
@@ -269,13 +290,13 @@ func TestProbeModelTimesOutAndIsRedacted(t *testing.T) {
 }
 
 func TestProbeModelRejectsInvalidInputWithoutRequest(t *testing.T) {
-	if _, err := ProbeModel(context.Background(), "deepseek", "deepseek-chat", "key-sentinel"); !errors.Is(err, ErrUnsupportedModelProvider) {
+	if _, err := ProbeModel(context.Background(), "ghost", "deepseek-chat", "key-sentinel", "", ""); !errors.Is(err, ErrUnsupportedModelProvider) {
 		t.Fatalf("unsupported provider err = %v", err)
 	}
-	if _, err := ProbeModel(context.Background(), ProviderAnthropic, "", "key-sentinel"); !errors.Is(err, ErrModelProbe) {
+	if _, err := ProbeModel(context.Background(), "anthropic", "", "key-sentinel", "", ""); !errors.Is(err, ErrModelProbe) {
 		t.Fatalf("empty model err = %v", err)
 	}
-	if _, err := ProbeModel(context.Background(), ProviderAnthropic, "claude-sonnet-5-5", "   "); !errors.Is(err, ErrModelProbe) {
+	if _, err := ProbeModel(context.Background(), "anthropic", "claude-sonnet-5-5", "   ", "", ""); !errors.Is(err, ErrModelProbe) {
 		t.Fatalf("empty key err = %v", err)
 	}
 }
