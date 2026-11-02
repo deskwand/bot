@@ -355,12 +355,12 @@ test("secret replace and clear are distinct operations", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "模型", exact: true }).click();
   await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
-  await expect(page.getByText("OPENCODE_API_KEY 已配置")).toBeVisible();
+  await expect(page.getByText("MODEL_KEY_OPENCODE_GO 已配置")).toBeVisible();
 
   await page.getByLabel("API 密钥").fill("sk-replace-SENTINEL");
   await page.getByRole("button", { name: "保存并发布" }).click();
   const preview = page.getByRole("dialog", { name: "确认保存并发布" });
-  await expect(preview.getByText(/替换 secret OPENCODE_API_KEY/)).toBeVisible();
+  await expect(preview.getByText(/替换 secret MODEL_KEY_OPENCODE_GO/)).toBeVisible();
   await preview.getByRole("button", { name: "确认保存并发布" }).click();
   await expect(page.getByText(/配置已发布/).first()).toBeVisible();
   await expect(page.getByLabel("API 密钥")).toHaveValue("");
@@ -368,15 +368,109 @@ test("secret replace and clear are distinct operations", async ({ page }) => {
   await page.getByRole("button", { name: "清除已保存密钥" }).click();
   await page.getByRole("button", { name: "保存并发布" }).click();
   const clearPreview = page.getByRole("dialog", { name: "确认保存并发布" });
-  await expect(clearPreview.getByText(/清除 secret OPENCODE_API_KEY/)).toBeVisible();
+  await expect(clearPreview.getByText(/清除 secret MODEL_KEY_OPENCODE_GO/)).toBeVisible();
   await clearPreview.getByRole("button", { name: "确认保存并发布" }).click();
-  await expect(page.getByText("OPENCODE_API_KEY 未配置")).toBeVisible();
+  await expect(page.getByText("MODEL_KEY_OPENCODE_GO 未配置")).toBeVisible();
+});
+
+test("model keys use MODEL_KEY_<ID> names", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByLabel("密钥所属供应商").click();
+  await page.getByRole("option", { name: "DeepSeek", exact: true }).click();
+  await page.getByLabel("API 密钥").fill("sk-deepseek-SENTINEL");
+  await page.getByRole("button", { name: "保存并发布" }).click();
+  const preview = page.getByRole("dialog", { name: "确认保存并发布" });
+  await expect(preview.getByText(/替换 secret MODEL_KEY_DEEPSEEK/)).toBeVisible();
+  await preview.getByRole("button", { name: "确认保存并发布" }).click();
+  await expect(page.getByText(/配置已发布/).first()).toBeVisible();
+  await page.getByLabel("密钥所属供应商").click();
+  await page.getByRole("option", { name: "DeepSeek", exact: true }).click();
+  await expect(page.getByText("MODEL_KEY_DEEPSEEK 已配置")).toBeVisible();
+});
+
+test("custom endpoint can be added and selected", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "添加自定义端点" }).click();
+  const dialog = page.getByRole("dialog", { name: "添加自定义端点" });
+  await dialog.getByLabel("端点 ID").fill("my-proxy");
+  await dialog.getByLabel("显示名称").fill("我的中转");
+  await dialog.getByLabel("Base URL").fill("https://proxy.example.com/v1");
+  await dialog.getByLabel("模型 ID（用逗号分隔）").fill("gpt-5.6");
+  await dialog.getByRole("button", { name: "保存端点" }).click();
+  await expect(page.getByText("my-proxy").first()).toBeVisible();
+
+  await page.getByLabel("管家模型").click();
+  await page.getByRole("option", { name: /我的中转 · gpt-5\.6/ }).click();
+  await page.getByRole("button", { name: "保存并发布" }).click();
+  const preview = page.getByRole("dialog", { name: "确认保存并发布" });
+  await preview.getByRole("button", { name: "确认保存并发布" }).click();
+  await expect(page.getByText(/配置已发布/).first()).toBeVisible();
+  await expect(page.getByLabel("管家模型")).toHaveText(/我的中转 · gpt-5\.6/);
+  await expect(page.getByText("my-proxy").first()).toBeVisible();
+  await expect(page.getByText("https://proxy.example.com/v1").first()).toBeVisible();
+});
+
+test("custom endpoint rejects a built-in id and plain http", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "添加自定义端点" }).click();
+  const dialog = page.getByRole("dialog", { name: "添加自定义端点" });
+  await dialog.getByLabel("端点 ID").fill("deepseek");
+  await dialog.getByLabel("Base URL").fill("https://proxy.example.com/v1");
+  await dialog.getByLabel("模型 ID（用逗号分隔）").fill("gpt-5.6");
+  await expect(dialog.getByRole("button", { name: "保存端点" })).toBeDisabled();
+  await expect(dialog.getByText(/与内置厂商重名/)).toBeVisible();
+
+  await dialog.getByLabel("端点 ID").fill("my-proxy");
+  await dialog.getByLabel("Base URL").fill("http://proxy.example.com");
+  await expect(dialog.getByRole("button", { name: "保存端点" })).toBeDisabled();
+  await expect(dialog.getByText(/https:\/\//)).toBeVisible();
+  await dialog.getByLabel("Base URL").fill("http://localhost:8080/v1");
+  await expect(dialog.getByRole("button", { name: "保存端点" })).toBeEnabled();
+});
+
+test("model ids containing a slash round-trip", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByLabel("管家模型").click();
+  await page.getByRole("option", { name: /OpenRouter · Claude Sonnet 5\.5/ }).click();
+  await page.getByRole("button", { name: "保存并发布" }).click();
+  const preview = page.getByRole("dialog", { name: "确认保存并发布" });
+  await preview.getByRole("button", { name: "确认保存并发布" }).click();
+  await expect(page.getByText(/配置已发布/).first()).toBeVisible();
+  await expect(page.getByLabel("管家模型")).toHaveText(/OpenRouter · Claude Sonnet 5\.5/);
+});
+
+test("upgrade warns which model keys must be re-entered", async ({ page }) => {
+  await page.goto("/test.html?fixture=upgrade-keys-missing");
+  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await expect(
+    page.getByText(/升级后需要在模型页重新填写这些 key：MODEL_KEY_OPENCODE_GO/),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "升级云端服务" }).click();
+  const dialog = page.getByRole("dialog", { name: "升级前确认" });
+  await expect(dialog.getByText(/升级后需要在模型页重新填写这些 key：/)).toBeVisible();
+  await expect(dialog.getByText(/MODEL_KEY_OPENCODE_GO/)).toBeVisible();
+});
+
+test("MODEL_KEY_MISSING lists the missing secrets", async ({ page }) => {
+  await page.goto("/test.html?fixture=model-key-missing");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByLabel("API 密钥").fill("sk-missing-SENTINEL");
+  await page.getByRole("button", { name: "保存并发布" }).click();
+  const preview = page.getByRole("dialog", { name: "确认保存并发布" });
+  await preview.getByRole("button", { name: "确认保存并发布" }).click();
+  const alert = page.getByTestId("error-alert");
+  await expect(alert.getByText("MODEL_KEY_MISSING")).toBeVisible();
+  await expect(alert.getByText(/MODEL_KEY_DEEPSEEK/)).toBeVisible();
 });
 
 test("dirty form protection warns before leaving", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "模型", exact: true }).click();
-  await chooseModel(page, "管家模型", /deepseek-v4-pro/);
+  await chooseModel(page, "管家模型", /OpenCode Go · DeepSeek V4 Pro/);
   await page.getByRole("button", { name: "服务概览", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "有未保存的更改" });
   await expect(dialog).toBeVisible();

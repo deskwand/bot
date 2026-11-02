@@ -125,6 +125,8 @@ export function describeCode(code: string): string {
       return "该旧版部署需要重新填写管家模型和任务模型。";
     case "CONFIG_MISSING":
       return "云端部署缺少 DESKWAND_CONFIG。请先在导入或配置流程中补全配置。";
+    case "MODEL_KEY_MISSING":
+      return "配置引用的模型 key 尚未配置。请在模型页填写缺失的 key 后再发布。";
     case "SERVICE_NOT_FOUND":
       return "找不到目标 Worker。请刷新部署列表，或确认服务没有被删除。";
     case "UPLOAD_REJECTED":

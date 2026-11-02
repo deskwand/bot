@@ -152,6 +152,14 @@ export function Updates() {
                   {upgrade.reason}：{describeCode(upgrade.reason)}
                 </p>
               ) : null}
+              {upgrade.modelKeysMissing?.length ? (
+                <Alert>
+                  <AlertTitle>模型 key 需要重新填写</AlertTitle>
+                  <AlertDescription>
+                    升级后需要在模型页重新填写这些 key：{upgrade.modelKeysMissing.join("、")}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
               {upgrade.reason === "VERSION_UNKNOWN_REIMPORT" ? (
                 <Button type="button" size="sm" variant="outline" onClick={navigateImport}>
                   重新导入
@@ -321,6 +329,14 @@ export function Updates() {
               客户端已验证发布包签名、配置 schema 与迁移历史。下载或预检失败不会修改远端。
             </AlertDescription>
           </Alert>
+          {upgrade?.modelKeysMissing?.length ? (
+            <Alert>
+              <AlertTitle>模型 key 需要重新填写</AlertTitle>
+              <AlertDescription>
+                升级后需要在模型页重新填写这些 key：{upgrade.modelKeysMissing.join("、")}
+              </AlertDescription>
+            </Alert>
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)}>
               取消

@@ -4,11 +4,13 @@
 import type {
   ConfigDTO,
   ConfigEditDTO,
+  CustomProviderDTO,
   EntryResultDTO,
   ImportInputDTO,
   ImportPreviewDTO,
   InstallInputDTO,
   LoginStatusDTO,
+  ModelCatalogDTO,
   ModelDTO,
   OperationDTO,
   ResultDTO,
@@ -26,6 +28,8 @@ type Scenario =
   | "config-conflict"
   | "multi-version"
   | "upgrade-required"
+  | "upgrade-keys-missing"
+  | "model-key-missing"
   | "client-update-available"
   | "client-update-unavailable"
   | "pending-operations"
@@ -53,6 +57,7 @@ interface MockState {
   ownerUserIds: number[];
   butlerModel: ModelDTO | null;
   taskModel: ModelDTO | null;
+  customProviders: CustomProviderDTO[];
   secrets: Record<string, boolean>;
   installAttempts: number;
   pending: OperationDTO[];
@@ -63,6 +68,8 @@ const NOW = "2026-11-02T09:00:00Z";
 
 const MODELS: Record<string, string[]> = {
   anthropic: ["claude-sonnet-5-5", "claude-haiku-5-5"],
+  deepseek: ["deepseek-flash", "deepseek-v4-pro"],
+  openrouter: ["anthropic/claude-sonnet-5-5"],
   "opencode-go": [
     "deepseek-v4.1-flash",
     "deepseek-v4-pro",
@@ -70,6 +77,46 @@ const MODELS: Record<string, string[]> = {
     "kimi-k3",
     "qwen3.8-max",
     "gpt-5.6-luna",
+  ],
+};
+
+const CATALOG: ModelCatalogDTO = {
+  providers: [
+    {
+      id: "opencode-go",
+      name: "OpenCode Go",
+      models: [
+        { id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" },
+        { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro (New)" },
+        { id: "glm-5.3", name: "GLM-5.3" },
+        { id: "kimi-k3", name: "Kimi K3" },
+        { id: "qwen3.8-max", name: "Qwen3.8 Max" },
+        { id: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
+      ],
+    },
+    {
+      id: "anthropic",
+      name: "Anthropic",
+      models: [
+        { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
+        { id: "claude-haiku-5-5", name: "Claude Haiku 5.5" },
+      ],
+    },
+    {
+      id: "deepseek",
+      name: "DeepSeek",
+      models: [
+        { id: "deepseek-flash", name: "DeepSeek Flash" },
+        { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+      ],
+    },
+    {
+      id: "openrouter",
+      name: "OpenRouter",
+      models: [
+        { id: "anthropic/claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
+      ],
+    },
   ],
 };
 
@@ -82,6 +129,8 @@ function scenarioFromLocation(): Scenario {
     case "config-conflict":
     case "multi-version":
     case "upgrade-required":
+    case "upgrade-keys-missing":
+    case "model-key-missing":
     case "client-update-available":
     case "client-update-unavailable":
     case "pending-operations":
@@ -110,6 +159,8 @@ function initialState(): MockState {
     "config-conflict",
     "multi-version",
     "upgrade-required",
+    "upgrade-keys-missing",
+    "model-key-missing",
     "client-update-available",
     "client-update-unavailable",
     "pending-operations",
@@ -138,9 +189,10 @@ function initialState(): MockState {
     taskModel: shellScenario
       ? { provider: "opencode-go", id: "deepseek-v4.1-flash" }
       : null,
+    customProviders: [],
     secrets: {
-      OPENCODE_API_KEY: shellScenario,
-      ANTHROPIC_API_KEY: false,
+      MODEL_KEY_OPENCODE_GO: shellScenario,
+      MODEL_KEY_ANTHROPIC: false,
       TELEGRAM_BOT_TOKEN: false,
       TELEGRAM_WEBHOOK_SECRET: false,
       WECHAT_CREDENTIALS: scenario === "user-evidence",
@@ -238,6 +290,7 @@ export function createMockClient(): ClientService {
       ownerUserIds: [...state.ownerUserIds],
       butlerModel: state.butlerModel,
       taskModel: state.taskModel,
+      customProviders: state.customProviders,
       secrets: Object.keys(state.secrets)
         .sort()
         .map((name) => ({ name, configured: state.secrets[name] === true })),
@@ -254,6 +307,7 @@ export function createMockClient(): ClientService {
     if (input.ownerUserIds) state.ownerUserIds = [...input.ownerUserIds];
     if (input.butlerModel) state.butlerModel = { ...input.butlerModel };
     if (input.taskModel) state.taskModel = { ...input.taskModel };
+    if (input.customProviders) state.customProviders = [...input.customProviders];
     for (const edit of input.secrets ?? []) {
       if (edit.operation === "clear") state.secrets[edit.name] = false;
       if (edit.operation === "replace") state.secrets[edit.name] = true;
@@ -359,8 +413,8 @@ export function createMockClient(): ClientService {
         ownerConfigured: !legacy,
         modelsConfigured: !legacy,
         activeChannel: legacy ? "" : "telegram",
-        secretNames: ["ANTHROPIC_API_KEY", "WECHAT_CREDENTIALS"],
-        preserveSecretNames: ["ANTHROPIC_API_KEY", "WECHAT_CREDENTIALS"],
+        secretNames: ["MODEL_KEY_ANTHROPIC", "WECHAT_CREDENTIALS"],
+        preserveSecretNames: ["MODEL_KEY_ANTHROPIC", "WECHAT_CREDENTIALS"],
         plaintextSecrets: legacy
           ? [
               {
@@ -450,6 +504,10 @@ export function createMockClient(): ClientService {
         available: true,
         currentVersion: "1.0.0",
         availableVersion: "1.1.0",
+        modelKeysMissing:
+          state.scenario === "upgrade-keys-missing"
+            ? ["MODEL_KEY_OPENCODE_GO"]
+            : undefined,
       };
     },
 
@@ -507,6 +565,9 @@ export function createMockClient(): ClientService {
     async publishConfig(input: ConfigEditDTO) {
       if (state.scenario === "upgrade-required") {
         fail("UPGRADE_REQUIRED", "请先在“更新”页升级云端服务。");
+      }
+      if (state.scenario === "model-key-missing") {
+        fail("MODEL_KEY_MISSING", "缺少模型 key：MODEL_KEY_DEEPSEEK");
       }
       applyEdit(input);
       const result = published(`op-publish-${sequence}`);
@@ -670,11 +731,15 @@ export function createMockClient(): ClientService {
       return JSON.stringify({ exportedAt: NOW, items: statusItems() }, null, 2);
     },
 
-    async probeModel(provider, model, key) {
+    async modelCatalog() {
+      return CATALOG;
+    },
+
+    async probeModel(provider, model, key, api, baseUrl) {
       if (!key.trim()) {
         throw new Error("请输入要测试的 API 密钥；已有 secret 不可读。");
       }
-      if (!MODELS[provider]?.includes(model)) {
+      if (!api && !baseUrl && !MODELS[provider]?.includes(model)) {
         throw new Error("不支持的模型提供商或模型 ID。");
       }
       return {

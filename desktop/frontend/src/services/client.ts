@@ -20,6 +20,7 @@ export function createProductionClient(): ClientService {
     checkClientUpdate: () => Service.checkClientUpdate(),
     installClientUpdate: () => Service.installClientUpdate(),
     getConfig: () => Service.getConfig(),
+    modelCatalog: () => Service.modelCatalog(),
     previewConfig: (input) => Service.previewConfig(input),
     publishConfig: (input) => Service.publishConfig(input),
     resumeOperation: (id) => Service.resumeOperation(id),
@@ -31,7 +32,8 @@ export function createProductionClient(): ClientService {
     selectEntry: (channel) => Service.selectEntry(channel),
     status: () => Service.status(),
     exportDiagnostics: () => Service.exportDiagnostics(),
-    probeModel: (provider, model, key) => Service.probeModel(provider, model, key),
+    probeModel: (provider, model, key, api, baseUrl) =>
+      Service.probeModel(provider, model, key, api, baseUrl),
     subscribeLoginStatus: (listener) => events.loginStatus.on(listener),
   };
 }

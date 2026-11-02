@@ -43,6 +43,8 @@ import {
   modelKey,
   parseModelKey,
   parseUserIDs,
+  providerOptions,
+  type ProviderOption,
 } from "@/features/models/catalog";
 import { ModelSelect } from "@/features/models/ModelSelect";
 
@@ -54,6 +56,26 @@ const PERMISSIONS = [
   ["Account Settings", "Read", "读取账号与资源信息", false],
   ["Workers Observability", "Edit", "读取脱敏运行事件并配置日志（诊断）", true],
 ] as const;
+
+function useCatalogModelOptions(): ProviderOption[] {
+  const { client } = useApp();
+  const [options, setOptions] = useState<ProviderOption[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    client
+      .modelCatalog()
+      .then((catalog) => {
+        if (!cancelled) setOptions(providerOptions(catalog, []));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
+
+  return options;
+}
 
 export function Setup({
   phase,
@@ -346,6 +368,7 @@ function GuardedBack({
 
 function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => void }) {
   const { client } = useApp();
+  const modelOptions = useCatalogModelOptions();
   const setPage = useUiStore((state) => state.setPage);
   const [workerName, setWorkerName] = useState("deskwand-bot");
   const [bucketName, setBucketName] = useState("deskwand-files");
@@ -481,11 +504,11 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="install-butler">管家模型</Label>
-                  <ModelSelect id="install-butler" value={butler} onChange={setButler} />
+                  <ModelSelect id="install-butler" value={butler} onChange={setButler} options={modelOptions} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="install-task">任务模型</Label>
-                  <ModelSelect id="install-task" value={task} onChange={setTask} />
+                  <ModelSelect id="install-task" value={task} onChange={setTask} options={modelOptions} />
                 </div>
               </div>
 
@@ -589,6 +612,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
 
 function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => void }) {
   const { client } = useApp();
+  const modelOptions = useCatalogModelOptions();
   const [workers, setWorkers] = useState<WorkerDTO[]>([]);
   const [selected, setSelected] = useState("");
   const [preview, setPreview] = useState<ImportPreviewDTO | null>(null);
@@ -808,11 +832,11 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="import-butler">管家模型</Label>
-                  <ModelSelect id="import-butler" value={butler} onChange={setButler} />
+                  <ModelSelect id="import-butler" value={butler} onChange={setButler} options={modelOptions} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="import-task">任务模型</Label>
-                  <ModelSelect id="import-task" value={task} onChange={setTask} />
+                  <ModelSelect id="import-task" value={task} onChange={setTask} options={modelOptions} />
                 </div>
               </div>
             ) : null}

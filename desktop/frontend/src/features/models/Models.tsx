@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Save, ShieldCheck, Zap } from "lucide-react";
+import { Loader2, Pencil, Plus, RefreshCw, Save, ShieldCheck, Trash2, Zap } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,22 +34,86 @@ import { toClientError } from "@/services/errors";
 import type {
   ConfigDTO,
   ConfigEditDTO,
+  CustomModelDTO,
+  CustomProviderDTO,
+  ModelCatalogDTO,
   ResultDTO,
   SecretEditDTO,
   StatusItemDTO,
 } from "@/services/types";
 import {
   DEFAULT_MODEL,
-  PROVIDERS,
   modelKey,
   parseModelKey,
-  secretNameForProvider,
+  providerOptions,
+  secretNameFor,
 } from "./catalog";
 import { ModelSelect } from "./ModelSelect";
+
+const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const BASE_URL_PATTERN = /^(https:\/\/|http:\/\/(localhost|127\.0\.0\.1)(:[0-9]{1,5})?(\/|$))/;
+
+interface CustomDraft {
+  index: number | null;
+  id: string;
+  name: string;
+  api: string;
+  baseUrl: string;
+  models: string;
+}
+
+function parseModelIDs(value: string): string[] {
+  return value
+    .split(/[\s,，]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function customDraftError(
+  draft: CustomDraft,
+  catalog: ModelCatalogDTO | null,
+  providers: CustomProviderDTO[],
+): string {
+  const id = draft.id.trim();
+  if (!PROVIDER_ID_PATTERN.test(id)) {
+    return "端点 ID 只能使用小写字母、数字和 -，且以字母或数字开头";
+  }
+  if (catalog?.providers.some((provider) => provider.id === id)) {
+    return `与内置厂商重名：${id}`;
+  }
+  if (providers.some((provider, index) => index !== draft.index && provider.id === id)) {
+    return `自定义端点的 id 不能重复：${id}`;
+  }
+  if (draft.name.trim().length > 128) {
+    return "显示名称不能超过 128 个字符";
+  }
+  if (draft.api !== "openai-completions" && draft.api !== "anthropic-messages") {
+    return "协议必须是 openai-completions 或 anthropic-messages";
+  }
+  if (!BASE_URL_PATTERN.test(draft.baseUrl.trim())) {
+    return "Base URL 必须以 https:// 开头，只有 localhost 或 127.0.0.1 可以使用 http://";
+  }
+  const models = parseModelIDs(draft.models);
+  if (models.length === 0) {
+    return "至少添加一个模型";
+  }
+  if (models.length > 64) {
+    return "最多添加 64 个模型";
+  }
+  if (new Set(models).size !== models.length) {
+    return "模型 ID 不能重复";
+  }
+  if (draft.index === null && providers.length >= 16) {
+    return "最多添加 16 个自定义端点";
+  }
+  return "";
+}
 
 export function Models() {
   const { client } = useApp();
   const [config, setConfig] = useState<ConfigDTO | null>(null);
+  const [catalog, setCatalog] = useState<ModelCatalogDTO | null>(null);
+  const [customProviders, setCustomProviders] = useState<CustomProviderDTO[]>([]);
   const [butler, setButler] = useState(modelKey(DEFAULT_MODEL));
   const [task, setTask] = useState(modelKey(DEFAULT_MODEL));
   const [keyProvider, setKeyProvider] = useState(DEFAULT_MODEL.provider);
@@ -67,6 +131,8 @@ export function Models() {
   const [probeOpen, setProbeOpen] = useState(false);
   const [probeItem, setProbeItem] = useState<StatusItemDTO | null>(null);
   const [probeError, setProbeError] = useState<unknown>(null);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customDraft, setCustomDraft] = useState<CustomDraft | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -74,8 +140,13 @@ export function Models() {
     setError(null);
     setConflict(false);
     try {
-      const next = await client.getConfig();
+      const [next, nextCatalog] = await Promise.all([
+        client.getConfig(),
+        client.modelCatalog(),
+      ]);
       setConfig(next);
+      setCatalog(nextCatalog);
+      setCustomProviders(next.customProviders ?? []);
       setButler(modelKey(next.butlerModel) || modelKey(DEFAULT_MODEL));
       setTask(modelKey(next.taskModel) || modelKey(DEFAULT_MODEL));
       setKeyProvider(next.butlerModel?.provider ?? DEFAULT_MODEL.provider);
@@ -92,7 +163,12 @@ export function Models() {
     void load();
   }, [load]);
 
-  const secretName = secretNameForProvider(keyProvider);
+  const options = useMemo(
+    () => providerOptions(catalog ?? { providers: [] }, customProviders),
+    [catalog, customProviders],
+  );
+
+  const secretName = secretNameFor(keyProvider);
   const secretConfigured =
     config?.secrets.find((secret) => secret.name === secretName)?.configured ?? false;
 
@@ -102,9 +178,10 @@ export function Models() {
       apiKey.length > 0 ||
       clearSecret ||
       modelKey(config.butlerModel) !== butler ||
-      modelKey(config.taskModel) !== task
+      modelKey(config.taskModel) !== task ||
+      JSON.stringify(config.customProviders ?? []) !== JSON.stringify(customProviders)
     );
-  }, [apiKey, butler, clearSecret, config, task]);
+  }, [apiKey, butler, clearSecret, config, customProviders, task]);
   useDirty(dirty);
 
   const edit = (): ConfigEditDTO => {
@@ -118,8 +195,65 @@ export function Models() {
       baseFingerprint: config?.fingerprint,
       butlerModel: parseModelKey(butler) ?? undefined,
       taskModel: parseModelKey(task) ?? undefined,
+      customProviders,
       secrets,
     };
+  };
+
+  const openCustom = (index: number | null) => {
+    if (index === null) {
+      setCustomDraft({
+        index: null,
+        id: "",
+        name: "",
+        api: "openai-completions",
+        baseUrl: "",
+        models: "",
+      });
+    } else {
+      const provider = customProviders[index];
+      if (!provider) return;
+      setCustomDraft({
+        index,
+        id: provider.id,
+        name: provider.name ?? "",
+        api: provider.api,
+        baseUrl: provider.baseUrl,
+        models: provider.models.map((model) => model.id).join(", "),
+      });
+    }
+    setCustomOpen(true);
+  };
+
+  const saveCustom = () => {
+    if (!customDraft || customDraftError(customDraft, catalog, customProviders)) return;
+    const previous =
+      customDraft.index === null ? undefined : customProviders[customDraft.index];
+    const models: CustomModelDTO[] = parseModelIDs(customDraft.models).map(
+      (id) => previous?.models.find((model) => model.id === id) ?? { id },
+    );
+    const provider: CustomProviderDTO = {
+      id: customDraft.id.trim(),
+      name: customDraft.name.trim() || undefined,
+      api: customDraft.api,
+      baseUrl: customDraft.baseUrl.trim(),
+      models,
+    };
+    setCustomProviders((current) =>
+      customDraft.index === null
+        ? [...current, provider]
+        : current.map((entry, index) => (index === customDraft.index ? provider : entry)),
+    );
+    setCustomOpen(false);
+    setCustomDraft(null);
+  };
+
+  const removeCustom = (index: number) => {
+    const removed = customProviders[index];
+    setCustomProviders((current) => current.filter((_, entryIndex) => entryIndex !== index));
+    if (removed && keyProvider === removed.id) {
+      setKeyProvider(parseModelKey(butler)?.provider ?? DEFAULT_MODEL.provider);
+    }
   };
 
   const openPreview = async () => {
@@ -181,10 +315,12 @@ export function Models() {
     }
   };
 
+  const keyOption = options.find((provider) => provider.id === keyProvider);
   const probeModelId =
     keyProvider === parseModelKey(butler)?.provider
       ? (parseModelKey(butler)?.id ?? "")
-      : (PROVIDERS.find((provider) => provider.id === keyProvider)?.models[0] ?? "");
+      : (keyOption?.models[0]?.id ?? "");
+  const customKeyProvider = customProviders.find((provider) => provider.id === keyProvider);
 
   const probe = async () => {
     setProbeOpen(false);
@@ -192,7 +328,13 @@ export function Models() {
     setProbeError(null);
     setRunning("probe");
     try {
-      const item = await client.probeModel(keyProvider, probeModelId, apiKey);
+      const item = await client.probeModel(
+        keyProvider,
+        probeModelId,
+        apiKey,
+        customKeyProvider?.api ?? "",
+        customKeyProvider?.baseUrl ?? "",
+      );
       setProbeItem(item);
     } catch (cause) {
       setProbeError(cause);
@@ -209,6 +351,10 @@ export function Models() {
       </div>
     );
   }
+
+  const draftError = customDraft
+    ? customDraftError(customDraft, catalog, customProviders)
+    : "";
 
   return (
     <div>
@@ -296,7 +442,7 @@ export function Models() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {PROVIDERS.map((provider) => (
+                  {options.map((provider) => (
                     <SelectItem key={provider.id} value={provider.id}>
                       {provider.label}
                     </SelectItem>
@@ -363,6 +509,74 @@ export function Models() {
 
       <Card className="mt-4">
         <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle>自定义端点</CardTitle>
+              <CardDescription>
+                接入任意 OpenAI 或 Anthropic 兼容端点。保存后随下一次“保存并发布”写入云端配置。
+              </CardDescription>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => openCustom(null)}
+              disabled={customProviders.length >= 16}
+            >
+              <Plus aria-hidden />
+              添加自定义端点
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {customProviders.length === 0 ? (
+            <p className="text-sm text-muted-foreground">尚未添加自定义端点。</p>
+          ) : (
+            <ul className="space-y-2">
+              {customProviders.map((provider, index) => (
+                <li
+                  key={provider.id}
+                  className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-border p-3"
+                >
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">{provider.name || provider.id}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {provider.id} · {provider.api}
+                    </p>
+                    <p className="break-all text-xs text-muted-foreground">{provider.baseUrl}</p>
+                    <p className="text-xs text-muted-foreground">
+                      模型：{provider.models.map((model) => model.id).join("、")}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openCustom(index)}
+                    >
+                      <Pencil aria-hidden />
+                      编辑
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => removeCustom(index)}
+                    >
+                      <Trash2 aria-hidden />
+                      删除
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mt-4">
+        <CardHeader>
           <CardTitle>角色模型</CardTitle>
           <CardDescription>同一时间只启用一个消息入口；所有入口共用这两个角色模型。</CardDescription>
         </CardHeader>
@@ -370,11 +584,11 @@ export function Models() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="butler-model">管家模型</Label>
-              <ModelSelect id="butler-model" value={butler} onChange={setButler} />
+              <ModelSelect id="butler-model" value={butler} onChange={setButler} options={options} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="task-model">任务模型</Label>
-              <ModelSelect id="task-model" value={task} onChange={setTask} />
+              <ModelSelect id="task-model" value={task} onChange={setTask} options={options} />
             </div>
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
@@ -441,6 +655,125 @@ export function Models() {
             <Button type="button" onClick={() => void probe()} disabled={running !== null}>
               {running === "probe" ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
               确认测试
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={customOpen}
+        onOpenChange={(open) => {
+          setCustomOpen(open);
+          if (!open) setCustomDraft(null);
+        }}
+      >
+        <DialogContent className="max-h-[85svh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {customDraft?.index === null || customDraft === null
+                ? "添加自定义端点"
+                : "编辑自定义端点"}
+            </DialogTitle>
+            <DialogDescription>
+              端点 id 决定 secret 名（MODEL_KEY_&lt;ID&gt;）。保存端点后仍需“保存并发布”才会写入云端。
+            </DialogDescription>
+          </DialogHeader>
+          {customDraft ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="custom-id">端点 ID</Label>
+                <Input
+                  id="custom-id"
+                  value={customDraft.id}
+                  onChange={(event) =>
+                    setCustomDraft((current) =>
+                      current ? { ...current, id: event.target.value } : current,
+                    )
+                  }
+                  placeholder="my-proxy"
+                  spellCheck={false}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="custom-name">显示名称</Label>
+                <Input
+                  id="custom-name"
+                  value={customDraft.name}
+                  onChange={(event) =>
+                    setCustomDraft((current) =>
+                      current ? { ...current, name: event.target.value } : current,
+                    )
+                  }
+                  placeholder="可留空"
+                />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="custom-api">协议</Label>
+                <Select
+                  value={customDraft.api}
+                  onValueChange={(value) =>
+                    setCustomDraft((current) => (current ? { ...current, api: value } : current))
+                  }
+                >
+                  <SelectTrigger id="custom-api" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="openai-completions">
+                      OpenAI 兼容（openai-completions）
+                    </SelectItem>
+                    <SelectItem value="anthropic-messages">
+                      Anthropic 兼容（anthropic-messages）
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="custom-base-url">Base URL</Label>
+                <Input
+                  id="custom-base-url"
+                  value={customDraft.baseUrl}
+                  onChange={(event) =>
+                    setCustomDraft((current) =>
+                      current ? { ...current, baseUrl: event.target.value } : current,
+                    )
+                  }
+                  placeholder="https://proxy.example.com/v1"
+                  spellCheck={false}
+                />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="custom-models">模型 ID（用逗号分隔）</Label>
+                <Input
+                  id="custom-models"
+                  value={customDraft.models}
+                  onChange={(event) =>
+                    setCustomDraft((current) =>
+                      current ? { ...current, models: event.target.value } : current,
+                    )
+                  }
+                  placeholder="gpt-5.6, gpt-5.6-mini"
+                  spellCheck={false}
+                />
+              </div>
+              {draftError ? (
+                <p className="text-sm text-destructive sm:col-span-2">{draftError}</p>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setCustomOpen(false);
+                setCustomDraft(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button type="button" onClick={saveCustom} disabled={!customDraft || draftError !== ""}>
+              保存端点
             </Button>
           </DialogFooter>
         </DialogContent>

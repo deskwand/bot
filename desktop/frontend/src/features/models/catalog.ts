@@ -1,49 +1,45 @@
-import type { ModelDTO } from "@/services/types";
+import type { CustomProviderDTO, ModelCatalogDTO, ModelDTO } from "@/services/types";
 
-export const PROVIDERS: { id: string; label: string; secretName: string; models: string[] }[] = [
-  {
-    id: "opencode-go",
-    label: "OpenCode Go",
-    secretName: "OPENCODE_API_KEY",
-    models: [
-      "deepseek-v4.1-flash",
-      "deepseek-v4-pro",
-      "glm-5.3",
-      "kimi-k3",
-      "qwen3.8-max",
-      "gpt-5.6-luna",
-      "grok-4.7",
-    ],
-  },
-  {
-    id: "anthropic",
-    label: "Anthropic",
-    secretName: "ANTHROPIC_API_KEY",
-    models: ["claude-sonnet-5-5", "claude-haiku-5-5"],
-  },
-];
+export type ProviderOption = {
+  id: string;
+  label: string;
+  custom: boolean;
+  models: { id: string; label: string }[];
+};
 
 export const DEFAULT_MODEL: ModelDTO = {
   provider: "opencode-go",
   id: "deepseek-v4.1-flash",
 };
 
-export function providerLabel(provider: string): string {
-  return PROVIDERS.find((entry) => entry.id === provider)?.label ?? provider;
+export function secretNameFor(id: string): string {
+  return `MODEL_KEY_${id.toUpperCase().replaceAll("-", "_")}`;
 }
 
-export function secretNameForProvider(provider: string): string {
-  return PROVIDERS.find((entry) => entry.id === provider)?.secretName ?? "";
+export function providerOptions(
+  catalog: ModelCatalogDTO,
+  custom: CustomProviderDTO[],
+): ProviderOption[] {
+  const builtin = catalog.providers.map((provider) => ({
+    id: provider.id,
+    label: provider.name,
+    custom: false,
+    models: provider.models.map((model) => ({ id: model.id, label: model.name })),
+  }));
+  const customOptions = custom.map((provider) => ({
+    id: provider.id,
+    label: provider.name?.trim() || provider.id,
+    custom: true,
+    models: provider.models.map((model) => ({ id: model.id, label: model.id })),
+  }));
+  return [...builtin, ...customOptions];
 }
 
-export function allModels(): { provider: string; id: string; label: string }[] {
-  return PROVIDERS.flatMap((provider) =>
-    provider.models.map((id) => ({
-      provider: provider.id,
-      id,
-      label: `${provider.label} · ${id}`,
-    })),
-  );
+export function providerLabel(
+  id: string,
+  options: ReturnType<typeof providerOptions>,
+): string {
+  return options.find((entry) => entry.id === id)?.label ?? id;
 }
 
 export function modelKey(model: ModelDTO | null): string {
@@ -51,7 +47,10 @@ export function modelKey(model: ModelDTO | null): string {
 }
 
 export function parseModelKey(value: string): ModelDTO | null {
-  const [provider, id] = value.split("/");
+  const slash = value.indexOf("/");
+  if (slash <= 0) return null;
+  const provider = value.slice(0, slash);
+  const id = value.slice(slash + 1);
   if (!provider || !id) return null;
   return { provider, id };
 }

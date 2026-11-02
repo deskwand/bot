@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, Loader2, RefreshCw, Stethoscope, Zap } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -23,13 +23,19 @@ import { Label } from "@/components/ui/label";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StatusRow } from "@/components/feedback";
 import { useDirty } from "@/components/use-dirty";
-import type { StatusItemDTO } from "@/services/types";
-import { DEFAULT_MODEL, modelKey, parseModelKey } from "@/features/models/catalog";
+import type { ModelCatalogDTO, StatusItemDTO } from "@/services/types";
+import {
+  DEFAULT_MODEL,
+  modelKey,
+  parseModelKey,
+  providerOptions,
+} from "@/features/models/catalog";
 import { ModelSelect } from "@/features/models/ModelSelect";
 
 export function Diagnostics() {
   const { client } = useApp();
   const [items, setItems] = useState<StatusItemDTO[]>([]);
+  const [catalog, setCatalog] = useState<ModelCatalogDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
   const [exportRunning, setExportRunning] = useState(false);
@@ -49,6 +55,7 @@ export function Diagnostics() {
     setError(null);
     try {
       setItems(await client.status());
+      setCatalog(await client.modelCatalog());
     } catch (cause) {
       setError(cause);
     } finally {
@@ -59,6 +66,11 @@ export function Diagnostics() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const options = useMemo(
+    () => providerOptions(catalog ?? { providers: [] }, []),
+    [catalog],
+  );
 
   const exportDiagnostics = async () => {
     setExportRunning(true);
@@ -91,7 +103,7 @@ export function Diagnostics() {
     const ref = parseModelKey(probeModel);
     try {
       if (!ref) throw new Error("MODELS_REQUIRED: 请选择要测试的模型。");
-      setProbeResult(await client.probeModel(ref.provider, ref.id, probeKey));
+      setProbeResult(await client.probeModel(ref.provider, ref.id, probeKey, "", ""));
     } catch (cause) {
       setProbeError(cause);
     } finally {
@@ -161,7 +173,7 @@ export function Diagnostics() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="probe-model">模型</Label>
-              <ModelSelect id="probe-model" value={probeModel} onChange={setProbeModel} />
+              <ModelSelect id="probe-model" value={probeModel} onChange={setProbeModel} options={options} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="probe-key">API 密钥</Label>

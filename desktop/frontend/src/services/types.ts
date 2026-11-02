@@ -7,12 +7,17 @@ import type {
   ConfigDTO,
   ConfigEditDTO as GeneratedConfigEditDTO,
   ConnectionDTO,
+  CustomModelDTO,
+  CustomProviderDTO,
   EntryResultDTO,
   ImportInputDTO as GeneratedImportInputDTO,
   ImportPreviewDTO,
   InstallInputDTO,
   LoginStatusDTO,
+  ModelCatalogDTO,
   ModelDTO,
+  ModelEntryDTO,
+  ModelProviderDTO,
   OperationDTO,
   PlaintextSecretDTO,
   ResultDTO,
@@ -29,11 +34,16 @@ export type {
   ClientUpdateResultDTO,
   ConfigDTO,
   ConnectionDTO,
+  CustomModelDTO,
+  CustomProviderDTO,
   EntryResultDTO,
   ImportPreviewDTO,
   InstallInputDTO,
   LoginStatusDTO,
+  ModelCatalogDTO,
   ModelDTO,
+  ModelEntryDTO,
+  ModelProviderDTO,
   OperationDTO,
   PlaintextSecretDTO,
   ResultDTO,
@@ -89,6 +99,7 @@ export interface ClientService {
   checkClientUpdate(): Promise<ClientUpdateDTO>;
   installClientUpdate(): Promise<ClientUpdateResultDTO>;
   getConfig(): Promise<ConfigDTO>;
+  modelCatalog(): Promise<ModelCatalogDTO>;
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]>;
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO>;
   resumeOperation(id: string): Promise<ResultDTO>;
@@ -100,6 +111,12 @@ export interface ClientService {
   selectEntry(channel: string): Promise<EntryResultDTO>;
   status(): Promise<StatusItemDTO[]>;
   exportDiagnostics(): Promise<string>;
-  probeModel(provider: string, model: string, key: string): Promise<StatusItemDTO>;
+  probeModel(
+    provider: string,
+    model: string,
+    key: string,
+    api: string,
+    baseUrl: string,
+  ): Promise<StatusItemDTO>;
   subscribeLoginStatus(listener: (status: LoginStatusDTO) => void): () => void;
 }
