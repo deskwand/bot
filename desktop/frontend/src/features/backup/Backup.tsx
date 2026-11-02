@@ -24,6 +24,7 @@ import { describeCode } from "@/services/errors";
 import type {
   BackupPreviewDTO,
   BackupSummaryDTO,
+  PendingRestoreDTO,
   Progress,
 } from "@/services/types";
 
@@ -87,8 +88,21 @@ export function Backup() {
   const [restoreRunning, setRestoreRunning] = useState(false);
   const [restoreError, setRestoreError] = useState<unknown>(null);
   const [restoreDone, setRestoreDone] = useState(false);
+  const [pending, setPending] = useState<PendingRestoreDTO | null>(null);
 
   useEffect(() => client.subscribeBackupProgress(setProgress), [client]);
+
+  const refreshPending = useCallback(async () => {
+    try {
+      setPending(await client.pendingRestore());
+    } catch {
+      setPending(null);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void refreshPending();
+  }, [refreshPending]);
 
   const exportData = useCallback(async () => {
     setExportRunning(true);
@@ -129,12 +143,40 @@ export function Backup() {
     try {
       await client.restoreData();
       setRestoreDone(true);
+      setPending(null);
     } catch (cause) {
       setRestoreError(cause);
+      // A failure after the destructive step leaves a journal record; a
+      // snapshot/file failure does not. The retry action below depends on it.
+      await refreshPending();
     } finally {
       setRestoreRunning(false);
     }
-  }, [client]);
+  }, [client, refreshPending]);
+
+  const retryRestore = useCallback(async () => {
+    if (!pending) {
+      // Pre-write failure (file/snapshot): the service consumed the chosen
+      // path, so select the file again and show the normal preview.
+      await chooseBackup();
+      return;
+    }
+    setRestoreRunning(true);
+    setRestoreError(null);
+    setRestoreDone(false);
+    try {
+      // The journal protects the second write; never re-open the dialog with
+      // a path the service no longer has.
+      await client.retryRestore(false);
+      setRestoreDone(true);
+      setPending(null);
+    } catch (cause) {
+      setRestoreError(cause);
+      await refreshPending();
+    } finally {
+      setRestoreRunning(false);
+    }
+  }, [chooseBackup, client, pending, refreshPending]);
 
   const blocked = preview ? problemMessage(preview) : null;
   const canRestore = Boolean(preview) && !blocked;
@@ -181,7 +223,7 @@ export function Backup() {
         <CardHeader>
           <CardTitle>导出</CardTitle>
           <CardDescription>
-            导出包含全部业务表和产物，不包含部署配置与 secret。导出和恢复期间消息会暂停，最多 10 分钟后自动恢复。
+            导出包含全部业务表和产物，不包含部署配置与 secret。导出和恢复期间消息会暂停；维护租约最多 10 分钟，微信轮询会在下一次定时检查时恢复，最坏约 15 分钟。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -218,7 +260,7 @@ export function Backup() {
               {exportSummary.oversized.length > 0 ? (
                 <p className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
                   <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-                  {exportSummary.oversized.length} 个产物超过 100 MiB，已按原样导出，但无法恢复：
+                  {exportSummary.oversized.length} 个产物超过 100 MiB，未包含在备份中，因此这个备份不能直接恢复：
                   {exportSummary.oversized.join("、")}
                 </p>
               ) : null}
@@ -297,7 +339,11 @@ export function Backup() {
             </p>
           )}
 
-          <ErrorAlert error={restoreError} onRetry={() => setRestoreOpen(true)} retryLabel="重新恢复" />
+          <ErrorAlert
+            error={restoreError}
+            onRetry={() => void retryRestore()}
+            retryLabel={pending ? "重试未完成恢复" : "重新选择备份"}
+          />
 
           {restoreDone ? (
             <Alert className="mt-4">

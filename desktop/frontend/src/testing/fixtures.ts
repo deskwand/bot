@@ -60,7 +60,9 @@ type Scenario =
   | "backup"
   | "backup-progress"
   | "backup-version-mismatch"
-  | "backup-pending";
+  | "backup-pending"
+  | "backup-restore-snapshot-failed"
+  | "backup-restore-midway-failed";
 
 interface MockState {
   scenario: Scenario;
@@ -184,6 +186,8 @@ function scenarioFromLocation(): Scenario {
     case "backup-progress":
     case "backup-version-mismatch":
     case "backup-pending":
+    case "backup-restore-snapshot-failed":
+    case "backup-restore-midway-failed":
       return value;
     default:
       return "default";
@@ -217,6 +221,8 @@ function initialState(): MockState {
     "backup-progress",
     "backup-version-mismatch",
     "backup-pending",
+    "backup-restore-snapshot-failed",
+    "backup-restore-midway-failed",
   ].includes(scenario);
   return {
     scenario,
@@ -312,12 +318,19 @@ export function createMockClient(): ClientService {
   const listeners = new Set<(status: LoginStatusDTO) => void>();
   const cfListeners = new Set<(status: CloudflareLoginDTO) => void>();
   const backupListeners = new Set<(progress: Progress) => void>();
-  const backupCalls = { restore: 0, retry: [] as boolean[] };
+  const backupCalls = { restore: 0, retry: [] as boolean[], choose: 0, abandon: 0 };
   (
     window as unknown as {
-      __backupCalls?: { restore: number; retry: boolean[] };
+      __backupCalls?: {
+        restore: number;
+        retry: boolean[];
+        choose: number;
+        abandon: number;
+      };
     }
   ).__backupCalls = backupCalls;
+  let pendingAbandoned = false;
+  let restoreAttempts = 0;
   let cfOperationID = "";
   const emitCloudflare = (status: CloudflareLoginDTO) => {
     for (const listener of cfListeners) listener(status);
@@ -885,6 +898,7 @@ export function createMockClient(): ClientService {
 
     async chooseBackup(): Promise<BackupPreviewDTO | null> {
       if (!state.target) fail("TARGET_NOT_SELECTED", "请先选择一个 Worker 部署");
+      backupCalls.choose += 1;
       if (state.scenario === "backup-version-mismatch") {
         return {
           summary: { ...BACKUP_SUMMARY, release: "1.2.0" },
@@ -898,20 +912,51 @@ export function createMockClient(): ClientService {
     async restoreData() {
       if (!state.target) fail("TARGET_NOT_SELECTED", "请先选择一个 Worker 部署");
       backupCalls.restore += 1;
+      restoreAttempts += 1;
+      if (
+        state.scenario === "backup-restore-snapshot-failed" &&
+        restoreAttempts === 1
+      ) {
+        fail("RESTORE_SNAPSHOT_FAILED", "恢复前快照失败，云端数据未改动。");
+      }
+      if (
+        state.scenario === "backup-restore-midway-failed" &&
+        restoreAttempts === 1
+      ) {
+        fail("BACKUP_INVALID", "恢复在中途失败。");
+      }
     },
 
     async pendingRestore(): Promise<PendingRestoreDTO | null> {
-      if (state.scenario !== "backup-pending") return null;
+      if (pendingAbandoned) return null;
+      if (
+        state.scenario !== "backup-pending" &&
+        state.scenario !== "backup-restore-midway-failed"
+      ) {
+        return null;
+      }
+      if (
+        state.scenario === "backup-restore-midway-failed" &&
+        restoreAttempts === 0
+      ) {
+        return null;
+      }
       return {
         operationId: "op-restore-pending",
         backupPath: "/tmp/deskwand-backup-deskwand-bot-20261102-090000.zip",
         snapshotPath: "/tmp/backups/pre-restore-20261102-090500.zip",
+        state: state.scenario === "backup-pending" ? "failed" : "running",
         failureCode: "MAINTENANCE_REQUIRED",
       };
     },
 
     async retryRestore(useSnapshot: boolean) {
       backupCalls.retry.push(useSnapshot);
+    },
+
+    async abandonPendingRestore() {
+      backupCalls.abandon += 1;
+      pendingAbandoned = true;
     },
 
     subscribeBackupProgress(listener) {

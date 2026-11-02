@@ -10,6 +10,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StatusRow, StateBadge, formatObserved, sourceLabel } from "@/components/feedback";
 import type { ConfigDTO, ConnectionDTO, PendingRestoreDTO, StatusItemDTO } from "@/services/types";
@@ -23,6 +31,9 @@ export function Overview({ initialError }: { initialError?: unknown }) {
   const [retrying, setRetrying] = useState<"backup" | "snapshot" | null>(null);
   const [retryError, setRetryError] = useState<unknown>(null);
   const [retryMessage, setRetryMessage] = useState("");
+  const [abandonOpen, setAbandonOpen] = useState(false);
+  const [abandoning, setAbandoning] = useState(false);
+  const [abandonError, setAbandonError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(initialError ?? null);
 
@@ -69,6 +80,22 @@ export function Overview({ initialError }: { initialError?: unknown }) {
     }
   };
 
+  const abandonRestore = async () => {
+    setAbandoning(true);
+    setAbandonError(null);
+    try {
+      await client.abandonPendingRestore();
+      setAbandonOpen(false);
+      setRetryError(null);
+      setRetryMessage("已清除未完成的恢复记录；云端数据没有改变。");
+      await load();
+    } catch (cause) {
+      setAbandonError(cause);
+    } finally {
+      setAbandoning(false);
+    }
+  };
+
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -96,11 +123,20 @@ export function Overview({ initialError }: { initialError?: unknown }) {
         <Card className="mt-4 border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
           <CardContent className="pt-4">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-sm font-semibold">数据恢复未完成</h2>
-              <Badge variant="outline">{pendingRestore.failureCode}</Badge>
+              <h2 className="text-sm font-semibold">
+                {pendingRestore.state === "running" ? "数据恢复仍在进行或已中断" : "数据恢复未完成"}
+              </h2>
+              <Badge variant="outline">
+                {pendingRestore.state === "running" ? "进行中" : "失败"}
+              </Badge>
+              {pendingRestore.failureCode ? (
+                <Badge variant="outline">{pendingRestore.failureCode}</Badge>
+              ) : null}
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              上次恢复在中途失败。云端可能只写入了部分数据；可以从原备份重试，或回到恢复前的快照。
+              {pendingRestore.state === "running"
+                ? "恢复记录显示上次操作没有正常结束（客户端可能已重启）。云端可能只写入了部分数据；可以重试，或回到恢复前的快照。"
+                : "上次恢复在中途失败。云端可能只写入了部分数据；可以从原备份重试，或回到恢复前的快照。"}
             </p>
             <div className="mt-2 space-y-1 text-xs text-muted-foreground">
               <p className="break-all">备份：{pendingRestore.backupPath}</p>
@@ -130,14 +166,51 @@ export function Overview({ initialError }: { initialError?: unknown }) {
                 ) : null}
                 恢复到恢复前快照
               </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={retrying !== null || abandoning}
+                onClick={() => setAbandonOpen(true)}
+              >
+                放弃恢复记录
+              </Button>
             </div>
             {retryMessage ? (
               <p className="mt-2 text-xs text-muted-foreground">{retryMessage}</p>
             ) : null}
             <ErrorAlert error={retryError} onRetry={() => void retryRestore(false)} />
+            <ErrorAlert error={abandonError} />
           </CardContent>
         </Card>
       ) : null}
+
+      <Dialog open={abandonOpen} onOpenChange={setAbandonOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>放弃未完成的恢复记录？</DialogTitle>
+            <DialogDescription>
+              这只会删除本机的恢复记录，不会恢复任何云端数据，也不会回滚已经写入的内容。清除后，概览页不再提示重试；如需找回数据，请重新选择一个备份文件恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setAbandonOpen(false)}>
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={abandoning}
+              onClick={() => void abandonRestore()}
+            >
+              {abandoning ? (
+                <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : null}
+              确认放弃记录
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {connection?.state === "reauth_required" ? (
         <Alert className="mt-4">

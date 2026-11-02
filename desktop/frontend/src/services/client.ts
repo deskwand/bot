@@ -42,6 +42,7 @@ export function createProductionClient(): ClientService {
     restoreData: () => Service.restoreData(),
     pendingRestore: () => Service.pendingRestore(),
     retryRestore: (useSnapshot) => Service.retryRestore(useSnapshot),
+    abandonPendingRestore: () => Service.abandonPendingRestore(),
     subscribeBackupProgress: (listener) => events.backupProgress.on(listener),
   };
 }

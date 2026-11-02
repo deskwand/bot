@@ -235,6 +235,7 @@ export interface PendingRestoreDTO {
   operationId: string;
   backupPath: string;
   snapshotPath: string;
+  state: string;
   failureCode: string;
 }
 
@@ -329,6 +330,14 @@ export const Service = {
    */
   abandonOperation(id: string): Promise<ResultDTO> {
     return call("Service.AbandonOperation", id);
+  },
+  /**
+   * AbandonPendingRestore clears the local unfinished-restore record. It does
+   * not roll back or otherwise change any cloud data; the user is told this in
+   * the confirmation. Clearing works even when restore.json is unreadable.
+   */
+  abandonPendingRestore(): Promise<void> {
+    return call("Service.AbandonPendingRestore");
   },
   /** CancelCloudflareLogin stops an unfinished OAuth login. */
   cancelCloudflareLogin(opID: string): Promise<void> {

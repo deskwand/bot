@@ -136,5 +136,6 @@ export interface ClientService {
   restoreData(): Promise<void>;
   pendingRestore(): Promise<PendingRestoreDTO | null>;
   retryRestore(useSnapshot: boolean): Promise<void>;
+  abandonPendingRestore(): Promise<void>;
   subscribeBackupProgress(listener: (progress: Progress) => void): () => void;
 }

@@ -694,12 +694,17 @@ const BACKUP_NOTICE =
 const OVERWRITE_NOTICE =
   "将清空当前部署的全部业务数据并替换为备份内容；恢复前会自动保存当前数据快照；备份时正在运行的任务恢复后可能重复执行外部动作。";
 
-type BackupCalls = { restore: number; retry: boolean[] };
+type BackupCalls = {
+  restore: number;
+  retry: boolean[];
+  choose: number;
+  abandon: number;
+};
 
 async function backupCalls(page: Page): Promise<BackupCalls> {
   return page.evaluate(() => {
     const calls = (window as unknown as { __backupCalls?: BackupCalls }).__backupCalls;
-    return calls ?? { restore: 0, retry: [] };
+    return calls ?? { restore: 0, retry: [], choose: 0, abandon: 0 };
   });
 }
 
@@ -761,4 +766,49 @@ test("overview offers retry for an unfinished restore", async ({ page }) => {
   await expect.poll(async () => (await backupCalls(page)).retry).toEqual([false]);
   await page.getByRole("button", { name: "恢复到恢复前快照", exact: true }).click();
   await expect.poll(async () => (await backupCalls(page)).retry).toEqual([false, true]);
+});
+
+test("abandons an unfinished restore record only after confirmation", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup-pending");
+  await expect(page.getByText("数据恢复未完成")).toBeVisible();
+  await page.getByRole("button", { name: "放弃恢复记录", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "放弃未完成的恢复记录？" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/不会恢复任何云端数据/)).toBeVisible();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect.poll(async () => (await backupCalls(page)).abandon).toBe(0);
+
+  await page.getByRole("button", { name: "放弃恢复记录", exact: true }).click();
+  await dialog.getByRole("button", { name: "确认放弃记录", exact: true }).click();
+  await expect.poll(async () => (await backupCalls(page)).abandon).toBe(1);
+  await expect(page.getByText("数据恢复未完成")).toHaveCount(0);
+});
+
+test("snapshot failure retries by choosing the backup again", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup-restore-snapshot-failed");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
+  await page.getByRole("button", { name: "覆盖并恢复", exact: true }).click();
+  await page.getByRole("dialog", { name: "确认覆盖恢复" }).getByRole("button", { name: "确认覆盖恢复", exact: true }).click();
+  await expect(page.getByText("RESTORE_SNAPSHOT_FAILED")).toBeVisible();
+
+  await page.getByRole("button", { name: "重新选择备份", exact: true }).click();
+  await expect.poll(async () => (await backupCalls(page)).choose).toBe(2);
+  await expect(page.getByText("恢复摘要")).toBeVisible();
+});
+
+test("midway failure retries from the journal and shows the running state", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup-restore-midway-failed");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
+  await page.getByRole("button", { name: "覆盖并恢复", exact: true }).click();
+  await page.getByRole("dialog", { name: "确认覆盖恢复" }).getByRole("button", { name: "确认覆盖恢复", exact: true }).click();
+  await expect(page.getByText("BACKUP_INVALID")).toBeVisible();
+
+  await page.getByRole("button", { name: "重试未完成恢复", exact: true }).click();
+  await expect.poll(async () => (await backupCalls(page)).retry).toEqual([false]);
+
+  await page.getByRole("button", { name: "服务概览", exact: true }).click();
+  await expect(page.getByText("数据恢复仍在进行或已中断")).toBeVisible();
+  await expect(page.getByText("进行中", { exact: true })).toBeVisible();
 });
