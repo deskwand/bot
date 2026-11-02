@@ -27,6 +27,7 @@ type Scenario =
   | "cf-timeout"
   | "cf-slow-apply"
   | "cf-slow-apply-fail"
+  | "cf-signout-failed"
   | "multi-account"
   | "credential-denied"
   | "store-unavailable"
@@ -39,6 +40,7 @@ type Scenario =
   | "client-update-unavailable"
   | "catalog-unavailable"
   | "pending-operations"
+  | "pending-other-account"
   | "version-unknown"
   | "install-conflict"
   | "import-resume"
@@ -133,6 +135,7 @@ function scenarioFromLocation(): Scenario {
     case "cf-timeout":
     case "cf-slow-apply":
     case "cf-slow-apply-fail":
+    case "cf-signout-failed":
     case "multi-account":
     case "credential-denied":
     case "store-unavailable":
@@ -145,6 +148,7 @@ function scenarioFromLocation(): Scenario {
     case "client-update-unavailable":
     case "catalog-unavailable":
     case "pending-operations":
+    case "pending-other-account":
     case "version-unknown":
     case "install-conflict":
     case "import-resume":
@@ -175,6 +179,7 @@ function initialState(): MockState {
     "client-update-available",
     "client-update-unavailable",
     "pending-operations",
+    "pending-other-account",
     "version-unknown",
     "configured",
     "qr-expired",
@@ -184,6 +189,7 @@ function initialState(): MockState {
     "entry-unchanged",
     "diagnostics-unknown",
     "user-evidence",
+    "cf-signout-failed",
   ].includes(scenario);
   return {
     scenario,
@@ -210,12 +216,14 @@ function initialState(): MockState {
     },
     installAttempts: 0,
     pending:
-      scenario === "pending-operations"
+      scenario === "pending-operations" || scenario === "pending-other-account"
         ? [
             {
               operationId: "op-pending-1",
               kind: "install",
-              accountId: "a".repeat(32),
+              // A journal survives sign-out, so this operation can belong to
+              // an account that is no longer connected.
+              accountId: scenario === "pending-other-account" ? "b".repeat(32) : "a".repeat(32),
               workerName: "deskwand-bot",
               state: "unknown",
               steps: [
@@ -442,6 +450,12 @@ export function createMockClient(): ClientService {
     },
 
     async disconnectCloudflare() {
+      if (state.scenario === "cf-signout-failed") {
+        // Talking to the keychain takes visible time; failing immediately
+        // would hide the in-flight state the dialog has to keep coherent.
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        fail("CREDENTIAL_STORE_UNAVAILABLE", "无法删除本机凭据");
+      }
       state.connected = false;
       state.target = null;
     },

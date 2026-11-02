@@ -553,6 +553,69 @@ test("dirty form protection warns before leaving", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
 });
 
+test("signing out returns to the Cloudflare login page", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await expect(page.getByRole("button", { name: "模型", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "退出登录" }).click();
+  const dialog = page.getByRole("dialog", { name: "退出 Cloudflare 账号？" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/云端服务不受影响，消息照常收发/)).toBeVisible();
+  await expect(dialog.getByText(/重新登录后可以继续管理/)).toBeVisible();
+  await dialog.getByRole("button", { name: "确认退出" }).click();
+  await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
+  // The shell, its navigation and any pending operation block are gone.
+  await expect(page.getByRole("button", { name: "模型", exact: true })).toHaveCount(0);
+  await screenshot(page, "06-signout.png");
+});
+
+test("cancelling sign-out keeps the account connected", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "退出登录" }).click();
+  const dialog = page.getByRole("dialog", { name: "退出 Cloudflare 账号？" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "取消" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "模型", exact: true })).toBeVisible();
+});
+
+test("signing out warns that unpublished edits are dropped", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await chooseModel(page, "管家模型", "OpenCode Go", /DeepSeek V4 Pro/);
+  await page.getByRole("button", { name: "退出登录" }).click();
+  const dialog = page.getByRole("dialog", { name: "退出 Cloudflare 账号？" });
+  await expect(dialog.getByText(/未发布的更改会丢弃/)).toBeVisible();
+  await dialog.getByRole("button", { name: "确认退出" }).click();
+  await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
+});
+
+test("a failed sign-out reports the error and stays connected", async ({ page }) => {
+  await page.goto("/test.html?fixture=cf-signout-failed");
+  await page.getByRole("button", { name: "退出登录" }).click();
+  const dialog = page.getByRole("dialog", { name: "退出 Cloudflare 账号？" });
+  const confirm = dialog.getByRole("button", { name: "确认退出" });
+  await confirm.click();
+  // In flight: the dialog must not offer a second click or a way out.
+  await expect(confirm).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeVisible();
+  const alert = dialog.getByTestId("error-alert");
+  await expect(alert.getByText("CREDENTIAL_STORE_UNAVAILABLE")).toBeVisible();
+  await expect(alert.getByText(/系统凭据库不可用/)).toBeVisible();
+  await expect(dialog).toBeVisible();
+  await expect(confirm).toBeEnabled();
+  // The client is still signed in: cancelling returns to a working shell.
+  await dialog.getByRole("button", { name: "取消" }).click();
+  await expect(page.getByRole("button", { name: "模型", exact: true })).toBeVisible();
+});
+
+test("an operation from a previously connected account is not offered", async ({ page }) => {
+  await page.goto("/test.html?fixture=pending-other-account");
+  await expect(page.getByRole("button", { name: "模型", exact: true })).toBeVisible();
+  // Resuming it would fail TARGET_MISMATCH, so the block must not appear.
+  await expect(page.getByText("有未完成的部署操作")).toHaveCount(0);
+});
+
 test("QR expiration offers a new code and never claims success", async ({ page }) => {
   await page.goto("/test.html?fixture=qr-expired");
   await page.getByRole("button", { name: "消息入口", exact: true }).click();

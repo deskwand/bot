@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { AppContext, PAGE_LABELS, type Page } from "@/components/app-context";
+import { CloudflareAccountCard } from "@/components/cloudflare-account";
 import { ErrorAlert, StepList, StateBadge } from "@/components/feedback";
 import { toClientError } from "@/services/errors";
 import type { ClientService, ConnectionDTO, OperationDTO } from "@/services/types";
@@ -92,7 +93,11 @@ export function App({ client }: { client: ClientService }) {
           return;
         }
         const operations = await client.pendingOperations().catch(() => []);
-        setPending(operations);
+        // The journal outlives a sign-out, so it can still hold operations for
+        // a previously connected account. Those cannot be resumed here.
+        setPending(
+          operations.filter((item) => !item.accountId || item.accountId === connection.accountId),
+        );
         try {
           await client.getConfig();
           setSession({ kind: "ready" });
@@ -221,10 +226,15 @@ export function App({ client }: { client: ClientService }) {
                   </Button>
                 ))}
               </nav>
-              <div className="mt-6 border-t border-border pt-4 text-xs text-muted-foreground md:mt-auto">
-                <Badge variant="secondary" className="mb-2">Cloudflare 已连接</Badge>
-                <p>一套服务 · 客户端关闭后云端继续运行</p>
-              </div>
+              <CloudflareAccountCard
+                dirty={dirty}
+                onSignedOut={() => {
+                  // The shell is about to unmount; the import flow lives in the
+                  // parent, so it would otherwise survive the next session.
+                  setSetupImport(false);
+                  void refresh(false);
+                }}
+              />
             </aside>
           ) : null}
 
