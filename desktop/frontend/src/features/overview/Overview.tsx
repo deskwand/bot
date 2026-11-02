@@ -12,12 +12,13 @@ import {
 } from "@/components/ui/card";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StatusRow, StateBadge, formatObserved, sourceLabel } from "@/components/feedback";
-import type { ConfigDTO, StatusItemDTO } from "@/services/types";
+import type { ConfigDTO, ConnectionDTO, StatusItemDTO } from "@/services/types";
 
 export function Overview({ initialError }: { initialError?: unknown }) {
   const { client, navigate } = useApp();
   const [config, setConfig] = useState<ConfigDTO | null>(null);
   const [status, setStatus] = useState<StatusItemDTO[]>([]);
+  const [connection, setConnection] = useState<ConnectionDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(initialError ?? null);
 
@@ -25,9 +26,14 @@ export function Overview({ initialError }: { initialError?: unknown }) {
     setLoading(true);
     setError(null);
     try {
-      const [nextConfig, nextStatus] = await Promise.all([client.getConfig(), client.status()]);
+      const [nextConfig, nextStatus, nextConnection] = await Promise.all([
+        client.getConfig(),
+        client.status(),
+        client.cloudflareStatus(),
+      ]);
       setConfig(nextConfig);
       setStatus(nextStatus);
+      setConnection(nextConnection);
     } catch (cause) {
       setError(cause);
     } finally {
@@ -64,6 +70,13 @@ export function Overview({ initialError }: { initialError?: unknown }) {
       </div>
 
       <ErrorAlert error={error} onRetry={load} />
+
+      {connection?.state === "reauth_required" ? (
+        <Alert className="mt-4">
+          <AlertTitle>Cloudflare 授权已过期，请重新登录</AlertTitle>
+          <AlertDescription>部署和诊断会暂停，直到你重新登录。</AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <Card>

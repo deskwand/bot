@@ -13,12 +13,11 @@ type BrowserOpener interface {
 	Open(url string) error
 }
 
-// allowedBrowserPrefixes are the only destinations the client may open. They
-// are documentation and token-management pages on Cloudflare's own hosts; a
-// caller cannot turn this into an arbitrary-URL opener.
+// allowedBrowserPrefixes are the only destinations the client may open. The
+// single caller is the OAuth authorize URL, so the allowlist is exactly that
+// endpoint: a caller cannot turn this into an arbitrary-URL opener.
 var allowedBrowserPrefixes = []string{
-	"https://dash.cloudflare.com/",
-	"https://developers.cloudflare.com/",
+	"https://dash.cloudflare.com/oauth2/auth",
 }
 
 type systemBrowserOpener struct {
@@ -26,7 +25,7 @@ type systemBrowserOpener struct {
 }
 
 // NewSystemBrowserOpener returns a BrowserOpener backed by MyGo's external
-// browser support, restricted to Cloudflare documentation and dashboard pages.
+// browser support, restricted to Cloudflare's OAuth authorize endpoint.
 func NewSystemBrowserOpener() BrowserOpener {
 	return newBrowserOpener(mygo.Shell.OpenExternal)
 }

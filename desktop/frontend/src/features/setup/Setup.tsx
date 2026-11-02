@@ -4,8 +4,6 @@ import {
   ArrowRight,
   Check,
   Cloud,
-  ExternalLink,
-  KeyRound,
   Loader2,
   RefreshCw,
   ShieldCheck,
@@ -37,7 +35,7 @@ import { useDirty } from "@/components/use-dirty";
 import { toClientError } from "@/services/errors";
 import { useApp } from "@/components/app-context";
 import { useUiStore } from "@/store/ui";
-import type { ImportPreviewDTO, ResultDTO, WorkerDTO } from "@/services/types";
+import type { AccountDTO, ImportPreviewDTO, ResultDTO, WorkerDTO } from "@/services/types";
 import {
   DEFAULT_MODEL,
   modelKey,
@@ -50,12 +48,6 @@ import { ModelSelect } from "@/features/models/ModelSelect";
 
 export type SetupPhase = "disconnected" | "choose";
 
-const PERMISSIONS = [
-  ["Workers Scripts", "Edit", "发布 Worker、版本与部署", false],
-  ["Workers R2 Storage", "Edit", "创建并保留文件存储桶", false],
-  ["Account Settings", "Read", "读取账号与资源信息", false],
-  ["Workers Observability", "Edit", "读取脱敏运行事件并配置日志（诊断）", true],
-] as const;
 
 function useCatalogModelOptions(): {
   options: ProviderOption[];
@@ -144,6 +136,26 @@ function Welcome({
   onShowDeploy: () => void;
   onShowImport: () => void;
 }) {
+  const { client } = useApp();
+  const [accountName, setAccountName] = useState("");
+
+  useEffect(() => {
+    if (!connected) {
+      setAccountName("");
+      return;
+    }
+    let cancelled = false;
+    client
+      .cloudflareStatus()
+      .then((connection) => {
+        if (!cancelled) setAccountName(connection.accountName ?? "");
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [client, connected]);
+
   return (
     <div className="mx-auto max-w-3xl">
       <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">让云端服务更容易开始</p>
@@ -200,7 +212,10 @@ function Welcome({
               </Card>
             </button>
           </div>
-          <p className="mt-4 text-xs text-muted-foreground">
+          {accountName ? (
+            <p className="mt-4 text-xs text-muted-foreground">已连接 Cloudflare 账号：{accountName}</p>
+          ) : null}
+          <p className="mt-1 text-xs text-muted-foreground">
             目前支持 Cloudflare · 服务在客户端关闭后继续运行
           </p>
         </>
@@ -217,25 +232,91 @@ function ConnectCard({
   onConnected: () => void;
 }) {
   const { client } = useApp();
-  const [accountId, setAccountId] = useState("");
-  const [token, setToken] = useState("");
-  const [running, setRunning] = useState(false);
+  const [state, setState] = useState<"idle" | "waiting" | "select">("idle");
+  const [accounts, setAccounts] = useState<AccountDTO[]>([]);
+  const [selected, setSelected] = useState("");
   const [error, setError] = useState<unknown>(null);
-  const dirty = accountId.length > 0 || token.length > 0;
-  useDirty(dirty);
+  const [confirming, setConfirming] = useState(false);
+  const opIDRef = useRef("");
 
-  const connect = async () => {
-    setRunning(true);
+  useEffect(
+    () =>
+      client.subscribeCloudflareLogin((status) => {
+        // The first event can arrive before startCloudflareLogin resolves, so
+        // adopt its operation id instead of dropping it.
+        if (opIDRef.current === "") {
+          opIDRef.current = status.operationId;
+        } else if (status.operationId !== opIDRef.current) {
+          return;
+        }
+        switch (status.state) {
+          case "waiting_browser":
+            setState("waiting");
+            break;
+          case "select_account":
+            setAccounts(status.accounts ?? []);
+            setSelected(status.accounts?.[0]?.id ?? "");
+            setState("select");
+            break;
+          case "connected":
+            opIDRef.current = "";
+            setState("idle");
+            onConnected();
+            break;
+          case "cancelled":
+            opIDRef.current = "";
+            setState("idle");
+            break;
+          default:
+            opIDRef.current = "";
+            setState("idle");
+            setError(new Error(`${status.code ?? "AUTH_OAUTH_EXCHANGE_FAILED"}: `));
+        }
+      }),
+    [client, onConnected],
+  );
+
+  // Closing the card or the window must not leave a login holding the port.
+  useEffect(
+    () => () => {
+      if (opIDRef.current) {
+        void client.cancelCloudflareLogin(opIDRef.current).catch(() => undefined);
+      }
+    },
+    [client],
+  );
+
+  const start = async () => {
+    setError(null);
+    setState("waiting");
+    try {
+      const operationID = await client.startCloudflareLogin();
+      // An event may already have adopted this id; never clobber it.
+      if (!opIDRef.current) opIDRef.current = operationID;
+    } catch (cause) {
+      opIDRef.current = "";
+      setState("idle");
+      setError(cause);
+    }
+  };
+
+  const cancel = () => {
+    const opID = opIDRef.current;
+    opIDRef.current = "";
+    setState("idle");
+    if (opID) void client.cancelCloudflareLogin(opID).catch(() => undefined);
+  };
+
+  const confirm = async () => {
+    if (confirming) return;
+    setConfirming(true);
     setError(null);
     try {
-      await client.connectCloudflare(accountId.trim(), token);
-      setToken("");
-      onConnected();
+      await client.confirmCloudflareAccount(selected);
     } catch (cause) {
-      setToken("");
       setError(cause);
     } finally {
-      setRunning(false);
+      setConfirming(false);
     }
   };
 
@@ -243,87 +324,58 @@ function ConnectCard({
     <Card className="mt-7">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <KeyRound className="size-4" aria-hidden />
+          <Cloud className="size-4" aria-hidden />
           连接你的 Cloudflare
         </CardTitle>
         <CardDescription>
-          使用你自己的账号。API token 只保存在系统凭据库，前端不会读回；客户端不会把 token 写入浏览器存储。
+          登录时 Cloudflare 会列出需要授权的权限（Worker 脚本、R2 存储、账号信息、运行日志）。
         </CardDescription>
       </CardHeader>
       <CardContent>
         <ErrorAlert error={connectionError} />
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void connect();
-          }}
-        >
-          <div className="space-y-2">
-            <Label htmlFor="account-id">Cloudflare 账户 ID</Label>
-            <Input
-              id="account-id"
-              value={accountId}
-              onChange={(event) => setAccountId(event.target.value)}
-              placeholder="32 位十六进制账户 ID"
-              autoComplete="off"
-              spellCheck={false}
-              required
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="api-token">API Token</Label>
-            <Input
-              id="api-token"
-              type="password"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-              placeholder="只写入一次，提交后清空"
-              autoComplete="new-password"
-              spellCheck={false}
-              required
-            />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                void client.openTokenPage().catch(() => undefined);
-              }}
-            >
-              <ExternalLink aria-hidden />
-              打开 Cloudflare 创建令牌
-            </Button>
-            <Button type="submit" disabled={running || !accountId.trim() || !token.trim()}>
-              {running ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-              {running ? "正在验证令牌…" : "连接 Cloudflare"}
+
+        {state === "idle" ? (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">浏览器里完成授权，不需要填写 token。</p>
+            <Button type="button" onClick={() => void start()}>
+              <Cloud aria-hidden />
+              使用 Cloudflare 登录
             </Button>
           </div>
-        </form>
+        ) : null}
 
-        <div className="mt-6 rounded-lg border border-border bg-muted/40 p-4">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <ShieldCheck className="size-4" aria-hidden />
-            所需权限（账户范围）
+        {state === "waiting" ? (
+          <div className="space-y-3">
+            <p className="text-sm">已在浏览器打开 Cloudflare 授权页，完成后会自动继续</p>
+            <Button type="button" variant="outline" onClick={cancel}>
+              取消
+            </Button>
           </div>
-          <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
-            {PERMISSIONS.map(([group, level, reason, optional]) => (
-              <li key={group} className="flex flex-wrap items-baseline gap-2">
-                <Badge variant="outline" className="font-mono text-[11px]">
-                  {group}:{level}
-                </Badge>
-                {optional ? <Badge variant="outline">可选</Badge> : null}
-                <span>{reason}</span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-3 text-xs text-muted-foreground">
-            可选的 Workers Observability:Edit 对应 API 权限组 “Workers Observability Write”；没有该权限时，诊断会显示未知，而不会伪造成功。
-          </p>
-        </div>
+        ) : null}
 
-        <ErrorAlert error={error} onRetry={connect} retryLabel="重新连接" />
+        {state === "select" ? (
+          <div className="space-y-3">
+            <p className="text-sm">这个 Cloudflare 用户有多个账号，请选择要部署到的账号。</p>
+            <RadioGroup value={selected} onValueChange={setSelected}>
+              {accounts.map((account) => (
+                <div key={account.id} className="flex items-center gap-2">
+                  <RadioGroupItem value={account.id} id={`account-${account.id}`} />
+                  <Label htmlFor={`account-${account.id}`}>{account.name || account.id}</Label>
+                </div>
+              ))}
+            </RadioGroup>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" onClick={() => void confirm()} disabled={!selected || confirming}>
+                继续
+              </Button>
+              <Button type="button" variant="outline" onClick={cancel}>
+                取消
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        <ErrorAlert error={error} onRetry={start} retryLabel="重新登录" />
       </CardContent>
     </Card>
   );

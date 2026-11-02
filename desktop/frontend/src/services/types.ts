@@ -4,6 +4,7 @@ import type {
   AccountDTO,
   ClientUpdateDTO,
   ClientUpdateResultDTO,
+  CloudflareLoginDTO,
   ConfigDTO,
   ConfigEditDTO as GeneratedConfigEditDTO,
   ConnectionDTO,
@@ -32,6 +33,7 @@ export type {
   AccountDTO,
   ClientUpdateDTO,
   ClientUpdateResultDTO,
+  CloudflareLoginDTO,
   ConfigDTO,
   ConnectionDTO,
   CustomModelDTO,
@@ -86,9 +88,11 @@ export type ImportInputDTO = Omit<GeneratedImportInputDTO, "secrets"> & {
 export interface ClientService {
   name(): Promise<string>;
   cloudflareStatus(): Promise<ConnectionDTO>;
-  connectCloudflare(accountId: string, token: string): Promise<AccountDTO>;
+  startCloudflareLogin(): Promise<string>;
+  cancelCloudflareLogin(opId: string): Promise<void>;
+  confirmCloudflareAccount(accountId: string): Promise<void>;
+  subscribeCloudflareLogin(listener: (status: CloudflareLoginDTO) => void): () => void;
   disconnectCloudflare(): Promise<void>;
-  openTokenPage(): Promise<void>;
   listWorkers(): Promise<WorkerDTO[]>;
   selectDeployment(scriptName: string): Promise<void>;
   inspectImport(): Promise<ImportPreviewDTO>;

@@ -2,6 +2,7 @@
 // production entry never imports this module; a Playwright test asserts the
 // built bundle contains no fixture router.
 import type {
+  CloudflareLoginDTO,
   ConfigDTO,
   ConfigEditDTO,
   CustomProviderDTO,
@@ -22,7 +23,9 @@ import type { ClientService } from "../services/types";
 
 type Scenario =
   | "default"
-  | "wrong-token"
+  | "cf-denied"
+  | "cf-timeout"
+  | "multi-account"
   | "credential-denied"
   | "store-unavailable"
   | "config-conflict"
@@ -124,7 +127,9 @@ const CATALOG: ModelCatalogDTO = {
 function scenarioFromLocation(): Scenario {
   const value = new URLSearchParams(window.location.search).get("fixture");
   switch (value) {
-    case "wrong-token":
+    case "cf-denied":
+    case "cf-timeout":
+    case "multi-account":
     case "credential-denied":
     case "store-unavailable":
     case "config-conflict":
@@ -266,6 +271,11 @@ function unknownResult(opId: string): ResultDTO {
 export function createMockClient(): ClientService {
   const state = initialState();
   const listeners = new Set<(status: LoginStatusDTO) => void>();
+  const cfListeners = new Set<(status: CloudflareLoginDTO) => void>();
+  let cfOperationID = "";
+  const emitCloudflare = (status: CloudflareLoginDTO) => {
+    for (const listener of cfListeners) listener(status);
+  };
   const statusItems = () => statusItemsFor(state);
   let sequence = 0;
 
@@ -357,39 +367,69 @@ export function createMockClient(): ClientService {
     async cloudflareStatus() {
       if (state.scenario === "store-unavailable") return { state: "unavailable" };
       return state.connected
-        ? { state: "connected", accountId: state.accountId }
+        ? { state: "connected", accountId: state.accountId, accountName: "测试账户" }
         : { state: "disconnected" };
     },
 
-    async connectCloudflare(accountId, token) {
-      if (state.scenario === "credential-denied") {
-        fail(
-          "CREDENTIAL_STORE_UNAVAILABLE",
-          "系统凭据库不可用，未保存 API token。",
+    async startCloudflareLogin() {
+      const operationId = `login-cf-${++sequence}`;
+      cfOperationID = operationId;
+      queueMicrotask(() => emitCloudflare({ operationId, state: "waiting_browser" }));
+      if (state.scenario === "cf-denied") {
+        queueMicrotask(() =>
+          emitCloudflare({ operationId, state: "denied", code: "AUTH_OAUTH_DENIED" }),
         );
+        return operationId;
       }
-      if (
-        state.scenario === "wrong-token" ||
-        /wrong|invalid/i.test(token) ||
-        token.trim().length < 8
-      ) {
-        fail("AUTH_INVALID_TOKEN", "Cloudflare 拒绝了这个 API token（HTTP 403）。");
+      if (state.scenario === "cf-timeout") {
+        queueMicrotask(() =>
+          emitCloudflare({ operationId, state: "timeout", code: "AUTH_OAUTH_TIMEOUT" }),
+        );
+        return operationId;
       }
-      if (!/^[a-f0-9]{32}$/i.test(accountId.trim())) {
-        fail("AUTH_INVALID_ACCOUNT_ID", "Cloudflare 账户 ID 应为 32 位十六进制字符。");
+      if (state.scenario === "credential-denied") {
+        queueMicrotask(() =>
+          emitCloudflare({
+            operationId,
+            state: "error",
+            code: "CREDENTIAL_STORE_UNAVAILABLE",
+          }),
+        );
+        return operationId;
       }
+      queueMicrotask(() => {
+        if (state.scenario === "multi-account") {
+          emitCloudflare({
+            operationId,
+            state: "select_account",
+            accounts: [
+              { id: state.accountId, name: "测试账户" },
+              { id: "b".repeat(32), name: "第二个账户" },
+            ],
+          });
+          return;
+        }
+        state.connected = true;
+        emitCloudflare({ operationId, state: "connected" });
+      });
+      return operationId;
+    },
+    async cancelCloudflareLogin() {},
+    async confirmCloudflareAccount(accountId: string) {
+      state.accountId = accountId;
       state.connected = true;
-      state.accountId = accountId.trim();
-      return { id: state.accountId, name: "测试账户" };
+      emitCloudflare({ operationId: cfOperationID, state: "connected" });
+    },
+    subscribeCloudflareLogin(listener) {
+      cfListeners.add(listener);
+      return () => {
+        cfListeners.delete(listener);
+      };
     },
 
     async disconnectCloudflare() {
       state.connected = false;
       state.target = null;
-    },
-
-    async openTokenPage() {
-      return;
     },
 
     async listWorkers(): Promise<WorkerDTO[]> {

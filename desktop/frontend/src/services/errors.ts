@@ -40,14 +40,26 @@ export function describeCode(code: string): string {
     case "AUTH_REQUIRED":
     case "AUTH_NOT_CONNECTED":
       return "请先连接 Cloudflare 账户，然后重试。";
-    case "AUTH_INVALID_TOKEN":
-      return "Cloudflare 拒绝了这个 API token。请重新创建令牌并确认它包含所需权限。";
-    case "AUTH_INVALID_ACCOUNT_ID":
-      return "Cloudflare 账户 ID 无效。请填写 32 位十六进制账户 ID。";
+    case "AUTH_OAUTH_DENIED":
+      return "你取消了 Cloudflare 授权。需要连接时请重新登录。";
+    case "AUTH_OAUTH_TIMEOUT":
+      return "浏览器授权在 5 分钟内没有完成。请重新登录，并在浏览器里完成授权。";
+    case "AUTH_OAUTH_PORT_BUSY":
+      return "端口 8756–8758 都被占用了。请关闭占用这些端口的程序后重试。";
+    case "AUTH_OAUTH_STATE_MISMATCH":
+      return "授权回调校验失败，已中止本次登录。请重新登录。";
+    case "AUTH_OAUTH_EXCHANGE_FAILED":
+      return "无法完成 Cloudflare 授权。请检查网络或默认浏览器后重试。";
+    case "AUTH_NO_ACCOUNT":
+      return "该 Cloudflare 用户没有可用的账号，或未授予读取账号的权限。";
+    case "AUTH_REAUTH_REQUIRED":
+      return "Cloudflare 授权已过期，请重新登录。";
     case "AUTH_VERIFY_FAILED":
-      return "暂时无法连接 Cloudflare 验证 token。请检查网络后重试。";
-    case "AUTH_ACCOUNT_LOOKUP_FAILED":
-      return "token 已通过验证，但无法读取账号信息。请确认 token 具有 Account Settings:Read 权限后重试。";
+      return "暂时无法连接 Cloudflare 刷新授权。请检查网络后重试。";
+    case "CLOUDFLARE_LOGIN_IN_PROGRESS":
+      return "已有一次 Cloudflare 登录正在进行，请先完成或取消它。";
+    case "CLOUDFLARE_LOGIN_NOT_FOUND":
+      return "该登录操作不存在或已经结束。";
     case "CREDENTIAL_STORE_UNAVAILABLE":
       return "系统凭据库不可用。请解锁系统钥匙串并确认客户端有访问权限；客户端不会改用明文保存。";
     case "CREDENTIAL_STORE_FAILURE":

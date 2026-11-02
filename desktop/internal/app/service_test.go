@@ -35,29 +35,21 @@ const (
 type fakeAuth struct {
 	mu sync.Mutex
 
-	account         auth.Account
 	connection      auth.Connection
-	connectErr      error
+	login           auth.LoginSession
+	beginErr        error
 	statusErr       error
 	disconnectErr   error
-	connectedTo     string
-	connectCalls    int
 	disconnectCalls int
 }
 
-func (f *fakeAuth) Connect(_ context.Context, accountID, token string) (auth.Account, error) {
+func (f *fakeAuth) BeginLogin(context.Context) (auth.LoginSession, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.connectCalls++
-	f.connectedTo = accountID
-	if f.connectErr != nil {
-		return auth.Account{}, f.connectErr
+	if f.beginErr != nil {
+		return nil, f.beginErr
 	}
-	account := f.account
-	if account.ID == "" {
-		account = auth.Account{ID: accountID, Name: "Test Account"}
-	}
-	return account, nil
+	return f.login, nil
 }
 
 func (f *fakeAuth) Status(context.Context) (auth.Connection, error) {
@@ -575,23 +567,12 @@ func TestServiceReleaseGatePrecedesNetworkAndJournal(t *testing.T) {
 	}
 }
 
-func TestServiceAuthLifecycle(t *testing.T) {
+func TestServiceCloudflareStatusPassesAccountName(t *testing.T) {
 	f := newServiceFixture(t)
-	f.auth.account = auth.Account{ID: serviceAccountID, Name: "Acme"}
-	f.auth.connection = auth.Connection{State: auth.StateConnected, AccountID: serviceAccountID}
+	f.auth.connection = auth.Connection{State: auth.StateConnected, AccountID: serviceAccountID, AccountName: "Acme"}
 
-	account, err := f.service.ConnectCloudflare(strings.ToUpper(serviceAccountID), serviceToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if account.ID != serviceAccountID || account.Name != "Acme" {
-		t.Fatalf("account = %#v", account)
-	}
-	if f.auth.connectedTo != strings.ToUpper(serviceAccountID) {
-		t.Fatalf("account passed to auth = %q", f.auth.connectedTo)
-	}
 	status := f.service.CloudflareStatus()
-	if status.State != auth.StateConnected || status.AccountID != serviceAccountID {
+	if status.State != auth.StateConnected || status.AccountID != serviceAccountID || status.AccountName != "Acme" {
 		t.Fatalf("status = %#v", status)
 	}
 	if err := f.service.DisconnectCloudflare(); err != nil {
@@ -600,14 +581,6 @@ func TestServiceAuthLifecycle(t *testing.T) {
 	if f.auth.disconnectCalls != 1 {
 		t.Fatalf("disconnect calls = %d", f.auth.disconnectCalls)
 	}
-	assertNoSentinel(t, serviceToken, account, status, err)
-
-	f.auth.connectErr = fmt.Errorf("Cloudflare rejected token %s", serviceToken)
-	_, err = f.service.ConnectCloudflare(serviceAccountID, serviceToken)
-	if err == nil {
-		t.Fatal("expected connect error")
-	}
-	assertNoSentinel(t, serviceToken, err)
 }
 
 func TestServiceCloudflareStatusUnavailable(t *testing.T) {
@@ -616,16 +589,6 @@ func TestServiceCloudflareStatusUnavailable(t *testing.T) {
 	f.auth.statusErr = errors.New("denied")
 	if got := f.service.CloudflareStatus(); got.State != auth.StateUnavailable {
 		t.Fatalf("status = %#v", got)
-	}
-}
-
-func TestServiceOpenTokenPage(t *testing.T) {
-	f := newServiceFixture(t)
-	if err := f.service.OpenTokenPage(); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.browser.opened) != 1 || f.browser.opened[0] != "https://dash.cloudflare.com/profile/api-tokens" {
-		t.Fatalf("opened = %#v", f.browser.opened)
 	}
 }
 
@@ -1588,4 +1551,303 @@ func TestServiceModelCatalogMatchesBuiltinCatalog(t *testing.T) {
 func hasCode(err error, code string) bool {
 	var domainErr domain.Error
 	return errors.As(err, &domainErr) && domainErr.Code == code
+}
+
+type fakeLoginSession struct {
+	authURL   string
+	result    auth.LoginResult
+	waitErr   error
+	complete  error
+	cancelled bool
+	stored    string
+}
+
+func (f *fakeLoginSession) AuthURL() string { return f.authURL }
+
+func (f *fakeLoginSession) Wait(context.Context) (auth.LoginResult, error) {
+	return f.result, f.waitErr
+}
+
+func (f *fakeLoginSession) Complete(_ context.Context, accountID string) error {
+	f.stored = accountID
+	return f.complete
+}
+
+func (f *fakeLoginSession) Cancel() { f.cancelled = true }
+
+// cloudflareEvents collects CloudflareLoginDTO broadcasts for one fixture.
+func (f *serviceFixture) cloudflareEvents() chan CloudflareLoginDTO {
+	events := make(chan CloudflareLoginDTO, 8)
+	f.service.emitCloudflare = func(dto CloudflareLoginDTO) { events <- dto }
+	return events
+}
+
+func TestStartCloudflareLoginEmitsConnectedForSingleAccount(t *testing.T) {
+	f := newServiceFixture(t)
+	session := &fakeLoginSession{
+		authURL: "https://dash.cloudflare.com/oauth2/auth?x=1",
+		result:  auth.LoginResult{Accounts: []auth.Account{{ID: serviceAccountID, Name: "测试账户"}}},
+	}
+	f.auth.login = session
+	events := f.cloudflareEvents()
+
+	operationID, err := f.service.StartCloudflareLogin()
+	if err != nil {
+		t.Fatalf("StartCloudflareLogin: %v", err)
+	}
+	if operationID == "" {
+		t.Fatal("StartCloudflareLogin must return an operation id")
+	}
+	if first := <-events; first.State != "waiting_browser" || first.OperationID != operationID {
+		t.Fatalf("first event = %+v", first)
+	}
+	if second := <-events; second.State != "connected" {
+		t.Fatalf("second event = %+v", second)
+	}
+	if session.stored != serviceAccountID {
+		t.Fatalf("stored account = %q", session.stored)
+	}
+	if len(f.browser.opened) != 1 || f.browser.opened[0] != session.authURL {
+		t.Fatalf("browser opened %#v, want the authorization URL", f.browser.opened)
+	}
+}
+
+func TestStartCloudflareLoginAsksForAccountWhenAmbiguous(t *testing.T) {
+	f := newServiceFixture(t)
+	session := &fakeLoginSession{
+		authURL: "https://dash.cloudflare.com/oauth2/auth?x=1",
+		result: auth.LoginResult{Accounts: []auth.Account{
+			{ID: serviceAccountID, Name: "A"},
+			{ID: strings.Repeat("b", 32), Name: "B"},
+		}},
+	}
+	f.auth.login = session
+	events := f.cloudflareEvents()
+
+	if _, err := f.service.StartCloudflareLogin(); err != nil {
+		t.Fatalf("StartCloudflareLogin: %v", err)
+	}
+	<-events
+	pick := <-events
+	if pick.State != "select_account" || len(pick.Accounts) != 2 {
+		t.Fatalf("event = %+v, want select_account with two accounts", pick)
+	}
+	second := strings.Repeat("b", 32)
+	if err := f.service.ConfirmCloudflareAccount(second); err != nil {
+		t.Fatalf("ConfirmCloudflareAccount: %v", err)
+	}
+	if session.stored != second {
+		t.Fatalf("stored = %q, want %q", session.stored, second)
+	}
+	if done := <-events; done.State != "connected" {
+		t.Fatalf("final event = %+v", done)
+	}
+}
+
+func TestStartCloudflareLoginReportsDenial(t *testing.T) {
+	f := newServiceFixture(t)
+	session := &fakeLoginSession{
+		authURL: "https://dash.cloudflare.com/oauth2/auth?x=1",
+		waitErr: &auth.Error{Code: auth.ErrCodeOAuthDenied, Message: "denied"},
+	}
+	f.auth.login = session
+	events := f.cloudflareEvents()
+
+	if _, err := f.service.StartCloudflareLogin(); err != nil {
+		t.Fatalf("StartCloudflareLogin: %v", err)
+	}
+	<-events
+	denied := <-events
+	if denied.State != "denied" || denied.Code != auth.ErrCodeOAuthDenied {
+		t.Fatalf("event = %+v", denied)
+	}
+}
+
+func TestStartCloudflareLoginRejectsConcurrentLogin(t *testing.T) {
+	f := newServiceFixture(t)
+	f.auth.login = &fakeLoginSession{
+		authURL: "https://dash.cloudflare.com/oauth2/auth?x=1",
+		result: auth.LoginResult{Accounts: []auth.Account{
+			{ID: serviceAccountID},
+			{ID: strings.Repeat("b", 32)},
+		}},
+	}
+	f.cloudflareEvents()
+
+	if _, err := f.service.StartCloudflareLogin(); err != nil {
+		t.Fatalf("StartCloudflareLogin: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if _, err := f.service.StartCloudflareLogin(); appErrorCode(err) != CodeCloudflareLoginInProgress {
+		t.Fatalf("code = %q, want %q", appErrorCode(err), CodeCloudflareLoginInProgress)
+	}
+}
+
+func TestCancelCloudflareLoginClearsThePendingSession(t *testing.T) {
+	f := newServiceFixture(t)
+	session := &fakeLoginSession{
+		authURL: "https://dash.cloudflare.com/oauth2/auth?x=1",
+		result: auth.LoginResult{Accounts: []auth.Account{
+			{ID: serviceAccountID},
+			{ID: strings.Repeat("b", 32)},
+		}},
+	}
+	f.auth.login = session
+	events := f.cloudflareEvents()
+
+	operationID, err := f.service.StartCloudflareLogin()
+	if err != nil {
+		t.Fatalf("StartCloudflareLogin: %v", err)
+	}
+	<-events // waiting_browser
+	<-events // select_account
+
+	if err := f.service.CancelCloudflareLogin(operationID); err != nil {
+		t.Fatalf("CancelCloudflareLogin: %v", err)
+	}
+	if got := <-events; got.State != "cancelled" {
+		t.Fatalf("event = %+v, want cancelled", got)
+	}
+	if !session.cancelled {
+		t.Fatal("the session must be cancelled, not just forgotten")
+	}
+	if err := f.service.CancelCloudflareLogin(operationID); appErrorCode(err) != CodeCloudflareLoginNotFound {
+		t.Fatalf("second cancel code = %q, want %q", appErrorCode(err), CodeCloudflareLoginNotFound)
+	}
+}
+
+// blockingLoginSession keeps Wait pending until the test releases it, so the
+// cancel race can actually happen.
+type blockingLoginSession struct {
+	authURL   string
+	release   chan struct{}
+	cancelled bool
+	once      sync.Once
+}
+
+func (b *blockingLoginSession) AuthURL() string { return b.authURL }
+
+func (b *blockingLoginSession) Wait(ctx context.Context) (auth.LoginResult, error) {
+	select {
+	case <-b.release:
+		return auth.LoginResult{}, &auth.Error{Code: auth.ErrCodeOAuthTimeout, Message: "released"}
+	case <-ctx.Done():
+		return auth.LoginResult{}, ctx.Err()
+	}
+}
+
+func (b *blockingLoginSession) Complete(context.Context, string) error { return nil }
+
+func (b *blockingLoginSession) Cancel() {
+	b.cancelled = true
+	b.once.Do(func() { close(b.release) })
+}
+
+func TestCancelCloudflareLoginEmitsExactlyOneEvent(t *testing.T) {
+	f := newServiceFixture(t)
+	session := &blockingLoginSession{
+		authURL: "https://dash.cloudflare.com/oauth2/auth?x=1",
+		release: make(chan struct{}),
+	}
+	f.auth.login = session
+	events := f.cloudflareEvents()
+
+	operationID, err := f.service.StartCloudflareLogin()
+	if err != nil {
+		t.Fatalf("StartCloudflareLogin: %v", err)
+	}
+	if first := <-events; first.State != "waiting_browser" {
+		t.Fatalf("first event = %+v", first)
+	}
+	if err := f.service.CancelCloudflareLogin(operationID); err != nil {
+		t.Fatalf("CancelCloudflareLogin: %v", err)
+	}
+	if got := <-events; got.State != "cancelled" {
+		t.Fatalf("event = %+v, want cancelled", got)
+	}
+	// Give the background goroutine a chance to emit a contradicting timeout.
+	time.Sleep(50 * time.Millisecond)
+	if len(events) != 0 {
+		t.Fatalf("%d extra events after cancel, want none", len(events))
+	}
+	if !session.cancelled {
+		t.Fatal("the session must be cancelled")
+	}
+}
+
+func TestStartCloudflareLoginReportsTimeout(t *testing.T) {
+	f := newServiceFixture(t)
+	f.auth.login = &fakeLoginSession{
+		authURL: "https://dash.cloudflare.com/oauth2/auth?x=1",
+		waitErr: &auth.Error{Code: auth.ErrCodeOAuthTimeout, Message: "no callback"},
+	}
+	events := f.cloudflareEvents()
+
+	if _, err := f.service.StartCloudflareLogin(); err != nil {
+		t.Fatalf("StartCloudflareLogin: %v", err)
+	}
+	<-events
+	timedOut := <-events
+	if timedOut.State != "timeout" || timedOut.Code != auth.ErrCodeOAuthTimeout {
+		t.Fatalf("event = %+v, want timeout", timedOut)
+	}
+}
+
+func TestCloudflareLoginEventsCarryNoToken(t *testing.T) {
+	f := newServiceFixture(t)
+	const sentinel = "cfort-SENTINEL-never-emit"
+	f.auth.login = &fakeLoginSession{
+		authURL: "https://dash.cloudflare.com/oauth2/auth?x=1",
+		result:  auth.LoginResult{Accounts: []auth.Account{{ID: serviceAccountID, Name: "Acme"}}},
+		complete: &auth.Error{
+			Code:    auth.ErrCodeCredentialStoreFailure,
+			Message: "cannot access the system credential store",
+			Err:     errors.New("boom " + sentinel),
+		},
+	}
+	events := f.cloudflareEvents()
+	if _, err := f.service.StartCloudflareLogin(); err != nil {
+		t.Fatalf("StartCloudflareLogin: %v", err)
+	}
+	<-events
+	failure := <-events
+	rendered, err := json.Marshal(failure)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(rendered), sentinel) {
+		t.Fatalf("event leaked a credential: %s", rendered)
+	}
+	status := f.service.CloudflareStatus()
+	rendered, _ = json.Marshal(status)
+	if strings.Contains(string(rendered), sentinel) {
+		t.Fatalf("status leaked a credential: %s", rendered)
+	}
+}
+
+func TestCancelCloudflareLoginRejectsUnknownOperation(t *testing.T) {
+	f := newServiceFixture(t)
+	if err := f.service.CancelCloudflareLogin("login-unknown"); appErrorCode(err) != CodeCloudflareLoginNotFound {
+		t.Fatalf("code = %q, want %q", appErrorCode(err), CodeCloudflareLoginNotFound)
+	}
+}
+
+func TestStartCloudflareLoginFailsWhenTheBrowserCannotOpen(t *testing.T) {
+	f := newServiceFixture(t)
+	f.browser.err = errors.New("no browser")
+	f.auth.login = &fakeLoginSession{
+		authURL: "https://dash.cloudflare.com/oauth2/auth?x=1",
+		result:  auth.LoginResult{Accounts: []auth.Account{{ID: serviceAccountID}}},
+	}
+	events := f.cloudflareEvents()
+
+	if _, err := f.service.StartCloudflareLogin(); err == nil {
+		t.Fatal("StartCloudflareLogin must fail when the browser cannot open")
+	}
+	if len(events) != 0 {
+		t.Fatalf("no event may be emitted, got %d", len(events))
+	}
+	if f.service.cfActive {
+		t.Fatal("the failed attempt must not leave a login active")
+	}
 }

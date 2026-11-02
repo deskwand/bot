@@ -35,6 +35,17 @@ export interface ClientUpdateResultDTO {
   message?: string;
 }
 
+/**
+ * CloudflareLoginDTO is the only OAuth login state sent to the frontend. It
+ * carries no token, authorization code or PKCE verifier.
+ */
+export interface CloudflareLoginDTO {
+  operationId: string;
+  state: string;
+  accounts?: AccountDTO[];
+  code?: string;
+}
+
 /** ConfigDTO is the editable configuration summary. */
 export interface ConfigDTO {
   accountId: string;
@@ -65,12 +76,13 @@ export interface ConfigEditDTO {
 }
 
 /**
- * ConnectionDTO is the local Cloudflare connection state. It never contains
- * the API token.
+ * ConnectionDTO is the local Cloudflare connection state. It never contains a
+ * token. AccountName is display-only metadata.
  */
 export interface ConnectionDTO {
   state: string;
   accountId?: string;
+  accountName?: string;
 }
 
 /** CustomModelDTO is one model declared by a custom provider. */
@@ -275,6 +287,10 @@ export const Service = {
   abandonOperation(id: string): Promise<ResultDTO> {
     return call("Service.AbandonOperation", id);
   },
+  /** CancelCloudflareLogin stops an unfinished OAuth login. */
+  cancelCloudflareLogin(opID: string): Promise<void> {
+    return call("Service.CancelCloudflareLogin", opID);
+  },
   /** CancelWeChatLogin cancels a running QR login by operation id. */
   cancelWeChatLogin(opID: string): Promise<void> {
     return call("Service.CancelWeChatLogin", opID);
@@ -292,6 +308,10 @@ export const Service = {
   cloudflareStatus(): Promise<ConnectionDTO> {
     return call("Service.CloudflareStatus");
   },
+  /** ConfirmCloudflareAccount finishes a login that offered several accounts. */
+  confirmCloudflareAccount(accountID: string): Promise<void> {
+    return call("Service.ConfirmCloudflareAccount", accountID);
+  },
   /**
    * ConfirmImport publishes the confirmed import through the versioned publish
    * path.
@@ -300,23 +320,13 @@ export const Service = {
     return call("Service.ConfirmImport", input);
   },
   /**
-   * ConnectCloudflare validates and stores an API token. The token is write-only:
-   * it is never echoed in the result or an error.
-   */
-  connectCloudflare(accountID: string, token: string): Promise<AccountDTO> {
-    return call("Service.ConnectCloudflare", accountID, token);
-  },
-  /**
    * ConnectTelegram validates the bot token, publishes it and registers the
    * webhook. rotate replaces an existing webhook secret explicitly.
    */
   connectTelegram(token: string, rotate: boolean): Promise<ResultDTO> {
     return call("Service.ConnectTelegram", token, rotate);
   },
-  /**
-   * DisconnectCloudflare removes local credentials. It does not revoke the token
-   * or change the deployment in Cloudflare.
-   */
+  /** DisconnectCloudflare revokes the authorization and removes local credentials. */
   disconnectCloudflare(): Promise<void> {
     return call("Service.DisconnectCloudflare");
   },
@@ -358,13 +368,6 @@ export const Service = {
   /** Name returns the product name for the shell header. */
   name(): Promise<string> {
     return call("Service.Name");
-  },
-  /**
-   * OpenTokenPage opens Cloudflare's API token page in the system browser. The
-   * BrowserOpener allows only Cloudflare dashboard and documentation URLs.
-   */
-  openTokenPage(): Promise<void> {
-    return call("Service.OpenTokenPage");
   },
   /** PendingOperations lists unfinished journaled operations, newest first. */
   pendingOperations(): Promise<OperationDTO[]> {
@@ -411,6 +414,14 @@ export const Service = {
     return call("Service.SelectEntry", channel);
   },
   /**
+   * StartCloudflareLogin opens Cloudflare's authorization page and waits for the
+   * loopback callback in the background. It returns the operation id used by
+   * CancelCloudflareLogin; progress arrives through CloudflareLoginEvent.
+   */
+  startCloudflareLogin(): Promise<string> {
+    return call("Service.StartCloudflareLogin");
+  },
+  /**
    * StartWeChatLogin starts a QR login in the background and returns the
    * operation id used by CancelWeChatLogin. Status is pushed through the
    * login-status event; credentials never leave Go.
@@ -441,4 +452,9 @@ export const events = {
    * `mygo generate` turns it into `events.loginStatus`.
    */
   loginStatus: event<LoginStatusDTO>("login-status"),
+  /**
+   * CloudflareLoginEvent carries sanitized OAuth login progress to the frontend.
+   * `mygo generate` turns it into `events.cloudflareLogin`.
+   */
+  cloudflareLogin: event<CloudflareLoginDTO>("cloudflare-login"),
 } as const;

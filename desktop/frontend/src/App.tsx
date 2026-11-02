@@ -72,15 +72,22 @@ export function App({ client }: { client: ClientService }) {
           return;
         }
         if (connection.state !== "connected") {
-          setSession({
-            kind: "disconnected",
-            connectionError:
-              connection.state === "unavailable"
+          // An expired authorization is not the same as never having
+          // connected: say so, and keep the account name so the welcome page
+          // can tell the user which account needs re-login.
+          const connectionError =
+            connection.state === "unavailable"
+              ? new Error(
+                  "CREDENTIAL_STORE_UNAVAILABLE: 系统凭据库不可用，无法读取本地授权。客户端不会改用明文保存。",
+                )
+              : connection.state === "reauth_required"
                 ? new Error(
-                    "CREDENTIAL_STORE_UNAVAILABLE: 系统凭据库不可用，无法读取本地授权。客户端不会改用明文保存。",
+                    `AUTH_REAUTH_REQUIRED: Cloudflare 授权已过期，请重新登录${
+                      connection.accountName ? `（${connection.accountName}）` : ""
+                    }。`,
                   )
-                : undefined,
-          });
+                : undefined;
+          setSession({ kind: "disconnected", connectionError });
           setPending([]);
           return;
         }

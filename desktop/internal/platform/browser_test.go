@@ -4,9 +4,8 @@ import "testing"
 
 func TestBrowserURLAllowlist(t *testing.T) {
 	allowed := []string{
-		"https://dash.cloudflare.com/",
-		"https://dash.cloudflare.com/profile/api-tokens",
-		"https://developers.cloudflare.com/fundamentals/api/reference/permissions/",
+		"https://dash.cloudflare.com/oauth2/auth",
+		"https://dash.cloudflare.com/oauth2/auth?client_id=abc&scope=x",
 	}
 	for _, raw := range allowed {
 		if !allowedBrowserURL(raw) {
@@ -23,6 +22,8 @@ func TestBrowserURLAllowlist(t *testing.T) {
 		"https://developers.cloudflare.com.evil.example/",
 		"https://user:pass@dash.cloudflare.com/",
 		"https://dash.cloudflare.com:8443/",
+		"https://dash.cloudflare.com/profile/api-tokens",
+		"https://developers.cloudflare.com/fundamentals/oauth/",
 		"javascript:alert(1)",
 		"file:///etc/passwd",
 		"https://dash.cloudflare.com/\x00",
@@ -46,7 +47,7 @@ func TestBrowserOpenerRejectsDisallowedURLBeforeOpening(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("open called %d times for disallowed URL", calls)
 	}
-	if err := opener.Open("https://dash.cloudflare.com/profile/api-tokens"); err != nil {
+	if err := opener.Open("https://dash.cloudflare.com/oauth2/auth?client_id=abc"); err != nil {
 		t.Fatalf("allowed URL: %v", err)
 	}
 	if calls != 1 {

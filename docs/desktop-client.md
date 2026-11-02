@@ -28,32 +28,17 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。若打开后
 
 客户端不包含任何账号、令牌或生产凭据。第一次启动会显示欢迎页，要求你连接自己的 Cloudflare 账号。
 
-## 2. 创建 Cloudflare API Token
+## 2. 连接 Cloudflare 账号
 
-v1 使用你自行创建的 Cloudflare API Token，而不是第三方 OAuth 应用。Token 只保存在系统凭据库中：
+在欢迎页点「使用 Cloudflare 登录」，浏览器会打开 Cloudflare 授权页。登录你的 Cloudflare 账号并允许访问，回到客户端即可自动继续。
 
-- macOS：登录钥匙串；
-- Windows：凭据管理器。
+- 不需要填写账号 ID，也不需要手动创建 API token。
+- 授权页会列出客户端需要的权限：Worker 脚本、Worker R2 存储、账号信息、运行日志（诊断用）。
+- 凭据保存在系统凭据库中：macOS 为登录钥匙串，Windows 为凭据管理器。客户端不会把凭据写进普通配置文件或日志，前端也不会读取它们。
+- 授权可以随时在 Cloudflare 的 **我的个人资料 → 访问管理 → 已连接的应用** 中撤销；撤销后客户端会提示重新登录。
+- 需要更换账号时，先在设置页断开连接，再重新登录。
 
-前端页面不会再次读取或显示完整 token。客户端不会把 token 写进普通配置文件或日志。
-
-在 Cloudflare Dashboard 打开 **My Profile → API Tokens → Create Token**，使用 **Custom token**，并至少授予以下账户级权限：
-
-| 权限 | API 权限组 | 用途 |
-| --- | --- | --- |
-| Workers Scripts:Edit | Workers Scripts Write | 上传 Worker、创建版本与部署 |
-| Workers R2 Storage:Edit | Workers R2 Storage Write | 创建并保留 R2 存储桶 |
-| Account Settings:Read | Account Settings Read | 读取账号与资源信息 |
-| Workers Observability:Edit（可选） | Workers Observability Write | 读取脱敏运行事件并配置日志；没有该权限时诊断显示“未知” |
-
-资源范围选择你的账号；不要授予无关的 Zone、DNS 或账号管理权限。创建后复制 token，在客户端填写：
-
-- **Cloudflare 账户 ID**：32 位十六进制；
-- **API Token**：只粘贴一次。
-
-连接成功后，token 输入框会消失。需要更换账号或 token 时，先断开连接，再重新授权。
-
-Token 过期、被撤销或权限被收回后，云端服务不会停止；客户端会显示授权错误。重新创建 token 并在客户端重新连接即可，不需要删除或重装云端部署。
+登录后客户端会换取短期访问令牌并自动续期。续期失败时概览页会提示「Cloudflare 授权已过期，请重新登录」；云端服务不受影响，重新登录即可，不需要删除或重装云端部署。
 
 ## 3. 部署新服务或连接已有服务
 

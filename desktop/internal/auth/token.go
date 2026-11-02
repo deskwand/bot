@@ -1,32 +1,39 @@
-// Package auth manages the Cloudflare API token used by the deployment
-// client. v1 uses a user-created API token, not OAuth: Cloudflare has no
-// public OAuth client registration for third-party desktop applications.
+// Package auth manages the Cloudflare credentials used by the deployment
+// client. It signs in with OAuth 2.0 Authorization Code + PKCE against
+// Cloudflare's public client, keeps the rotating refresh token in the system
+// credential store, and hands the Cloudflare API client a fresh access token.
+// https://developers.cloudflare.com/fundamentals/oauth/
 package auth
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
-	"fmt"
+	"net/http"
 	"net/url"
-	"regexp"
-	"strings"
 	"sync"
+	"time"
 
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/platform"
 )
 
 const (
-	// KeyAPIToken is the credential-store key holding the Cloudflare token.
-	KeyAPIToken = "cloudflare.api-token"
-	// KeyAccountID is the credential-store key holding the selected account.
-	KeyAccountID = "cloudflare.account-id"
+	// KeyRefreshToken is the rotating OAuth refresh token.
+	KeyRefreshToken = "cloudflare.oauth.refresh-token"
+	// KeyAccountID is the selected Cloudflare account.
+	KeyAccountID = "cloudflare.oauth.account-id"
+	// KeyAccountName is the account display name. It is not a secret.
+	KeyAccountName = "cloudflare.oauth.account-name"
 )
 
+// legacyKeys are the pre-OAuth credential items. They are deleted on startup.
+var legacyKeys = []string{"cloudflare.api-token", "cloudflare.account-id"}
+
 const (
-	// StateConnected means both local credentials are present.
+	// StateConnected means local credentials are present and usable.
 	StateConnected = "connected"
+	// StateReauthRequired means the refresh token is no longer accepted.
+	StateReauthRequired = "reauth_required"
 	// StateDisconnected means no local Cloudflare credentials are stored.
 	StateDisconnected = "disconnected"
 	// StateUnavailable means the system credential store cannot be read.
@@ -34,15 +41,21 @@ const (
 )
 
 // Fixed error codes returned to the UI. Messages are safe to display and never
-// contain the API token.
+// contain a token.
 const (
-	ErrCodeInvalidToken               = "AUTH_INVALID_TOKEN"
-	ErrCodeInvalidAccountID           = "AUTH_INVALID_ACCOUNT_ID"
 	ErrCodeVerifyFailed               = "AUTH_VERIFY_FAILED"
-	ErrCodeAccountLookupFailed        = "AUTH_ACCOUNT_LOOKUP_FAILED"
 	ErrCodeCredentialStoreUnavailable = "CREDENTIAL_STORE_UNAVAILABLE"
 	ErrCodeCredentialStoreFailure     = "CREDENTIAL_STORE_FAILURE"
 	ErrCodeNotConnected               = "AUTH_NOT_CONNECTED"
+
+	// OAuth login and session lifetime.
+	ErrCodeOAuthDenied         = "AUTH_OAUTH_DENIED"
+	ErrCodeOAuthTimeout        = "AUTH_OAUTH_TIMEOUT"
+	ErrCodeOAuthPortBusy       = "AUTH_OAUTH_PORT_BUSY"
+	ErrCodeOAuthStateMismatch  = "AUTH_OAUTH_STATE_MISMATCH"
+	ErrCodeOAuthExchangeFailed = "AUTH_OAUTH_EXCHANGE_FAILED"
+	ErrCodeNoAccount           = "AUTH_NO_ACCOUNT"
+	ErrCodeReauthRequired      = "AUTH_REAUTH_REQUIRED"
 )
 
 // Error is a safe authorization error with a stable machine-readable code.
@@ -79,156 +92,229 @@ func Code(err error) string {
 	return ""
 }
 
-// Account identifies the Cloudflare account selected by the token.
+// Account identifies one Cloudflare account the authorization can act on.
 type Account struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
-// Connection is the non-secret local connection state. It never contains the
-// API token.
+// Connection is the non-secret local connection state. It never contains a
+// token.
 type Connection struct {
-	State     string `json:"state"`
-	AccountID string `json:"accountId,omitempty"`
+	State       string `json:"state"`
+	AccountID   string `json:"accountId,omitempty"`
+	AccountName string `json:"accountName,omitempty"`
 }
 
 type cloudflareAPI interface {
 	GetJSON(ctx context.Context, path string, query url.Values, out any) error
 }
 
-// TokenService validates and stores the Cloudflare API token. The token is
-// written only to the operating system credential store; callers and the
-// frontend only receive Account and Connection values.
+// tokenSkew refreshes the access token before it actually expires.
+const tokenSkew = 120 * time.Second
+
+// TokenService owns Cloudflare OAuth credentials. The refresh token is written
+// only to the operating system credential store; the access token lives in
+// memory and never reaches the frontend.
 //
-// Required token permissions (account scope; dashboard label / API group):
-// Workers Scripts:Edit / Workers Scripts Write, Workers R2 Storage:Edit /
-// Workers R2 Storage Write, Account Settings:Read / Account Settings Read.
-// Task 9 diagnostics additionally need Workers Observability Write, the group
-// named by the telemetry query endpoint, and Workers Scripts Write for the
-// explicit script-settings observability patch.
-// https://developers.cloudflare.com/fundamentals/api/reference/permissions/
+// The OAuth client requests these permissions (see RequiredScopes): Workers
+// Scripts, Workers R2 Storage, Workers Observability, Workers Observability
+// Telemetry and Account Settings.
 type TokenService struct {
-	mu     sync.Mutex
-	store  platform.CredentialStore
-	newAPI func(token string) cloudflareAPI
+	mu        sync.Mutex
+	refreshMu sync.Mutex
+	store     platform.CredentialStore
+	newAPI    func(token string) cloudflareAPI
+	http      *http.Client
+	endpoints OAuthEndpoints
+	listen    listenerFunc
+	now       func() time.Time
+
+	access    string
+	expiresAt time.Time
+	reauth    bool
 }
 
 // NewTokenService returns a service backed by the system credential store and
 // the fixed-origin Cloudflare client.
 func NewTokenService(store platform.CredentialStore) *TokenService {
-	return &TokenService{
+	service := &TokenService{
 		store: store,
 		newAPI: func(token string) cloudflareAPI {
 			return cloudflare.New(cloudflare.Options{
 				Token: func(context.Context) (string, error) { return token, nil },
 			})
 		},
+		http:      &http.Client{Timeout: oauthTimeout},
+		endpoints: CloudflareOAuthEndpoints,
+		listen:    defaultListen,
+		now:       time.Now,
 	}
-}
-
-type tokenVerify struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-}
-
-type accountResult struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-// Connect validates accountID and token with Cloudflare, requires an active
-// token, reads the account name, and stores the token and account ID. No
-// credential is stored when validation fails.
-func (s *TokenService) Connect(ctx context.Context, accountID, token string) (Account, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if err := validateAccountID(accountID); err != nil {
-		return Account{}, &Error{Code: ErrCodeInvalidAccountID, Message: "account ID must be exactly 32 hexadecimal characters"}
-	}
-	accountID = strings.ToLower(accountID)
-	token = strings.TrimSpace(token)
-	if err := validateToken(token); err != nil {
-		return Account{}, &Error{Code: ErrCodeInvalidToken, Message: err.Error()}
-	}
-	if ctx.Err() != nil {
-		return Account{}, ctx.Err()
-	}
-
-	previous, err := s.previousCredentials(ctx)
-	if err != nil {
-		return Account{}, credentialStoreError(err)
-	}
-
-	api := s.newAPI(token)
-	if err := verifyToken(ctx, api, accountID, token); err != nil {
-		return Account{}, err
-	}
-	account, err := readAccount(ctx, api, accountID, token)
-	if err != nil {
-		return Account{}, err
-	}
-
-	// Account ID first, then the token. If either write fails, put the local
-	// credentials back exactly as they were before this attempt.
-	if err := s.store.Set(ctx, KeyAccountID, accountID); err != nil {
-		return Account{}, errors.Join(credentialStoreError(err), s.rollbackCredentials(ctx, previous))
-	}
-	if err := s.store.Set(ctx, KeyAPIToken, token); err != nil {
-		return Account{}, errors.Join(credentialStoreError(err), s.rollbackCredentials(ctx, previous))
-	}
-	return account, nil
+	// API-token credentials from before OAuth are dead weight; drop them at
+	// startup so a stale key can never look like a working connection.
+	service.cleanupLegacy(context.Background())
+	return service
 }
 
 // Status reports whether local credentials are present. It does not return or
-// log the token.
+// log the refresh token.
 func (s *TokenService) Status(ctx context.Context) (Connection, error) {
-	accountID, err := s.store.Get(ctx, KeyAccountID)
+	refresh, err := s.store.Get(ctx, KeyRefreshToken)
 	if errors.Is(err, platform.ErrCredentialNotFound) {
 		return Connection{State: StateDisconnected}, nil
 	}
 	if err != nil {
 		return Connection{State: StateUnavailable}, credentialStoreError(err)
 	}
-	token, err := s.store.Get(ctx, KeyAPIToken)
-	if errors.Is(err, platform.ErrCredentialNotFound) {
+	if refresh == "" {
 		return Connection{State: StateDisconnected}, nil
 	}
-	if err != nil {
-		return Connection{State: StateUnavailable}, credentialStoreError(err)
-	}
-	if accountID == "" || token == "" {
+	accountID, _ := s.store.Get(ctx, KeyAccountID)
+	accountName, _ := s.store.Get(ctx, KeyAccountName)
+	if accountID == "" {
+		// A refresh token without an account cannot drive any operation.
 		return Connection{State: StateDisconnected}, nil
 	}
-	return Connection{State: StateConnected, AccountID: accountID}, nil
+
+	s.mu.Lock()
+	reauth := s.reauth
+	s.mu.Unlock()
+
+	state := StateConnected
+	if reauth {
+		state = StateReauthRequired
+	}
+	return Connection{State: state, AccountID: accountID, AccountName: accountName}, nil
 }
 
-// Token returns the stored API token for the Cloudflare client. It is not a UI
-// DTO; callers must not return, print or log the value.
+// Token returns a valid access token for the Cloudflare client. It refreshes at
+// most once per expiry window and persists the rotated refresh token before
+// returning, because Cloudflare invalidates the old one immediately.
 func (s *TokenService) Token(ctx context.Context) (string, error) {
-	token, err := s.store.Get(ctx, KeyAPIToken)
-	if errors.Is(err, platform.ErrCredentialNotFound) {
-		return "", &Error{Code: ErrCodeNotConnected, Message: "no Cloudflare API token is connected"}
+	if token, ok := s.cachedToken(); ok {
+		return token, nil
+	}
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if token, ok := s.cachedToken(); ok {
+		return token, nil
+	}
+
+	refresh, err := s.store.Get(ctx, KeyRefreshToken)
+	if errors.Is(err, platform.ErrCredentialNotFound) || (err == nil && refresh == "") {
+		return "", &Error{Code: ErrCodeNotConnected, Message: "no Cloudflare account is connected"}
 	}
 	if err != nil {
 		return "", credentialStoreError(err)
 	}
-	if token == "" {
-		return "", &Error{Code: ErrCodeNotConnected, Message: "no Cloudflare API token is connected"}
+
+	set, err := refreshAccess(ctx, s.http, s.endpoints, refresh)
+	if errors.Is(err, errInvalidGrant) {
+		s.markReauthRequired()
+		return "", &Error{Code: ErrCodeReauthRequired, Message: "Cloudflare no longer accepts this authorization; sign in again"}
 	}
-	return token, nil
+	if err != nil {
+		return "", err
+	}
+	// Persist first: a lost rotation would strand the user with a dead token.
+	if err := s.store.Set(ctx, KeyRefreshToken, set.Refresh); err != nil {
+		return "", credentialStoreError(err)
+	}
+
+	s.mu.Lock()
+	s.access = set.Access
+	s.expiresAt = s.now().Add(time.Duration(set.ExpiresIn) * time.Second)
+	s.reauth = false
+	s.mu.Unlock()
+	return set.Access, nil
 }
 
-// Disconnect removes the local token and account ID. It does not change or
-// delete the deployment in Cloudflare. A Cloudflare API token cannot revoke
-// itself; the user must delete or roll it in the Cloudflare dashboard.
-func (s *TokenService) Disconnect(ctx context.Context) error {
+func (s *TokenService) cachedToken() (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.access == "" || s.reauth {
+		return "", false
+	}
+	if s.now().Add(tokenSkew).After(s.expiresAt) {
+		return "", false
+	}
+	return s.access, true
+}
+
+func (s *TokenService) markReauthRequired() {
+	s.mu.Lock()
+	s.reauth = true
+	s.access = ""
+	s.expiresAt = time.Time{}
+	s.mu.Unlock()
+}
+
+func (s *TokenService) listAccounts(ctx context.Context, access string) ([]Account, error) {
+	var accounts []Account
+	if err := s.newAPI(access).GetJSON(ctx, "/accounts", nil, &accounts); err != nil {
+		return nil, &Error{Code: ErrCodeNoAccount, Message: "could not read the Cloudflare accounts for this authorization", Err: err}
+	}
+	return accounts, nil
+}
+
+// storeLogin persists the authorized account and caches the access token. It
+// holds refreshMu so a concurrent refresh cannot interleave its writes.
+func (s *TokenService) storeLogin(ctx context.Context, set tokenSet, account Account) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	previous := map[string]credentialSnapshot{}
+	for _, key := range []string{KeyRefreshToken, KeyAccountID, KeyAccountName} {
+		value, err := s.store.Get(ctx, key)
+		switch {
+		case err == nil:
+			previous[key] = credentialSnapshot{value: value, exists: true}
+		case errors.Is(err, platform.ErrCredentialNotFound):
+			previous[key] = credentialSnapshot{}
+		default:
+			return credentialStoreError(err)
+		}
+	}
+	writes := []struct{ key, value string }{
+		{KeyRefreshToken, set.Refresh},
+		{KeyAccountID, account.ID},
+		{KeyAccountName, account.Name},
+	}
+	for _, write := range writes {
+		if err := s.store.Set(ctx, write.key, write.value); err != nil {
+			return errors.Join(credentialStoreError(err), s.rollback(ctx, previous))
+		}
+	}
+
+	s.mu.Lock()
+	s.access = set.Access
+	s.expiresAt = s.now().Add(time.Duration(set.ExpiresIn) * time.Second)
+	s.reauth = false
+	s.mu.Unlock()
+	return nil
+}
+
+// Disconnect revokes the authorization in Cloudflare and deletes the local
+// credentials. A rejected revoke is not an error: the user cannot act on it,
+// and the local credentials are gone either way.
+func (s *TokenService) Disconnect(ctx context.Context) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	refresh, err := s.store.Get(ctx, KeyRefreshToken)
+	if err == nil && refresh != "" {
+		_ = revokeAccess(ctx, s.http, s.endpoints, refresh)
+	}
+
+	s.mu.Lock()
+	s.access = ""
+	s.expiresAt = time.Time{}
+	s.reauth = false
+	s.mu.Unlock()
 
 	var failures []error
-	for _, key := range []string{KeyAPIToken, KeyAccountID} {
-		err := s.store.Delete(ctx, key)
+	for _, key := range []string{KeyRefreshToken, KeyAccountID, KeyAccountName} {
+		err := s.store.Delete(context.WithoutCancel(ctx), key)
 		if err == nil || errors.Is(err, platform.ErrCredentialNotFound) {
 			continue
 		}
@@ -237,104 +323,10 @@ func (s *TokenService) Disconnect(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-func validateAccountID(accountID string) error {
-	if len(accountID) != 32 {
-		return errors.New("account ID length")
+func (s *TokenService) cleanupLegacy(ctx context.Context) {
+	for _, key := range legacyKeys {
+		_ = s.store.Delete(ctx, key)
 	}
-	if _, err := hex.DecodeString(accountID); err != nil {
-		return errors.New("account ID encoding")
-	}
-	return nil
-}
-
-var tokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{20,512}$`)
-
-func validateToken(token string) error {
-	token = strings.TrimSpace(token)
-	if !tokenPattern.MatchString(token) {
-		return errors.New("API token must be 20-512 characters using letters, digits, underscore or hyphen")
-	}
-	return nil
-}
-
-func verifyToken(ctx context.Context, api cloudflareAPI, accountID, token string) error {
-	// Endpoints and status field:
-	// https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/
-	// https://developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/verify/
-	// Token prefixes: https://developers.cloudflare.com/fundamentals/api/get-started/token-formats/
-	paths := []string{"/user/tokens/verify"}
-	if strings.HasPrefix(token, "cfat_") {
-		paths = []string{"/accounts/" + accountID + "/tokens/verify"}
-	} else {
-		paths = append(paths, "/accounts/"+accountID+"/tokens/verify")
-	}
-
-	var lastErr error
-	for _, path := range paths {
-		var result tokenVerify
-		err := api.GetJSON(ctx, path, nil, &result)
-		if err == nil {
-			if result.Status == "active" {
-				return nil
-			}
-			status := result.Status
-			if status == "" {
-				status = "unknown"
-			}
-			return &Error{
-				Code:    ErrCodeInvalidToken,
-				Message: "Cloudflare reports the API token status as " + redactToken(status, token),
-			}
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		lastErr = err
-	}
-
-	var apiErr *cloudflare.APIError
-	if isTokenRejection(lastErr) && errors.As(lastErr, &apiErr) {
-		return &Error{
-			Code:    ErrCodeInvalidToken,
-			Message: fmt.Sprintf("Cloudflare rejected the API token (HTTP %d, code %d)", apiErr.Status, apiErr.Code),
-		}
-	}
-	return &Error{
-		Code:    ErrCodeVerifyFailed,
-		Message: "could not reach Cloudflare to verify the API token; try again",
-	}
-}
-
-func readAccount(ctx context.Context, api cloudflareAPI, accountID, token string) (Account, error) {
-	var result accountResult
-	if err := api.GetJSON(ctx, "/accounts/"+accountID, nil, &result); err != nil {
-		if ctx.Err() != nil {
-			return Account{}, ctx.Err()
-		}
-		var apiErr *cloudflare.APIError
-		if isTokenRejection(err) && errors.As(err, &apiErr) {
-			return Account{}, &Error{
-				Code:    ErrCodeInvalidToken,
-				Message: fmt.Sprintf("Cloudflare rejected the API token (HTTP %d, code %d)", apiErr.Status, apiErr.Code),
-			}
-		}
-		return Account{}, &Error{
-			Code:    ErrCodeAccountLookupFailed,
-			Message: "could not reach Cloudflare to read the account; try again",
-		}
-	}
-	if result.ID == "" {
-		result.ID = accountID
-	}
-	return Account{ID: result.ID, Name: result.Name}, nil
-}
-
-func isTokenRejection(err error) bool {
-	var apiErr *cloudflare.APIError
-	if !errors.As(err, &apiErr) || apiErr.Message == "non-JSON response" {
-		return false
-	}
-	return apiErr.Status == 401 || apiErr.Status == 403 || (apiErr.Status == 400 && apiErr.Code != 0)
 }
 
 type credentialSnapshot struct {
@@ -342,27 +334,10 @@ type credentialSnapshot struct {
 	exists bool
 }
 
-func (s *TokenService) previousCredentials(ctx context.Context) (map[string]credentialSnapshot, error) {
-	previous := make(map[string]credentialSnapshot, 2)
-	for _, key := range []string{KeyAccountID, KeyAPIToken} {
-		value, err := s.store.Get(ctx, key)
-		switch {
-		case err == nil:
-			previous[key] = credentialSnapshot{value: value, exists: true}
-		case errors.Is(err, platform.ErrCredentialNotFound):
-			previous[key] = credentialSnapshot{}
-		default:
-			return nil, err
-		}
-	}
-	return previous, nil
-}
-
-func (s *TokenService) rollbackCredentials(ctx context.Context, previous map[string]credentialSnapshot) error {
+func (s *TokenService) rollback(ctx context.Context, previous map[string]credentialSnapshot) error {
 	ctx = context.WithoutCancel(ctx)
 	var failures []error
-	for _, key := range []string{KeyAccountID, KeyAPIToken} {
-		snapshot := previous[key]
+	for key, snapshot := range previous {
 		var err error
 		if snapshot.exists {
 			err = s.store.Set(ctx, key, snapshot.value)
@@ -388,7 +363,7 @@ func credentialStoreError(err error) *Error {
 			Err:     platform.ErrCredentialStoreUnavailable,
 		}
 	case errors.Is(err, platform.ErrCredentialNotFound):
-		return &Error{Code: ErrCodeNotConnected, Message: "no Cloudflare API token is connected"}
+		return &Error{Code: ErrCodeNotConnected, Message: "no Cloudflare account is connected"}
 	default:
 		return &Error{
 			Code:    ErrCodeCredentialStoreFailure,
@@ -396,22 +371,4 @@ func credentialStoreError(err error) *Error {
 			Err:     err,
 		}
 	}
-}
-
-func redactToken(message, token string) string {
-	if token == "" {
-		return message
-	}
-	values := []string{token}
-	for _, prefix := range []string{"cfut_", "cfat_"} {
-		if strings.HasPrefix(token, prefix) {
-			values = append(values, strings.TrimPrefix(token, prefix))
-		}
-	}
-	for _, value := range values {
-		if value != "" {
-			message = strings.ReplaceAll(message, value, "[REDACTED]")
-		}
-	}
-	return message
 }

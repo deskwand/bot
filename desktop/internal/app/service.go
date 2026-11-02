@@ -30,17 +30,20 @@ import (
 // Stable error codes returned to the frontend in domain.Error.Code. Messages
 // are display-safe and never contain a token or secret value.
 const (
-	CodeTargetNotSelected   = "TARGET_NOT_SELECTED"
-	CodeAccountMismatch     = "TARGET_ACCOUNT_MISMATCH"
-	CodeTargetMismatch      = "TARGET_MISMATCH"
-	CodeAuthRequired        = "AUTH_REQUIRED"
-	CodeServiceUnavailable  = "SERVICE_UNAVAILABLE"
-	CodeReleaseNotBundled   = "RELEASE_NOT_BUNDLED"
-	CodeReleaseUntrusted    = "RELEASE_UNTRUSTED"
-	CodeReleaseUnavailable  = "RELEASE_UNAVAILABLE"
-	CodeLoginNotFound       = "LOGIN_NOT_FOUND"
-	CodeLoginInProgress     = "LOGIN_IN_PROGRESS"
-	CodeInvalidEntryChannel = "INVALID_ENTRY_CHANNEL"
+	CodeTargetNotSelected  = "TARGET_NOT_SELECTED"
+	CodeAccountMismatch    = "TARGET_ACCOUNT_MISMATCH"
+	CodeTargetMismatch     = "TARGET_MISMATCH"
+	CodeAuthRequired       = "AUTH_REQUIRED"
+	CodeServiceUnavailable = "SERVICE_UNAVAILABLE"
+	CodeReleaseNotBundled  = "RELEASE_NOT_BUNDLED"
+	CodeReleaseUntrusted   = "RELEASE_UNTRUSTED"
+	CodeReleaseUnavailable = "RELEASE_UNAVAILABLE"
+	CodeLoginNotFound      = "LOGIN_NOT_FOUND"
+	CodeLoginInProgress    = "LOGIN_IN_PROGRESS"
+
+	CodeCloudflareLoginInProgress = "CLOUDFLARE_LOGIN_IN_PROGRESS"
+	CodeCloudflareLoginNotFound   = "CLOUDFLARE_LOGIN_NOT_FOUND"
+	CodeInvalidEntryChannel       = "INVALID_ENTRY_CHANNEL"
 )
 
 // legacyModelSecretNames are the pre-MODEL_KEY_* names. A publish clears any
@@ -51,11 +54,15 @@ var legacyModelSecretNames = []string{"ANTHROPIC_API_KEY", "OPENCODE_API_KEY"}
 // `mygo generate` turns it into `events.loginStatus`.
 var LoginStatusEvent = mygo.NewEvent[LoginStatusDTO]("login-status")
 
+// CloudflareLoginEvent carries sanitized OAuth login progress to the frontend.
+// `mygo generate` turns it into `events.cloudflareLogin`.
+var CloudflareLoginEvent = mygo.NewEvent[CloudflareLoginDTO]("cloudflare-login")
+
 // AuthService is the consumer-owned subset of *auth.TokenService.
 type AuthService interface {
-	Connect(ctx context.Context, accountID, token string) (auth.Account, error)
 	Status(ctx context.Context) (auth.Connection, error)
 	Disconnect(ctx context.Context) error
+	BeginLogin(ctx context.Context) (auth.LoginSession, error)
 }
 
 // PublishService is the configuration publish state machine.
@@ -147,29 +154,38 @@ type ServiceOptions struct {
 	ClientUpdates ClientUpdateProvider
 	// EmitLoginStatus defaults to LoginStatusEvent.Broadcast.
 	EmitLoginStatus func(LoginStatusDTO)
-	NewOperationID  func() (string, error)
-	Now             func() time.Time
+	// EmitCloudflareLogin defaults to CloudflareLoginEvent.Broadcast.
+	EmitCloudflareLogin func(CloudflareLoginDTO)
+	NewOperationID      func() (string, error)
+	Now                 func() time.Time
 }
 
 // Service is the single service bound to MyGo. Every exported method is a
 // frontend-safe DTO operation; raw clients, tokens, secret getters and
 // arbitrary URL openers are not exposed.
 type Service struct {
-	auth          AuthService
-	publish       PublishService
-	lifecycle     LifecycleService
-	entries       EntriesService
-	diagnostics   StatusService
-	snapshots     SnapshotReader
-	scripts       ScriptLister
-	journal       OperationJournal
-	store         TargetStore
-	browser       platform.BrowserOpener
-	release       ReleaseSource
-	clientUpdates ClientUpdateProvider
-	emitLogin     func(LoginStatusDTO)
-	newOpID       func() (string, error)
-	now           func() time.Time
+	auth           AuthService
+	publish        PublishService
+	lifecycle      LifecycleService
+	entries        EntriesService
+	diagnostics    StatusService
+	snapshots      SnapshotReader
+	scripts        ScriptLister
+	journal        OperationJournal
+	store          TargetStore
+	browser        platform.BrowserOpener
+	release        ReleaseSource
+	clientUpdates  ClientUpdateProvider
+	emitLogin      func(LoginStatusDTO)
+	emitCloudflare func(CloudflareLoginDTO)
+	newOpID        func() (string, error)
+	now            func() time.Time
+
+	cfMu          sync.Mutex
+	cfSession     auth.LoginSession
+	cfOperationID string
+	cfActive      bool
+	cfTimer       *time.Timer
 
 	loginMu     sync.Mutex
 	logins      map[string]context.CancelFunc
@@ -189,6 +205,10 @@ func NewService(options ServiceOptions) *Service {
 	if newOpID == nil {
 		newOpID = randomOperationID
 	}
+	emitCloudflare := options.EmitCloudflareLogin
+	if emitCloudflare == nil {
+		emitCloudflare = func(status CloudflareLoginDTO) { _ = CloudflareLoginEvent.Broadcast(status) }
+	}
 	now := options.Now
 	if now == nil {
 		now = time.Now
@@ -198,39 +218,191 @@ func NewService(options ServiceOptions) *Service {
 		clientUpdates = NewMyGoClientUpdateProvider(ClientUpdateFeedURL)
 	}
 	return &Service{
-		auth:          options.Auth,
-		publish:       options.Publish,
-		lifecycle:     options.Lifecycle,
-		entries:       options.Entries,
-		diagnostics:   options.Diagnostics,
-		snapshots:     options.Snapshots,
-		scripts:       options.Scripts,
-		journal:       options.Journal,
-		store:         options.Store,
-		browser:       options.Browser,
-		release:       options.Release,
-		clientUpdates: clientUpdates,
-		emitLogin:     emit,
-		newOpID:       newOpID,
-		now:           now,
-		logins:        map[string]context.CancelFunc{},
+		auth:           options.Auth,
+		publish:        options.Publish,
+		lifecycle:      options.Lifecycle,
+		entries:        options.Entries,
+		diagnostics:    options.Diagnostics,
+		snapshots:      options.Snapshots,
+		scripts:        options.Scripts,
+		journal:        options.Journal,
+		store:          options.Store,
+		browser:        options.Browser,
+		release:        options.Release,
+		clientUpdates:  clientUpdates,
+		emitLogin:      emit,
+		emitCloudflare: emitCloudflare,
+		newOpID:        newOpID,
+		now:            now,
+		logins:         map[string]context.CancelFunc{},
 	}
 }
 
 // Name returns the product name for the shell header.
 func (s *Service) Name() string { return "DeskWand Bot" }
 
-// ConnectCloudflare validates and stores an API token. The token is write-only:
-// it is never echoed in the result or an error.
-func (s *Service) ConnectCloudflare(accountID, token string) (AccountDTO, error) {
+// StartCloudflareLogin opens Cloudflare's authorization page and waits for the
+// loopback callback in the background. It returns the operation id used by
+// CancelCloudflareLogin; progress arrives through CloudflareLoginEvent.
+func (s *Service) StartCloudflareLogin() (string, error) {
 	if s.auth == nil {
-		return AccountDTO{}, serviceUnavailable()
+		return "", serviceUnavailable()
 	}
-	account, err := s.auth.Connect(context.Background(), accountID, token)
+	operationID, err := s.newOpID()
 	if err != nil {
-		return AccountDTO{}, safeAppError(err, token)
+		return "", serviceUnavailable()
 	}
-	return AccountDTO{ID: account.ID, Name: account.Name}, nil
+
+	s.cfMu.Lock()
+	if s.cfActive {
+		s.cfMu.Unlock()
+		return "", domain.Error{Code: CodeCloudflareLoginInProgress, Message: "已有 Cloudflare 登录正在进行"}
+	}
+	session, err := s.auth.BeginLogin(context.Background())
+	if err != nil {
+		s.cfMu.Unlock()
+		return "", safeAppError(err)
+	}
+	s.cfActive = true
+	s.cfSession = session
+	s.cfOperationID = operationID
+	s.cfMu.Unlock()
+
+	if s.browser == nil {
+		s.finishCloudflareLogin(session)
+		session.Cancel()
+		return "", serviceUnavailable()
+	}
+	if err := s.browser.Open(session.AuthURL()); err != nil {
+		s.finishCloudflareLogin(session)
+		session.Cancel()
+		return "", safeAppError(&auth.Error{Code: auth.ErrCodeOAuthExchangeFailed, Message: "无法打开浏览器，请检查默认浏览器设置后重试"})
+	}
+	s.emitCloudflare(CloudflareLoginDTO{OperationID: operationID, State: "waiting_browser"})
+	go s.runCloudflareLogin(operationID, session)
+	return operationID, nil
+}
+
+func (s *Service) runCloudflareLogin(operationID string, session auth.LoginSession) {
+	ctx, cancel := context.WithTimeout(context.Background(), auth.LoginTimeout)
+	defer cancel()
+
+	result, err := session.Wait(ctx)
+	if err != nil {
+		state := "error"
+		code := auth.Code(err)
+		switch {
+		case code == auth.ErrCodeOAuthDenied:
+			state = "denied"
+		case code == auth.ErrCodeOAuthTimeout || errors.Is(err, context.DeadlineExceeded):
+			state = "timeout"
+			code = auth.ErrCodeOAuthTimeout
+		}
+		if !s.finishCloudflareLogin(session) {
+			// CancelCloudflareLogin already reported this login as cancelled.
+			return
+		}
+		s.emitCloudflare(CloudflareLoginDTO{OperationID: operationID, State: state, Code: code})
+		return
+	}
+
+	if len(result.Accounts) == 1 {
+		s.completeCloudflareLogin(operationID, session, result.Accounts[0].ID)
+		return
+	}
+	// Several accounts: keep the session open until the user picks one, but not
+	// forever — an abandoned picker would block every later login attempt.
+	s.cfMu.Lock()
+	s.cfTimer = time.AfterFunc(auth.LoginTimeout, func() {
+		if !s.finishCloudflareLogin(session) {
+			return
+		}
+		session.Cancel()
+		s.emitCloudflare(CloudflareLoginDTO{OperationID: operationID, State: "timeout", Code: auth.ErrCodeOAuthTimeout})
+	})
+	s.cfMu.Unlock()
+	s.emitCloudflare(CloudflareLoginDTO{
+		OperationID: operationID,
+		State:       "select_account",
+		Accounts:    accountDTOs(result.Accounts),
+	})
+}
+
+// ConfirmCloudflareAccount finishes a login that offered several accounts.
+func (s *Service) ConfirmCloudflareAccount(accountID string) error {
+	s.cfMu.Lock()
+	session := s.cfSession
+	operationID := s.cfOperationID
+	s.cfMu.Unlock()
+	if session == nil {
+		return domain.Error{Code: CodeCloudflareLoginNotFound, Message: "没有等待选择账号的登录"}
+	}
+	if err := session.Complete(context.Background(), strings.TrimSpace(accountID)); err != nil {
+		return safeAppError(err)
+	}
+	// The credentials are on disk now, so the UI is told the truth even if a
+	// cancel won the race: otherwise the screen says cancelled while the store
+	// says connected.
+	s.finishCloudflareLogin(session)
+	s.emitCloudflare(CloudflareLoginDTO{OperationID: operationID, State: "connected"})
+	return nil
+}
+
+// completeCloudflareLogin persists the only offered account and reports the
+// outcome. It runs after Wait, so the session is finished either way.
+func (s *Service) completeCloudflareLogin(operationID string, session auth.LoginSession, accountID string) {
+	completeErr := session.Complete(context.Background(), accountID)
+	s.finishCloudflareLogin(session)
+	if completeErr != nil {
+		s.emitCloudflare(CloudflareLoginDTO{OperationID: operationID, State: "error", Code: auth.Code(completeErr)})
+		return
+	}
+	s.emitCloudflare(CloudflareLoginDTO{OperationID: operationID, State: "connected"})
+}
+
+// CancelCloudflareLogin stops an unfinished OAuth login.
+func (s *Service) CancelCloudflareLogin(opID string) error {
+	s.cfMu.Lock()
+	session := s.cfSession
+	active := s.cfActive
+	operationID := s.cfOperationID
+	s.cfMu.Unlock()
+	if !active || session == nil || operationID != strings.TrimSpace(opID) {
+		return domain.Error{Code: CodeCloudflareLoginNotFound, Message: "登录操作不存在或已结束"}
+	}
+	if !s.finishCloudflareLogin(session) {
+		return domain.Error{Code: CodeCloudflareLoginNotFound, Message: "登录操作不存在或已结束"}
+	}
+	session.Cancel()
+	s.emitCloudflare(CloudflareLoginDTO{OperationID: operationID, State: "cancelled"})
+	return nil
+}
+
+// finishCloudflareLogin clears the in-flight session. It reports whether this
+// call was the one that cleared it, so the loser of a cancel race stays quiet
+// instead of emitting a second, contradictory event.
+func (s *Service) finishCloudflareLogin(session auth.LoginSession) bool {
+	s.cfMu.Lock()
+	defer s.cfMu.Unlock()
+	if s.cfSession != session {
+		return false
+	}
+	if s.cfTimer != nil {
+		s.cfTimer.Stop()
+		s.cfTimer = nil
+	}
+	s.cfSession = nil
+	s.cfOperationID = ""
+	s.cfActive = false
+	return true
+}
+
+func accountDTOs(accounts []auth.Account) []AccountDTO {
+	out := make([]AccountDTO, 0, len(accounts))
+	for _, account := range accounts {
+		out = append(out, AccountDTO{ID: account.ID, Name: account.Name})
+	}
+	return out
 }
 
 // CloudflareStatus reports local connection state without an error channel.
@@ -242,25 +414,19 @@ func (s *Service) CloudflareStatus() ConnectionDTO {
 	if err != nil && connection.State == "" {
 		return ConnectionDTO{State: auth.StateUnavailable}
 	}
-	return ConnectionDTO{State: connection.State, AccountID: connection.AccountID}
+	return ConnectionDTO{
+		State:       connection.State,
+		AccountID:   connection.AccountID,
+		AccountName: connection.AccountName,
+	}
 }
 
-// DisconnectCloudflare removes local credentials. It does not revoke the token
-// or change the deployment in Cloudflare.
+// DisconnectCloudflare revokes the authorization and removes local credentials.
 func (s *Service) DisconnectCloudflare() error {
 	if s.auth == nil {
 		return serviceUnavailable()
 	}
 	return s.auth.Disconnect(context.Background())
-}
-
-// OpenTokenPage opens Cloudflare's API token page in the system browser. The
-// BrowserOpener allows only Cloudflare dashboard and documentation URLs.
-func (s *Service) OpenTokenPage() error {
-	if s.browser == nil {
-		return serviceUnavailable()
-	}
-	return s.browser.Open("https://dash.cloudflare.com/profile/api-tokens")
 }
 
 // ListWorkers lists Worker scripts in the connected account.

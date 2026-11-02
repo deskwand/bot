@@ -16,11 +16,21 @@ type AccountDTO struct {
 	Name string `json:"name"`
 }
 
-// ConnectionDTO is the local Cloudflare connection state. It never contains
-// the API token.
+// ConnectionDTO is the local Cloudflare connection state. It never contains a
+// token. AccountName is display-only metadata.
 type ConnectionDTO struct {
-	State     string `json:"state"`
-	AccountID string `json:"accountId,omitempty"`
+	State       string `json:"state"`
+	AccountID   string `json:"accountId,omitempty"`
+	AccountName string `json:"accountName,omitempty"`
+}
+
+// CloudflareLoginDTO is the only OAuth login state sent to the frontend. It
+// carries no token, authorization code or PKCE verifier.
+type CloudflareLoginDTO struct {
+	OperationID string       `json:"operationId"`
+	State       string       `json:"state"`
+	Accounts    []AccountDTO `json:"accounts,omitempty"`
+	Code        string       `json:"code,omitempty"`
 }
 
 // WorkerDTO is one Worker script summary.

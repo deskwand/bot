@@ -6,8 +6,6 @@ import { FALLBACK_CODE_MESSAGE, describeCode } from "../../src/services/errors";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const SCREENS = fileURLToPath(new URL("../../test-results/screens", import.meta.url));
-const TOKEN_SENTINEL = "cf-token-SENTINEL-do-not-leak-123456";
-const ACCOUNT_ID = "a".repeat(32);
 
 test.beforeAll(() => {
   mkdirSync(SCREENS, { recursive: true });
@@ -17,21 +15,13 @@ async function screenshot(page: Page, name: string, fullPage = true) {
   await page.screenshot({ path: join(SCREENS, name), fullPage });
 }
 
-async function expectTokenAbsent(page: Page) {
-  const body = await page.content();
-  expect(body).not.toContain(TOKEN_SENTINEL);
-  const storage = await page.evaluate(() => {
-    const out: Record<string, string> = {};
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (key !== null) out[key] = localStorage.getItem(key) ?? "";
-    }
-    return JSON.stringify(out);
-  });
-  expect(storage).not.toContain(TOKEN_SENTINEL);
-  expect(storage).not.toContain("API_KEY");
-  expect(storage).not.toContain("TELEGRAM_BOT_TOKEN");
+// connectCloudflare drives the OAuth consent from the welcome page. The mock
+// client finishes the flow on its own, so no browser round trip happens here.
+async function connectCloudflare(page: Page) {
+  await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
+  await expect(page.getByRole("button", { name: "部署新服务" })).toBeVisible();
 }
+
 
 function keyRow(page: Page, provider: string) {
   return page.getByTestId(`model-key-row-${provider}`);
@@ -98,12 +88,10 @@ test("welcome → token connect → preflight → interrupted deployment → res
   await expect(page.getByRole("heading", { name: "部署一次，随时管理。" })).toBeVisible();
   await screenshot(page, "01-welcome.png");
 
-  await page.getByLabel("Cloudflare 账户 ID").fill(ACCOUNT_ID);
-  await page.getByLabel("API Token").fill(TOKEN_SENTINEL);
-  await expect(page.getByText("Workers Observability:Edit", { exact: true })).toBeVisible();
-  await expect(page.getByText(/Workers Observability Write/)).toBeVisible();
-  await page.getByRole("button", { name: "连接 Cloudflare" }).click();
-  await expect(page.getByRole("button", { name: "部署新服务" })).toBeVisible();
+  await expect(
+    page.getByText("浏览器里完成授权，不需要填写 token。", { exact: true }),
+  ).toBeVisible();
+  await connectCloudflare(page);
   await expect(page.getByLabel("API Token")).toHaveCount(0);
 
   await page.getByRole("button", { name: "部署新服务" }).click();
@@ -144,7 +132,6 @@ test("welcome → token connect → preflight → interrupted deployment → res
   await expect(page.getByRole("heading", { name: "凭据已发布", exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("凭据已发布，等待真实消息")).toBeVisible();
   await expect(page.getByText("收发已验证", { exact: true })).toHaveCount(0);
-  await expectTokenAbsent(page);
 });
 
 
@@ -198,9 +185,7 @@ test("unknown entry selection offers a resume action", async ({ page }) => {
 
 test("import preview explains legacy schema, preserved secrets and plaintext migration", async ({ page }) => {
   await page.goto("/test.html");
-  await page.getByLabel("Cloudflare 账户 ID").fill(ACCOUNT_ID);
-  await page.getByLabel("API Token").fill(TOKEN_SENTINEL);
-  await page.getByRole("button", { name: "连接 Cloudflare" }).click();
+  await connectCloudflare(page);
   await page.getByRole("button", { name: "连接已有服务" }).click();
   await expect(page.getByText("候选 Worker")).toBeVisible();
   const legacy = page.locator("li", { hasText: "my-bot" }).first();
@@ -218,9 +203,7 @@ test("import preview explains legacy schema, preserved secrets and plaintext mig
 
 test("import resume continues an unknown takeover result", async ({ page }) => {
   await page.goto("/test.html?fixture=import-resume");
-  await page.getByLabel("Cloudflare 账户 ID").fill(ACCOUNT_ID);
-  await page.getByLabel("API Token").fill(TOKEN_SENTINEL);
-  await page.getByRole("button", { name: "连接 Cloudflare" }).click();
+  await connectCloudflare(page);
   await page.getByRole("button", { name: "连接已有服务" }).click();
   const legacy = page.locator("li", { hasText: "my-bot" }).first();
   await legacy.getByRole("button", { name: "检查并接管" }).click();
@@ -232,9 +215,7 @@ test("import resume continues an unknown takeover result", async ({ page }) => {
 
 test("import retry requires re-entering cleared secrets", async ({ page }) => {
   await page.goto("/test.html?fixture=import-secret-retry");
-  await page.getByLabel("Cloudflare 账户 ID").fill(ACCOUNT_ID);
-  await page.getByLabel("API Token").fill(TOKEN_SENTINEL);
-  await page.getByRole("button", { name: "连接 Cloudflare" }).click();
+  await connectCloudflare(page);
   await page.getByRole("button", { name: "连接已有服务" }).click();
   const legacy = page.locator("li", { hasText: "my-bot" }).first();
   await legacy.getByRole("button", { name: "检查并接管" }).click();
@@ -262,9 +243,7 @@ test("UPGRADE_REQUIRED points to the updates page", async ({ page }) => {
 
 test("model catalog failure is surfaced during setup", async ({ page }) => {
   await page.goto("/test.html?fixture=catalog-unavailable");
-  await page.getByLabel("Cloudflare 账户 ID").fill(ACCOUNT_ID);
-  await page.getByLabel("API Token").fill(TOKEN_SENTINEL);
-  await page.getByRole("button", { name: "连接 Cloudflare" }).click();
+  await connectCloudflare(page);
   await page.getByRole("button", { name: "部署新服务" }).click();
   const alert = page.getByTestId("error-alert");
   await expect(alert.getByText("CATALOG_UNAVAILABLE")).toBeVisible();
@@ -273,9 +252,7 @@ test("model catalog failure is surfaced during setup", async ({ page }) => {
 
 test("OPERATION_IN_PROGRESS does not re-run install and points to pending resume", async ({ page }) => {
   await page.goto("/test.html?fixture=install-conflict");
-  await page.getByLabel("Cloudflare 账户 ID").fill(ACCOUNT_ID);
-  await page.getByLabel("API Token").fill(TOKEN_SENTINEL);
-  await page.getByRole("button", { name: "连接 Cloudflare" }).click();
+  await connectCloudflare(page);
   await page.getByRole("button", { name: "部署新服务" }).click();
   await page.locator("#install-channel-telegram").click();
   await page.getByRole("button", { name: "检查并部署" }).click();
@@ -311,32 +288,41 @@ test("credential store unavailability is shown on the welcome page", async ({ pa
   await expect(page.getByRole("heading", { name: "部署一次，随时管理。" })).toBeVisible();
   const alert = page.getByTestId("error-alert");
   await expect(alert.getByText("CREDENTIAL_STORE_UNAVAILABLE")).toBeVisible();
-  await expect(page.getByLabel("Cloudflare 账户 ID")).toBeVisible();
+  await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
 });
 
-test("wrong token shows a fixed code and clears the input", async ({ page }) => {
-  await page.goto("/test.html?fixture=wrong-token");
-  await page.getByLabel("Cloudflare 账户 ID").fill(ACCOUNT_ID);
-  await page.getByLabel("API Token").fill(TOKEN_SENTINEL);
-  await page.getByRole("button", { name: "连接 Cloudflare" }).click();
+test("a denied authorization explains itself and offers a retry", async ({ page }) => {
+  await page.goto("/test.html?fixture=cf-denied");
+  await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
   const alert = page.getByTestId("error-alert");
-  await expect(alert).toBeVisible();
-  await expect(alert.getByText("AUTH_INVALID_TOKEN")).toBeVisible();
-  await expect(alert.getByText(/重新创建令牌/)).toBeVisible();
-  await expect(page.getByLabel("API Token")).toHaveValue("");
-  await expectTokenAbsent(page);
+  await expect(alert.getByText("AUTH_OAUTH_DENIED")).toBeVisible();
+  await expect(alert.getByText(/你取消了 Cloudflare 授权/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
+});
+
+test("a timed-out authorization is reported as such", async ({ page }) => {
+  await page.goto("/test.html?fixture=cf-timeout");
+  await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
+  const alert = page.getByTestId("error-alert");
+  await expect(alert.getByText("AUTH_OAUTH_TIMEOUT")).toBeVisible();
+  await expect(alert.getByText(/5 分钟内没有完成/)).toBeVisible();
+});
+
+test("several accounts require an explicit choice", async ({ page }) => {
+  await page.goto("/test.html?fixture=multi-account");
+  await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
+  await expect(page.getByText("这个 Cloudflare 用户有多个账号")).toBeVisible();
+  await page.getByRole("radio", { name: "第二个账户" }).click();
+  await page.getByRole("button", { name: "继续" }).click();
+  await expect(page.getByRole("button", { name: "部署新服务" })).toBeVisible();
 });
 
 test("credential-store denial is explicit and never falls back to plaintext", async ({ page }) => {
   await page.goto("/test.html?fixture=credential-denied");
-  await page.getByLabel("Cloudflare 账户 ID").fill(ACCOUNT_ID);
-  await page.getByLabel("API Token").fill(TOKEN_SENTINEL);
-  await page.getByRole("button", { name: "连接 Cloudflare" }).click();
+  await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
   const alert = page.getByTestId("error-alert");
   await expect(alert.getByText("CREDENTIAL_STORE_UNAVAILABLE")).toBeVisible();
-  await expect(alert.getByText("系统凭据库不可用，未保存 API token。")).toBeVisible();
-  await expect(page.getByLabel("API Token")).toHaveValue("");
-  await expectTokenAbsent(page);
+  await expect(alert.getByText(/系统凭据库不可用/)).toBeVisible();
 });
 
 test("config conflict asks for a reload instead of overwriting", async ({ page }) => {

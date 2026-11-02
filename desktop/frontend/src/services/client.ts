@@ -7,9 +7,11 @@ export function createProductionClient(): ClientService {
   return {
     name: () => Service.name(),
     cloudflareStatus: () => Service.cloudflareStatus(),
-    connectCloudflare: (accountId, token) => Service.connectCloudflare(accountId, token),
+    startCloudflareLogin: () => Service.startCloudflareLogin(),
+    cancelCloudflareLogin: (opId) => Service.cancelCloudflareLogin(opId),
+    confirmCloudflareAccount: (accountId) => Service.confirmCloudflareAccount(accountId),
+    subscribeCloudflareLogin: (listener) => events.cloudflareLogin.on(listener),
     disconnectCloudflare: () => Service.disconnectCloudflare(),
-    openTokenPage: () => Service.openTokenPage(),
     listWorkers: () => Service.listWorkers(),
     selectDeployment: (scriptName) => Service.selectDeployment(scriptName),
     inspectImport: () => Service.inspectImport(),
