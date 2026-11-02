@@ -48,6 +48,45 @@ type PublishAPI interface {
 	FindVersionByOperation(ctx context.Context, target domain.Target, operationID string) (versionID string, isLatest bool, found bool, err error)
 }
 
+// TargetLocker serializes operations for one account/script across Service
+// instances and the lifecycle operations. A nil locker is not usable; use
+// NewTargetLocker.
+type TargetLocker struct {
+	mu    sync.Mutex
+	locks map[string]chan struct{}
+}
+
+// NewTargetLocker constructs an empty per-target lock set.
+func NewTargetLocker() *TargetLocker {
+	return &TargetLocker{locks: map[string]chan struct{}{}}
+}
+
+// Lock waits for the target lock and returns its release function.
+func (l *TargetLocker) Lock(ctx context.Context, target domain.Target) (func(), error) {
+	if l == nil {
+		return nil, errors.New("deployment: no target locker is configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	key := target.AccountID + "/" + target.ScriptName
+	l.mu.Lock()
+	semaphore := l.locks[key]
+	if semaphore == nil {
+		semaphore = make(chan struct{}, 1)
+		semaphore <- struct{}{}
+		l.locks[key] = semaphore
+	}
+	l.mu.Unlock()
+
+	select {
+	case <-semaphore:
+		return func() { semaphore <- struct{}{} }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // Service executes Preview/Apply/Resume/Abandon with a per-target lock, a
 // durable journal and a verified release package.
 type Service struct {
@@ -56,15 +95,22 @@ type Service struct {
 	creds   platform.CredentialStore
 	pkg     release.Package
 	clock   func() time.Time
-
-	mu    sync.Mutex
-	locks map[string]chan struct{}
+	locker  *TargetLocker
 }
 
 // NewService constructs a publish service. clock may be nil; time.Now is used.
 func NewService(api PublishAPI, journal *Journal, creds platform.CredentialStore, pkg release.Package, clock func() time.Time) *Service {
+	return NewServiceWithLocker(api, journal, creds, pkg, clock, NewTargetLocker())
+}
+
+// NewServiceWithLocker constructs a publish service sharing a target lock set
+// with other lifecycle operations.
+func NewServiceWithLocker(api PublishAPI, journal *Journal, creds platform.CredentialStore, pkg release.Package, clock func() time.Time, locker *TargetLocker) *Service {
 	if clock == nil {
 		clock = time.Now
+	}
+	if locker == nil {
+		locker = NewTargetLocker()
 	}
 	return &Service{
 		api:     api,
@@ -72,7 +118,7 @@ func NewService(api PublishAPI, journal *Journal, creds platform.CredentialStore
 		creds:   creds,
 		pkg:     pkg,
 		clock:   clock,
-		locks:   map[string]chan struct{}{},
+		locker:  locker,
 	}
 }
 
@@ -609,25 +655,12 @@ func pendingSecretKey(operationID, secretName string) string {
 }
 
 func (s *Service) lockTarget(ctx context.Context, target domain.Target) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	key := target.AccountID + "/" + target.ScriptName
-	s.mu.Lock()
-	semaphore := s.locks[key]
-	if semaphore == nil {
-		semaphore = make(chan struct{}, 1)
-		semaphore <- struct{}{}
-		s.locks[key] = semaphore
-	}
-	s.mu.Unlock()
+	return s.locker.Lock(ctx, target)
+}
 
-	select {
-	case <-semaphore:
-		return func() { semaphore <- struct{}{} }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+// LockTarget exposes the shared per-target lock to lifecycle operations.
+func (s *Service) LockTarget(ctx context.Context, target domain.Target) (func(), error) {
+	return s.lockTarget(ctx, target)
 }
 
 var operationRand io.Reader = rand.Reader

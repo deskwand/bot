@@ -160,26 +160,45 @@ type EditablePatch struct {
 	TaskModel       *json.RawMessage `json:"taskModel"`
 }
 
+// ConfigReference rewrites one existing JSON string in DESKWAND_CONFIG to an
+// env:NAME secret reference. Import uses it to remove inline credentials from
+// an existing configuration without copying the value into a plain variable.
+// Path is an RFC 6901 JSON pointer; Reference must be "env:" followed by a
+// secret name.
+type ConfigReference struct {
+	Path      string `json:"path"`
+	Reference string `json:"reference"`
+}
+
 // Change is the UI intent: a whitelisted patch plus secret edits, based on a
-// specific previously read fingerprint.
+// specific previously read fingerprint. References is an optional, narrow
+// migration for inline credentials found during import; it never carries a
+// secret value.
 type Change struct {
 	BaseFingerprint string
 	Patch           EditablePatch
 	Secrets         []SecretEdit
+	References      []ConfigReference
 }
 
 type changeJSON struct {
-	BaseFingerprint string        `json:"baseFingerprint"`
-	Patch           EditablePatch `json:"patch"`
-	Secrets         []SecretEdit  `json:"secrets"`
+	BaseFingerprint string            `json:"baseFingerprint"`
+	Patch           EditablePatch     `json:"patch"`
+	Secrets         []SecretEdit      `json:"secrets"`
+	References      []ConfigReference `json:"references,omitempty"`
 }
 
 func (c Change) MarshalJSON() ([]byte, error) {
-	return json.Marshal(changeJSON{BaseFingerprint: c.BaseFingerprint, Patch: c.Patch, Secrets: c.Secrets})
+	return json.Marshal(changeJSON{
+		BaseFingerprint: c.BaseFingerprint,
+		Patch:           c.Patch,
+		Secrets:         c.Secrets,
+		References:      c.References,
+	})
 }
 
 func (c Change) String() string {
-	return fmt.Sprintf("Change{base=%q patch=%s secrets=%v}", c.BaseFingerprint, patchString(c.Patch), c.Secrets)
+	return fmt.Sprintf("Change{base=%q patch=%s secrets=%v references=%v}", c.BaseFingerprint, patchString(c.Patch), c.Secrets, c.References)
 }
 
 func (c Change) GoString() string {
@@ -195,6 +214,7 @@ func (c Change) LogValue() slog.Value {
 		slog.String("baseFingerprint", c.BaseFingerprint),
 		slog.String("patch", patchString(c.Patch)),
 		slog.Any("secrets", c.Secrets),
+		slog.Any("references", c.References),
 	)
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -31,7 +32,10 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 			Message: "the deployment has no version receiving traffic; refresh after a deployment is active",
 		}
 	}
-	if err := validateSecretEdits(base.SecretNames, change.Secrets); err != nil {
+	if err := validateSecretEdits(base.SecretNames, change.Secrets, referenceSecretNames(change.References)); err != nil {
+		return domain.PublishPlan{}, err
+	}
+	if err := validateReferences(base.SecretNames, change.References, change.Secrets); err != nil {
 		return domain.PublishPlan{}, err
 	}
 
@@ -49,6 +53,9 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 	}
 
 	if err := applyPatch(document, change.Patch); err != nil {
+		return domain.PublishPlan{}, err
+	}
+	if err := applyReferences(document, change.References); err != nil {
 		return domain.PublishPlan{}, err
 	}
 
@@ -197,7 +204,178 @@ func patchIsEmpty(patch domain.EditablePatch) bool {
 	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil
 }
 
-func validateSecretEdits(existingNames []string, edits []domain.SecretEdit) error {
+var (
+	referenceNamePattern = regexp.MustCompile(`^MCP_[A-Z0-9_]+$`)
+	referencePathPattern = regexp.MustCompile(`^/mcpServers/[0-9]+/headers/[^/]+$`)
+)
+
+// reservedReferenceNames lists names an imported credential must not shadow.
+// They mirror the release template's bindings, variables and secret names.
+var reservedReferenceNames = func() map[string]bool {
+	set := map[string]bool{
+		"DESKWAND_CONFIG":     true,
+		"CF_VERSION_METADATA": true,
+		"PUBLIC_BASE_URL":     true,
+		"ACTIVE_CHANNEL":      true,
+		"BUTLER":              true,
+		"TASK":                true,
+		"CHANNELS":            true,
+		"ARTIFACTS":           true,
+	}
+	for _, name := range templateSecretNames {
+		set[name] = true
+	}
+	return set
+}()
+
+// referenceSecretNames returns the secret names referenced by import
+// migrations. Merging may create a new named secret for an inline value that
+// is not part of the release template.
+func referenceSecretNames(references []domain.ConfigReference) map[string]bool {
+	if len(references) == 0 {
+		return nil
+	}
+	names := make(map[string]bool, len(references))
+	for _, reference := range references {
+		if strings.HasPrefix(reference.Reference, "env:") {
+			names[strings.TrimPrefix(reference.Reference, "env:")] = true
+		}
+	}
+	return names
+}
+
+// applyReferences rewrites inline credential strings to env:NAME references.
+// It only touches string leaves that already exist and never copies a value.
+func applyReferences(document map[string]any, references []domain.ConfigReference) error {
+	for _, reference := range references {
+		if !referencePathPattern.MatchString(reference.Path) {
+			return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference may only rewrite an MCP header value"}
+		}
+		if !strings.HasPrefix(reference.Reference, "env:") {
+			return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference must start with env:"}
+		}
+		name := strings.TrimPrefix(reference.Reference, "env:")
+		if !referenceNamePattern.MatchString(name) {
+			return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference names an invalid secret"}
+		}
+		segments, err := pointerSegments(reference.Path)
+		if err != nil {
+			return err
+		}
+		parent, last, err := walkPointer(document, segments)
+		if err != nil {
+			return err
+		}
+		switch container := parent.(type) {
+		case map[string]any:
+			value, ok := container[last]
+			if !ok {
+				return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference points at a missing field"}
+			}
+			if _, ok := value.(string); !ok {
+				return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference must replace a string field"}
+			}
+			container[last] = reference.Reference
+		case []any:
+			index, err := pointerIndex(last, len(container))
+			if err != nil {
+				return err
+			}
+			if _, ok := container[index].(string); !ok {
+				return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference must replace a string field"}
+			}
+			container[index] = reference.Reference
+		default:
+			return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference points at a non-container field"}
+		}
+	}
+	return nil
+}
+
+func pointerSegments(path string) ([]string, error) {
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return nil, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference path must be a JSON pointer"}
+	}
+	raw := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	segments := make([]string, len(raw))
+	for i, segment := range raw {
+		segment = strings.ReplaceAll(segment, "~1", "/")
+		segment = strings.ReplaceAll(segment, "~0", "~")
+		segments[i] = segment
+	}
+	return segments, nil
+}
+
+func walkPointer(document map[string]any, segments []string) (any, string, error) {
+	var current any = document
+	for i, segment := range segments {
+		last := i == len(segments)-1
+		switch container := current.(type) {
+		case map[string]any:
+			value, ok := container[segment]
+			if !ok {
+				return nil, "", domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference points at a missing field"}
+			}
+			if last {
+				return container, segment, nil
+			}
+			current = value
+		case []any:
+			index, err := pointerIndex(segment, len(container))
+			if err != nil {
+				return nil, "", err
+			}
+			if last {
+				return container, segment, nil
+			}
+			current = container[index]
+		default:
+			return nil, "", domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference points at a non-container field"}
+		}
+	}
+	return nil, "", domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference path is empty"}
+}
+
+func pointerIndex(segment string, length int) (int, error) {
+	index, err := strconv.Atoi(segment)
+	if err != nil || index < 0 || index >= length {
+		return 0, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference array index is invalid"}
+	}
+	return index, nil
+}
+
+func validateReferences(_ []string, references []domain.ConfigReference, edits []domain.SecretEdit) error {
+	if len(references) == 0 {
+		return nil
+	}
+	replaced := make(map[string]bool, len(edits))
+	for _, edit := range edits {
+		if edit.Operation == domain.SecretReplace {
+			replaced[edit.Name] = true
+		}
+	}
+	for _, reference := range references {
+		if !referencePathPattern.MatchString(reference.Path) {
+			return invalidSecretEdit("configuration references may only rewrite MCP header values")
+		}
+		if !strings.HasPrefix(reference.Reference, "env:") {
+			return invalidSecretEdit("configuration reference must start with env:")
+		}
+		name := strings.TrimPrefix(reference.Reference, "env:")
+		if !referenceNamePattern.MatchString(name) {
+			return invalidSecretEdit("migrated secret names must match ^MCP_[A-Z0-9_]+$")
+		}
+		if reservedReferenceNames[name] {
+			return invalidSecretEdit(fmt.Sprintf("migrated secret name %q collides with a binding, variable or template name", name))
+		}
+		if !replaced[name] {
+			return invalidSecretEdit(fmt.Sprintf("configuration reference %q requires a replace edit in the same change", name))
+		}
+	}
+	return nil
+}
+
+func validateSecretEdits(existingNames []string, edits []domain.SecretEdit, referenced map[string]bool) error {
 	if len(edits) == 0 {
 		return nil
 	}
@@ -217,7 +395,7 @@ func validateSecretEdits(existingNames []string, edits []domain.SecretEdit) erro
 		}
 		seen[edit.Name] = true
 
-		if !templateSecretSet[edit.Name] && !existing[edit.Name] {
+		if !templateSecretSet[edit.Name] && !existing[edit.Name] && !referenced[edit.Name] {
 			return invalidSecretEdit(fmt.Sprintf("secret %q is not declared by the release template", edit.Name))
 		}
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
@@ -23,6 +24,7 @@ var operationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // hold pending values.
 type OperationRecord struct {
 	OperationID     string              `json:"operationId"`
+	Kind            string              `json:"kind,omitempty"`
 	Target          domain.Target       `json:"target"`
 	State           string              `json:"state"`
 	Steps           []domain.Step       `json:"steps"`
@@ -36,8 +38,16 @@ type OperationRecord struct {
 	StageAttempted  bool                `json:"stageAttempted"`
 	CleanupPending  bool                `json:"cleanupPending,omitempty"`
 	FailureCode     string              `json:"failureCode,omitempty"`
-	CreatedAt       time.Time           `json:"createdAt"`
-	UpdatedAt       time.Time           `json:"updatedAt"`
+	// Install-only fields. They let a resumed install prove which remote
+	// resources belong to this operation without storing any secret.
+	BucketName            string    `json:"bucketName,omitempty"`
+	PublicBaseURL         string    `json:"publicBaseUrl,omitempty"`
+	ReleaseVersion        string    `json:"releaseVersion,omitempty"`
+	ActiveChannel         string    `json:"activeChannel,omitempty"`
+	BucketCreateAttempted bool      `json:"bucketCreateAttempted,omitempty"`
+	ScriptUploadAttempted bool      `json:"scriptUploadAttempted,omitempty"`
+	CreatedAt             time.Time `json:"createdAt"`
+	UpdatedAt             time.Time `json:"updatedAt"`
 }
 
 // Journal stores one JSON file per operation in an injected directory. Writes
@@ -109,6 +119,27 @@ func (j *Journal) Save(record OperationRecord) error {
 		return fmt.Errorf("deployment: sync journal directory: %w", err)
 	}
 	return nil
+}
+
+// List reads every complete operation file. Temporary files are ignored.
+func (j *Journal) List() ([]OperationRecord, error) {
+	entries, err := os.ReadDir(j.dir)
+	if err != nil {
+		return nil, fmt.Errorf("deployment: read journal directory: %w", err)
+	}
+	records := make([]OperationRecord, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		operationID := strings.TrimSuffix(entry.Name(), ".json")
+		record, err := j.Load(operationID)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 // Load reads one operation by id.

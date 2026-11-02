@@ -227,6 +227,12 @@ func (c *Client) GetJSONWithResultInfo(ctx context.Context, path string, query u
 // response result into out. path follows the same unescaped-segment rules as
 // GetJSON.
 func (c *Client) SendJSON(ctx context.Context, method, path string, in, out any) error {
+	return c.SendJSONQuery(ctx, method, path, nil, in, out)
+}
+
+// SendJSONQuery is SendJSON with query parameters, used by cleanup calls such
+// as DELETE .../scripts/{name}?force=true.
+func (c *Client) SendJSONQuery(ctx context.Context, method, path string, query url.Values, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		encoded, err := json.Marshal(in)
@@ -235,7 +241,7 @@ func (c *Client) SendJSON(ctx context.Context, method, path string, in, out any)
 		}
 		body = bytes.NewReader(encoded)
 	}
-	resp, err := c.do(ctx, method, path, nil, body, "application/json")
+	resp, err := c.do(ctx, method, path, query, body, "application/json")
 	if err != nil {
 		return err
 	}

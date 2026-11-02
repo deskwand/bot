@@ -358,3 +358,57 @@ func TestMergeReportsSchemaLocationsWithoutValues(t *testing.T) {
 		t.Fatalf("schema error leaked the invalid value: %v", err)
 	}
 }
+
+func TestReferenceMigrationsAreLockedDown(t *testing.T) {
+	validPath := "/mcpServers/0/headers/Authorization"
+	validName := "MCP_NOTION_AUTHORIZATION"
+	tests := []struct {
+		name      string
+		reference domain.ConfigReference
+		secrets   []domain.SecretEdit
+		wantCode  string
+	}{
+		{
+			name:      "valid MCP header reference",
+			reference: domain.ConfigReference{Path: validPath, Reference: "env:" + validName},
+			secrets:   []domain.SecretEdit{domain.NewSecretEdit(validName, domain.SecretReplace, "value")},
+		},
+		{
+			name:      "non-header path",
+			reference: domain.ConfigReference{Path: "/advanced/apiKey", Reference: "env:" + validName},
+			secrets:   []domain.SecretEdit{domain.NewSecretEdit(validName, domain.SecretReplace, "value")},
+			wantCode:  domain.INVALID_SECRET_EDIT,
+		},
+		{
+			name:      "invalid secret name",
+			reference: domain.ConfigReference{Path: validPath, Reference: "env:TOKEN"},
+			secrets:   []domain.SecretEdit{domain.NewSecretEdit("TOKEN", domain.SecretReplace, "value")},
+			wantCode:  domain.INVALID_SECRET_EDIT,
+		},
+		{
+			name:      "missing replace edit",
+			reference: domain.ConfigReference{Path: validPath, Reference: "env:" + validName},
+			wantCode:  domain.INVALID_SECRET_EDIT,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			base := baseSnapshot(t)
+			plan, err := Merge(base, domain.Change{
+				BaseFingerprint: base.Fingerprint,
+				Secrets:         testCase.secrets,
+				References:      []domain.ConfigReference{testCase.reference},
+			})
+			if testCase.wantCode != "" {
+				assertMergeCode(t, err, testCase.wantCode)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(plan.ConfigJSON, []byte("env:"+validName)) {
+				t.Fatalf("reference was not applied: %s", plan.ConfigJSON)
+			}
+		})
+	}
+}
