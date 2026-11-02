@@ -10,18 +10,22 @@ import (
 )
 
 type fakeSecretBackend struct {
-	values map[string][]byte
-	err    error
+	values    map[string][]byte
+	err       error
+	setErr    error
+	deleteErr map[string]error
 
 	getCalls    int
 	setCalls    int
 	deleteCalls int
 	lastSetKey  string
 	lastSetVal  []byte
+	getKeys     []string
 }
 
 func (f *fakeSecretBackend) Get(key string) ([]byte, error) {
 	f.getCalls++
+	f.getKeys = append(f.getKeys, key)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -39,6 +43,9 @@ func (f *fakeSecretBackend) Set(key string, value []byte) error {
 	if f.err != nil {
 		return f.err
 	}
+	if f.setErr != nil {
+		return f.setErr
+	}
 	if f.values == nil {
 		f.values = map[string][]byte{}
 	}
@@ -50,6 +57,9 @@ func (f *fakeSecretBackend) Delete(key string) error {
 	f.deleteCalls++
 	if f.err != nil {
 		return f.err
+	}
+	if err := f.deleteErr[key]; err != nil {
+		return err
 	}
 	if _, ok := f.values[key]; !ok {
 		return mygo.ErrSecretNotFound
