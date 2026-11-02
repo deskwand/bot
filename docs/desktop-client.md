@@ -130,7 +130,57 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。若打开后
 
 模型的本机探测只证明“这台机器用这个密钥能访问提供商”，不代表云端 Worker 已经使用该密钥成功处理消息。界面会显示来源和观察时间。
 
-## 8. 与命令行 Wrangler 共存
+## 8. 数据备份与恢复
+
+“数据备份”页把当前部署的云端业务数据导出为一个本地 `.zip`，也可以从这个文件整体恢复。备份文件由当前客户端直接读写，云端不会长期保存副本。
+
+### 8.1 导出包含什么
+
+- `ButlerDO` 的全部业务表：记忆、对话与 Pi 会话、定时任务、任务清单与事件、审批消息、元数据，以及 Agents SDK 的 Durable Object KV 状态（作为伪表一并导出）；
+- 每个 `TaskDO` 的全部业务表与任务事件；
+- `ChannelDO` 的 owner 地址、微信登录状态与微信会话上下文；
+- R2 `ARTIFACTS` 中的任务产物。
+
+不包含部署配置（`DESKWAND_CONFIG`）、任何 secret（模型 key、Telegram / 微信凭据等）、Cloudflare 账号授权、桌面客户端本地状态和恢复日志；备份里也没有云端维护租约。
+
+**备份文件不加密**，包含记忆、对话和微信会话上下文等敏感内容。请像保管密码一样保管，不要上传到公共位置或发给不受信任的人。
+
+导出文件默认名为 `deskwand-backup-<Worker 名称>-<YYYYMMDD-HHMMSS>.zip`。单个 R2 产物超过 100 MiB 时仍会导出，但该备份不能用于恢复，界面会列出这些对象。
+
+### 8.2 恢复的限制
+
+- **只能恢复到同一云端版本。** 备份记录导出时的 Worker 发布版本，目标部署当前版本必须与它完全相同。版本未知（例如用 `wrangler deploy` 部署后尚未重新导入）也不能恢复。
+- 备份来自 `1.2.0`、当前部署是 `1.3.0` 时，界面会提示先升级或降级到 `1.2.0`。旧版云端尚不支持备份接口时，会提示先在“更新”页升级。
+- **恢复是整体覆盖，不是合并。** 恢复会用备份内容清空并替换 `ButlerDO`、各 `TaskDO`、`ChannelDO` 的业务数据和 Durable Object KV；备份中不存在的任务对象与 R2 产物会被删除。恢复后云端业务数据等于备份时刻，之后写入的内容不会保留。
+- 备份含超过 100 MiB 的产物时，恢复会被拒绝（`BACKUP_OBJECT_TOO_LARGE`），因为 Worker 请求体无法写回该对象。
+- 同一时间只允许一个导出或恢复操作。
+
+### 8.3 恢复前快照
+
+每次真正开始覆盖前，客户端会先对当前部署执行一次完整导出，作为恢复前快照。快照位于应用数据目录的 `backups/` 下：
+
+- macOS：`~/Library/Application Support/DeskWand Bot/backups/pre-restore-<YYYYMMDD-HHMMSS>.zip`
+- Windows：`%APPDATA%\DeskWand Bot\backups\pre-restore-<YYYYMMDD-HHMMSS>.zip`
+
+快照失败（包括当前部署含超过 100 MiB 的产物）时恢复会中止，云端数据不会被修改。快照和普通备份一样未加密，也包含敏感内容。
+
+恢复过程中失败时，概览页会显示“数据恢复未完成”，并提供“用该文件重试”和“恢复到恢复前快照”。在恢复完成前不要重新开始另一次恢复；未完成的记录保存在应用数据目录的 `restore/restore.json`。重试会重新执行覆盖步骤；每个 Durable Object 都先清空，因此重试是幂等的。
+
+### 8.4 导出和恢复期间消息会暂停
+
+导出或恢复开始后，客户端会向云端申请一个维护租约，最长 10 分钟：
+
+- 暂停期间 Telegram webhook 返回 503，Telegram 会在稍后重投；
+- 微信轮询暂停；
+- 每 5 分钟的 cron 与 Durable Object alarm 被推迟，任务和定时任务不会在数据不一致时执行。
+
+操作正常结束时会主动释放租约。客户端崩溃、网络中断或进程被关闭时，租约最多 10 分钟后自然过期，消息收发和定时任务自动恢复，不需要手动重启云端。租约到期后，进行中的恢复会以 `MAINTENANCE_REQUIRED` 失败，并保留“数据恢复未完成”记录。
+
+### 8.5 正在运行的任务可能重复外部动作
+
+恢复会中止进行中的任务，并把状态回退到备份时刻。如果任务在备份之后、恢复之前已经执行过外部动作（例如发送消息、提交请求或写入第三方系统），恢复后它可能从较早的状态继续执行，从而重复这些动作。确认恢复前请确认这些重复可以接受。
+
+## 9. 与命令行 Wrangler 共存
 
 客户端和 `wrangler deploy` 可以管理同一套 Worker，但要注意变量覆盖规则：
 
@@ -150,7 +200,7 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。若打开后
 
 **命令行部署会清除 release tag：** `wrangler deploy` 不写客户端使用的 `workers/tag` 注解。部署后云端版本会显示为未知，客户端会返回 `VERSION_UNKNOWN_REIMPORT`，直到下一次在“连接已有服务”中重新导入或执行一次客户端升级。不要用 `--tag` 临时修补部署脚本；重新导入/升级才会恢复客户端可识别的版本。
 
-## 9. 客户端更新
+## 10. 客户端更新
 
 桌面客户端更新与云端 Worker 升级是两条独立链路：
 
@@ -165,11 +215,11 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。若打开后
 
 客户端更新与 Worker 发布包不能互相替代：Worker 发布包不能安装成桌面更新，桌面更新也不会携带或替换云端代码。
 
-## 10. 维护者：发布密钥、构建、签名与更新源
+## 11. 维护者：发布密钥、构建、签名与更新源
 
 以下步骤只属于维护者，不是普通用户安装步骤。
 
-### 10.1 两套独立的 Ed25519 密钥
+### 11.1 两套独立的 Ed25519 密钥
 
 **Worker 发布密钥**（key id `deskwand-release-1`）：
 
@@ -192,7 +242,7 @@ npm run generate:release-key -- --client
 
 脚本拒绝覆盖已有密钥。私钥绝不进入仓库、日志、构建产物或客户端包。两套密钥不能混用。轮换密钥时，先发布同时信任旧、新 key id 的客户端，再切换签名密钥。
 
-### 10.2 构建 Worker 发布包和桌面安装包
+### 11.2 构建 Worker 发布包和桌面安装包
 
 一次完成签名 Worker 发布包、嵌入和 macOS 打包：
 
@@ -212,7 +262,7 @@ Windows 交叉构建可以编译出 `.exe`，但本仓库的 macOS 环境在执�
 
 **应用图标**：母版是 `desktop/icon/icon.svg`（轨道星球，设计见 `docs/superpowers/specs/2026-11-02-app-icon-design.md`）。`desktop/mygo.json` 的 `icon` 指向 `icon/icon.png`，MyGo 由它生成 macOS `.icns` 与 Windows `.ico`。修改图标：改 SVG → 运行 `bash desktop/scripts/render-icon.sh` → 同时提交 SVG 与 PNG。渲染需要本机 Google Chrome（可用 `CHROME=` 指定路径）；构建只读已提交的 PNG，不需要 Chrome。图标源文件不放在 `desktop/resources/`：MyGo 会把该目录的全部内容打进应用。`desktop/icon_test.go` 校验 PNG 尺寸、透明角和关键配色。
 
-### 10.3 macOS 签名与公证
+### 11.3 macOS 签名与公证
 
 在 `desktop/mygo.json` 中配置（示例，未写入仓库）：
 
@@ -235,7 +285,7 @@ xcrun notarytool store-credentials notary
 
 Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配置；证书密码来自 `MYGO_WINDOWS_CERTIFICATE_PASSWORD`。未签名安装器会触发 SmartScreen 警告。
 
-### 10.4 客户端更新源
+### 11.4 客户端更新源
 
 客户端更新使用 MyGo 的签名更新机制，但密钥与 Worker 发布包分离：
 
@@ -248,7 +298,7 @@ Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配�
 
 `ClientUpdateFeedURL` 默认为空，因此普通源码构建和本仓库的 CI 不检查更新；UI 显示“未配置更新源”。只有同时存在可信公钥、有效更新源和可写安装位置时，MyGo 才会启用更新。客户端源码不嵌入公钥文件；`mygo.json` 的 `updates.publicKey` 是唯一验签来源。
 
-### 10.5 CI
+### 11.5 CI
 
 `.github/workflows/desktop-build.yml` 在 `macos-latest` 和 `windows-latest` 上：
 
@@ -261,7 +311,7 @@ Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配�
 
 secret 缺失时会输出明确 notice 并跳过打包，不会用开发密钥伪造正式产物。
 
-### 10.6 验收记录
+### 11.6 验收记录
 
 当前仓库实际执行过的验证、环境限制和 NOT RUN 项见：
 
