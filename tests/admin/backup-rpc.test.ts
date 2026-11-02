@@ -1,6 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { BackupRpc, KV_TABLE } from "../../src/admin/backup-rpc";
+import { MaintenanceStore } from "../../src/admin/maintenance";
 import { PAGE_BYTES, type DumpRow } from "../../src/admin/sql-dump";
 
 declare module "cloudflare:test" {
@@ -82,5 +83,49 @@ describe("BackupRpc KV pages", () => {
     expect(
       dumped.rows.some((row) => JSON.stringify(row).length > PAGE_BYTES / 4),
     ).toBe(true);
+  });
+});
+
+describe("restoreBegin lease preconditions", () => {
+  it("refuses to wipe the object when the local lease is missing or expired", async () => {
+    const stub = harness("backup-rpc-expired-lease");
+    const result = await runInDurableObject(
+      stub,
+      async (_instance, state) => {
+        state.storage.sql.exec(
+          `CREATE TABLE IF NOT EXISTS keep (id INTEGER PRIMARY KEY)`,
+        );
+        state.storage.sql.exec(`INSERT INTO keep (id) VALUES (1)`);
+        let now = 0;
+        const lease = new MaintenanceStore(state.storage.sql, () => now);
+        lease.acquire("restore", "op-expired");
+        now = 600_001;
+        const rpc = new BackupRpc(state, lease);
+        let rejected = false;
+        try {
+          await rpc.restoreBegin({
+            tables: [
+              { name: "replacement", create: "CREATE TABLE replacement (id INTEGER)", withoutRowid: false },
+            ],
+            indexes: [],
+          });
+        } catch {
+          rejected = true;
+        }
+        return {
+          rejected,
+          tables: state.storage.sql
+            .exec<{ name: string }>(
+              `SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`,
+            )
+            .toArray()
+            .map((row) => row.name),
+        };
+      },
+    );
+
+    expect(result.rejected).toBe(true);
+    expect(result.tables).toContain("keep");
+    expect(result.tables).not.toContain("replacement");
   });
 });

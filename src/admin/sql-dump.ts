@@ -201,6 +201,16 @@ function decodeValue(text: string): DumpValue {
   return { $int: text };
 }
 
+function decodeColumn(text: string, raw: SqlStorageValue): DumpValue {
+  // SQLite's quote() truncates TEXT at the first NUL. The raw value keeps the
+  // complete string, so use quote() only to classify the value; numeric and
+  // blob literals still come from quote() to avoid JS precision loss.
+  if (text.startsWith("'")) {
+    return typeof raw === "string" ? raw : decodeValue(text);
+  }
+  return decodeValue(text);
+}
+
 function decodeRow(
   raw: Record<string, SqlStorageValue>,
   cols: ColumnInfo[],
@@ -208,8 +218,11 @@ function decodeRow(
 ): DumpRow {
   const row: DumpRow = {};
   if (withRowid) row.__rowid = decodeValue(String(raw.__rowid));
-  for (const column of cols) {
-    row[column.name] = decodeValue(String(raw[column.name]));
+  for (let i = 0; i < cols.length; i += 1) {
+    row[cols[i]!.name] = decodeColumn(
+      String(raw[`__q${i}`]),
+      raw[`__r${i}`]!,
+    );
   }
   return row;
 }
@@ -228,10 +241,14 @@ export function readPage(
   maxBytes: number = PAGE_BYTES,
 ): DumpPage {
   const cols = columns(sql, table.name);
+  // Read each value twice: quote() is lossless for numbers and blobs, while
+  // the raw value keeps NUL bytes in TEXT that quote() would truncate.
   const select = cols
-    .map(
-      (column) =>
-        `quote(${quoteIdent(column.name)}) AS ${quoteIdent(column.name)}`,
+    .map((column, index) =>
+      [
+        `quote(${quoteIdent(column.name)}) AS ${quoteIdent(`__q${index}`)}`,
+        `${quoteIdent(column.name)} AS ${quoteIdent(`__r${index}`)}`,
+      ].join(", "),
     )
     .join(", ");
 

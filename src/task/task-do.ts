@@ -172,6 +172,7 @@ export class TaskDO extends Agent<Env> {
             this.env.ARTIFACTS,
             () => this.currentTaskId() ?? "",
             this.env.PUBLIC_BASE_URL,
+            () => this.assertNoMaintenance(),
           ),
           emitProgress,
           (args) => `保存：${args.filename}`,
@@ -205,9 +206,22 @@ export class TaskDO extends Agent<Env> {
     this.lifecycle.use(this.harness);
   }
 
-  override async onStart(_props?: object): Promise<void> {
-    await super.onStart(_props);
+  override async onStart(props?: object): Promise<void> {
+    // The admin restore RPC enters this object before dispatching the handler.
+    // Defer every piece of startup business work while the Butler holds the
+    // maintenance lease; the alarm below retries it after the lease is gone.
+    if (await this.deferStartupIfMaintenance()) return;
+    await this.runStartup(props);
+  }
+
+  private async runStartup(props?: object): Promise<void> {
+    // Clear the flag before flushing: flushOutbox sets it again only if the
+    // lease came back. Checking the old value here would skip the rest of
+    // startup on the very alarm that resumed it.
+    this.setMeta("startup_deferred", "0");
+    await super.onStart(props);
     await this.flushOutbox();
+    if (this.readMeta("startup_deferred") === "1") return;
 
     const state = this.readMeta("state");
     if (state === "queued" || state === "running") {
@@ -229,6 +243,8 @@ export class TaskDO extends Agent<Env> {
 
   override async onAlarm(): Promise<void> {
     await super.onAlarm();
+    // The alarm override resumes deferred startup after it clears the lease.
+    if (this.readMeta("startup_deferred") === "1") return;
     await this.flushOutbox();
   }
 
@@ -276,6 +292,13 @@ export class TaskDO extends Agent<Env> {
       return;
     }
     await super.alarm();
+
+    // Startup was skipped while the lease was live. Resume it now, after the
+    // alarm path itself proved the lease is gone.
+    if (this.readMeta("startup_deferred") === "1") {
+      if (await this.deferStartupIfMaintenance()) return;
+      await this.runStartup();
+    }
   }
 
   async start(spec: TaskSpec): Promise<void> {
@@ -528,6 +551,9 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async watchRun(operationId: string): Promise<void> {
+    // Re-attaching resumes Pi work, so it must wait out the lease. Startup
+    // will re-attach from the persisted operation id on the next alarm.
+    if (await this.deferStartupIfMaintenance()) return;
     let summary = "";
     try {
       const result = await this.harness.wait(operationId);
@@ -673,6 +699,8 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async flushOutbox(excludeRetryId?: string): Promise<void> {
+    // Never deliver to the Butler while it is being exported or restored.
+    if (await this.deferStartupIfMaintenance()) return;
     const taskId = this.currentTaskId();
     if (!taskId) return;
 
@@ -758,6 +786,34 @@ export class TaskDO extends Agent<Env> {
   private async butlerMaintenanceActive(): Promise<boolean> {
     const butler = this.env.BUTLER.get(this.env.BUTLER.idFromName("owner"));
     return butler.maintenanceActive();
+  }
+
+  private async assertNoMaintenance(): Promise<void> {
+    let active: boolean;
+    try {
+      active = await this.butlerMaintenanceActive();
+    } catch {
+      active = true;
+    }
+    if (active) throw new Error("maintenance lease active");
+  }
+
+  /**
+   * Fail closed on an unknown lease state: the Butler may be unreachable
+   * exactly while a restore is in progress. Setting the persisted flag makes
+   * the next alarm resume startup even though onStart already ran.
+   */
+  private async deferStartupIfMaintenance(): Promise<boolean> {
+    let active: boolean;
+    try {
+      active = await this.butlerMaintenanceActive();
+    } catch {
+      active = true;
+    }
+    if (!active) return false;
+    this.setMeta("startup_deferred", "1");
+    await this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
+    return true;
   }
 
   private currentTaskId(): string | undefined {

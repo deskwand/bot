@@ -31,12 +31,16 @@ export function saveArtifactTool(
   bucket: R2Bucket,
   taskId: () => string,
   baseUrl: string,
+  guard?: () => Promise<void>,
 ): ToolRegistration<typeof SaveArtifact> {
   return {
     name: "save_artifact",
     description: "Save a file so it can be shared with the user.",
     parameters: SaveArtifact,
     async execute({ filename, content, contentType }) {
+      // A backup/restore lease fences artifact writes so the R2 listing and
+      // the write-back cannot miss a file created halfway through the export.
+      if (guard) await guard();
       const id = taskId();
       if (!id) throw new Error("任务尚未开始");
 

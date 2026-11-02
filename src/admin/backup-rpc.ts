@@ -61,9 +61,18 @@ export class BackupRpc {
   async restoreBegin(schema: DbSchema): Promise<void> {
     // `deleteAll` removes the lease table too. Capture the live lease first so
     // the next admin request still sees it and the restore can continue.
-    const lease = this.lease?.current() ?? null;
+    // Refuse before deleting anything when the lease expired between the
+    // gateway's renewal and this RPC: otherwise the object would be wiped with
+    // no lease left to finish the restore.
+    let lease: ReturnType<MaintenanceStore["current"]> = null;
+    if (this.lease !== null) {
+      lease = this.lease.current();
+      if (lease === null) {
+        throw new Error("maintenance lease is missing or expired");
+      }
+    }
     await this.ctx.storage.deleteAll();
-    if (this.lease && lease !== null) this.lease.restore(lease);
+    if (this.lease !== null && lease !== null) this.lease.restore(lease);
     createTables(this.ctx.storage.sql, schema);
   }
 

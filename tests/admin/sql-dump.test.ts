@@ -396,3 +396,30 @@ describe("sql-dump", () => {
     expect(page).toEqual({ rows: [], next: null });
   });
 });
+
+describe("sql-dump text fidelity", () => {
+  it("round-trips TEXT containing a NUL byte", async () => {
+    const source = harness("dump-nul");
+    const captured = await runInDurableObject(source, (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec(`CREATE TABLE t (id INTEGER PRIMARY KEY, s TEXT)`);
+      sql.exec(`INSERT INTO t (id, s) VALUES (1, 'a' || char(0) || 'b')`);
+      const schema = readSchema(sql);
+      const page = readPage(sql, findTable(schema, "t"), null);
+      return { schema, row: page.rows[0]! };
+    });
+
+    expect(captured.row.s).toBe("a\0b");
+
+    const target = harness("dump-nul-target");
+    const restored = await runInDurableObject(target, (_instance, state) => {
+      const sql = state.storage.sql;
+      createTables(sql, captured.schema);
+      writePage(sql, findTable(captured.schema, "t"), [captured.row]);
+      return sql
+        .exec<{ s: string }>(`SELECT s FROM t WHERE id = 1`)
+        .toArray()[0]?.s;
+    });
+    expect(restored).toBe("a\0b");
+  });
+});

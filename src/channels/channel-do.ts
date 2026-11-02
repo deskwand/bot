@@ -653,6 +653,9 @@ export class ChannelDO extends Agent<Env> {
     credentials: WeChatCredentials,
     routeKey: string,
   ): void {
+    // A lease can be acquired while getUpdates is in flight. Do not admit the
+    // batch or write session context into a database that is being restored.
+    if (this.lease.current() !== null) return;
     updates.forEach((update, index) => {
       if (
         update.messageType !== 1 ||
@@ -834,7 +837,10 @@ export class ChannelDO extends Agent<Env> {
     };
   }
 
-  private dispatchMessage(event: MessageEvent, routeKey: string): void {
+  private dispatchMessage(event: MessageEvent, routeKey: string): boolean {
+    // Fail closed for a poll or webhook already in flight when the lease was
+    // acquired: the Butler must not start new work against half-saved data.
+    if (this.lease.current() !== null) return false;
     try {
       const admitted: AdmittedMessage = { ...event, routeKey };
       const butler = this.env.BUTLER.get(
@@ -848,10 +854,12 @@ export class ChannelDO extends Agent<Env> {
           );
         }),
       );
+      return true;
     } catch (error) {
       console.error(
         `channel: message dispatch failed: ${errorMessage(error)}`,
       );
+      return false;
     }
   }
 

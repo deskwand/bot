@@ -403,6 +403,11 @@ export class ButlerDO extends Agent<Env> {
    * so the gateway's `onMessage` is mapped here in `src/index.ts`.
    */
   async handleMessage(evt: AdmittedMessage): Promise<void> {
+    // A live lease pauses inbound work. The channel hub already rejects new
+    // webhooks and polling, but an in-flight dispatch can still arrive.
+    if (this.lease.current() !== null) {
+      throw new Error("maintenance lease active");
+    }
     try {
       await this.handleInboundMessage(evt);
     } catch (error) {
@@ -417,11 +422,21 @@ export class ButlerDO extends Agent<Env> {
    * log saves the rows each durable event writes on both sides.
    */
   async reportTaskProgress(taskId: string, text: string): Promise<void> {
+    // Display-only progress is dropped while the deployment is quiesced; the
+    // Task outbox keeps the durable events for after the lease.
+    if (this.lease.current() !== null) return;
     if (!this.repo.get(taskId)) return;
     await this.handleProgress(taskId, text, getClock().now());
   }
 
   async report(event: TaskEvent): Promise<void> {
+    // Fail closed: throwing makes Outbox.flush keep delivered = 0 and retry
+    // once the maintenance lease is gone. Acknowledging here would let the
+    // TaskDO mark an event delivered while the Butler never stored it.
+    if (this.lease.current() !== null) {
+      throw new Error("maintenance lease active");
+    }
+
     const now = getClock().now();
 
     // Events can arrive before the Butler has spawned/indexed the task.
