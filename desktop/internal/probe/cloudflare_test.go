@@ -30,6 +30,7 @@ const (
 
 var (
 	keepSecret    = "DESKWAND_PROBE_KEEP"
+	keep2Secret   = "DESKWAND_PROBE_KEEP2"
 	replaceSecret = "DESKWAND_PROBE_REPLACE"
 	clearSecret   = "DESKWAND_PROBE_CLEAR"
 )
@@ -560,6 +561,240 @@ func TestLiveDurableObjectMigrationPaths(t *testing.T) {
 	}
 }
 
+// TestLiveScriptUploadSecretPreservation asks how the non-versioned script
+// upload (PUT .../scripts/{name}), which is required for Durable Object
+// migrations, treats existing secrets.
+//
+// Sources:
+//   - Upload Worker Module API reference. `keep_bindings` is documented there
+//     as "List of binding types to keep from previous_upload". The same page
+//     documents the Inherit binding object fields (`name`, `type`, `old_name`,
+//     `version_id`) and the `bindings_inherit=strict` query parameter:
+//     https://developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/update/
+//   - `inherit` resolves only from the latest uploaded version on script
+//     uploads. An explicit version id is rejected with error 10057; without
+//     `bindings_inherit=strict`, an unresolvable inherit is silently dropped.
+//     (Same Upload Worker Module page.)
+//   - Multipart upload metadata for binding shapes and the immediate-deploy
+//     `migrations` attribute:
+//     https://developers.cloudflare.com/workers/configuration/multipart-upload-metadata/
+//
+// `keep_bindings` appears in the Upload Worker Module API schema; it is not
+// listed on the multipart-upload-metadata page.
+//
+// Outcomes are recorded, not asserted. Only harness failures and broken DO
+// counter persistence fail the test.
+func TestLiveScriptUploadSecretPreservation(t *testing.T) {
+	if liveTestDisabled(t) {
+		return
+	}
+	account, token := liveAccount(t)
+
+	name := newProbeName(t)
+	if err := checkProbeName(name); err != nil {
+		t.Fatalf("generated probe name rejected: %v", err)
+	}
+
+	client := &cfClient{
+		account: account,
+		token:   token,
+		http:    &http.Client{Timeout: 60 * time.Second},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cleanupCancel()
+		if err := client.deleteScript(cleanupCtx, name); err != nil {
+			t.Errorf("cleanup: delete %s: %v", name, err)
+			return
+		}
+		t.Logf("cleanup: deleted %s", name)
+	})
+
+	// 1. Create the Worker with ProbeCounter and migration v1.
+	initialMetadata := map[string]any{
+		"main_module":        "worker.js",
+		"compatibility_date": "2026-11-01",
+		"bindings": append(doBindingsForClasses([]string{"ProbeCounter"}),
+			map[string]any{"type": "plain_text", "name": "DESKWAND_PROBE_MARKER", "text": "deskwand-probe"},
+		),
+		"migrations": map[string]any{
+			"new_tag":            "v1",
+			"new_sqlite_classes": []string{"ProbeCounter"},
+		},
+		"annotations": map[string]any{"workers/message": "deskwand probe: script-upload secret baseline"},
+	}
+	client.uploadScript(t, ctx, name, initialMetadata, durableProbeModule("initial", false))
+
+	accountSubdomain := client.accountSubdomain(t, ctx)
+	client.enableSubdomain(t, ctx, name)
+	probeURL := fmt.Sprintf("https://%s.%s.workers.dev/", name, accountSubdomain)
+	t.Logf("enabled workers.dev route %s", probeURL)
+
+	keepValue := "keep-" + randomSuffix(t)
+	keep2Value := "keep2-" + randomSuffix(t)
+	client.addRedactions(map[string]string{keepSecret: keepValue, keep2Secret: keep2Value})
+	client.patchSecrets(t, ctx, name, map[string]any{
+		keepSecret:  secretText(keepSecret, keepValue),
+		keep2Secret: secretText(keep2Secret, keep2Value),
+	})
+
+	// Deploy a known baseline through the script upload so the next upload's
+	// "previous_upload" is also a script upload. Both secrets are explicit in
+	// this baseline; the bulk-secret call above registers the same values.
+	baselineMetadata := map[string]any{
+		"main_module":        "worker.js",
+		"compatibility_date": "2026-11-01",
+		"bindings": append(doBindingsForClasses([]string{"ProbeCounter"}),
+			secretText(keepSecret, keepValue),
+			secretText(keep2Secret, keep2Value),
+		),
+		"annotations": map[string]any{"workers/message": "deskwand probe: script-upload secret baseline"},
+	}
+	client.uploadScript(t, ctx, name, baselineMetadata, durableProbeModule("baseline", false))
+	baseline := client.waitForRevision(t, ctx, probeURL, "baseline")
+	if !hasSecretHashes(baseline, keepValue, keep2Value) {
+		t.Fatalf("baseline / did not report both KEEP and KEEP2 hashes: %s", baseline)
+	}
+	client.mustCounter(t, ctx, probeURL+"do", 1)
+	expectedCounter := 1
+
+	// The initial PUT applied v1. Keep the expected tag locally; the list
+	// read is observational only because it can lag the upload.
+	appliedTag := "v1"
+	if tag := client.migrationTag(t, ctx, name); tag != "" && tag != appliedTag {
+		t.Logf("WARNING: expected migration tag %q after baseline, list returned %q", appliedTag, tag)
+	} else {
+		t.Logf("migration tag after baseline script upload: %q", tag)
+	}
+
+	// Variant A: keep_bindings=["secret_text"], migration v1->v2, and no
+	// secret bindings listed. Both KEEP and KEEP2 are checked because
+	// keep_bindings is a binding-type keep, not a per-name keep.
+	variantAMetadata := map[string]any{
+		"main_module":        "worker.js",
+		"compatibility_date": "2026-11-01",
+		"keep_bindings":      []string{"secret_text"},
+		"bindings":           doBindingsForClasses([]string{"ProbeCounter", "ProbeCounter2"}),
+		"migrations": map[string]any{
+			"old_tag":            appliedTag,
+			"new_tag":            "v2",
+			"new_sqlite_classes": []string{"ProbeCounter2"},
+		},
+		"annotations": map[string]any{"workers/message": "deskwand probe: keep_bindings secret_text"},
+	}
+	outcomeA := client.uploadScriptOutcome(t, ctx, name, variantAMetadata,
+		durableProbeModuleWithClasses("script-keep-bindings", "ProbeCounter", "ProbeCounter2"))
+	if outcomeA.Accepted {
+		got := client.waitForRevision(t, ctx, probeURL, "script-keep-bindings")
+		t.Logf("keep_bindings / response: %s", got)
+		if hasSecretHashes(got, keepValue, keep2Value) {
+			t.Logf("RESULT script-upload keep_bindings: KEPT")
+		} else {
+			t.Logf("RESULT script-upload keep_bindings: LOST")
+		}
+		expectedCounter++
+		client.mustCounter(t, ctx, probeURL+"do", expectedCounter)
+		appliedTag = "v2"
+		if tag := client.migrationTag(t, ctx, name); tag != "" && tag != appliedTag {
+			t.Logf("WARNING: expected migration tag %q after keep_bindings upload, list returned %q", appliedTag, tag)
+		} else {
+			t.Logf("migration tag after keep_bindings upload: %q", tag)
+		}
+	} else {
+		t.Logf("RESULT script-upload keep_bindings: REJECTED code=%d message=%s",
+			outcomeA.firstCode(), client.safeBody([]byte(outcomeA.message())))
+	}
+
+	// Variant B: no keep_bindings, inherit KEEP only, and migration v2->v3.
+	// If variant A was rejected, create the missing classes in this step so
+	// the test can still reach variant C; the applied tag is recorded below.
+	currentClasses := doClassesForTag(appliedTag)
+	newClasses := missingDOClasses(currentClasses, []string{"ProbeCounter2", "ProbeCounter3"})
+	classesAfterB := append(append([]string{}, currentClasses...), newClasses...)
+	if appliedTag != "v2" {
+		t.Logf("NOTE: applied tag before inherit upload is %q, not v2; missing classes are created together", appliedTag)
+	}
+	inheritBindings := append(doBindingsForClasses(classesAfterB),
+		map[string]any{"type": "inherit", "name": keepSecret},
+	)
+	variantBMetadata := map[string]any{
+		"main_module":        "worker.js",
+		"compatibility_date": "2026-11-01",
+		"bindings":           inheritBindings,
+		"annotations":        map[string]any{"workers/message": "deskwand probe: script upload inherit KEEP"},
+	}
+	if len(newClasses) > 0 {
+		variantBMetadata["migrations"] = map[string]any{
+			"old_tag":            appliedTag,
+			"new_tag":            "v3",
+			"new_sqlite_classes": newClasses,
+		}
+	} else {
+		t.Logf("no missing DO classes for v3; inherit upload carries no migration")
+	}
+	outcomeB := client.uploadScriptOutcomeStrict(t, ctx, name, variantBMetadata,
+		durableProbeModuleWithClasses("script-inherit-keep", classesAfterB...))
+	if outcomeB.Accepted {
+		got := client.waitForRevision(t, ctx, probeURL, "script-inherit-keep")
+		t.Logf("inherit / response: %s", got)
+		keepState := "LOST"
+		if got.Keep != nil && *got.Keep == sha256Hex(keepValue) {
+			keepState = "KEPT"
+		}
+		keep2State := "ABSENT"
+		if got.Keep2 != nil {
+			keep2State = "PRESENT"
+			if *got.Keep2 != sha256Hex(keep2Value) {
+				t.Logf("WARNING: KEEP2 is present but its hash changed")
+			}
+		}
+		t.Logf("RESULT script-upload inherit: ACCEPTED keep=%s keep2=%s", keepState, keep2State)
+		expectedCounter++
+		client.mustCounter(t, ctx, probeURL+"do", expectedCounter)
+		if len(newClasses) > 0 {
+			appliedTag = "v3"
+		}
+		if tag := client.migrationTag(t, ctx, name); tag != "" && tag != appliedTag {
+			t.Logf("WARNING: expected migration tag %q after inherit upload, list returned %q", appliedTag, tag)
+		} else {
+			t.Logf("migration tag after inherit upload: %q", tag)
+		}
+	} else {
+		t.Logf("RESULT script-upload inherit: REJECTED code=%d message=%s",
+			outcomeB.firstCode(), client.safeBody([]byte(outcomeB.message())))
+	}
+
+	// Variant C: a plain script upload with no keep_bindings and no secret
+	// bindings at all. DO bindings are still present so /do remains testable.
+	plainClasses := doClassesForTag(appliedTag)
+	variantCMetadata := map[string]any{
+		"main_module":        "worker.js",
+		"compatibility_date": "2026-11-01",
+		"bindings":           doBindingsForClasses(plainClasses),
+		"annotations":        map[string]any{"workers/message": "deskwand probe: plain script upload"},
+	}
+	outcomeC := client.uploadScriptOutcome(t, ctx, name, variantCMetadata,
+		durableProbeModuleWithClasses("script-plain", plainClasses...))
+	if outcomeC.Accepted {
+		got := client.waitForRevision(t, ctx, probeURL, "script-plain")
+		t.Logf("plain / response: %s", got)
+		if hasSecretHashes(got, keepValue, keep2Value) {
+			t.Logf("RESULT script-upload plain: KEPT")
+		} else {
+			t.Logf("RESULT script-upload plain: LOST")
+		}
+		expectedCounter++
+		client.mustCounter(t, ctx, probeURL+"do", expectedCounter)
+	} else {
+		t.Logf("RESULT script-upload plain: REJECTED code=%d message=%s",
+			outcomeC.firstCode(), client.safeBody([]byte(outcomeC.message())))
+	}
+}
+
 func liveAccount(t *testing.T) (string, string) {
 	t.Helper()
 	account := strings.TrimSpace(os.Getenv("DESKWAND_CF_TEST_ACCOUNT"))
@@ -652,29 +887,46 @@ func durableNamespaceBinding(name, className string) map[string]any {
 	}
 }
 
-// durableProbeModule is a minimal SQLite-backed Durable Object Worker.
+// durableProbeModule is a minimal SQLite-backed Durable Object Worker with
+// ProbeCounter plus, optionally, ProbeCounter2.
 //
-//   - `/` returns the same SHA-256-only secret report as probeModule.
+//   - `/` returns SHA-256 digests for KEEP, KEEP2 and REPLACE plus whether
+//     CLEAR is defined.
 //   - `/do` increments ProbeCounter's SQLite counter and returns its value.
-//   - `/do2` does the same for ProbeCounter2, which exists only when
-//     includeSecondClass is true (the v2 uploads).
+//   - `/do2` does the same for ProbeCounter2.
 //
 // The DO classes are exported so `new_sqlite_classes` can provision SQLite
 // namespaces for them. `ctx.storage.sql` is the documented SQLite storage API.
 func durableProbeModule(revision string, includeSecondClass bool) string {
-	secondClass := ""
+	classes := []string{"ProbeCounter"}
 	if includeSecondClass {
-		secondClass = `
-export class ProbeCounter2 {
+		classes = append(classes, "ProbeCounter2")
+	}
+	return durableProbeModuleWithClasses(revision, classes...)
+}
+
+// durableProbeModuleWithClasses is durableProbeModule generalized to any
+// number of extra DO classes. ProbeCounter is always defined; names in classes
+// other than ProbeCounter are appended in order and deduplicated.
+func durableProbeModuleWithClasses(revision string, classes ...string) string {
+	var extraClasses strings.Builder
+	seen := map[string]bool{"ProbeCounter": true}
+	for _, className := range classes {
+		if seen[className] {
+			continue
+		}
+		seen[className] = true
+		fmt.Fprintf(&extraClasses, `
+export class %s {
   constructor(ctx, env) {
     this.ctx = ctx;
     this.env = env;
   }
   async fetch(_request) {
-    return incrementCounter(this.ctx, "ProbeCounter2");
+    return incrementCounter(this.ctx, %q);
   }
 }
-`
+`, className, className)
 	}
 	return `const respond = (body, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -709,7 +961,7 @@ export class ProbeCounter {
     return incrementCounter(this.ctx, "ProbeCounter");
   }
 }
-` + secondClass + `
+` + extraClasses.String() + `
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -735,6 +987,7 @@ export default {
     return respond({
       revision: "` + revision + `",
       keep: await sha256(env.DESKWAND_PROBE_KEEP),
+      keep2: await sha256(env.DESKWAND_PROBE_KEEP2),
       replace: await sha256(env.DESKWAND_PROBE_REPLACE),
       clearDefined:
         env.DESKWAND_PROBE_CLEAR !== undefined && env.DESKWAND_PROBE_CLEAR !== null,
@@ -742,6 +995,52 @@ export default {
   },
 };
 `
+}
+
+var doBindingNames = map[string]string{
+	"ProbeCounter":  "COUNTER",
+	"ProbeCounter2": "COUNTER2",
+	"ProbeCounter3": "COUNTER3",
+}
+
+func doBindingsForClasses(classes []string) []any {
+	bindings := make([]any, 0, len(classes))
+	for _, className := range classes {
+		bindingName, ok := doBindingNames[className]
+		if !ok {
+			bindingName = "COUNTER_" + strings.ToUpper(className)
+		}
+		bindings = append(bindings, durableNamespaceBinding(bindingName, className))
+	}
+	return bindings
+}
+
+func doClassesForTag(tag string) []string {
+	switch tag {
+	case "v1":
+		return []string{"ProbeCounter"}
+	case "v2":
+		return []string{"ProbeCounter", "ProbeCounter2"}
+	case "v3":
+		return []string{"ProbeCounter", "ProbeCounter2", "ProbeCounter3"}
+	default:
+		return []string{"ProbeCounter"}
+	}
+}
+
+func missingDOClasses(current, wanted []string) []string {
+	var missing []string
+	for _, className := range wanted {
+		if !slices.Contains(current, className) {
+			missing = append(missing, className)
+		}
+	}
+	return missing
+}
+
+func hasSecretHashes(r probeResponse, keep, keep2 string) bool {
+	return r.Keep != nil && *r.Keep == sha256Hex(keep) &&
+		r.Keep2 != nil && *r.Keep2 == sha256Hex(keep2)
 }
 
 func secretText(name, value string) map[string]any {
@@ -971,6 +1270,13 @@ type apiOutcome struct {
 	Body     []byte
 }
 
+func (o apiOutcome) firstCode() int {
+	if len(o.Codes) > 0 {
+		return o.Codes[0]
+	}
+	return 0
+}
+
 func (o apiOutcome) message() string {
 	return strings.Join(o.Messages, "; ")
 }
@@ -1055,8 +1361,24 @@ func (c *cfClient) createVersionOutcome(t *testing.T, ctx context.Context, name 
 // rejection instead of failing the test.
 func (c *cfClient) uploadScriptOutcome(t *testing.T, ctx context.Context, name string, metadata any, code string) apiOutcome {
 	t.Helper()
+	return c.uploadScriptOutcomeQuery(t, ctx, name, metadata, code, "")
+}
+
+// uploadScriptOutcomeStrict uses bindings_inherit=strict, so an unresolvable
+// `inherit` binding fails with error 10057 instead of being silently dropped.
+// Source: https://developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/update/
+func (c *cfClient) uploadScriptOutcomeStrict(t *testing.T, ctx context.Context, name string, metadata any, code string) apiOutcome {
+	t.Helper()
+	return c.uploadScriptOutcomeQuery(t, ctx, name, metadata, code, "bindings_inherit=strict")
+}
+
+func (c *cfClient) uploadScriptOutcomeQuery(t *testing.T, ctx context.Context, name string, metadata any, code, query string) apiOutcome {
+	t.Helper()
 	body, contentType := multipartBody(t, metadata, code)
 	path := c.scriptPath(t, name)
+	if query != "" {
+		path += "?" + query
+	}
 	status, data, err := c.call(ctx, http.MethodPut, path, body, contentType)
 	if err != nil {
 		t.Fatalf("PUT %s: %v", path, err)
@@ -1258,19 +1580,23 @@ type probeExpect struct {
 type probeResponse struct {
 	Revision     string  `json:"revision"`
 	Keep         *string `json:"keep"`
+	Keep2        *string `json:"keep2"`
 	Replace      *string `json:"replace"`
 	ClearDefined bool    `json:"clearDefined"`
 }
 
 func (r probeResponse) String() string {
-	keep, replace := "null", "null"
+	keep, keep2, replace := "null", "null", "null"
 	if r.Keep != nil {
 		keep = *r.Keep
+	}
+	if r.Keep2 != nil {
+		keep2 = *r.Keep2
 	}
 	if r.Replace != nil {
 		replace = *r.Replace
 	}
-	return fmt.Sprintf("revision=%q keep=%s replace=%s clearDefined=%v", r.Revision, keep, replace, r.ClearDefined)
+	return fmt.Sprintf("revision=%q keep=%s keep2=%s replace=%s clearDefined=%v", r.Revision, keep, keep2, replace, r.ClearDefined)
 }
 
 func (r probeResponse) matches(want probeExpect) bool {
