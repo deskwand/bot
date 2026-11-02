@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DeskWand Bot — orbit planet (gold planet, cold-light orbit).
+  Master artwork. After editing, run `bash desktop/scripts/render-icon.sh`
+  and commit the regenerated resources/icon.png; builds only read the PNG.
+  Same family as DeskWand Voice (Lingque): jewel-tone base + warm-gold glyph.
+  Keep the transparent canvas inset; do not bake a square background in.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3f4a8a"/>
+      <stop offset="0.55" stop-color="#232b5e"/>
+      <stop offset="1" stop-color="#10153a"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#fff7d9"/>
+      <stop offset="0.55" stop-color="#f2dfab"/>
+      <stop offset="1" stop-color="#d6b77b"/>
+    </linearGradient>
+    <linearGradient id="cold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#bff3ff"/>
+      <stop offset="1" stop-color="#5cc4dc"/>
+    </linearGradient>
+  </defs>
+  <rect x="79" y="79" width="866" height="866" rx="196.4" fill="url(#base)"/>
+  <rect x="83.5" y="83.5" width="857" height="857" rx="191.9" fill="none" stroke="#ffffff" stroke-opacity="0.17" stroke-width="4.5"/>
+  <g transform="translate(150 150) scale(7.24)">
+    <!-- Orbit, back half: behind the planet. -->
+    <g transform="translate(50 52) rotate(-22)" fill="none" stroke-width="5" stroke-linecap="round">
+      <path stroke="url(#cold)" stroke-opacity="0.45" d="M-42 0 A42 13 0 0 1 42 0"/>
+    </g>
+    <circle cx="50" cy="52" r="21" fill="url(#gold)"/>
+    <!-- Orbit, front half: a base-coloured gap, then the ring over the planet. -->
+    <g transform="translate(50 52) rotate(-22)" fill="none" stroke-linecap="round">
+      <path stroke="url(#base)" stroke-width="11" d="M-42 0 A42 13 0 0 0 42 0"/>
+      <path stroke="url(#cold)" stroke-width="5" d="M-42 0 A42 13 0 0 0 42 0"/>
+    </g>
+    <circle cx="87.9" cy="57.8" r="5.5" fill="url(#cold)"/>
+    <path fill="url(#gold)" d="M22 14 Q22.96 21.04 30 22 Q22.96 22.96 22 30 Q21.04 22.96 14 22 Q21.04 21.04 22 14 Z"/>
+  </g>
+</svg>
