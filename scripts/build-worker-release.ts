@@ -63,6 +63,11 @@ export type ReleaseTemplate = {
   durableObjects: Array<{ name: string; className: string }>;
   r2Buckets: Array<{ name: string; parameterKey: string }>;
   versionMetadataBinding: { name: string };
+  observability: {
+    enabled: boolean;
+    head_sampling_rate: number;
+    logs: { invocation_logs: boolean };
+  };
   configBinding: { name: string; type: "json"; schemaVersion: number };
   secretNames: string[];
   plainVars: string[];
@@ -170,6 +175,21 @@ export function assertReleaseTemplate(value: unknown): asserts value is ReleaseT
     "release template versionMetadataBinding",
   );
   requireString(versionMetadata.name, "release template versionMetadataBinding.name");
+
+  const observability = requireRecord(template.observability, "release template observability");
+  if (typeof observability.enabled !== "boolean") {
+    throw new Error("release template observability.enabled must be a boolean");
+  }
+  if (typeof observability.head_sampling_rate !== "number") {
+    throw new Error("release template observability.head_sampling_rate must be a number");
+  }
+  const observabilityLogs = requireRecord(
+    observability.logs,
+    "release template observability.logs",
+  );
+  if (typeof observabilityLogs.invocation_logs !== "boolean") {
+    throw new Error("release template observability.logs.invocation_logs must be a boolean");
+  }
 
   const configBinding = requireRecord(template.configBinding, "release template configBinding");
   requireString(configBinding.name, "release template configBinding.name");

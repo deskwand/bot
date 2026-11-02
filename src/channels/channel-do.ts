@@ -25,12 +25,14 @@ import {
   sha256Hex,
   versionIdOf,
 } from "./route-identity";
+import { emitChannelEvent } from "./events";
 import { createTelegramAdapter } from "./telegram";
 import { parseTextAction, type TextAction } from "./text-action";
 import { ChannelError, type ChannelAdapter } from "./types";
 import { toWeChatText } from "./wechat/markdown";
 import {
   createILinkClient,
+  ILinkError,
   isSessionExpired,
   isTrustedBaseUrl,
   parseCredentials,
@@ -67,6 +69,26 @@ const ACTION_LABELS = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Maps an iLink/network failure to a fixed diagnostic code. The raw error text
+ * is never logged as an event field.
+ */
+function wechatErrorCode(error: unknown): string {
+  if (error instanceof ILinkError) {
+    if (error.status === 0) return "untrusted_origin";
+    if (error.status === 429) return "rate_limited";
+    if (error.status >= 500) return "upstream_error";
+    return "api_error";
+  }
+  if (
+    error instanceof Error &&
+    (error.name === "TimeoutError" || error.name === "AbortError")
+  ) {
+    return "network_timeout";
+  }
+  return "network_error";
 }
 
 /** Drop buttons and turn each one into an instruction the owner can type. */
@@ -154,6 +176,11 @@ export class ChannelDO extends Agent<Env> {
       try {
         event = await adapter.parseInbound(req);
       } catch (error) {
+        emitChannelEvent(this.env, {
+          channel: "telegram",
+          event: "webhook_rejected",
+          errorCode: "payload_invalid",
+        });
         console.error(
           `channel: failed to parse update: ${errorMessage(error)}`,
         );
@@ -167,6 +194,7 @@ export class ChannelDO extends Agent<Env> {
       }
 
       this.rememberOwner(event);
+      emitChannelEvent(this.env, { channel: "telegram", event: "webhook_ok" });
 
       // The other channel's input must not reach the Butler or a task.
       const route = await this.currentRoute();
@@ -312,6 +340,9 @@ export class ChannelDO extends Agent<Env> {
     const conversationId = this.currentAddress(channel);
     const outbound = channel === "wechat" ? forWechat(msg) : msg;
     const sent = await this.adapter(channel).send(conversationId, outbound);
+    if (channel === "telegram") {
+      emitChannelEvent(this.env, { channel: "telegram", event: "send_ok" });
+    }
     return {
       channel,
       conversationId,
@@ -478,6 +509,10 @@ export class ChannelDO extends Agent<Env> {
             AbortSignal.timeout(WECHAT_GET_UPDATES_TIMEOUT_MS),
           );
           if (!(await ownsRun())) return;
+          emitChannelEvent(this.env, {
+            channel: "wechat",
+            event: "poll_ok",
+          });
           this.updateWeChatState({
             cursor: batch.cursor,
             last_poll_at: Date.now(),
@@ -492,9 +527,19 @@ export class ChannelDO extends Agent<Env> {
         } catch (error) {
           if (!(await ownsRun())) return;
           if (isSessionExpired(error)) {
+            emitChannelEvent(this.env, {
+              channel: "wechat",
+              event: "poll_expired",
+              errorCode: "session_expired",
+            });
             await this.expireWeChat();
             return;
           }
+          emitChannelEvent(this.env, {
+            channel: "wechat",
+            event: "poll_error",
+            errorCode: wechatErrorCode(error),
+          });
           console.error(
             `channel: wechat poll failed: ${errorMessage(error)}`,
           );
@@ -695,6 +740,7 @@ export class ChannelDO extends Agent<Env> {
 
         if (msg.text.length === 0) return { messageId: "" };
         await client.sendText(credentials, chatId, context, msg.text);
+        emitChannelEvent(hub.env, { channel: "wechat", event: "send_ok" });
         return { messageId: "" };
       },
       edit: async () => {},

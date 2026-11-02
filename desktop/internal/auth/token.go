@@ -101,7 +101,9 @@ type cloudflareAPI interface {
 // Required token permissions (account scope; dashboard label / API group):
 // Workers Scripts:Edit / Workers Scripts Write, Workers R2 Storage:Edit /
 // Workers R2 Storage Write, Account Settings:Read / Account Settings Read.
-// Task 9 diagnostics may additionally need Workers Observability:Read.
+// Task 9 diagnostics additionally need Workers Observability Write, the group
+// named by the telemetry query endpoint, and Workers Scripts Write for the
+// explicit script-settings observability patch.
 // https://developers.cloudflare.com/fundamentals/api/reference/permissions/
 type TokenService struct {
 	mu     sync.Mutex

@@ -84,6 +84,7 @@ type ResourceTemplate struct {
 	DurableObjects  []DOBinding        `json:"durableObjects"`
 	R2Buckets       []R2Binding        `json:"r2Buckets"`
 	VersionMetadata BindingRef         `json:"versionMetadataBinding"`
+	Observability   Observability      `json:"observability"`
 	ConfigBinding   ConfigBinding      `json:"configBinding"`
 	SecretNames     []string           `json:"secretNames"`
 	PlainVars       []string           `json:"plainVars"`
@@ -91,6 +92,21 @@ type ResourceTemplate struct {
 	Vars            []VarBinding       `json:"vars"`
 	Migrations      []Migration        `json:"migrations"`
 	InstallParams   []InstallParameter `json:"installParameters"`
+}
+
+// Observability is the script-level logging configuration required for
+// diagnostics. Field names match the Cloudflare script-settings API so the
+// explicit script-settings patch uses the same shape as the release template.
+type Observability struct {
+	Enabled          bool              `json:"enabled"`
+	HeadSamplingRate float64           `json:"head_sampling_rate"`
+	Logs             ObservabilityLogs `json:"logs"`
+}
+
+// ObservabilityLogs keeps persisted structured logs while disabling the noisy
+// per-invocation log line.
+type ObservabilityLogs struct {
+	InvocationLogs bool `json:"invocation_logs"`
 }
 
 // ConfigBinding describes the single JSON binding that carries the editable

@@ -541,6 +541,14 @@ func TestCrossLanguageFixture(t *testing.T) {
 	if manifest.KeyID != testKeyID {
 		t.Fatalf("fixture keyId = %q, want %q", manifest.KeyID, testKeyID)
 	}
+	wantObservability := Observability{
+		Enabled:          true,
+		HeadSamplingRate: 1,
+		Logs:             ObservabilityLogs{InvocationLogs: false},
+	}
+	if manifest.ResourceTemplate.Observability != wantObservability {
+		t.Fatalf("fixture observability = %+v, want %+v", manifest.ResourceTemplate.Observability, wantObservability)
+	}
 
 	files := readFixtureFiles(t, filepath.Join(fixtureDir, "files"))
 	if err := Verify(manifestBytes, signature, pub, files); err != nil {

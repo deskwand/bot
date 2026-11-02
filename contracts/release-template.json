@@ -14,6 +14,13 @@
     { "name": "ARTIFACTS", "parameterKey": "r2BucketName" }
   ],
   "versionMetadataBinding": { "name": "CF_VERSION_METADATA" },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "invocation_logs": false
+    }
+  },
   "configBinding": {
     "name": "DESKWAND_CONFIG",
     "type": "json",

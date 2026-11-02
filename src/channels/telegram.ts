@@ -129,7 +129,9 @@ export function createTelegramAdapter(
       try {
         update = (await req.json()) as TelegramUpdate;
       } catch {
-        return null;
+        // A malformed body is a parse failure, not an unsupported update. The
+        // caller emits the fixed webhook_rejected event for it.
+        throw new ChannelError("telegram payload invalid", 400);
       }
 
       if (update.message) {

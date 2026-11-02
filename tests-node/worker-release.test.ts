@@ -357,6 +357,20 @@ describe("release template consistency", () => {
     expect(template.configBinding.schemaVersion).toBe(1);
   });
 
+  it("matches wrangler.jsonc observability settings exactly", () => {
+    const wrangler = JSON.parse(readFileSync(join(repoRoot, "wrangler.jsonc"), "utf8")) as {
+      observability?: unknown;
+    };
+    const template = readTemplate();
+
+    expect(template.observability).toEqual(wrangler.observability);
+    expect(template.observability).toEqual({
+      enabled: true,
+      head_sampling_rate: 1,
+      logs: { invocation_logs: false },
+    });
+  });
+
   it("declares exactly the Worker secrets from src/env.d.ts", () => {
     const envSource = readFileSync(join(repoRoot, "src", "env.d.ts"), "utf8");
     const secrets = [...envSource.matchAll(/^\s+([A-Z0-9_]+)\?:\s*string;\s*$/gm)]
@@ -390,6 +404,11 @@ describe("cross-language release fixture", () => {
     expect(manifest.compressedSize).toBeGreaterThan(0);
     expect(manifest.compressedSize).toBeLessThanOrEqual(MAX_COMPRESSED_BYTES);
     expect(canonicalJson(manifest)).toBe(manifestBytes.toString("utf8"));
+    expect(manifest.resourceTemplate.observability).toEqual({
+      enabled: true,
+      head_sampling_rate: 1,
+      logs: { invocation_logs: false },
+    });
   });
 
   it("has a signature both languages can verify over the same bytes", () => {
