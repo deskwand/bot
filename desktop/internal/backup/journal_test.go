@@ -95,5 +95,7 @@ func TestJournalRejectsCorruptRecord(t *testing.T) {
 	}
 	if _, err := journal.Pending(); err == nil {
 		t.Fatal("a corrupt journal was accepted")
+	} else if code := adminErrorCode(t, err); code != CodeBackupInvalid {
+		t.Fatalf("code = %q", code)
 	}
 }

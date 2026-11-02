@@ -86,8 +86,26 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 	}
 	now := deps.now()
 	snapshotPath := filepath.Join(snapshotDir, "pre-restore-"+now.Format("20060102-150405")+".zip")
-	if _, err := Export(ctx, deps, target, snapshotPath); err != nil {
+	snapshotDeps := deps
+	snapshotDeps.Progress = func(progress Progress) {
+		progress.Op = "restore"
+		deps.report(progress)
+	}
+	snapshotManifest, err := Export(ctx, snapshotDeps, target, snapshotPath)
+	if err != nil {
 		return domain.Error{Code: CodeRestoreSnapshotFailed, Message: err.Error()}
+	}
+	if len(snapshotManifest.R2.Oversized) > 0 {
+		// An oversized artifact means the snapshot cannot be restored, so it
+		// is not a safety net. Discard it before the write-back starts.
+		_ = os.Remove(snapshotPath)
+		return domain.Error{
+			Code: CodeRestoreSnapshotFailed,
+			Message: fmt.Sprintf(
+				"snapshot is incomplete because these artifacts exceed %d bytes: %s",
+				MaxR2ObjectBytes, strings.Join(snapshotManifest.R2.Oversized, ", "),
+			),
+		}
 	}
 
 	opID, err := deps.newOpID()
@@ -110,6 +128,8 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 		record.State = restoreStateFailed
 		record.FailureCode = failureCode(err)
 		record.UpdatedAt = deps.now()
+		// The running record is already on disk; if this update is lost the
+		// restore stays pending either way.
 		_ = journal.Save(record)
 		return err
 	}
@@ -167,6 +187,8 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 		record.State = restoreStateFailed
 		record.FailureCode = failureCode(err)
 		record.UpdatedAt = deps.now()
+		// The running record is already on disk; if this update is lost the
+		// restore stays pending either way.
 		_ = journal.Save(*record)
 		return err
 	}

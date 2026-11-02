@@ -3,12 +3,16 @@ package backup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/deskwand/bot/desktop/internal/domain"
 )
 
 var restoreTestRefs = []DORef{
@@ -96,6 +100,24 @@ func captureObjects(t *testing.T, worker *fakeWorker) map[string]capturedObject 
 		captured[key] = capturedObject{body: string(body), contentType: contentType}
 	}
 	return captured
+}
+
+func assertObjectsEqual(t *testing.T, worker *fakeWorker, want map[string]capturedObject) {
+	t.Helper()
+	keys := make([]string, 0, len(want))
+	for key := range want {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if got := worker.objectKeys(); !reflect.DeepEqual(got, keys) {
+		t.Fatalf("object keys = %v, want %v", got, keys)
+	}
+	for key, object := range want {
+		body, contentType, ok := worker.object(key)
+		if !ok || string(body) != object.body || contentType != object.contentType {
+			t.Fatalf("object %s = %q (%s), want %q (%s)", key, body, contentType, object.body, object.contentType)
+		}
+	}
 }
 
 func assertDORows(t *testing.T, worker *fakeWorker, ref DORef, want map[string][]json.RawMessage) {
@@ -199,7 +221,7 @@ func TestRestoreReplacesAllData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "pre-restore-") {
+	if len(entries) != 1 || entries[0].Name() != "pre-restore-20261102-100500.zip" {
 		t.Fatalf("snapshot directory = %+v", entries)
 	}
 }
@@ -277,6 +299,47 @@ func TestRestoreRefusesOversizedObjects(t *testing.T) {
 	}
 }
 
+func TestRestoreRefusesIncompleteSnapshot(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+	// The deployment gained an artifact that cannot be uploaded back, so the
+	// pre-restore snapshot would be unable to undo a restore.
+	worker.addOversizedObject("huge.bin", "application/octet-stream", MaxR2ObjectBytes+1, []byte("tiny"))
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	snapshotDir := filepath.Join(t.TempDir(), "backups")
+
+	err := Restore(context.Background(), deps, journal, backupTestTarget, path, snapshotDir)
+	if code := adminErrorCode(t, err); code != CodeRestoreSnapshotFailed {
+		t.Fatalf("code = %q", code)
+	}
+	var coded domain.Error
+	if !errors.As(err, &coded) || !strings.Contains(coded.Message, "huge.bin") {
+		t.Fatalf("error = %v, want the oversized key in the message", err)
+	}
+	if got := len(restoreCalls(worker)); got != 0 {
+		t.Fatalf("restore calls = %d, want 0", got)
+	}
+	pending, err := journal.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != nil {
+		t.Fatalf("pending = %+v, want nil", pending)
+	}
+	entries, err := os.ReadDir(snapshotDir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("snapshot directory = %+v, want empty", entries)
+	}
+	if _, _, ok := worker.object("huge.bin"); !ok {
+		t.Fatal("the oversized artifact was removed")
+	}
+}
+
 func TestRestoreStopsWhenSnapshotFails(t *testing.T) {
 	worker := seedRestoreWorker(t)
 	path := makeRestoreBackup(t, worker, "1.2.3")
@@ -309,6 +372,36 @@ func TestRestoreStopsWhenSnapshotFails(t *testing.T) {
 	}
 }
 
+func TestRestoreSnapshotProgressReportsRestoreOp(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	var events []Progress
+	deps.Progress = func(progress Progress) { events = append(events, progress) }
+
+	if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 {
+		t.Fatal("the restore reported no progress")
+	}
+	phases := map[string]bool{}
+	for _, event := range events {
+		if event.Op != "restore" {
+			t.Fatalf("progress op = %q, want restore", event.Op)
+		}
+		phases[event.Phase] = true
+	}
+	// These phases come from the pre-restore snapshot export and must be
+	// attributed to the restore.
+	for _, phase := range []string{PhasePreparing, PhaseDatabase, PhaseObjects, PhaseFinishing} {
+		if !phases[phase] {
+			t.Fatalf("missing phase %q in %+v", phase, events)
+		}
+	}
+}
+
 func TestRestoreClearsExtraTaskDOs(t *testing.T) {
 	worker := seedRestoreWorker(t)
 	path := makeRestoreBackup(t, worker, "1.2.3")
@@ -328,10 +421,18 @@ func TestRestoreClearsExtraTaskDOs(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	calls := restoreCalls(worker)
 	var orphanCalls []fakeRequest
-	for _, call := range restoreCalls(worker) {
+	orphanLast := -1
+	backupFirst := -1
+	for i, call := range calls {
 		if call.DO == "task" && call.ID == "t9" {
 			orphanCalls = append(orphanCalls, call)
+			orphanLast = i
+			continue
+		}
+		if backupFirst < 0 {
+			backupFirst = i
 		}
 	}
 	wantPaths := []string{restoreResetPath, restoreBeginPath, restoreResetPath}
@@ -342,6 +443,9 @@ func TestRestoreClearsExtraTaskDOs(t *testing.T) {
 		if orphanCalls[i].Path != want {
 			t.Fatalf("orphan call %d = %s, want %s", i, orphanCalls[i].Path, want)
 		}
+	}
+	if backupFirst < 0 || orphanLast > backupFirst {
+		t.Fatalf("orphan calls do not precede the backup objects: %v", calls)
 	}
 	if got := worker.resetsOf(orphan); got != 2 {
 		t.Fatalf("orphan resets = %d, want 2", got)
@@ -453,6 +557,37 @@ func TestRestoreOrder(t *testing.T) {
 	}
 }
 
+func TestRestoreRenewsLeaseForLargeObjects(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	body := []byte("01234567890123456789")
+	worker.addObject("big.bin", "application/octet-stream", body)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+
+	previous := renewEveryBytes
+	renewEveryBytes = 10
+	defer func() { renewEveryBytes = previous }()
+
+	// The current object is small, so only the restore's upload renews the
+	// lease; the pre-restore snapshot export does not.
+	worker.addObject("big.bin", "application/octet-stream", []byte("123"))
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	before := worker.requestCount("POST", acquirePath)
+	if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
+		t.Fatal(err)
+	}
+	// One acquire for the snapshot export, one for the restore, and one
+	// renewal after the 20-byte upload.
+	if got := worker.requestCount("POST", acquirePath) - before; got != 3 {
+		t.Fatalf("acquire calls = %d, want 3", got)
+	}
+	restored, _, ok := worker.object("big.bin")
+	if !ok || string(restored) != string(body) {
+		t.Fatalf("big.bin = %q, want %q", restored, body)
+	}
+}
+
 func TestRetryAfterMidwayFailure(t *testing.T) {
 	worker := seedRestoreWorker(t)
 	original := captureRows(t, worker, restoreTestRefs)
@@ -481,12 +616,23 @@ func TestRetryAfterMidwayFailure(t *testing.T) {
 	if record.State != "failed" || record.FailureCode != CodeBackupInvalid {
 		t.Fatalf("record = %+v", record)
 	}
-	if record.SnapshotPath == "" {
-		t.Fatal("the record does not name the pre-restore snapshot")
+	wantSnapshot := filepath.Join(snapshotDir, "pre-restore-20261102-100500.zip")
+	if record.SnapshotPath != wantSnapshot {
+		t.Fatalf("snapshot path = %q, want %q", record.SnapshotPath, wantSnapshot)
+	}
+	operationID := record.OperationID
+	if operationID == "" {
+		t.Fatal("the record has no operation id")
 	}
 
+	start := len(worker.requestsLog())
 	if err := Retry(context.Background(), deps, journal, false); err != nil {
 		t.Fatal(err)
+	}
+	for _, request := range worker.requestsLog()[start:] {
+		if request.OpID != operationID {
+			t.Fatalf("retry request %s used op id %q, want %q", request, request.OpID, operationID)
+		}
 	}
 	for _, ref := range restoreTestRefs {
 		assertDORows(t, worker, ref, original[doKey(ref)])
@@ -516,11 +662,14 @@ func TestRetryFromSnapshot(t *testing.T) {
 	worker.setDO(DORef{DO: "channel"}, worker.schemaOf(DORef{DO: "channel"}), map[string][]json.RawMessage{
 		"__kv": {json.RawMessage(`{"key":"schema_version","value":"9"}`)},
 	})
+	worker.addObject("notes/readme.txt", "text/plain", []byte("changed"))
+	worker.addObject("current-only.txt", "text/plain", []byte("current"))
 	current := captureRows(t, worker, restoreTestRefs)
+	currentObjects := captureObjects(t, worker)
 
-	// Fail while writing the Butler, the last object, so the snapshot is taken
-	// but the restore does not finish.
-	worker.failRoute("POST", restorePagePath, "butler", "", 1, 500)
+	// Fail on the first artifact upload, after the snapshot is taken and the
+	// artifacts outside the backup have been deleted.
+	worker.failRoute("PUT", objectPath, "", "", 1, 500)
 
 	journal := newRestoreJournal(t)
 	deps := restoreTestDeps(t, worker, "1.2.3")
@@ -540,6 +689,7 @@ func TestRetryFromSnapshot(t *testing.T) {
 	for _, ref := range restoreTestRefs {
 		assertDORows(t, worker, ref, current[doKey(ref)])
 	}
+	assertObjectsEqual(t, worker, currentObjects)
 	record, err := journal.Pending()
 	if err != nil {
 		t.Fatal(err)
