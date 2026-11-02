@@ -169,12 +169,19 @@ export function Models() {
 
   const keyProviders = useMemo(() => {
     const ids: string[] = [];
-    for (const value of [butler, task]) {
+    const roles: Record<string, string[]> = {};
+    for (const [role, value] of [
+      ["管家", butler],
+      ["任务", task],
+    ] as const) {
       const provider = parseModelKey(value)?.provider;
-      if (provider && !ids.includes(provider)) ids.push(provider);
+      if (!provider) continue;
+      if (!ids.includes(provider)) ids.push(provider);
+      (roles[provider] ??= []).push(role);
     }
     return ids.map((id) => ({
       id,
+      roles: roles[id] ?? [],
       option: options.find((provider) => provider.id === id),
       custom: customProviders.find((provider) => provider.id === id),
     }));
@@ -447,113 +454,141 @@ export function Models() {
 
       <Card className="mt-5">
         <CardHeader>
-          <CardTitle>模型供应商</CardTitle>
+          <CardTitle>角色模型</CardTitle>
           <CardDescription>
-            密钥只写入 Cloudflare secret；输入框提交后清空，已有值不可读取。管家和任务模型用到的每个供应商各需一个 key。
+            先为管家和任务各选一个供应商和模型，再在下方填写所选供应商的 API 密钥。所有消息入口共用这两个角色模型。
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {keyProviders.length === 0 ? (
-            <p className="text-sm text-muted-foreground">请先选择管家模型或任务模型。</p>
-          ) : (
-            <div className="space-y-3">
-              {keyProviders.map((provider) => {
-                const secret = secretNameFor(provider.id);
-                const configured =
-                  config?.secrets.find((entry) => entry.name === secret)?.configured ?? false;
-                const draft = keyDrafts[provider.id] ?? { value: "", clear: false };
-                const rowProbeItem =
-                  probeItem?.provider === provider.id ? probeItem.item : null;
-                const rowProbeError =
-                  probeError?.provider === provider.id ? probeError.error : null;
-                return (
-                  <div
-                    key={provider.id}
-                    data-testid={`model-key-row-${provider.id}`}
-                    className="rounded-md border border-border p-3"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-medium">{provider.option?.label ?? provider.id}</p>
-                      <Badge variant={configured ? "secondary" : "outline"}>
-                        {secret} {configured ? "已配置" : "未配置"}
-                      </Badge>
-                    </div>
-                    <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label htmlFor={`api-key-${provider.id}`}>API 密钥</Label>
-                        <Input
-                          id={`api-key-${provider.id}`}
-                          type="password"
-                          value={draft.value}
-                          onChange={(event) =>
-                            updateKeyDraft(provider.id, {
-                              value: event.target.value,
-                              ...(event.target.value ? { clear: false } : {}),
-                            })
-                          }
-                          placeholder={configured ? "已配置；输入新值才会替换" : "输入新密钥"}
-                          autoComplete="new-password"
-                          spellCheck={false}
-                        />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="butler-model">管家模型</Label>
+              <ModelSelect id="butler-model" label="管家模型" value={butler} onChange={setButler} options={options} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="task-model">任务模型</Label>
+              <ModelSelect id="task-model" label="任务模型" value={task} onChange={setTask} options={options} />
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            供应商列表里没有你要的服务？可在下方“自定义端点”添加 OpenAI 或 Anthropic 兼容地址。
+          </p>
+
+          <section className="mt-5 border-t border-border pt-4" aria-labelledby="provider-keys-title">
+            <h3 id="provider-keys-title" className="text-sm font-medium">供应商密钥</h3>
+            <p className="mt-1 mb-3 text-xs text-muted-foreground">
+              上面选中的每个供应商各需一个 key。密钥只写入 Cloudflare secret；输入框提交后清空，已有值不可读取。
+            </p>
+            {keyProviders.length === 0 ? (
+              <p className="text-sm text-muted-foreground">请先选择管家模型或任务模型。</p>
+            ) : (
+              <div className="space-y-3">
+                {keyProviders.map((provider) => {
+                  const secret = secretNameFor(provider.id);
+                  const configured =
+                    config?.secrets.find((entry) => entry.name === secret)?.configured ?? false;
+                  const draft = keyDrafts[provider.id] ?? { value: "", clear: false };
+                  const rowProbeItem =
+                    probeItem?.provider === provider.id ? probeItem.item : null;
+                  const rowProbeError =
+                    probeError?.provider === provider.id ? probeError.error : null;
+                  return (
+                    <div
+                      key={provider.id}
+                      data-testid={`model-key-row-${provider.id}`}
+                      className="rounded-md border border-border p-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-medium">
+                          {provider.option?.label ?? provider.id}
+                          <span className="ml-2 text-xs font-normal text-muted-foreground">
+                            用于{provider.roles.join("、")}模型
+                          </span>
+                        </p>
+                        <Badge variant={configured ? "secondary" : "outline"}>
+                          {secret} {configured ? "已配置" : "未配置"}
+                        </Badge>
                       </div>
-                      <div className="flex flex-wrap items-end gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
+                      <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label htmlFor={`api-key-${provider.id}`}>API 密钥</Label>
+                          <Input
+                            id={`api-key-${provider.id}`}
+                            type="password"
+                            value={draft.value}
+                            onChange={(event) =>
+                              updateKeyDraft(provider.id, {
+                                value: event.target.value,
+                                ...(event.target.value ? { clear: false } : {}),
+                              })
+                            }
+                            placeholder={configured ? "已配置；输入新值才会替换" : "输入新密钥"}
+                            autoComplete="new-password"
+                            spellCheck={false}
+                          />
+                        </div>
+                        <div className="flex flex-wrap items-end gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setProbeTarget(provider.id);
+                              setProbeOpen(true);
+                            }}
+                            disabled={!draft.value.trim() || running !== null}
+                          >
+                            <Zap aria-hidden />
+                            测试连接
+                          </Button>
+                          <Button
+                            type="button"
+                            variant={draft.clear ? "destructive" : "outline"}
+                            size="sm"
+                            onClick={() =>
+                              updateKeyDraft(provider.id, {
+                                clear: !draft.clear,
+                                ...(draft.clear ? {} : { value: "" }),
+                              })
+                            }
+                            disabled={!configured}
+                          >
+                            {draft.clear ? "已标记清除" : "清除已保存密钥"}
+                          </Button>
+                          {!draft.value.trim() ? (
+                            <span className="text-xs text-muted-foreground">
+                              已有密钥不可读，测试连接需要重新输入密钥。
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      {rowProbeError ? (
+                        <ErrorAlert
+                          error={rowProbeError}
+                          onRetry={() => {
                             setProbeTarget(provider.id);
                             setProbeOpen(true);
                           }}
-                          disabled={!draft.value.trim() || running !== null}
-                        >
-                          <Zap aria-hidden />
-                          测试连接
-                        </Button>
-                        <Button
-                          type="button"
-                          variant={draft.clear ? "destructive" : "outline"}
-                          size="sm"
-                          onClick={() =>
-                            updateKeyDraft(provider.id, {
-                              clear: !draft.clear,
-                              ...(draft.clear ? {} : { value: "" }),
-                            })
-                          }
-                          disabled={!configured}
-                        >
-                          {draft.clear ? "已标记清除" : "清除已保存密钥"}
-                        </Button>
-                        {!draft.value.trim() ? (
-                          <span className="text-xs text-muted-foreground">
-                            已有密钥不可读，测试连接需要重新输入密钥。
-                          </span>
-                        ) : null}
-                      </div>
+                          retryLabel="重新测试"
+                        />
+                      ) : null}
+                      {rowProbeItem ? (
+                        <div className="mt-3 rounded-md border border-border p-3">
+                          <StatusRow item={rowProbeItem} />
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            本机测试只证明该凭据在这台机器上可用，不代表云端已应用或消息收发正常。
+                          </p>
+                        </div>
+                      ) : null}
                     </div>
-                    {rowProbeError ? (
-                      <ErrorAlert
-                        error={rowProbeError}
-                        onRetry={() => {
-                          setProbeTarget(provider.id);
-                          setProbeOpen(true);
-                        }}
-                        retryLabel="重新测试"
-                      />
-                    ) : null}
-                    {rowProbeItem ? (
-                      <div className="mt-3 rounded-md border border-border p-3">
-                        <StatusRow item={rowProbeItem} />
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          本机测试只证明该凭据在这台机器上可用，不代表云端已应用或消息收发正常。
-                        </p>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  );
+                })}
+              </div>
+            )}
+          </section>
+          <p className="mt-4 text-xs text-muted-foreground">
+            保存会发布 Worker 配置版本。未编辑的 vars、secrets、bindings 和迁移历史会保留。
+          </p>
         </CardContent>
       </Card>
 
@@ -622,28 +657,6 @@ export function Models() {
               ))}
             </ul>
           )}
-        </CardContent>
-      </Card>
-
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>角色模型</CardTitle>
-          <CardDescription>同一时间只启用一个消息入口；所有入口共用这两个角色模型。</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="butler-model">管家模型</Label>
-              <ModelSelect id="butler-model" label="管家模型" value={butler} onChange={setButler} options={options} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="task-model">任务模型</Label>
-              <ModelSelect id="task-model" label="任务模型" value={task} onChange={setTask} options={options} />
-            </div>
-          </div>
-          <p className="mt-3 text-xs text-muted-foreground">
-            保存会发布 Worker 配置版本。未编辑的 vars、secrets、bindings 和迁移历史会保留。
-          </p>
         </CardContent>
       </Card>
 

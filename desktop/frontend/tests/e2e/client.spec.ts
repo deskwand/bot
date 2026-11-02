@@ -411,7 +411,8 @@ test("model picker chooses the provider first, then filters its models", async (
   await expect(page.getByRole("option")).toHaveText([/Claude Haiku 5\.5/]);
   await search.press("Enter");
   await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/Claude Haiku 5\.5/);
-  await expect(keyRow(page, "anthropic")).toBeVisible();
+  await expect(keyRow(page, "anthropic").getByText("用于管家模型")).toBeVisible();
+  await expect(keyRow(page, "opencode-go").getByText("用于任务模型")).toBeVisible();
 
   await page.getByLabel("管家模型", { exact: true }).click();
   await page.getByPlaceholder("搜索模型").fill("no-such-model");
