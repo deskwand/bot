@@ -100,7 +100,21 @@ Token 过期、被撤销或权限被收回后，云端服务不会停止；客�
 
 选择了一个尚未配置凭据的入口是允许的，但界面会警告该入口暂时不可用；客户端不会自动回退到另一个渠道。
 
-## 5. “保存并发布”到底做什么
+## 5. 模型与模型 key
+
+模型厂商的 key 都存成 secret，名字是 `MODEL_KEY_<ID>`：`<ID>` 是厂商 id 转大写，`-` 换成 `_`。例如：
+
+- `opencode-go` → `MODEL_KEY_OPENCODE_GO`
+- `deepseek` → `MODEL_KEY_DEEPSEEK`
+- 自定义端点 `my-proxy` → `MODEL_KEY_MY_PROXY`
+
+内置厂商和自定义 OpenAI / Anthropic 兼容端点都遵循同一规则。旧的 `ANTHROPIC_API_KEY`、`OPENCODE_API_KEY` 不再读取；升级后需要在新版本客户端的模型页重新填写对应的 `MODEL_KEY_*`。
+
+升级旧部署前，更新页的确认框会列出升级后缺失、需要重新填写的 key（“升级后需要在模型页重新填写这些 key：…”）。提示不会拦住升级，但 key 没填好之前，管家和任务会直接回复“模型 … 没有配置 key（…），请在桌面端模型页填写”，不会进入模型调用。
+
+“保存并发布”前会检查管家和任务引用的模型厂商是否都已有对应的 `MODEL_KEY_*` secret，或者本次发布是否会写入它。缺失时发布会以 `MODEL_KEY_MISSING` 被拒绝，并列出缺的 secret 名。首次安装不做这项检查：key 在安装完成后到模型页填写。
+
+## 6. “保存并发布”到底做什么
 
 模型、owner、MCP 或 secret 的修改都通过 **保存并发布** 提交，不是即时热更新。发布流程大致是：
 
@@ -118,7 +132,7 @@ Token 过期、被撤销或权限被收回后，云端服务不会停止；客�
 - 如果其它人同时在 Cloudflare Dashboard 修改配置，客户端可能提示 `CONFIG_CONFLICT`，需要重新加载后再提交；
 - 外部只替换同名 secret 的值时，客户端可能无法从指纹察觉；发布确认页会说明这一限制。
 
-## 6. 状态：未知、未验证、已验证
+## 7. 状态：未知、未验证、已验证
 
 状态来自不同证据，不能混为一谈：
 
@@ -131,7 +145,7 @@ Token 过期、被撤销或权限被收回后，云端服务不会停止；客�
 
 模型的本机探测只证明“这台机器用这个密钥能访问提供商”，不代表云端 Worker 已经使用该密钥成功处理消息。界面会显示来源和观察时间。
 
-## 7. 与命令行 Wrangler 共存
+## 8. 与命令行 Wrangler 共存
 
 客户端和 `wrangler deploy` 可以管理同一套 Worker，但要注意变量覆盖规则：
 
@@ -151,7 +165,7 @@ Token 过期、被撤销或权限被收回后，云端服务不会停止；客�
 
 **命令行部署会清除 release tag：** `wrangler deploy` 不写客户端使用的 `workers/tag` 注解。部署后云端版本会显示为未知，客户端会返回 `VERSION_UNKNOWN_REIMPORT`，直到下一次在“连接已有服务”中重新导入或执行一次客户端升级。不要用 `--tag` 临时修补部署脚本；重新导入/升级才会恢复客户端可识别的版本。
 
-## 8. 客户端更新
+## 9. 客户端更新
 
 桌面客户端更新与云端 Worker 升级是两条独立链路：
 
@@ -166,11 +180,11 @@ Token 过期、被撤销或权限被收回后，云端服务不会停止；客�
 
 客户端更新与 Worker 发布包不能互相替代：Worker 发布包不能安装成桌面更新，桌面更新也不会携带或替换云端代码。
 
-## 9. 维护者：发布密钥、构建、签名与更新源
+## 10. 维护者：发布密钥、构建、签名与更新源
 
 以下步骤只属于维护者，不是普通用户安装步骤。
 
-### 9.1 两套独立的 Ed25519 密钥
+### 10.1 两套独立的 Ed25519 密钥
 
 **Worker 发布密钥**（key id `deskwand-release-1`）：
 
@@ -193,7 +207,7 @@ npm run generate:release-key -- --client
 
 脚本拒绝覆盖已有密钥。私钥绝不进入仓库、日志、构建产物或客户端包。两套密钥不能混用。轮换密钥时，先发布同时信任旧、新 key id 的客户端，再切换签名密钥。
 
-### 9.2 构建 Worker 发布包和桌面安装包
+### 10.2 构建 Worker 发布包和桌面安装包
 
 一次完成签名 Worker 发布包、嵌入和 macOS 打包：
 
@@ -213,7 +227,7 @@ Windows 交叉构建可以编译出 `.exe`，但本仓库的 macOS 环境在执�
 
 **应用图标**：母版是 `desktop/icon/icon.svg`（轨道星球，设计见 `docs/superpowers/specs/2026-11-02-app-icon-design.md`）。`desktop/mygo.json` 的 `icon` 指向 `icon/icon.png`，MyGo 由它生成 macOS `.icns` 与 Windows `.ico`。修改图标：改 SVG → 运行 `bash desktop/scripts/render-icon.sh` → 同时提交 SVG 与 PNG。渲染需要本机 Google Chrome（可用 `CHROME=` 指定路径）；构建只读已提交的 PNG，不需要 Chrome。图标源文件不放在 `desktop/resources/`：MyGo 会把该目录的全部内容打进应用。`desktop/icon_test.go` 校验 PNG 尺寸、透明角和关键配色。
 
-### 9.3 macOS 签名与公证
+### 10.3 macOS 签名与公证
 
 在 `desktop/mygo.json` 中配置（示例，未写入仓库）：
 
@@ -236,7 +250,7 @@ xcrun notarytool store-credentials notary
 
 Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配置；证书密码来自 `MYGO_WINDOWS_CERTIFICATE_PASSWORD`。未签名安装器会触发 SmartScreen 警告。
 
-### 9.4 客户端更新源
+### 10.4 客户端更新源
 
 客户端更新使用 MyGo 的签名更新机制，但密钥与 Worker 发布包分离：
 
@@ -249,7 +263,7 @@ Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配�
 
 `ClientUpdateFeedURL` 默认为空，因此普通源码构建和本仓库的 CI 不检查更新；UI 显示“未配置更新源”。只有同时存在可信公钥、有效更新源和可写安装位置时，MyGo 才会启用更新。客户端源码不嵌入公钥文件；`mygo.json` 的 `updates.publicKey` 是唯一验签来源。
 
-### 9.5 CI
+### 10.5 CI
 
 `.github/workflows/desktop-build.yml` 在 `macos-latest` 和 `windows-latest` 上：
 
@@ -262,7 +276,7 @@ Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配�
 
 secret 缺失时会输出明确 notice 并跳过打包，不会用开发密钥伪造正式产物。
 
-### 9.6 验收记录
+### 10.6 验收记录
 
 当前仓库实际执行过的验证、环境限制和 NOT RUN 项见：
 
