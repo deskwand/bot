@@ -59,7 +59,7 @@ func (j *RestoreJournal) Pending() (*RestoreRecord, error) {
 	var record RestoreRecord
 	if err := json.Unmarshal(data, &record); err != nil {
 		return nil, domain.Error{
-			Code:    CodeBackupInvalid,
+			Code:    CodeRestoreJournalCorrupt,
 			Message: fmt.Sprintf("decode restore journal: %v", err),
 		}
 	}

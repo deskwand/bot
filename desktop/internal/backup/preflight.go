@@ -22,6 +22,12 @@ var (
 	integerText = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)$`)
 )
 
+// jsSafeIntMax is the largest integer JSON.parse preserves exactly. The Worker
+// decodes restore pages with JSON.parse, so a bare integer above this bound
+// would be silently rounded before it reaches SQLite; the archive format's
+// $int tag exists to carry larger values as strings.
+const jsSafeIntMax int64 = 1<<53 - 1
+
 // validateManifestStructure checks the parts of the manifest that a restore
 // depends on but the row counts alone cannot prove: exactly one Butler and one
 // Channel, unique identities, and a row map that matches the schema.
@@ -370,6 +376,9 @@ func archiveValue(raw json.RawMessage) (any, string, error) {
 				if !integerText.MatchString(text) {
 					return nil, "", fmt.Errorf("invalid $int %q", text)
 				}
+				if _, err := strconv.ParseInt(text, 10, 64); err != nil {
+					return nil, "", fmt.Errorf("invalid $int %q: outside the int64 range", text)
+				}
 				return text, "CAST(? AS INTEGER)", nil
 			case "$real":
 				value, err := strconv.ParseFloat(text, 64)
@@ -396,6 +405,13 @@ func archiveValue(raw json.RawMessage) (any, string, error) {
 	default:
 		if !integerText.MatchString(trimmed) {
 			return nil, "", fmt.Errorf("plain numbers must be integers, got %s", trimmed)
+		}
+		value, err := strconv.ParseInt(trimmed, 10, 64)
+		if err != nil {
+			return nil, "", fmt.Errorf("plain integer %s is outside the int64 range; encode it as $int", trimmed)
+		}
+		if value > jsSafeIntMax || value < -jsSafeIntMax {
+			return nil, "", fmt.Errorf("plain integer %s is outside the JavaScript safe range; encode it as $int", trimmed)
 		}
 		return trimmed, "CAST(? AS INTEGER)", nil
 	}

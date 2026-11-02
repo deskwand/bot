@@ -3,6 +3,7 @@ package backup
 import (
 	"archive/zip"
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -722,6 +723,140 @@ func TestOpenRejectsObjectCRCMismatch(t *testing.T) {
 	writeTestArchive(t, path, nil, []testObject{{item: item, body: body}}, nil)
 	corruptZipEntry(t, path, item.Entry)
 
+	_, err := Open(path)
+	requireCode(t, err, CodeBackupInvalid)
+}
+
+func writeNumericArchive(t *testing.T, path, columnType, value string) {
+	t.Helper()
+	manifest := minimalManifest()
+	manifest.DurableObjects = []DOManifest{
+		{
+			DORef:  DORef{DO: "butler"},
+			Schema: DBSchema{Tables: []TableSchema{{Name: "counts", Create: "CREATE TABLE counts (n " + columnType + ")"}}},
+			Rows:   map[string]int64{"counts": 1},
+		},
+		{DORef: DORef{DO: "channel"}, Rows: map[string]int64{}},
+	}
+	writeRawArchive(t, path, manifest, []rawEntry{{
+		name: "do/butler/counts.jsonl",
+		data: []byte(`{"__rowid":1,"n":` + value + "}\n"),
+	}})
+}
+
+func TestOpenRejectsUnsafeBareInteger(t *testing.T) {
+	for _, value := range []string{"9007199254740993", "-9007199254740993"} {
+		t.Run(value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "backup.zip")
+			writeNumericArchive(t, path, "INTEGER", value)
+			_, err := Open(path)
+			requireCode(t, err, CodeBackupInvalid)
+		})
+	}
+}
+
+func TestOpenRejectsTaggedIntegerOutsideInt64(t *testing.T) {
+	for _, value := range []string{
+		`{"$int":"9223372036854775808"}`,
+		`{"$int":"-9223372036854775809"}`,
+	} {
+		t.Run(value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "backup.zip")
+			writeNumericArchive(t, path, "INTEGER", value)
+			_, err := Open(path)
+			requireCode(t, err, CodeBackupInvalid)
+		})
+	}
+}
+
+func TestOpenAcceptsSafeAndTaggedIntegers(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"bare safe max", "9007199254740991"},
+		{"bare safe min", "-9007199254740991"},
+		{"tagged above safe", `{"$int":"9007199254740993"}`},
+		{"tagged int64 max", `{"$int":"9223372036854775807"}`},
+		{"tagged int64 min", `{"$int":"-9223372036854775808"}`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "backup.zip")
+			writeNumericArchive(t, path, "INTEGER", testCase.raw)
+			reader, err := Open(path)
+			if err != nil {
+				t.Fatalf("Open rejected %s: %v", testCase.raw, err)
+			}
+			_ = reader.Close()
+		})
+	}
+}
+
+func TestArchiveValuePreservesIntegerBoundaries(t *testing.T) {
+	cases := []struct {
+		name  string
+		raw   string
+		value string
+	}{
+		{"bare safe max", "9007199254740991", "9007199254740991"},
+		{"bare safe min", "-9007199254740991", "-9007199254740991"},
+		{"tagged above safe", `{"$int":"9007199254740993"}`, "9007199254740993"},
+		{"tagged int64 max", `{"$int":"9223372036854775807"}`, "9223372036854775807"},
+		{"tagged int64 min", `{"$int":"-9223372036854775808"}`, "-9223372036854775808"},
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE counts (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			value, placeholder, err := archiveValue(json.RawMessage(testCase.raw))
+			if err != nil {
+				t.Fatalf("archiveValue(%s): %v", testCase.raw, err)
+			}
+			if value != testCase.value {
+				t.Fatalf("binding = %v, want %s", value, testCase.value)
+			}
+			if placeholder != "CAST(? AS INTEGER)" {
+				t.Fatalf("placeholder = %q, want CAST(? AS INTEGER)", placeholder)
+			}
+			if _, err := db.Exec("INSERT INTO counts (n) VALUES ("+placeholder+")", value); err != nil {
+				t.Fatalf("insert %s: %v", testCase.value, err)
+			}
+			var stored string
+			if err := db.QueryRow("SELECT CAST(n AS TEXT) FROM counts ORDER BY rowid DESC LIMIT 1").Scan(&stored); err != nil {
+				t.Fatal(err)
+			}
+			if stored != testCase.value {
+				t.Fatalf("stored = %s, want %s", stored, testCase.value)
+			}
+		})
+	}
+}
+
+func TestOpenAcceptsTaggedInfiniteReal(t *testing.T) {
+	for _, value := range []string{`{"$real":"9.0e+999"}`, `{"$real":"-9.0e+999"}`} {
+		t.Run(value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "backup.zip")
+			writeNumericArchive(t, path, "REAL", value)
+			reader, err := Open(path)
+			if err != nil {
+				t.Fatalf("Open rejected %s: %v", value, err)
+			}
+			_ = reader.Close()
+		})
+	}
+}
+
+func TestOpenRejectsTaggedNaNReal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	writeNumericArchive(t, path, "REAL", `{"$real":"NaN"}`)
 	_, err := Open(path)
 	requireCode(t, err, CodeBackupInvalid)
 }

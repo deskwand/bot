@@ -12,6 +12,7 @@ const (
 	CodeBackupObjectTooLarge  = "BACKUP_OBJECT_TOO_LARGE"
 	CodeRestoreSnapshotFailed = "RESTORE_SNAPSHOT_FAILED"
 	CodeRestorePending        = "RESTORE_PENDING"
+	CodeRestoreJournalCorrupt = "RESTORE_JOURNAL_CORRUPT"
 )
 
 // MaxR2ObjectBytes is the largest artifact the Worker accepts in one request

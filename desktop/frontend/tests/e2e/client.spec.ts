@@ -784,6 +784,39 @@ test("abandons an unfinished restore record only after confirmation", async ({ p
   await expect(page.getByText("数据恢复未完成")).toHaveCount(0);
 });
 
+test("corrupt restore record can be abandoned without breaking the overview", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup-pending-corrupt");
+
+  // The other overview calls still render their own data.
+  await expect(page.getByRole("heading", { name: "服务概览" })).toBeVisible();
+  await expect(page.getByText("云端服务", { exact: true })).toBeVisible();
+  await expect(page.getByText("状态证据", { exact: true })).toBeVisible();
+
+  // The corrupt record offers abandonment only, with the no-rollback wording.
+  await expect(page.getByText("本机恢复记录无法读取", { exact: false })).toBeVisible();
+  await expect(page.getByText(/不会恢复或回滚任何云端数据/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "用该文件重试", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "恢复到恢复前快照", exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "放弃恢复记录", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "放弃未完成的恢复记录？" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(/不会恢复任何云端数据/)).toBeVisible();
+  await expect.poll(async () => (await backupCalls(page)).abandon).toBe(0);
+
+  await dialog.getByRole("button", { name: "确认放弃记录", exact: true }).click();
+  await expect.poll(async () => (await backupCalls(page)).abandon).toBe(1);
+  await expect(page.getByText("本机恢复记录无法读取", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "服务概览" })).toBeVisible();
+  await expect(page.getByText("云端服务", { exact: true })).toBeVisible();
+  await expect(page.getByText("状态证据", { exact: true })).toBeVisible();
+
+  // A generic pending-restore failure must not claim the journal is corrupt.
+  await page.goto("/test.html?fixture=backup-pending-unavailable");
+  await expect(page.getByText(/暂时无法检查未完成的恢复记录/)).toBeVisible();
+  await expect(page.getByText("本机恢复记录无法读取", { exact: false })).toHaveCount(0);
+});
+
 test("snapshot failure retries by choosing the backup again", async ({ page }) => {
   await page.goto("/test.html?fixture=backup-restore-snapshot-failed");
   await page.getByRole("button", { name: "数据备份", exact: true }).click();

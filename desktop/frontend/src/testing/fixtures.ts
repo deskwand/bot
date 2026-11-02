@@ -61,6 +61,8 @@ type Scenario =
   | "backup-progress"
   | "backup-version-mismatch"
   | "backup-pending"
+  | "backup-pending-corrupt"
+  | "backup-pending-unavailable"
   | "backup-restore-snapshot-failed"
   | "backup-restore-midway-failed";
 
@@ -186,6 +188,8 @@ function scenarioFromLocation(): Scenario {
     case "backup-progress":
     case "backup-version-mismatch":
     case "backup-pending":
+    case "backup-pending-corrupt":
+    case "backup-pending-unavailable":
     case "backup-restore-snapshot-failed":
     case "backup-restore-midway-failed":
       return value;
@@ -221,6 +225,8 @@ function initialState(): MockState {
     "backup-progress",
     "backup-version-mismatch",
     "backup-pending",
+    "backup-pending-corrupt",
+    "backup-pending-unavailable",
     "backup-restore-snapshot-failed",
     "backup-restore-midway-failed",
   ].includes(scenario);
@@ -929,6 +935,12 @@ export function createMockClient(): ClientService {
 
     async pendingRestore(): Promise<PendingRestoreDTO | null> {
       if (pendingAbandoned) return null;
+      if (state.scenario === "backup-pending-corrupt") {
+        fail("RESTORE_JOURNAL_CORRUPT", "本机恢复记录无法读取。");
+      }
+      if (state.scenario === "backup-pending-unavailable") {
+        fail("ADMIN_UNAVAILABLE", "云端服务尚不支持数据备份。");
+      }
       if (
         state.scenario !== "backup-pending" &&
         state.scenario !== "backup-restore-midway-failed"

@@ -84,7 +84,7 @@ func TestJournalRoundTrip(t *testing.T) {
 	}
 }
 
-func TestJournalRejectsCorruptRecord(t *testing.T) {
+func TestJournalCorruptRecordHasDedicatedCode(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "restore")
 	journal, err := NewRestoreJournal(dir)
 	if err != nil {
@@ -95,7 +95,7 @@ func TestJournalRejectsCorruptRecord(t *testing.T) {
 	}
 	if _, err := journal.Pending(); err == nil {
 		t.Fatal("a corrupt journal was accepted")
-	} else if code := adminErrorCode(t, err); code != CodeBackupInvalid {
+	} else if code := adminErrorCode(t, err); code != CodeRestoreJournalCorrupt {
 		t.Fatalf("code = %q", code)
 	}
 }

@@ -189,6 +189,8 @@ export function describeCode(code: string): string {
       return "恢复前快照失败，云端数据未改动。请检查网络和磁盘空间后重试。";
     case "RESTORE_PENDING":
       return "还有未完成的数据恢复。请先在概览页完成恢复，或回到恢复前快照。";
+    case "RESTORE_JOURNAL_CORRUPT":
+      return "本机恢复记录无法读取。放弃记录只会删除本机记录，不会恢复或回滚任何云端数据。";
 
     default:
       return FALLBACK_CODE_MESSAGE;

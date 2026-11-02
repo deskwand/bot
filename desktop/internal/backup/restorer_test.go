@@ -239,6 +239,9 @@ func TestRestoreRefusesVersionMismatch(t *testing.T) {
 	if got := len(restoreCalls(worker)); got != 0 {
 		t.Fatalf("restore calls = %d, want 0", got)
 	}
+	if worker.hasLease() {
+		t.Fatal("the lease was not released")
+	}
 	pending, err := journal.Pending()
 	if err != nil {
 		t.Fatal(err)
@@ -272,6 +275,9 @@ func TestRestoreRefusesUnknownRelease(t *testing.T) {
 			if got := len(restoreCalls(worker)); got != 0 {
 				t.Fatalf("restore calls = %d, want 0", got)
 			}
+			if worker.hasLease() {
+				t.Fatal("the lease was not released")
+			}
 		})
 	}
 }
@@ -289,6 +295,9 @@ func TestRestoreRefusesOversizedObjects(t *testing.T) {
 	}
 	if got := len(restoreCalls(worker)); got != 0 {
 		t.Fatalf("restore calls = %d, want 0", got)
+	}
+	if worker.hasLease() {
+		t.Fatal("the lease was not released")
 	}
 	pending, err := journal.Pending()
 	if err != nil {
@@ -320,6 +329,9 @@ func TestRestoreRefusesIncompleteSnapshot(t *testing.T) {
 	}
 	if got := len(restoreCalls(worker)); got != 0 {
 		t.Fatalf("restore calls = %d, want 0", got)
+	}
+	if worker.hasLease() {
+		t.Fatal("the lease was not released")
 	}
 	pending, err := journal.Pending()
 	if err != nil {
@@ -355,6 +367,9 @@ func TestRestoreStopsWhenSnapshotFails(t *testing.T) {
 	}
 	if got := len(restoreCalls(worker)); got != 0 {
 		t.Fatalf("restore calls = %d, want 0", got)
+	}
+	if worker.hasLease() {
+		t.Fatal("the lease was not released")
 	}
 	pending, err := journal.Pending()
 	if err != nil {
@@ -652,6 +667,89 @@ func TestRetryAfterMidwayFailure(t *testing.T) {
 	}
 }
 
+func TestRestoreKeepsLeaseAfterDestructiveFailure(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+	worker.failRoute("POST", restorePagePath, "channel", "", 1, 500)
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	releasesBefore := worker.requestCount("POST", releasePath)
+
+	err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups"))
+	if code := adminErrorCode(t, err); code != CodeBackupInvalid {
+		t.Fatalf("code = %q", code)
+	}
+	record, err := journal.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record == nil {
+		t.Fatal("no record was kept after the failure")
+	}
+	if record.State != "failed" || record.FailureCode == "" {
+		t.Fatalf("record = %+v, want a failed record with a failure code", record)
+	}
+	if !worker.hasLease() {
+		t.Fatal("the lease was released after a destructive failure")
+	}
+	op, opID := worker.lease()
+	if op != "restore" || opID != record.OperationID {
+		t.Fatalf("lease = (%q, %q), want (restore, %q)", op, opID, record.OperationID)
+	}
+	if got := worker.requestCount("POST", releasePath); got != releasesBefore {
+		t.Fatalf("release requests = %d, want %d", got, releasesBefore)
+	}
+}
+
+func TestRetryKeepsLeaseAfterDestructiveFailure(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+	worker.failRoute("POST", restorePagePath, "channel", "", 1, 500)
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	releasesBefore := worker.requestCount("POST", releasePath)
+
+	err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups"))
+	if code := adminErrorCode(t, err); code != CodeBackupInvalid {
+		t.Fatalf("restore code = %q", code)
+	}
+	record, err := journal.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record == nil {
+		t.Fatal("no record was kept after the first failure")
+	}
+	if !worker.hasLease() {
+		t.Fatal("the lease was released after the first destructive failure")
+	}
+
+	// Make the retry fail destructively as well: its lease must also survive.
+	worker.failRoute("POST", restorePagePath, "channel", "", 1, 500)
+	if err := Retry(context.Background(), deps, journal, false); err == nil {
+		t.Fatal("the retry unexpectedly succeeded")
+	}
+	record, err = journal.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record == nil || record.State != "failed" || record.FailureCode == "" {
+		t.Fatalf("record = %+v, want a failed record with a failure code", record)
+	}
+	if !worker.hasLease() {
+		t.Fatal("the lease was released after a destructive retry failure")
+	}
+	op, opID := worker.lease()
+	if op != "restore" || opID != record.OperationID {
+		t.Fatalf("lease = (%q, %q), want (restore, %q)", op, opID, record.OperationID)
+	}
+	if got := worker.requestCount("POST", releasePath); got != releasesBefore {
+		t.Fatalf("release requests = %d, want %d", got, releasesBefore)
+	}
+}
+
 func TestRetryFromSnapshot(t *testing.T) {
 	worker := seedRestoreWorker(t)
 	path := makeRestoreBackup(t, worker, "1.2.3")
@@ -759,6 +857,9 @@ func TestRestoreRechecksVersionImmediatelyBeforeDestructiveStep(t *testing.T) {
 	}
 	if got := len(restoreCalls(worker)); got != 0 {
 		t.Fatalf("restore calls = %d, want 0", got)
+	}
+	if worker.hasLease() {
+		t.Fatal("the lease was not released after the rejected recheck")
 	}
 	pending, err := journal.Pending()
 	if err != nil {

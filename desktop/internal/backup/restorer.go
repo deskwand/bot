@@ -92,7 +92,15 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 	if err != nil {
 		return err
 	}
-	defer func() { _ = releaseLease(client) }()
+	// Only failures before the first destructive call may release the lease.
+	// Once restoreData starts, the deployment may be half-restored and the
+	// live bot must stay fenced out until Retry finishes the job.
+	releaseOnExit := true
+	defer func() {
+		if releaseOnExit {
+			_ = releaseLease(client)
+		}
+	}()
 
 	unlock, err := lockTarget(ctx, deps, target)
 	if err != nil {
@@ -159,6 +167,7 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 	}
 	progress := Progress{Op: "restore", Phase: PhaseDatabase}
 	deps.report(progress)
+	releaseOnExit = false
 	err = withLeaseHeartbeat(ctx, client, func(heartbeatCtx context.Context) error {
 		return restoreData(heartbeatCtx, deps, client, reader, manifest, &progress)
 	})
@@ -171,6 +180,7 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 		_ = journal.Save(record)
 		return err
 	}
+	releaseOnExit = true
 	progress.Phase = PhaseFinishing
 	deps.report(progress)
 	return journal.Clear()
@@ -220,7 +230,14 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 	if err != nil {
 		return err
 	}
-	defer func() { _ = releaseLease(client) }()
+	// Like Restore, once the retry reaches its destructive stage the lease must
+	// survive a failure so the live bot stays fenced out.
+	releaseOnExit := true
+	defer func() {
+		if releaseOnExit {
+			_ = releaseLease(client)
+		}
+	}()
 
 	unlock, err := lockTarget(ctx, deps, record.Target)
 	if err != nil {
@@ -254,6 +271,7 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 	}
 	progress := Progress{Op: "restore", Phase: PhaseDatabase}
 	deps.report(progress)
+	releaseOnExit = false
 	err = withLeaseHeartbeat(ctx, client, func(heartbeatCtx context.Context) error {
 		return restoreData(heartbeatCtx, deps, client, reader, manifest, &progress)
 	})
@@ -266,6 +284,7 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 		_ = journal.Save(*record)
 		return err
 	}
+	releaseOnExit = true
 	progress.Phase = PhaseFinishing
 	deps.report(progress)
 	return journal.Clear()

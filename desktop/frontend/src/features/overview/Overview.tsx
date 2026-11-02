@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StatusRow, StateBadge, formatObserved, sourceLabel } from "@/components/feedback";
+import { isCode } from "@/services/errors";
 import type { ConfigDTO, ConnectionDTO, PendingRestoreDTO, StatusItemDTO } from "@/services/types";
 
 export function Overview({ initialError }: { initialError?: unknown }) {
@@ -28,6 +29,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
   const [status, setStatus] = useState<StatusItemDTO[]>([]);
   const [connection, setConnection] = useState<ConnectionDTO | null>(null);
   const [pendingRestore, setPendingRestore] = useState<PendingRestoreDTO | null>(null);
+  const [pendingError, setPendingError] = useState<unknown>(null);
   const [retrying, setRetrying] = useState<"backup" | "snapshot" | null>(null);
   const [retryError, setRetryError] = useState<unknown>(null);
   const [retryMessage, setRetryMessage] = useState("");
@@ -40,22 +42,38 @@ export function Overview({ initialError }: { initialError?: unknown }) {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      const [nextConfig, nextStatus, nextConnection, nextPendingRestore] = await Promise.all([
-        client.getConfig(),
-        client.status(),
-        client.cloudflareStatus(),
-        client.pendingRestore(),
-      ]);
-      setConfig(nextConfig);
-      setStatus(nextStatus);
-      setConnection(nextConnection);
-      setPendingRestore(nextPendingRestore);
-    } catch (cause) {
-      setError(cause);
-    } finally {
-      setLoading(false);
+    setPendingError(null);
+    // Load independently: a corrupt restore journal must not blank the rest
+    // of the overview, and its error must stay out of the page-level alert.
+    const [configResult, statusResult, connectionResult, pendingResult] = await Promise.allSettled([
+      client.getConfig(),
+      client.status(),
+      client.cloudflareStatus(),
+      client.pendingRestore(),
+    ]);
+    if (configResult.status === "fulfilled") {
+      setConfig(configResult.value);
+    } else {
+      setError(configResult.reason);
     }
+    if (statusResult.status === "fulfilled") {
+      setStatus(statusResult.value);
+    } else {
+      setError(statusResult.reason);
+    }
+    if (connectionResult.status === "fulfilled") {
+      setConnection(connectionResult.value);
+    } else {
+      setError(connectionResult.reason);
+    }
+    if (pendingResult.status === "fulfilled") {
+      setPendingRestore(pendingResult.value);
+      setPendingError(null);
+    } else {
+      setPendingRestore(null);
+      setPendingError(pendingResult.reason);
+    }
+    setLoading(false);
   }, [client]);
 
   useEffect(() => {
@@ -64,6 +82,8 @@ export function Overview({ initialError }: { initialError?: unknown }) {
 
   const entryStatus = status.find((item) => item.kind === config?.activeChannel);
   const modelsConfigured = Boolean(config?.butlerModel && config?.taskModel);
+  const corruptPendingRecord = pendingError !== null && isCode(pendingError, "RESTORE_JOURNAL_CORRUPT");
+  const pendingCheckFailed = pendingError !== null && !corruptPendingRecord;
 
   const retryRestore = async (useSnapshot: boolean) => {
     setRetrying(useSnapshot ? "snapshot" : "backup");
@@ -183,6 +203,35 @@ export function Overview({ initialError }: { initialError?: unknown }) {
             <ErrorAlert error={abandonError} />
           </CardContent>
         </Card>
+      ) : null}
+
+      {corruptPendingRecord ? (
+        <Card className="mt-4 border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
+          <CardContent className="pt-4">
+            <h2 className="text-sm font-semibold">本机恢复记录无法读取</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              本机的恢复记录已损坏，无法读取重试所需的信息。放弃这条记录只会删除本机的恢复记录，不会恢复或回滚任何云端数据。
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={abandoning}
+                onClick={() => setAbandonOpen(true)}
+              >
+                放弃恢复记录
+              </Button>
+            </div>
+            <ErrorAlert error={abandonError} />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {pendingCheckFailed ? (
+        <p className="mt-4 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          暂时无法检查未完成的恢复记录；请点击“重新检查”重试。
+        </p>
       ) : null}
 
       <Dialog open={abandonOpen} onOpenChange={setAbandonOpen}>
