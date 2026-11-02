@@ -1,4 +1,5 @@
 import { Agent, type Schedule } from "agents";
+import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
 import { isOwner } from "../config";
 import { readRuntimeConfig } from "../runtime-config";
 import {
@@ -129,9 +130,12 @@ export class ChannelDO extends Agent<Env> {
   /** Cached for the lifetime of this instance: its environment is immutable. */
   private routePromise: Promise<RouteSnapshot> | undefined;
 
+  private readonly lease: MaintenanceStore;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
+    this.lease = new MaintenanceStore(this.db);
 
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS owner_addresses (
@@ -168,7 +172,11 @@ export class ChannelDO extends Agent<Env> {
     }
   }
 
-  async handleTelegramWebhook(req: Request): Promise<void> {
+  async handleTelegramWebhook(
+    req: Request,
+  ): Promise<"accepted" | "maintenance"> {
+    if (this.lease.current() !== null) return "maintenance";
+
     try {
       const adapter = this.adapter("telegram");
 
@@ -184,13 +192,13 @@ export class ChannelDO extends Agent<Env> {
         console.error(
           `channel: failed to parse update: ${errorMessage(error)}`,
         );
-        return;
+        return "accepted";
       }
-      if (!event) return;
+      if (!event) return "accepted";
 
       if (!this.isOwner(event)) {
         console.warn(`channel: ignoring event from non-owner ${event.userId}`);
-        return;
+        return "accepted";
       }
 
       this.rememberOwner(event);
@@ -208,12 +216,12 @@ export class ChannelDO extends Agent<Env> {
             );
           }
         }
-        return;
+        return "accepted";
       }
 
       if (event.type === "message") {
         this.dispatchMessage(event, route.routeKey);
-        return;
+        return "accepted";
       }
 
       let text = "出错了，稍后再试";
@@ -237,6 +245,38 @@ export class ChannelDO extends Agent<Env> {
       // The webhook must always be acknowledged, even for an unexpected bug.
       console.error(`channel: webhook failed: ${errorMessage(error)}`);
     }
+    return "accepted";
+  }
+
+  /**
+   * Lease RPCs. A live lease pauses inbound webhooks, polling and alarms; the
+   * admin gateway keeps it alive on both this hub and the Butler.
+   */
+  async acquireMaintenance(
+    op: Lease["op"],
+    opId: string,
+  ): Promise<Lease | "busy"> {
+    return this.lease.acquire(op, opId);
+  }
+
+  async renewMaintenance(opId: string): Promise<boolean> {
+    return this.lease.renew(opId);
+  }
+
+  async releaseMaintenance(opId: string): Promise<void> {
+    this.lease.release(opId);
+  }
+
+  async maintenanceActive(): Promise<boolean> {
+    return this.lease.current() !== null;
+  }
+
+  override async alarm(): Promise<void> {
+    if (this.lease.current() !== null) {
+      this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
+      return;
+    }
+    await super.alarm();
   }
 
   /**
@@ -370,6 +410,8 @@ export class ChannelDO extends Agent<Env> {
   }
 
   async ensurePolling(): Promise<void> {
+    if (this.lease.current() !== null) return;
+
     const route = await this.currentRoute();
 
     if (route.channel !== "wechat") {
@@ -470,6 +512,8 @@ export class ChannelDO extends Agent<Env> {
     _payload?: unknown,
     _schedule?: Schedule<unknown>,
   ): Promise<void> {
+    if (this.lease.current() !== null) return;
+
     const route = await this.currentRoute();
     if (route.channel !== "wechat") return;
 
@@ -483,6 +527,7 @@ export class ChannelDO extends Agent<Env> {
     const ownsRun = async () => {
       const current = this.readWeChatState();
       return this.activeWeChatRun === run &&
+        this.lease.current() === null &&
         this.weChatCredentialsJson() === run.raw &&
         current.credentials_hash === run.hash && current.status === "running" &&
         (await this.currentRoute()).routeKey === run.routeKey;

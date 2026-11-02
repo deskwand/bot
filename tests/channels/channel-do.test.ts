@@ -299,7 +299,7 @@ describe("handleTelegramWebhook", () => {
 
     await expect(
       channels().handleTelegramWebhook(webhook()),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("accepted");
   });
 
   it("routes a button to the task and answers with its result", async () => {
@@ -337,7 +337,7 @@ describe("handleTelegramWebhook", () => {
 
     await expect(
       channels().handleTelegramWebhook(webhook()),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("accepted");
   });
 
   it("fails business processing with a fixed error when config is missing", async () => {
@@ -387,7 +387,7 @@ describe("active channel gating", () => {
 
     await expect(
       freshChannels("gated-action").handleTelegramWebhook(webhook()),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("accepted");
 
     expect(events).toEqual([]);
     expect(tg.answered).toEqual([

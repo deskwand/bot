@@ -1,6 +1,7 @@
 import { Agent } from "agents";
 import { PiHarness, type PiModel } from "agents/harness/pi";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
+import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
 import {
@@ -73,6 +74,8 @@ export class ButlerDO extends Agent<Env> {
 
   private readonly schedules: ScheduleStore;
 
+  private readonly lease: MaintenanceStore;
+
   /** The model last applied to the Butler session (see `ensureModel`). */
   private appliedModel: PiModel | undefined;
 
@@ -140,6 +143,7 @@ export class ButlerDO extends Agent<Env> {
     this.repo = new TasksRepo(this.db);
     this.memory = new MemoryStore(this.db);
     this.schedules = new ScheduleStore(this.db);
+    this.lease = new MaintenanceStore(this.db);
 
     // Installed once, at construction: Pi may re-run the harness factory after
     // a storage error, so registry changes must not depend on it.
@@ -200,6 +204,38 @@ export class ButlerDO extends Agent<Env> {
 
     // `Agent` already installed the lifecycle; adding to it is required.
     this.lifecycle.use(this.harness);
+  }
+
+  /**
+   * Lease RPCs. The admin gateway holds the same lease on the Butler and the
+   * Channel hub; alarms are the only thing an admin request cannot cancel, so
+   * they check it here and defer instead of running cron callbacks.
+   */
+  async acquireMaintenance(
+    op: Lease["op"],
+    opId: string,
+  ): Promise<Lease | "busy"> {
+    return this.lease.acquire(op, opId);
+  }
+
+  async renewMaintenance(opId: string): Promise<boolean> {
+    return this.lease.renew(opId);
+  }
+
+  async releaseMaintenance(opId: string): Promise<void> {
+    this.lease.release(opId);
+  }
+
+  async maintenanceActive(): Promise<boolean> {
+    return this.lease.current() !== null;
+  }
+
+  override async alarm(): Promise<void> {
+    if (this.lease.current() !== null) {
+      this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
+      return;
+    }
+    await super.alarm();
   }
 
   /**

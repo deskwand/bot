@@ -7,6 +7,7 @@ import {
   type ReportInfo,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
+import { DEFER_MS } from "../admin/maintenance";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
 import type {
@@ -218,6 +219,15 @@ export class TaskDO extends Agent<Env> {
   override async onAlarm(): Promise<void> {
     await super.onAlarm();
     await this.flushOutbox();
+  }
+
+  /** A live admin lease defers every alarm, including outbox retries. */
+  override async alarm(): Promise<void> {
+    if (await this.butlerMaintenanceActive()) {
+      this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
+      return;
+    }
+    await super.alarm();
   }
 
   async start(spec: TaskSpec): Promise<void> {
@@ -695,6 +705,11 @@ export class TaskDO extends Agent<Env> {
   private async deliver(event: TaskEvent): Promise<void> {
     const butler = this.env.BUTLER.get(this.env.BUTLER.idFromName("owner"));
     await butler.report(event);
+  }
+
+  private async butlerMaintenanceActive(): Promise<boolean> {
+    const butler = this.env.BUTLER.get(this.env.BUTLER.idFromName("owner"));
+    return butler.maintenanceActive();
   }
 
   private currentTaskId(): string | undefined {

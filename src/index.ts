@@ -24,6 +24,8 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    if (await butler(env).maintenanceActive()) return;
+
     const hub = channels(env);
     try {
       await hub.ensurePolling();

@@ -6,8 +6,11 @@ declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
+type WebhookOutcome = "accepted" | "maintenance";
+
 function setup(
-  handleTelegramWebhook: (req: Request) => Promise<void> = async () => {},
+  handleTelegramWebhook: (req: Request) => Promise<WebhookOutcome> = async () =>
+    "accepted",
 ) {
   const gateway = createGateway({
     channels: () => ({ handleTelegramWebhook }),
@@ -33,6 +36,14 @@ describe("POST /telegram/webhook", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("");
+  });
+
+  it("returns 503 when the channel hub is in maintenance", async () => {
+    const h = setup(async () => "maintenance");
+
+    const response = await h.gateway.fetch(webhook());
+
+    expect(response.status).toBe(503);
   });
 });
 

@@ -1,5 +1,7 @@
 export type GatewayDeps = {
-  channels(): { handleTelegramWebhook(req: Request): Promise<void> };
+  channels(): {
+    handleTelegramWebhook(req: Request): Promise<"accepted" | "maintenance">;
+  };
   artifacts: R2Bucket;
 };
 
@@ -34,10 +36,15 @@ export function createGateway(deps: GatewayDeps): {
 } {
   async function handleWebhook(req: Request): Promise<Response> {
     // Telegram retries failed deliveries; always acknowledge and log instead.
+    let outcome: "accepted" | "maintenance";
     try {
-      await deps.channels().handleTelegramWebhook(req);
+      outcome = await deps.channels().handleTelegramWebhook(req);
     } catch (error) {
       console.error(`gateway: webhook forward failed: ${errorMessage(error)}`);
+      return ok();
+    }
+    if (outcome === "maintenance") {
+      return new Response("Service Unavailable", { status: 503 });
     }
     return ok();
   }
