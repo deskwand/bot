@@ -78,20 +78,21 @@ type Migration struct {
 // per installation are represented by install parameter keys, not by fixed
 // personal values.
 type ResourceTemplate struct {
-	SchemaVersion   int                `json:"schemaVersion"`
-	Entrypoint      string             `json:"entrypoint"`
-	Compatibility   Compatibility      `json:"compatibility"`
-	DurableObjects  []DOBinding        `json:"durableObjects"`
-	R2Buckets       []R2Binding        `json:"r2Buckets"`
-	VersionMetadata BindingRef         `json:"versionMetadataBinding"`
-	Observability   *Observability     `json:"observability"`
-	ConfigBinding   ConfigBinding      `json:"configBinding"`
-	SecretNames     []string           `json:"secretNames"`
-	PlainVars       []string           `json:"plainVars"`
-	Crons           []string           `json:"crons"`
-	Vars            []VarBinding       `json:"vars"`
-	Migrations      []Migration        `json:"migrations"`
-	InstallParams   []InstallParameter `json:"installParameters"`
+	SchemaVersion      int                `json:"schemaVersion"`
+	Entrypoint         string             `json:"entrypoint"`
+	Compatibility      Compatibility      `json:"compatibility"`
+	DurableObjects     []DOBinding        `json:"durableObjects"`
+	R2Buckets          []R2Binding        `json:"r2Buckets"`
+	VersionMetadata    BindingRef         `json:"versionMetadataBinding"`
+	Observability      *Observability     `json:"observability"`
+	ConfigBinding      ConfigBinding      `json:"configBinding"`
+	SecretNamePatterns []string           `json:"secretNamePatterns"`
+	SecretNames        []string           `json:"secretNames"`
+	PlainVars          []string           `json:"plainVars"`
+	Crons              []string           `json:"crons"`
+	Vars               []VarBinding       `json:"vars"`
+	Migrations         []Migration        `json:"migrations"`
+	InstallParams      []InstallParameter `json:"installParameters"`
 }
 
 // Observability is the script-level logging configuration required for

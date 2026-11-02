@@ -45,10 +45,12 @@ npx wrangler r2 bucket create my-artifacts
 生产环境通过 `wrangler secret put` 逐个写入（值不会进入仓库）：
 
 ```bash
-npx wrangler secret put OPENCODE_API_KEY
+npx wrangler secret put MODEL_KEY_OPENCODE_GO
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 ```
+
+模型 key 的 secret 名统一按厂商 id 推导：`MODEL_KEY_` + id 转大写、`-` 换成 `_`。例如 `opencode-go` → `MODEL_KEY_OPENCODE_GO`、`deepseek` → `MODEL_KEY_DEEPSEEK`、`anthropic` → `MODEL_KEY_ANTHROPIC`。自定义端点同样按 id 推导，例如 `my-proxy` → `MODEL_KEY_MY_PROXY`。
 
 `TELEGRAM_WEBHOOK_SECRET` 是自定义的随机字符串，用于校验 Telegram 回调头 `X-Telegram-Bot-Api-Secret-Token`，可用下面命令生成：
 
@@ -64,8 +66,7 @@ cp .dev.vars.example .dev.vars
 
 | 名称 | 类型 | 说明 |
 | --- | --- | --- |
-| `OPENCODE_API_KEY` | secret | 模型调用（直接使用 OpenCode Go provider key，不经 AI Gateway）；缺失时只影响 opencode-go 模型 |
-| `ANTHROPIC_API_KEY` | secret | 可选；使用 `anthropic` provider 时填入 |
+| `MODEL_KEY_<ID>` | secret | 模型调用；`<ID>` 是厂商 id 转大写、`-` 换 `_`（如 `MODEL_KEY_OPENCODE_GO`、`MODEL_KEY_DEEPSEEK`）；缺失时只影响该厂商的模型 |
 | `TELEGRAM_BOT_TOKEN` | secret | BotFather 提供的 token |
 | `TELEGRAM_WEBHOOK_SECRET` | secret | webhook 校验密钥（自定义随机串）；缺失时所有 Telegram webhook 都会被拒绝 |
 | `WECHAT_CREDENTIALS` | secret | 可选；微信 iLink 登录凭据，由 `npm run wechat-login` 写入 |
@@ -108,7 +109,29 @@ cp .dev.vars.example .dev.vars
 - `mcpServers`：MCP 服务器列表；对需要人工确认的工具在 `requireApproval` 中列出工具名，触发时会先发 ✅/❌ 审批按钮。header 值可以写 `env:NAME` 引用 Worker secret，引用会原样保留，不会把值展开进普通 var。
 - `schemaVersion` 必须为 `1`；未知版本、非整数/越界用户 ID、未知 provider 或非法 JSON 都会以固定错误拒绝，不会猜测或回退。
 
-`OPENCODE_API_KEY`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_WEBHOOK_SECRET` 都是可选 secret：缺失时只影响对应业务路径（例如缺少 webhook secret 时所有 Telegram webhook 都会被拒绝）。
+`MODEL_KEY_<ID>`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_WEBHOOK_SECRET` 都是可选 secret：缺失时只影响对应业务路径（例如缺少 webhook secret 时所有 Telegram webhook 都会被拒绝）。
+
+自定义 OpenAI/Anthropic 兼容端点在 `models.customProviders` 里声明，并用同一个 id 推导 secret 名：
+
+```json
+{
+  "models": {
+    "butler": { "provider": "my-proxy", "id": "gpt-5.6" },
+    "task": { "provider": "my-proxy", "id": "gpt-5.6" },
+    "customProviders": [
+      {
+        "id": "my-proxy",
+        "name": "我的中转",
+        "api": "openai-completions",
+        "baseUrl": "https://proxy.example.com/v1",
+        "models": [{ "id": "gpt-5.6" }]
+      }
+    ]
+  }
+}
+```
+
+对应的 key 用 `npx wrangler secret put MODEL_KEY_MY_PROXY` 写入。
 
 渠道选择不在 `DESKWAND_CONFIG` 里：`ACTIVE_CHANNEL` 是唯一权威，缺省为 `telegram`（兼容旧部署）；显式写成其他值时业务收发全部关闭并记录固定配置错误，不会悄悄回退到 Telegram。
 

@@ -211,6 +211,7 @@ func patchIsEmpty(patch domain.EditablePatch) bool {
 var (
 	referenceNamePattern = regexp.MustCompile(`^MCP_[A-Z0-9_]+$`)
 	referencePathPattern = regexp.MustCompile(`^/mcpServers/[0-9]+/headers/[^/]+$`)
+	modelKeyNamePattern  = regexp.MustCompile(`^MODEL_KEY_`)
 )
 
 // reservedReferenceNames lists names an imported credential must not shadow.
@@ -369,7 +370,7 @@ func validateReferences(_ []string, references []domain.ConfigReference, edits [
 		if !referenceNamePattern.MatchString(name) {
 			return invalidSecretEdit("migrated secret names must match ^MCP_[A-Z0-9_]+$")
 		}
-		if reservedReferenceNames[name] {
+		if reservedReferenceNames[name] || modelKeyNamePattern.MatchString(name) {
 			return invalidSecretEdit(fmt.Sprintf("migrated secret name %q collides with a binding, variable or template name", name))
 		}
 		if !replaced[name] {
@@ -399,7 +400,7 @@ func validateSecretEdits(existingNames []string, edits []domain.SecretEdit, refe
 		}
 		seen[edit.Name] = true
 
-		if !templateSecretSet[edit.Name] && !existing[edit.Name] && !referenced[edit.Name] {
+		if !secretNameAllowed(edit.Name) && !existing[edit.Name] && !referenced[edit.Name] {
 			return invalidSecretEdit(fmt.Sprintf("secret %q is not declared by the release template", edit.Name))
 		}
 
@@ -515,11 +516,31 @@ var templatePlainVarSet = func() map[string]bool {
 // templateSecretNames is the runtime copy of the release template's
 // secretNames. secret_names_test.go asserts it matches the contract file.
 var templateSecretNames = []string{
-	"ANTHROPIC_API_KEY",
-	"OPENCODE_API_KEY",
 	"TELEGRAM_BOT_TOKEN",
 	"TELEGRAM_WEBHOOK_SECRET",
 	"WECHAT_CREDENTIALS",
+}
+
+// templateSecretNamePatterns is the runtime copy of the release template's
+// secretNamePatterns. secret_names_test.go asserts it matches the contract
+// file. Model provider keys are created by name, so the template cannot list
+// them individually.
+var templateSecretNamePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^MODEL_KEY_[A-Z0-9_]{1,64}$`),
+}
+
+// secretNameAllowed reports whether an edit may target name: either it is a
+// template secret or it matches a template secret name pattern.
+func secretNameAllowed(name string) bool {
+	if templateSecretSet[name] {
+		return true
+	}
+	for _, pattern := range templateSecretNamePatterns {
+		if pattern.MatchString(name) {
+			return true
+		}
+	}
+	return false
 }
 
 var templateSecretSet = func() map[string]bool {

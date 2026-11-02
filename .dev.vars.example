@@ -1,11 +1,13 @@
 # 复制为 .dev.vars 后填写本地开发用的值（.dev.vars 已在 .gitignore 中）。
 # 生产环境通过 `wrangler secret put` 写入 secret。
-OPENCODE_API_KEY=
+# 模型 key：每家厂商一个 MODEL_KEY_<ID>（id 转大写、- 换成 _）。
+MODEL_KEY_OPENCODE_GO=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_WEBHOOK_SECRET=
 PUBLIC_BASE_URL=http://localhost:8787
-# 可选：使用 Anthropic 模型时填写。
-# ANTHROPIC_API_KEY=
+# 可选：使用其他厂商时填写对应的 key，例如：
+# MODEL_KEY_ANTHROPIC=
+# MODEL_KEY_DEEPSEEK=
 
 # 必填：可管理配置（单行 JSON）。缺失时业务处理以 CONFIG_MISSING 拒绝。把 owner 换成你的 Telegram 用户 ID。
 DESKWAND_CONFIG={"schemaVersion":1,"owner":{"telegramUserIds":[100000001]},"models":{"butler":{"provider":"opencode-go","id":"deepseek-v4.1-flash"},"task":{"provider":"opencode-go","id":"deepseek-v4.1-flash"}},"mcpServers":[]}

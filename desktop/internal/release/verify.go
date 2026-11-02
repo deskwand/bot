@@ -322,6 +322,11 @@ func validateResourceTemplate(template *ResourceTemplate) error {
 	if err := validateUniqueNames(template.SecretNames, "secret names"); err != nil {
 		return err
 	}
+	for _, pattern := range template.SecretNamePatterns {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("release: resource template secret name pattern %q is invalid: %w", pattern, err)
+		}
+	}
 	if err := validateUniqueNames(template.PlainVars, "plain variable names"); err != nil {
 		return err
 	}

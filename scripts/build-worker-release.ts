@@ -69,6 +69,7 @@ export type ReleaseTemplate = {
     logs: { invocation_logs: boolean };
   };
   configBinding: { name: string; type: "json"; schemaVersion: number };
+  secretNamePatterns: string[];
   secretNames: string[];
   plainVars: string[];
   crons: string[];
@@ -202,6 +203,13 @@ export function assertReleaseTemplate(value: unknown): asserts value is ReleaseT
     );
   }
 
+  const secretNamePatterns = requireStringArray(
+    template.secretNamePatterns,
+    "release template secretNamePatterns",
+  );
+  if (secretNamePatterns.length === 0) {
+    throw new Error("release template secretNamePatterns must not be empty");
+  }
   const secretNames = requireStringArray(template.secretNames, "release template secretNames");
   assertUniqueStrings(secretNames, "release template secretNames");
   const plainVars = requireStringArray(template.plainVars, "release template plainVars");

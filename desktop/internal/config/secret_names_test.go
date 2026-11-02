@@ -8,7 +8,8 @@ import (
 func TestTemplateSecretNamesMatchReleaseTemplate(t *testing.T) {
 	raw := readContract(t, "release-template.json")
 	var template struct {
-		SecretNames []string `json:"secretNames"`
+		SecretNames        []string `json:"secretNames"`
+		SecretNamePatterns []string `json:"secretNamePatterns"`
 	}
 	if err := json.Unmarshal(raw, &template); err != nil {
 		t.Fatal(err)
@@ -19,6 +20,21 @@ func TestTemplateSecretNamesMatchReleaseTemplate(t *testing.T) {
 	for i, name := range template.SecretNames {
 		if name != templateSecretNames[i] {
 			t.Fatalf("secretNames[%d] = %q, runtime copy = %q", i, name, templateSecretNames[i])
+		}
+	}
+	for _, legacy := range []string{"ANTHROPIC_API_KEY", "OPENCODE_API_KEY"} {
+		for _, name := range template.SecretNames {
+			if name == legacy {
+				t.Fatalf("template still declares legacy secret %q", legacy)
+			}
+		}
+	}
+	if len(template.SecretNamePatterns) != len(templateSecretNamePatterns) {
+		t.Fatalf("template has %d secret name patterns, runtime copy has %d", len(template.SecretNamePatterns), len(templateSecretNamePatterns))
+	}
+	for i, pattern := range template.SecretNamePatterns {
+		if pattern != templateSecretNamePatterns[i].String() {
+			t.Fatalf("secretNamePatterns[%d] = %q, runtime copy = %q", i, pattern, templateSecretNamePatterns[i].String())
 		}
 	}
 }

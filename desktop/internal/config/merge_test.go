@@ -263,7 +263,9 @@ func TestMergeSecretEdits(t *testing.T) {
 		{name: "keep missing", edit: domain.NewSecretEdit("ANTHROPIC_API_KEY", domain.SecretKeep, ""), wantErr: true},
 		{name: "keep with value", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretKeep, "x"), wantErr: true},
 		{name: "replace existing", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretReplace, "new")},
-		{name: "replace new template secret", edit: domain.NewSecretEdit("ANTHROPIC_API_KEY", domain.SecretReplace, "new")},
+		{name: "replace new template secret", edit: domain.NewSecretEdit("MODEL_KEY_DEEPSEEK", domain.SecretReplace, "new")},
+		{name: "replace model key without suffix", edit: domain.NewSecretEdit("MODEL_KEY_", domain.SecretReplace, "new"), wantErr: true},
+		{name: "replace lowercase model key", edit: domain.NewSecretEdit("model_key_x", domain.SecretReplace, "new"), wantErr: true},
 		{name: "replace without value", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretReplace, ""), wantErr: true},
 		{name: "replace undeclared name", edit: domain.NewSecretEdit("UNKNOWN_SECRET", domain.SecretReplace, "x"), wantErr: true},
 		{name: "clear existing", edit: domain.NewSecretEdit("TELEGRAM_BOT_TOKEN", domain.SecretClear, "")},
@@ -290,6 +292,20 @@ func TestMergeSecretEdits(t *testing.T) {
 	}
 }
 
+func TestMergeAllowsExistingLegacySecretName(t *testing.T) {
+	base := baseSnapshot(t)
+	base.SecretNames = append(base.SecretNames, "ANTHROPIC_API_KEY")
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Secrets: []domain.SecretEdit{
+			domain.NewSecretEdit("ANTHROPIC_API_KEY", domain.SecretReplace, "new"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Merge() = %v, want nil", err)
+	}
+}
+
 func TestMergeRejectsDuplicateSecretEdits(t *testing.T) {
 	base := baseSnapshot(t)
 	_, err := Merge(base, domain.Change{
@@ -308,7 +324,7 @@ func TestMergeNeverExportsNewSecretValue(t *testing.T) {
 	plan, err := Merge(base, domain.Change{
 		BaseFingerprint: base.Fingerprint,
 		Secrets: []domain.SecretEdit{
-			domain.NewSecretEdit("ANTHROPIC_API_KEY", domain.SecretReplace, mergeSecretSentinel),
+			domain.NewSecretEdit("MODEL_KEY_DEEPSEEK", domain.SecretReplace, mergeSecretSentinel),
 		},
 	})
 	if err != nil {

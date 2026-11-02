@@ -461,6 +461,16 @@ func TestRejectUndeclaredInstallParameterKey(t *testing.T) {
 	})
 }
 
+func TestRejectInvalidSecretNamePattern(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.ResourceTemplate.SecretNamePatterns = []string{"["}
+	raw, signature, pub := signed(t, manifest)
+
+	if err := Verify(raw, signature, pub, fixtureFiles()); err == nil {
+		t.Fatal("invalid secret name pattern accepted")
+	}
+}
+
 func TestRejectUnknownManifestKey(t *testing.T) {
 	raw, _, _ := validReleaseFixture(t, "1.0.0")
 	mutated := bytes.Replace(

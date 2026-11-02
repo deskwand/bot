@@ -120,11 +120,12 @@ describe("Worker release manifest", () => {
       schemaVersion: 1,
     });
     expect(manifest.resourceTemplate.secretNames).toEqual([
-      "ANTHROPIC_API_KEY",
-      "OPENCODE_API_KEY",
       "TELEGRAM_BOT_TOKEN",
       "TELEGRAM_WEBHOOK_SECRET",
       "WECHAT_CREDENTIALS",
+    ]);
+    expect(manifest.resourceTemplate.secretNamePatterns).toEqual([
+      "^MODEL_KEY_[A-Z0-9_]{1,64}$",
     ]);
     expect(manifest.resourceTemplate.plainVars).toEqual(["ACTIVE_CHANNEL", "PUBLIC_BASE_URL"]);
     expect(manifest.resourceTemplate.crons).toEqual(["*/5 * * * *"]);
@@ -135,6 +136,17 @@ describe("Worker release manifest", () => {
       "owner",
     ]);
     expect(manifest.upgrade).toEqual({ minFromVersion: "1.0.0", irreversibleMigrations: [] });
+  });
+
+  it("requires secret name patterns in the template", () => {
+    const missing = { ...readTemplate() } as Partial<ReleaseTemplate>;
+    delete missing.secretNamePatterns;
+    expect(() => build({ template: missing as ReleaseTemplate })).toThrow(
+      /secretNamePatterns/,
+    );
+
+    const empty = { ...readTemplate(), secretNamePatterns: [] };
+    expect(() => build({ template: empty })).toThrow(/secretNamePatterns/);
   });
 
   it("does not embed maintainer domains, owner IDs or a fixed bucket name", () => {
