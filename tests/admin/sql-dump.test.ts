@@ -257,6 +257,51 @@ describe("sql-dump", () => {
     expect(schema.indexes.some((sql) => sql.includes("autoinc_v"))).toBe(true);
   });
 
+  it("skips FTS virtual tables and their shadow tables", async () => {
+    const source = harness("dump-fts");
+    const captured = await runInDurableObject(source, (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec(`CREATE TABLE normal (id INTEGER PRIMARY KEY, v TEXT)`);
+      sql.exec(`INSERT INTO normal (v) VALUES ('kept')`);
+      sql.exec(`CREATE INDEX normal_v ON normal (v)`);
+      sql.exec(`CREATE VIRTUAL TABLE f USING fts5(content)`);
+      sql.exec(`INSERT INTO f (content) VALUES ('indexed')`);
+
+      const schema = readSchema(sql);
+      return { schema, pages: dump(sql, findTable(schema, "normal")) };
+    });
+
+    const names = captured.schema.tables.map((table) => table.name);
+    expect(names).toContain("normal");
+    for (const skipped of [
+      "f",
+      "f_data",
+      "f_idx",
+      "f_content",
+      "f_docsize",
+      "f_config",
+    ]) {
+      expect(names).not.toContain(skipped);
+    }
+    expect(
+      captured.schema.indexes.some((sql) => sql.includes("normal_v")),
+    ).toBe(true);
+
+    const target = harness("dump-fts-target");
+    const readBack = await runInDurableObject(target, (_instance, state) => {
+      const sql = state.storage.sql;
+      createTables(sql, captured.schema);
+      writePage(sql, findTable(captured.schema, "normal"), rowsOf(captured.pages));
+      createIndexes(sql, captured.schema);
+      return sql
+        .exec<{ v: string }>(`SELECT v FROM normal`)
+        .toArray()
+        .map((row) => row.v);
+    });
+
+    expect(readBack).toEqual(["kept"]);
+  });
+
   it("resumes WITHOUT ROWID tables across pages without gaps or duplicates", async () => {
     const source = harness("dump-without-rowid-pages");
     const result = await runInDurableObject(source, (_instance, state) => {

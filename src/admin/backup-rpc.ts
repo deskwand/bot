@@ -12,6 +12,7 @@ import type { MaintenanceStore } from "./maintenance";
 import {
   createIndexes,
   createTables,
+  PAGE_BYTES,
   readPage,
   readSchema,
   writePage,
@@ -28,8 +29,11 @@ export const KV_TABLE: TableSchema = {
   withoutRowid: true,
 };
 
-/** Keys fetched per KV page, mirroring `readPage`'s row batch. */
-const KV_PAGE_LIMIT = 500;
+/**
+ * Keys fetched per KV page and written per `put()` call. Durable Object KV
+ * accepts at most 128 entries in a single `put()`.
+ */
+const KV_PAGE_LIMIT = 128;
 
 export class BackupRpc {
   private readonly ctx: DurableObjectState;
@@ -65,11 +69,12 @@ export class BackupRpc {
 
   async restorePage(table: TableSchema, rows: DumpRow[]): Promise<void> {
     if (table.name === KV_TABLE.name) {
-      const entries = rows.map((row) => [
-        String(row.key),
-        JSON.parse(String(row.value)),
-      ]);
-      await this.ctx.storage.put(Object.fromEntries(entries));
+      for (let start = 0; start < rows.length; start += KV_PAGE_LIMIT) {
+        const entries = rows
+          .slice(start, start + KV_PAGE_LIMIT)
+          .map((row) => [String(row.key), JSON.parse(String(row.value))]);
+        await this.ctx.storage.put(Object.fromEntries(entries));
+      }
       return;
     }
     this.ctx.storage.transactionSync(() =>
@@ -96,6 +101,7 @@ export class BackupRpc {
       limit: KV_PAGE_LIMIT,
     });
     const rows: DumpRow[] = [];
+    let bytes = 0;
     let last = cursor;
     for (const [key, value] of entries) {
       let encoded: string | undefined;
@@ -107,7 +113,14 @@ export class BackupRpc {
       if (encoded === undefined) {
         throw new Error(`KV value not serializable: ${key}`);
       }
-      rows.push({ key, value: encoded });
+
+      const row: DumpRow = { key, value: encoded };
+      const size = JSON.stringify(row).length;
+      if (rows.length > 0 && bytes + size > PAGE_BYTES) {
+        return { rows, next: last };
+      }
+      rows.push(row);
+      bytes += size;
       last = key;
     }
     return {

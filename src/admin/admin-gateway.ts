@@ -155,7 +155,18 @@ async function acquire(deps: AdminDeps, req: Request): Promise<Response> {
   const first = await butler.acquireMaintenance(body.op, body.opId);
   if (first === "busy") return errorCode("MAINTENANCE_BUSY", 409);
 
-  const second = await channel.acquireMaintenance(body.op, body.opId);
+  let second: Awaited<ReturnType<typeof channel.acquireMaintenance>>;
+  try {
+    second = await channel.acquireMaintenance(body.op, body.opId);
+  } catch (error) {
+    // Do not leave the Butler half-acquired when the hub fails.
+    try {
+      await butler.releaseMaintenance(body.opId);
+    } catch {
+      // The original error is the useful one.
+    }
+    throw error;
+  }
   if (second === "busy") {
     // Do not leave a half-acquired lease behind when the hub refuses.
     await butler.releaseMaintenance(body.opId);
@@ -300,12 +311,23 @@ export function createAdminGateway(deps: AdminDeps): {
       if (!url.pathname.startsWith("/admin/")) return notFound();
       if (deps.token === undefined || deps.token === "") return notFound();
 
-      const presented = bearerToken(req);
-      if (presented === null || !(await tokenMatches(deps.token, presented))) {
-        return errorCode("ADMIN_UNAUTHORIZED", 401);
-      }
+      try {
+        const presented = bearerToken(req);
+        if (
+          presented === null ||
+          !(await tokenMatches(deps.token, presented))
+        ) {
+          return errorCode("ADMIN_UNAUTHORIZED", 401);
+        }
 
-      return handle(req, url);
+        return await handle(req, url);
+      } catch {
+        // Never echo the thrown error: it may contain tokens or raw SQL.
+        return json(
+          { code: "BACKUP_INVALID", message: "backup request failed" },
+          500,
+        );
+      }
     },
   };
 }

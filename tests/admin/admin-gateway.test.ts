@@ -141,6 +141,59 @@ describe("admin gateway", () => {
     expect(await response.json()).toMatchObject({ code: "BACKUP_INVALID" });
   });
 
+  it("returns 500 BACKUP_INVALID when an RPC throws", async () => {
+    const gateway = createAdminGateway(deps("admin-rpc-error"));
+    expect((await acquire(gateway)).status).toBe(200);
+
+    const response = await call(gateway, "/admin/restore/page?do=butler", {
+      method: "POST",
+      body: {
+        table: { name: "does_not_exist", create: "", withoutRowid: false },
+        rows: [{ __rowid: 1, x: "y" }],
+      },
+    });
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      code: "BACKUP_INVALID",
+      message: "backup request failed",
+    });
+  });
+
+  it("releases the Butler lease when the Channel acquire throws", async () => {
+    const released: string[] = [];
+    const gateway = createAdminGateway({
+      token: TOKEN,
+      versionId: "version-test",
+      butler: () =>
+        ({
+          acquireMaintenance: async () => ({
+            until: 1,
+            op: "export",
+            opId: OP,
+          }),
+          releaseMaintenance: async (opId: string) => {
+            released.push(opId);
+          },
+        }) as unknown as ReturnType<AdminDeps["butler"]>,
+      channel: () =>
+        ({
+          acquireMaintenance: async () => {
+            throw new Error("channel down");
+          },
+        }) as unknown as ReturnType<AdminDeps["channel"]>,
+      task: () => {
+        throw new Error("unused");
+      },
+      artifacts: env.ARTIFACTS,
+    });
+
+    const response = await acquire(gateway);
+
+    expect(response.status).toBe(500);
+    expect(released).toEqual([OP]);
+  });
+
   it("releases without a live lease", async () => {
     const name = "admin-release-expired";
     const gateway = createAdminGateway(deps(name));

@@ -48,6 +48,17 @@ function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+const VIRTUAL_TABLE = /^\s*CREATE\s+VIRTUAL\s+TABLE/i;
+
+/** Shadow tables SQLite creates for each FTS5 virtual table. */
+const FTS_SHADOW_SUFFIXES = [
+  "_data",
+  "_idx",
+  "_content",
+  "_docsize",
+  "_config",
+] as const;
+
 function isExcludedTable(name: string): boolean {
   return (
     name.startsWith("sqlite_") ||
@@ -75,12 +86,30 @@ function hasRowid(sql: SqlStorage, table: string): boolean {
 }
 
 export function readSchema(sql: SqlStorage): DbSchema {
-  const tables = sql
+  const allTables = sql
     .exec<{ name: string; sql: string | null }>(
       `SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name`,
     )
-    .toArray()
-    .filter((row) => row.sql !== null && !isExcludedTable(row.name))
+    .toArray();
+
+  // FTS indexes are derived data: the Agents SDK rebuilds them lazily from the
+  // source rows, and SQLite rejects writing their shadow tables directly.
+  const skipped = new Set<string>();
+  for (const row of allTables) {
+    if (row.sql === null || !VIRTUAL_TABLE.test(row.sql)) continue;
+    skipped.add(row.name);
+    for (const suffix of FTS_SHADOW_SUFFIXES) {
+      skipped.add(`${row.name}${suffix}`);
+    }
+  }
+
+  const tables = allTables
+    .filter(
+      (row) =>
+        row.sql !== null &&
+        !isExcludedTable(row.name) &&
+        !skipped.has(row.name),
+    )
     .map((row) => ({
       name: row.name,
       create: row.sql!,
@@ -92,7 +121,10 @@ export function readSchema(sql: SqlStorage): DbSchema {
        WHERE type = 'index' AND sql IS NOT NULL ORDER BY name`,
     )
     .toArray()
-    .filter((row) => !isExcludedTable(row.tbl_name))
+    .filter(
+      (row) =>
+        !isExcludedTable(row.tbl_name) && !skipped.has(row.tbl_name),
+    )
     .map((row) => row.sql!);
   return { tables, indexes };
 }
