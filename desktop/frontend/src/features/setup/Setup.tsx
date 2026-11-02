@@ -521,11 +521,11 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="install-butler">管家模型</Label>
-                  <ModelSelect id="install-butler" value={butler} onChange={setButler} options={modelOptions} />
+                  <ModelSelect id="install-butler" label="管家模型" value={butler} onChange={setButler} options={modelOptions} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="install-task">任务模型</Label>
-                  <ModelSelect id="install-task" value={task} onChange={setTask} options={modelOptions} />
+                  <ModelSelect id="install-task" label="任务模型" value={task} onChange={setTask} options={modelOptions} />
                 </div>
               </div>
 
@@ -856,11 +856,11 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="import-butler">管家模型</Label>
-                  <ModelSelect id="import-butler" value={butler} onChange={setButler} options={modelOptions} />
+                  <ModelSelect id="import-butler" label="管家模型" value={butler} onChange={setButler} options={modelOptions} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="import-task">任务模型</Label>
-                  <ModelSelect id="import-task" value={task} onChange={setTask} options={modelOptions} />
+                  <ModelSelect id="import-task" label="任务模型" value={task} onChange={setTask} options={modelOptions} />
                 </div>
               </div>
             ) : null}

@@ -173,7 +173,7 @@ export function Diagnostics() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="probe-model">模型</Label>
-              <ModelSelect id="probe-model" value={probeModel} onChange={setProbeModel} options={options} />
+              <ModelSelect id="probe-model" label="模型" value={probeModel} onChange={setProbeModel} options={options} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="probe-key">API 密钥</Label>

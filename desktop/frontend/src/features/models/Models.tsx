@@ -634,11 +634,11 @@ export function Models() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="butler-model">管家模型</Label>
-              <ModelSelect id="butler-model" value={butler} onChange={setButler} options={options} />
+              <ModelSelect id="butler-model" label="管家模型" value={butler} onChange={setButler} options={options} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="task-model">任务模型</Label>
-              <ModelSelect id="task-model" value={task} onChange={setTask} options={options} />
+              <ModelSelect id="task-model" label="任务模型" value={task} onChange={setTask} options={options} />
             </div>
           </div>
           <p className="mt-3 text-xs text-muted-foreground">

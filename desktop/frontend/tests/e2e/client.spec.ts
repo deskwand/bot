@@ -37,9 +37,14 @@ function keyRow(page: Page, provider: string) {
   return page.getByTestId(`model-key-row-${provider}`);
 }
 
-async function chooseModel(page: Page, label: string, option: RegExp) {
-  await page.getByLabel(label).click();
-  await page.getByRole("option", { name: option }).click();
+async function chooseModel(page: Page, label: string, provider: string, model: RegExp) {
+  const providerTrigger = page.getByLabel(`${label}供应商`);
+  const switching = (await providerTrigger.textContent())?.trim() !== provider;
+  await providerTrigger.click();
+  await page.getByRole("option", { name: provider, exact: true }).click();
+  // A newly picked provider opens its model list by itself.
+  if (!switching) await page.getByLabel(label, { exact: true }).click();
+  await page.getByRole("listbox").getByRole("option", { name: model }).click();
 }
 
 test("production bundle contains no fixture router", () => {
@@ -390,10 +395,33 @@ test("secret replace and clear are distinct operations", async ({ page }) => {
   await expect(page.getByText("MODEL_KEY_OPENCODE_GO 未配置")).toBeVisible();
 });
 
+test("model picker chooses the provider first, then filters its models", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await expect(page.getByLabel("管家模型供应商")).toHaveText(/OpenCode Go/);
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/DeepSeek V4\.1 Flash/);
+
+  await page.getByLabel("管家模型供应商").click();
+  await page.getByRole("option", { name: "Anthropic", exact: true }).click();
+  // Switching provider alone does not change the saved model; the model list opens for it.
+  const search = page.getByPlaceholder("搜索模型");
+  await expect(search).toBeFocused();
+  await expect(page.getByRole("option")).toHaveText([/Claude Sonnet 5\.5/, /Claude Haiku 5\.5/]);
+  await search.fill("haiku");
+  await expect(page.getByRole("option")).toHaveText([/Claude Haiku 5\.5/]);
+  await search.press("Enter");
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/Claude Haiku 5\.5/);
+  await expect(keyRow(page, "anthropic")).toBeVisible();
+
+  await page.getByLabel("管家模型", { exact: true }).click();
+  await page.getByPlaceholder("搜索模型").fill("no-such-model");
+  await expect(page.getByText("没有匹配的模型")).toBeVisible();
+});
+
 test("model keys use MODEL_KEY_<ID> names", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "模型", exact: true }).click();
-  await chooseModel(page, "管家模型", /DeepSeek · DeepSeek Flash/);
+  await chooseModel(page, "管家模型", "DeepSeek", /^DeepSeek Flash/);
   const row = keyRow(page, "deepseek");
   await expect(row.getByText("MODEL_KEY_DEEPSEEK 未配置")).toBeVisible();
   await row.getByLabel("API 密钥").fill("sk-deepseek-SENTINEL");
@@ -408,7 +436,7 @@ test("model keys use MODEL_KEY_<ID> names", async ({ page }) => {
 test("each role provider gets its own key row", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "模型", exact: true }).click();
-  await chooseModel(page, "管家模型", /Anthropic · Claude Sonnet 5\.5/);
+  await chooseModel(page, "管家模型", "Anthropic", /Claude Sonnet 5\.5/);
   const anthropicRow = keyRow(page, "anthropic");
   const opencodeRow = keyRow(page, "opencode-go");
   await expect(anthropicRow.getByText("MODEL_KEY_ANTHROPIC 未配置")).toBeVisible();
@@ -440,13 +468,13 @@ test("custom endpoint can be added and selected", async ({ page }) => {
   await dialog.getByRole("button", { name: "保存端点" }).click();
   await expect(page.getByText("my-proxy").first()).toBeVisible();
 
-  await page.getByLabel("管家模型").click();
-  await page.getByRole("option", { name: /我的中转 · gpt-5\.6/ }).click();
+  await chooseModel(page, "管家模型", "我的中转", /gpt-5\.6/);
   await page.getByRole("button", { name: "保存并发布" }).click();
   const preview = page.getByRole("dialog", { name: "确认保存并发布" });
   await preview.getByRole("button", { name: "确认保存并发布" }).click();
   await expect(page.getByText(/配置已发布/).first()).toBeVisible();
-  await expect(page.getByLabel("管家模型")).toHaveText(/我的中转 · gpt-5\.6/);
+  await expect(page.getByLabel("管家模型供应商")).toHaveText(/我的中转/);
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/gpt-5\.6/);
   await expect(page.getByText("my-proxy").first()).toBeVisible();
   await expect(page.getByText("https://proxy.example.com/v1").first()).toBeVisible();
 });
@@ -473,13 +501,13 @@ test("custom endpoint rejects a built-in id and plain http", async ({ page }) =>
 test("model ids containing a slash round-trip", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "模型", exact: true }).click();
-  await page.getByLabel("管家模型").click();
-  await page.getByRole("option", { name: /OpenRouter · Claude Sonnet 5\.5/ }).click();
+  await chooseModel(page, "管家模型", "OpenRouter", /Claude Sonnet 5\.5/);
   await page.getByRole("button", { name: "保存并发布" }).click();
   const preview = page.getByRole("dialog", { name: "确认保存并发布" });
   await preview.getByRole("button", { name: "确认保存并发布" }).click();
   await expect(page.getByText(/配置已发布/).first()).toBeVisible();
-  await expect(page.getByLabel("管家模型")).toHaveText(/OpenRouter · Claude Sonnet 5\.5/);
+  await expect(page.getByLabel("管家模型供应商")).toHaveText(/OpenRouter/);
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/Claude Sonnet 5\.5/);
 });
 
 test("upgrade warns which model keys must be re-entered", async ({ page }) => {
@@ -509,7 +537,7 @@ test("MODEL_KEY_MISSING lists the missing secrets", async ({ page }) => {
 test("dirty form protection warns before leaving", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "模型", exact: true }).click();
-  await chooseModel(page, "管家模型", /OpenCode Go · DeepSeek V4 Pro/);
+  await chooseModel(page, "管家模型", "OpenCode Go", /DeepSeek V4 Pro/);
   await page.getByRole("button", { name: "服务概览", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "有未保存的更改" });
   await expect(dialog).toBeVisible();
