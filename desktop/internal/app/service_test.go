@@ -1851,3 +1851,55 @@ func TestStartCloudflareLoginFailsWhenTheBrowserCannotOpen(t *testing.T) {
 		t.Fatal("the failed attempt must not leave a login active")
 	}
 }
+
+func TestServiceGetConfigReturnsMcpServers(t *testing.T) {
+	f := newServiceFixture(t)
+	config, err := f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(config.McpServers) != "[]" {
+		t.Fatalf("mcpServers = %s, want []", config.McpServers)
+	}
+
+	f.snapshots.snapshot.ConfigJSON = []byte(`{
+		"schemaVersion": 1,
+		"mcpServers": [
+			{"name": "github", "url": "https://mcp.github.test/", "x-extra": 1},
+			{"name": "deepwiki", "url": "https://mcp.deepwiki.test/"}
+		]
+	}`)
+	config, err = f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var servers []map[string]any
+	if err := json.Unmarshal(config.McpServers, &servers); err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 2 || servers[0]["name"] != "github" || servers[0]["x-extra"] != float64(1) {
+		t.Fatalf("mcpServers = %#v", servers)
+	}
+}
+
+func TestServiceConfigEditWritesMcpServersPatch(t *testing.T) {
+	f := newServiceFixture(t)
+	servers := json.RawMessage(`[{"name":"github","url":"https://mcp.github.test/","headers":{"Authorization":"env:MCP_GITHUB_TOKEN"}}]`)
+	if _, err := f.service.PublishConfig(ConfigEditDTO{
+		BaseFingerprint: "fingerprint-1",
+		McpServers:      &servers,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	change := f.publish.lastChange()
+	if change.Patch.McpServers == nil {
+		t.Fatal("patch has no MCP servers")
+	}
+	var patched []map[string]any
+	if err := json.Unmarshal(*change.Patch.McpServers, &patched); err != nil {
+		t.Fatal(err)
+	}
+	if len(patched) != 1 || patched[0]["name"] != "github" {
+		t.Fatalf("patched = %#v", patched)
+	}
+}

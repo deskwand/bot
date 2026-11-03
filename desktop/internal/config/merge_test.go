@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -617,5 +618,99 @@ func TestMergePreservesUnknownCustomProviderFields(t *testing.T) {
 		if !bytes.Contains(plan.ConfigJSON, []byte(want)) {
 			t.Fatalf("merged configuration dropped %s: %s", want, plan.ConfigJSON)
 		}
+	}
+}
+
+func TestMergeReplacesMcpServers(t *testing.T) {
+	base := baseSnapshot(t)
+	servers := rawModel(t, `[{"name":"github","url":"https://mcp.github.test/","headers":{"Authorization":"env:MCP_GITHUB_TOKEN"},"x-extra":1},{"name":"deepwiki","url":"https://mcp.deepwiki.test/"}]`)
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{McpServers: servers},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decoded, err := domain.DecodeJSON(plan.ConfigJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, ok := decoded.(map[string]any)
+	if !ok {
+		t.Fatalf("merged configuration is not an object: %s", plan.ConfigJSON)
+	}
+	want, err := domain.DecodeJSON(*servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(document["mcpServers"], want) {
+		t.Fatalf("mcpServers = %#v, want %#v", document["mcpServers"], want)
+	}
+	if bytes.Contains(plan.ConfigJSON, []byte(`"notion"`)) {
+		t.Fatalf("replaced MCP server survived: %s", plan.ConfigJSON)
+	}
+}
+
+func TestMergeRejectsNonArrayMcpServers(t *testing.T) {
+	base := baseSnapshot(t)
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{McpServers: rawModel(t, `{"name":"github"}`)},
+	})
+	assertMergeCode(t, err, domain.UNSUPPORTED_SCHEMA)
+}
+
+func TestMergeRejectsMcpServerSchemaViolation(t *testing.T) {
+	base := baseSnapshot(t)
+	servers := rawModel(t, `[{"name":"github","url":"https://mcp.github.test/","approvalPolicy":"all"}]`)
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{McpServers: servers},
+	})
+	assertMergeCode(t, err, domain.UNSUPPORTED_SCHEMA)
+	if !strings.Contains(err.Error(), "/mcpServers/0/approvalPolicy") {
+		t.Fatalf("schema error does not name the field: %v", err)
+	}
+}
+
+func TestReferenceRewritesMcpURL(t *testing.T) {
+	base := baseSnapshot(t)
+	name := "MCP_NOTION_URL"
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		References: []domain.ConfigReference{{
+			Path: "/mcpServers/0/url", Reference: "env:" + name,
+		}},
+		Secrets: []domain.SecretEdit{domain.NewSecretEdit(name, domain.SecretReplace, "value")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(plan.ConfigJSON, []byte(`"url":"env:`+name+`"`)) {
+		t.Fatalf("URL reference was not applied: %s", plan.ConfigJSON)
+	}
+}
+
+func TestReferenceRejectsOtherPaths(t *testing.T) {
+	base := baseSnapshot(t)
+	name := "MCP_NOTION_NAME"
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		References: []domain.ConfigReference{{
+			Path: "/mcpServers/0/name", Reference: "env:" + name,
+		}},
+		Secrets: []domain.SecretEdit{domain.NewSecretEdit(name, domain.SecretReplace, "value")},
+	})
+	assertMergeCode(t, err, domain.INVALID_SECRET_EDIT)
+}
+
+func TestSecretEditAllowsMcpNames(t *testing.T) {
+	base := baseSnapshot(t)
+	if _, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Secrets:         []domain.SecretEdit{domain.NewSecretEdit("MCP_GITHUB_TOKEN", domain.SecretReplace, "value")},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

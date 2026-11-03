@@ -101,6 +101,7 @@ type ConfigDTO struct {
 	ButlerModel        *ModelDTO           `json:"butlerModel"`
 	TaskModel          *ModelDTO           `json:"taskModel"`
 	CustomProviders    []CustomProviderDTO `json:"customProviders"`
+	McpServers         json.RawMessage     `json:"mcpServers"`
 	Secrets            []SecretNameDTO     `json:"secrets"`
 }
 
@@ -153,6 +154,7 @@ type ConfigEditDTO struct {
 	ButlerModel     *ModelDTO            `json:"butlerModel,omitempty"`
 	TaskModel       *ModelDTO            `json:"taskModel,omitempty"`
 	CustomProviders *[]CustomProviderDTO `json:"customProviders,omitempty"`
+	McpServers      *json.RawMessage     `json:"mcpServers,omitempty"`
 	Secrets         []SecretEditDTO      `json:"secrets,omitempty"`
 }
 

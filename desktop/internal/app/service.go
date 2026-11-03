@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -720,6 +721,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		ActiveChannel:      ReadPlainVar(snapshot.SettingsJSON, "ACTIVE_CHANNEL"),
 		OwnerUserIDs:       []int64{},
 		CustomProviders:    []CustomProviderDTO{},
+		McpServers:         json.RawMessage("[]"),
 		Secrets:            s.secretStatuses(snapshot),
 	}
 	if len(snapshot.ConfigJSON) > 0 {
@@ -732,6 +734,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 				Task            *ModelDTO           `json:"task"`
 				CustomProviders []CustomProviderDTO `json:"customProviders"`
 			} `json:"models"`
+			McpServers json.RawMessage `json:"mcpServers"`
 		}
 		if err := json.Unmarshal(snapshot.ConfigJSON, &document); err != nil {
 			return dto, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "DESKWAND_CONFIG 不是有效的 JSON"}
@@ -743,6 +746,9 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		dto.TaskModel = summarizeModel(document.Models.Task)
 		if document.Models.CustomProviders != nil {
 			dto.CustomProviders = document.Models.CustomProviders
+		}
+		if raw := bytes.TrimSpace(document.McpServers); len(raw) > 0 && string(raw) != "null" {
+			dto.McpServers = raw
 		}
 	}
 	return dto, nil
@@ -1359,6 +1365,10 @@ func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, inpu
 		}
 		message := json.RawMessage(raw)
 		change.Patch.CustomProviders = &message
+	}
+	if input.McpServers != nil {
+		raw := append(json.RawMessage(nil), (*input.McpServers)...)
+		change.Patch.McpServers = &raw
 	}
 	edited := make(map[string]bool, len(input.Secrets))
 	for _, secret := range input.Secrets {

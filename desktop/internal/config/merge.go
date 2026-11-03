@@ -153,6 +153,14 @@ func applyPatch(document map[string]any, patch domain.EditablePatch) error {
 		owner["telegramUserIds"] = ids
 	}
 
+	if patch.McpServers != nil {
+		servers, err := decodeMcpServers(*patch.McpServers)
+		if err != nil {
+			return err
+		}
+		document["mcpServers"] = servers
+	}
+
 	if patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil {
 		return nil
 	}
@@ -223,6 +231,31 @@ func decodeModel(raw json.RawMessage) (any, error) {
 		}
 	}
 	return value, nil
+}
+
+func decodeMcpServers(raw json.RawMessage) ([]any, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "an mcpServers patch must be a JSON array",
+		}
+	}
+	value, err := domain.DecodeJSON(trimmed)
+	if err != nil {
+		return nil, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "an mcpServers patch is not valid JSON",
+		}
+	}
+	servers, ok := value.([]any)
+	if !ok {
+		return nil, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "an mcpServers patch must be a JSON array",
+		}
+	}
+	return servers, nil
 }
 
 func decodeCustomProviders(raw json.RawMessage) ([]any, error) {
@@ -348,12 +381,12 @@ func copyObject(source map[string]any) map[string]any {
 }
 
 func patchIsEmpty(patch domain.EditablePatch) bool {
-	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil
+	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil && patch.McpServers == nil
 }
 
 var (
 	referenceNamePattern = regexp.MustCompile(`^MCP_[A-Z0-9_]+$`)
-	referencePathPattern = regexp.MustCompile(`^/mcpServers/[0-9]+/headers/[^/]+$`)
+	referencePathPattern = regexp.MustCompile(`^/mcpServers/[0-9]+/(headers/[^/]+|url)$`)
 	modelKeyNamePattern  = regexp.MustCompile(`^MODEL_KEY_`)
 )
 
@@ -398,7 +431,7 @@ func referenceSecretNames(references []domain.ConfigReference) map[string]bool {
 func applyReferences(document map[string]any, references []domain.ConfigReference) error {
 	for _, reference := range references {
 		if !referencePathPattern.MatchString(reference.Path) {
-			return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference may only rewrite an MCP header value"}
+			return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference may only rewrite an MCP header or URL value"}
 		}
 		if !strings.HasPrefix(reference.Reference, "env:") {
 			return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference must start with env:"}
@@ -505,7 +538,7 @@ func validateReferences(_ []string, references []domain.ConfigReference, edits [
 	}
 	for _, reference := range references {
 		if !referencePathPattern.MatchString(reference.Path) {
-			return invalidSecretEdit("configuration references may only rewrite MCP header values")
+			return invalidSecretEdit("configuration references may only rewrite MCP header or URL values")
 		}
 		if !strings.HasPrefix(reference.Reference, "env:") {
 			return invalidSecretEdit("configuration reference must start with env:")

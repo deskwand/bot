@@ -161,6 +161,7 @@ type EditablePatch struct {
 	ButlerModel     *json.RawMessage `json:"butlerModel"`
 	TaskModel       *json.RawMessage `json:"taskModel"`
 	CustomProviders *json.RawMessage `json:"customProviders"`
+	McpServers      *json.RawMessage `json:"mcpServers"`
 }
 
 // ConfigReference rewrites one existing JSON string in DESKWAND_CONFIG to an
