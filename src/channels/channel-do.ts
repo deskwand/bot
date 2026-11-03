@@ -34,6 +34,7 @@ import {
   versionIdOf,
 } from "./route-identity";
 import { emitChannelEvent } from "./events";
+import { OutboundQueue } from "./outbound-queue";
 import { prepareInboundImage } from "./media";
 import { createTelegramAdapter } from "./telegram";
 import { parseTextAction, type TextAction } from "./text-action";
@@ -55,6 +56,8 @@ const WECHAT_POLL_BACKOFF_MS = 1_000;
 const WECHAT_POLL_MAX_BACKOFF_MS = 10_000;
 const WECHAT_GET_UPDATES_TIMEOUT_MS = 40_000;
 const WECHAT_HEARTBEAT_MAX_AGE_MS = 120_000;
+/** How many drains a rejected message survives before it is given up on. */
+const OUTBOUND_MAX_ATTEMPTS = 5;
 type WeChatState = {
   credentials_hash: string | null;
   cursor: string | null;
@@ -143,9 +146,18 @@ export class ChannelDO extends Agent<Env> {
 
   private readonly backup: BackupRpc;
 
+  private readonly outbound: OutboundQueue;
+
+  /** Single-flight guard: an inbound drain and a send-time drain must not run twice. */
+  private outboundFlush: Promise<void> | null = null;
+
+  /** A row was added while a drain was running, so one more pass is due. */
+  private outboundAgain = false;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
+    this.outbound = new OutboundQueue(this.db);
     this.lease = new MaintenanceStore(this.db);
     this.backup = new BackupRpc(ctx, this.lease);
 
@@ -418,16 +430,110 @@ export class ChannelDO extends Agent<Env> {
   ): Promise<ChannelMessageRef> {
     const conversationId = this.currentAddress(channel);
     const outbound = channel === "wechat" ? forWechat(msg) : msg;
-    const sent = await this.adapter(channel).send(conversationId, outbound);
-    if (channel === "telegram") {
+
+    if (channel !== "wechat") {
+      const sent = await this.adapter(channel).send(conversationId, outbound);
       emitChannelEvent(this.env, { channel: "telegram", event: "send_ok" });
+      return {
+        channel,
+        conversationId,
+        routeKey,
+        messageId: sent.messageId || null,
+      };
     }
-    return {
-      channel,
+
+    // WeChat has no message ids and no retry of its own, so the message is
+    // written down before anything talks to the network: a failure anywhere
+    // after this point leaves a row behind instead of losing the message.
+    // Only `drainOutbound` sends, and it goes in queue order, so a message
+    // added here waits behind older ones and is delivered at least once.
+    const { dropped } = this.outbound.enqueue({
       conversationId,
-      routeKey,
-      messageId: sent.messageId || null,
-    };
+      text: outbound.text,
+      buttons: outbound.buttons ?? null,
+    });
+    if (dropped > 0) {
+      console.error(`channel: outbound queue dropped ${dropped} oldest rows`);
+    }
+    await this.flushOutbound();
+    return { channel, conversationId, routeKey, messageId: null };
+  }
+
+  /** Sends queued messages, oldest first. */
+  async flushOutbound(): Promise<void> {
+    if (this.outboundFlush !== null) {
+      // A row may be added while the running drain is listing them: ask for
+      // one more pass instead of leaving it for the next caller.
+      this.outboundAgain = true;
+      await this.outboundFlush;
+      return;
+    }
+    this.outboundFlush = this.drainOutbound().finally(() => {
+      this.outboundFlush = null;
+    });
+    await this.outboundFlush;
+    if (this.outboundAgain) {
+      this.outboundAgain = false;
+      await this.flushOutbound();
+    }
+  }
+
+  private async drainOutbound(): Promise<void> {
+    if ((await this.currentRoute()).channel !== "wechat") return;
+    let address: string;
+    try {
+      address = this.currentAddress("wechat");
+    } catch {
+      // No owner address yet: the rows wait for the first inbound message.
+      return;
+    }
+    const adapter = this.adapter("wechat");
+
+    for (const row of this.outbound.list()) {
+      // A row for another conversation belongs to a former account (the chat
+      // id changes with the credentials) and can never be delivered.
+      if (row.conversationId !== address) {
+        this.outbound.remove(row.id);
+        console.error("channel: dropped a queued message for a former account");
+        continue;
+      }
+      // One message the channel always rejects must not wedge the queue.
+      if (row.attempts >= OUTBOUND_MAX_ATTEMPTS) {
+        this.outbound.remove(row.id);
+        console.error(
+          `channel: gave up on a queued message after ${row.attempts} attempts`,
+        );
+        emitChannelEvent(this.env, {
+          channel: "wechat",
+          event: "send_error",
+          errorCode: row.lastError ?? "api_error",
+        });
+        continue;
+      }
+      try {
+        await adapter.send(row.conversationId, {
+          text: row.text,
+          ...(row.buttons === null ? {} : { buttons: row.buttons }),
+        });
+        this.outbound.remove(row.id);
+      } catch (error) {
+        // Order matters: later messages wait behind this one.
+        this.reportSendFailure(row.id, error);
+        return;
+      }
+    }
+  }
+
+  /** Records a rejected send as a sanitized event and keeps the row. */
+  private reportSendFailure(id: number, error: unknown): void {
+    const code = wechatErrorCode(error);
+    this.outbound.markError(id, code);
+    emitChannelEvent(this.env, {
+      channel: "wechat",
+      event: "send_error",
+      errorCode: code,
+    });
+    console.error(`channel: wechat send failed: ${errorMessage(error)}`);
   }
 
   /** Selected channel's conversation; never falls back to the other channel. */
@@ -676,6 +782,15 @@ export class ChannelDO extends Agent<Env> {
           update.fromUserId,
           update.contextToken,
           Date.now(),
+        );
+        // The token just refreshed; anything the channel rejected earlier can
+        // go out now.
+        this.ctx.waitUntil(
+          this.flushOutbound().catch((error: unknown) => {
+            console.error(
+              `channel: outbound flush failed: ${errorMessage(error)}`,
+            );
+          }),
         );
       }
 

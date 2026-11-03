@@ -563,14 +563,16 @@ describe("sendCurrent", () => {
     const tg = fakeTelegram(null);
     setChannelOverride("telegram", tg.adapter);
 
-    const outcome = await runInDurableObject(hub, (instance) =>
-      instance.sendCurrent({ text: "x" }).then(
-        () => "sent",
-        (error: Error) => error.message,
-      ),
-    );
+    const outcome = await runInDurableObject(hub, async (instance, state) => {
+      await instance.sendCurrent({ text: "x" });
+      // Without a context token the send is rejected and held in the queue,
+      // and it must not fall through to Telegram.
+      return state.storage.sql
+        .exec<{ text: string }>(`SELECT text FROM outbound_queue`)
+        .toArray();
+    });
 
-    expect(outcome).toBe("wechat context missing");
+    expect(outcome).toEqual([{ text: "x" }]);
     expect(tg.sent).toEqual([]);
     setWeChatCredentialsOverride(null);
   });

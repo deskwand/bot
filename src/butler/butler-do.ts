@@ -26,7 +26,12 @@ import {
   type TaskEvent,
   type TaskEventBody,
 } from "../protocol";
-import { getClock, ProgressThrottle } from "./notifier";
+import {
+  getClock,
+  ProgressHeartbeat,
+  ProgressThrottle,
+  type ProgressPolicy,
+} from "./notifier";
 import { MemoryStore, renderMemorySection } from "./memory";
 import { butlerSystemPrompt } from "./prompt";
 import {
@@ -51,6 +56,8 @@ type ApprovalMessageRow = {
 };
 
 const PROGRESS_INTERVAL_MS = 3000;
+const PROGRESS_HEARTBEAT_INTERVAL_MS = 180_000;
+const PROGRESS_HEARTBEAT_FIRST_MS = 60_000;
 const PROGRESS_DETAIL_MAX = 200;
 const MESSAGE_MAX = 4096;
 
@@ -97,6 +104,11 @@ export class ButlerDO extends Agent<Env> {
   private origin: Address | null = null;
 
   private readonly throttle = new ProgressThrottle(PROGRESS_INTERVAL_MS);
+
+  private readonly heartbeat = new ProgressHeartbeat(
+    PROGRESS_HEARTBEAT_INTERVAL_MS,
+    PROGRESS_HEARTBEAT_FIRST_MS,
+  );
 
   private readonly progressTimers = new Map<string, unknown>();
 
@@ -551,6 +563,17 @@ export class ButlerDO extends Agent<Env> {
     return parseMessageRef(approval.message_ref_json)?.routeKey === routeKey;
   }
 
+  /**
+   * WeChat cannot edit a sent message, so every progress update there would
+   * become a new chat message. Those tasks get a heartbeat instead. A missing
+   * reference keeps the editing policy: the next send teaches us the channel.
+   */
+  private progressPolicy(row: TaskRow): ProgressPolicy {
+    return row.progressMessageRef?.channel === "wechat"
+      ? this.heartbeat
+      : this.throttle;
+  }
+
   private async handleProgress(
     taskId: string,
     detail: string,
@@ -560,7 +583,7 @@ export class ButlerDO extends Agent<Env> {
     if (!row) return;
 
     const text = progressText(row, detail);
-    const allowed = this.throttle.offer(taskId, text, now);
+    const allowed = this.progressPolicy(row).offer(taskId, text, now);
     if (allowed !== null) {
       await this.showProgress(taskId, allowed);
       return;
@@ -571,7 +594,7 @@ export class ButlerDO extends Agent<Env> {
 
   private scheduleProgressFlush(taskId: string, now: number): void {
     if (this.progressTimers.has(taskId)) return;
-    const dueAt = this.throttle.dueAt(taskId);
+    const dueAt = this.throttle.dueAt(taskId) ?? this.heartbeat.dueAt(taskId);
     if (dueAt === null) return;
 
     const handle = getClock().setTimeout(() => {
@@ -586,13 +609,16 @@ export class ButlerDO extends Agent<Env> {
   /** Delivers buffered progress once the throttle interval has elapsed. */
   private async flushProgress(taskId: string): Promise<void> {
     const now = getClock().now();
-    for (const item of this.throttle.takeDue(now)) {
+    const due = [...this.throttle.takeDue(now), ...this.heartbeat.takeDue(now)];
+    for (const item of due) {
       await this.showProgress(item.taskId, item.text);
     }
 
     // A timer can fire before the throttle window closes. Keep this task's
     // buffered update armed instead of stranding it until another event.
-    if (this.throttle.dueAt(taskId) !== null) {
+    const pending =
+      this.throttle.dueAt(taskId) ?? this.heartbeat.dueAt(taskId);
+    if (pending !== null) {
       this.scheduleProgressFlush(taskId, now);
     }
   }
@@ -744,6 +770,7 @@ export class ButlerDO extends Agent<Env> {
     now: number,
   ): Promise<void> {
     this.throttle.drop(taskId);
+    this.heartbeat.drop(taskId);
     this.cancelProgressTimer(taskId);
     this.repo.update(taskId, {
       status: "completed",
@@ -754,14 +781,22 @@ export class ButlerDO extends Agent<Env> {
 
     const row = this.repo.get(taskId);
     if (!row) return;
-    await this.showTerminal(taskId, `✅ ${taskId} ${row.title}：已完成`);
-    await this.reportCompletion(row, summary, artifacts);
+    const append = this.progressPolicy(row) === this.heartbeat;
+    if (append) {
+      // The single terminal message carries the status line, so the reference
+      // that only existed to be edited is no longer needed.
+      this.repo.update(taskId, { progressMessageRef: null });
+    } else {
+      await this.showTerminal(taskId, `✅ ${taskId} ${row.title}：已完成`);
+    }
+    await this.reportCompletion(row, summary, artifacts, append);
   }
 
   private async reportCompletion(
     row: TaskRow,
     summary: string,
     artifacts: Artifact[],
+    append: boolean,
   ): Promise<void> {
     const operationId = `task-completed:${row.id}`;
     const lines = [
@@ -779,6 +814,7 @@ export class ButlerDO extends Agent<Env> {
     }
     lines.push("请向用户简要汇报结果。");
 
+    let text = "";
     try {
       // A session default already covers this; when config was missing the
       // getter left no model and this raises the fixed configuration error.
@@ -794,12 +830,21 @@ export class ButlerDO extends Agent<Env> {
       // event with a higher seq): do not send the report twice.
       if (!receipt.accepted) return;
       const result = await this.harness.wait(operationId);
-      if (result.status === "done" && result.text) {
-        await this.sendBestEffort({ text: result.text });
-      }
+      text = result.status === "done" && result.text ? result.text : "";
     } catch (error) {
+      // The single WeChat terminal message is sent below even when the model
+      // step fails: it is the owner's only signal that the task finished.
       console.error("butler completion report failed:", error);
     }
+
+    if (append) {
+      const body = text.length > 0 ? text : summary.length > 0 ? summary : "已完成";
+      await this.sendBestEffort({
+        text: clampMessage(`✅ ${row.id} ${row.title}：${body}`),
+      });
+      return;
+    }
+    if (text.length > 0) await this.sendBestEffort({ text });
   }
 
   private async handleFailed(
@@ -809,6 +854,7 @@ export class ButlerDO extends Agent<Env> {
     now: number,
   ): Promise<void> {
     this.throttle.drop(taskId);
+    this.heartbeat.drop(taskId);
     this.cancelProgressTimer(taskId);
     this.repo.update(taskId, { status: "failed", updatedAt: now });
 
@@ -824,6 +870,7 @@ export class ButlerDO extends Agent<Env> {
 
   private async handleCancelled(taskId: string, now: number): Promise<void> {
     this.throttle.drop(taskId);
+    this.heartbeat.drop(taskId);
     this.cancelProgressTimer(taskId);
     this.repo.update(taskId, { status: "cancelled", updatedAt: now });
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ProgressThrottle } from "../../src/butler/notifier";
+import {
+  ProgressHeartbeat,
+  ProgressThrottle,
+  type ProgressPolicy,
+} from "../../src/butler/notifier";
 
 describe("ProgressThrottle", () => {
   it("lets one progress message through per interval and keeps the latest", () => {
@@ -18,5 +22,47 @@ describe("ProgressThrottle", () => {
     expect(t.offer("t1", "b", 1000)).toBeNull();
     t.drop("t1");
     expect(t.takeDue(5000)).toEqual([]);
+  });
+});
+
+describe("ProgressHeartbeat", () => {
+  it("stays silent for the first window and then sends the latest frame", () => {
+    const h = new ProgressHeartbeat(180_000, 60_000);
+
+    expect(h.offer("t1", "a", 10_000)).toBeNull();
+    expect(h.offer("t1", "b", 30_000)).toBeNull();
+    expect(h.takeDue(69_999)).toEqual([]);
+    expect(h.takeDue(70_000)).toEqual([{ taskId: "t1", text: "b" }]);
+  });
+
+  it("sends at most one heartbeat per interval afterwards", () => {
+    const h = new ProgressHeartbeat(180_000, 60_000);
+    expect(h.offer("t1", "a", 0)).toBeNull();
+    expect(h.takeDue(60_000)).toEqual([{ taskId: "t1", text: "a" }]);
+
+    expect(h.offer("t1", "b", 61_000)).toBeNull();
+    expect(h.offer("t1", "c", 200_000)).toBeNull();
+    expect(h.takeDue(239_999)).toEqual([]);
+    expect(h.takeDue(240_000)).toEqual([{ taskId: "t1", text: "c" }]);
+  });
+
+  it("keeps task clocks independent and drops on demand", () => {
+    const h = new ProgressHeartbeat(180_000, 60_000);
+    expect(h.offer("t1", "a", 0)).toBeNull();
+    expect(h.offer("t2", "x", 0)).toBeNull();
+    h.drop("t1");
+    expect(h.dueAt("t1")).toBeNull();
+    expect(h.takeDue(60_000)).toEqual([{ taskId: "t2", text: "x" }]);
+  });
+
+  it("is usable as a ProgressPolicy alongside the throttle", () => {
+    const policies: ProgressPolicy[] = [
+      new ProgressHeartbeat(),
+      new ProgressThrottle(3000),
+    ];
+    expect(policies.map((policy) => policy.offer("t1", "a", 0))).toEqual([
+      null,
+      "a",
+    ]);
   });
 });

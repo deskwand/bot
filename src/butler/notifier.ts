@@ -73,3 +73,65 @@ export class ProgressThrottle {
     this.lastSentAt.delete(taskId);
   }
 }
+
+/**
+ * Progress for channels that cannot edit a sent message (WeChat), where every
+ * update is a new message in the chat. A task stays silent for `firstMs` after
+ * its first update, then reports at most once per `intervalMs`, always
+ * carrying the latest frame.
+ *
+ * The cadence lives in memory only: an evicted object restarts the window, so
+ * a heartbeat can arrive sooner than `intervalMs` after one is lost. That is
+ * the intended trade: losing a frame is harmless, and the next progress event
+ * re-arms the schedule.
+ */
+export class ProgressHeartbeat {
+  private readonly nextAt = new Map<string, number>();
+
+  private readonly pending = new Map<string, string>();
+
+  constructor(
+    private readonly intervalMs = 180_000,
+    private readonly firstMs = 60_000,
+  ) {}
+
+  offer(taskId: string, text: string, now: number): string | null {
+    this.pending.set(taskId, text);
+    const due = this.nextAt.get(taskId) ?? now + this.firstMs;
+    if (now < due) {
+      this.nextAt.set(taskId, due);
+      return null;
+    }
+    this.pending.delete(taskId);
+    this.nextAt.set(taskId, now + this.intervalMs);
+    return text;
+  }
+
+  takeDue(now: number): { taskId: string; text: string }[] {
+    const due: { taskId: string; text: string }[] = [];
+    for (const [taskId, text] of this.pending) {
+      const at = this.nextAt.get(taskId);
+      if (at === undefined || at > now) continue;
+      this.pending.delete(taskId);
+      this.nextAt.set(taskId, now + this.intervalMs);
+      due.push({ taskId, text });
+    }
+    return due;
+  }
+
+  dueAt(taskId: string): number | null {
+    if (!this.pending.has(taskId)) return null;
+    return this.nextAt.get(taskId) ?? null;
+  }
+
+  drop(taskId: string): void {
+    this.pending.delete(taskId);
+    this.nextAt.delete(taskId);
+  }
+}
+
+/** What the Butler needs from a per-task progress schedule. */
+export type ProgressPolicy = Pick<
+  ProgressHeartbeat,
+  "offer" | "takeDue" | "dueAt" | "drop"
+>;

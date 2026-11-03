@@ -1,7 +1,11 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
-import type { OutboundMessage, RouteSnapshot } from "../../src/protocol";
+import type {
+  ChannelMessageRef,
+  OutboundMessage,
+  RouteSnapshot,
+} from "../../src/protocol";
 import { createTelegramAdapter } from "../../src/channels/telegram";
 import type { ChannelAdapter } from "../../src/channels/types";
 import { ChannelError } from "../../src/channels/types";
@@ -151,16 +155,20 @@ async function seedTask(
     progressMessageId?: string | null;
     /** Seeds only the pre-migration column, as an older release left it. */
     legacyMessageId?: string | null;
+    /** Writes this reference verbatim, for channels whose sends carry no id. */
+    ref?: ChannelMessageRef | null;
   } = {},
 ): Promise<void> {
   const messageId =
     row.progressMessageId === undefined ? "77" : row.progressMessageId;
   const ref =
-    row.legacyMessageId !== undefined
-      ? null
-      : messageId === null
+    row.ref !== undefined
+      ? row.ref
+      : row.legacyMessageId !== undefined
         ? null
-        : await currentChannelRef(messageId);
+        : messageId === null
+          ? null
+          : await currentChannelRef(messageId);
 
   await runInDurableObject(stub, (_instance, state) => {
     state.storage.sql.exec(
@@ -208,6 +216,58 @@ async function progressMessageId(
 }
 
 describe("ButlerDO.report", () => {
+  /** WeChat hub + clock fixture shared by the WeChat cases in this file. */
+  async function wechatButler(name: string): Promise<{
+    stub: ButlerStub;
+    channel: ReturnType<typeof fakeChannel>;
+    clock: FakeClock;
+  }> {
+    const channel = fakeChannel();
+    setChannelOverride("wechat", channel.adapter);
+    setEnv({
+      ACTIVE_CHANNEL: "wechat",
+      WECHAT_CREDENTIALS: JSON.stringify({
+        token: "token-a",
+        baseUrl: "https://ilinkai.weixin.qq.com",
+        accountId: "account-a",
+        userId: "wx-owner",
+      }),
+    });
+    const clock = fakeClock();
+    setClockOverride(clock.clock);
+
+    const hubName = `${name}-hub`;
+    await runInDurableObject(
+      env.CHANNELS.get(env.CHANNELS.idFromName(hubName)),
+      (_instance, state) => {
+        state.storage.sql.exec(
+          `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+           VALUES ('wechat', 'wx-owner', ?)
+           ON CONFLICT(channel) DO UPDATE SET
+             conversation_id = excluded.conversation_id`,
+          Date.now(),
+        );
+      },
+    );
+
+    const stub = butler(name);
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { channels(): unknown }).channels = () =>
+        env.CHANNELS.get(env.CHANNELS.idFromName(hubName));
+    });
+    return { stub, channel, clock };
+  }
+
+  /** A reference as a WeChat send leaves it: no message id, channel wechat. */
+  function wechatRef(routeKey: string): ChannelMessageRef {
+    return {
+      channel: "wechat",
+      conversationId: "wx-owner",
+      routeKey,
+      messageId: null,
+    };
+  }
+
   it("edits progress immediately, then flushes the latest text after the interval", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
@@ -237,59 +297,90 @@ describe("ButlerDO.report", () => {
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "running" });
   });
 
-  it("keeps every progress update on a channel that cannot edit messages", async () => {
-    const channel = fakeChannel();
-    setChannelOverride("wechat", channel.adapter);
-    setEnv({
-      ACTIVE_CHANNEL: "wechat",
-      WECHAT_CREDENTIALS: JSON.stringify({
-        token: "token-a",
-        baseUrl: "https://ilinkai.weixin.qq.com",
-        accountId: "account-a",
-        userId: "wx-owner",
-      }),
-    });
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
-
-    // A WeChat-selected hub of its own: the shared one resolved Telegram
-    // earlier in this file and keeps that route.
-    const hubName = "report-wechat-channel";
-    await runInDurableObject(
-      env.CHANNELS.get(env.CHANNELS.idFromName(hubName)),
-      (_instance, state) => {
-        state.storage.sql.exec(
-          `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
-           VALUES ('wechat', 'wx-owner', ?)
-           ON CONFLICT(channel) DO UPDATE SET
-             conversation_id = excluded.conversation_id`,
-          Date.now(),
-        );
-      },
+  it("throttles progress to one heartbeat per 3 minutes on a channel that cannot edit messages", async () => {
+    const { stub, channel, clock } = await wechatButler(
+      "report-wechat-progress",
     );
-
-    const stub = butler("report-wechat-progress");
-    await runInDurableObject(stub, (instance) => {
-      (instance as unknown as { channels(): unknown }).channels = () =>
-        env.CHANNELS.get(env.CHANNELS.idFromName(hubName));
-    });
-    await seedTask(stub, { progressMessageId: null });
+    await seedTask(stub, { ref: wechatRef("route-a") });
 
     await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-    expect(channel.sent).toEqual([
-      { chatId: "wx-owner", text: '⏳ t1 查天气：a\n回复"取消 t1"' },
-    ]);
+    // Silent inside the first window.
+    expect(channel.sent).toEqual([]);
 
-    // WeChat sends carry no message id, so the saved reference can never be
-    // edited: the next update must be a new message, not dropped.
-    fake.advance(3001);
+    clock.advance(60_001);
+    await vi.waitFor(() => expect(channel.sent).toHaveLength(1));
+    expect(channel.sent[0]?.text).toBe('⏳ t1 查天气：a\n回复"取消 t1"');
+
+    // Updates inside the next window collapse into one heartbeat.
     await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
+    await stub.report({ taskId: "t1", seq: 3, type: "progress", text: "c" });
+    expect(channel.sent).toHaveLength(1);
 
-    expect(channel.sent.map((msg) => msg.text)).toEqual([
-      '⏳ t1 查天气：a\n回复"取消 t1"',
-      '⏳ t1 查天气：b\n回复"取消 t1"',
+    clock.advance(200_000);
+    await vi.waitFor(() => expect(channel.sent).toHaveLength(2));
+    expect(channel.sent[1]?.text).toBe('⏳ t1 查天气：c\n回复"取消 t1"');
+    expect(channel.edits).toEqual([]);
+  });
+
+  it("still sends one terminal message when the report step fails", async () => {
+    const { stub, channel } = await wechatButler("report-wechat-terminal-broken");
+    await seedTask(stub, { ref: wechatRef("route-a") });
+    // The model step is what fails here; the user must still be told.
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { harness: { submit(): Promise<never> } })
+        .harness.submit = async () => {
+        throw new Error("model unavailable");
+      };
+    });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "抓到了价格",
+      artifacts: [],
+    });
+
+    expect(channel.sent).toEqual([
+      { chatId: "wx-owner", text: "✅ t1 查天气：抓到了价格" },
+    ]);
+  });
+
+  it("sends exactly one terminal message on a channel that cannot edit", async () => {
+    const { stub, channel } = await wechatButler("report-wechat-terminal");
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+    await seedTask(stub, { ref: wechatRef("route-a") });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "ok",
+      artifacts: [],
+    });
+
+    expect(channel.sent).toEqual([
+      { chatId: "wx-owner", text: "✅ t1 查天气：t1 结论：ok" },
     ]);
     expect(channel.edits).toEqual([]);
+  });
+
+  it("falls back to the task summary when the report produces no text", async () => {
+    const { stub, channel } = await wechatButler("report-wechat-terminal-empty");
+    setModelOverride(scriptedModel([{ text: "" }]));
+    await seedTask(stub, { ref: wechatRef("route-a") });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "抓到了价格",
+      artifacts: [],
+    });
+
+    expect(channel.sent).toEqual([
+      { chatId: "wx-owner", text: "✅ t1 查天气：抓到了价格" },
+    ]);
   });
 
   it("re-arms a progress flush that fires before the window closes", async () => {

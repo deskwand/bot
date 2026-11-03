@@ -314,6 +314,9 @@ describe("channel event wiring", () => {
     const lines = captureConsole();
     setWeChatCredentialsOverride(JSON.stringify(CREDS));
     await runInDurableObject(channels(), (_instance, state) => {
+      // Earlier cases in this file leave rejected sends queued; this case
+      // measures the events of a single send.
+      state.storage.sql.exec("DELETE FROM outbound_queue");
       state.storage.sql.exec(
         `INSERT INTO wechat_contexts (user_id, context_token, updated_at)
          VALUES (?, ?, ?)`,
