@@ -386,7 +386,7 @@ func patchIsEmpty(patch domain.EditablePatch) bool {
 
 var (
 	referenceNamePattern = regexp.MustCompile(`^MCP_[A-Z0-9_]+$`)
-	referencePathPattern = regexp.MustCompile(`^/mcpServers/[0-9]+/(headers/[^/]+|url)$`)
+	referencePathPattern = regexp.MustCompile(`^/mcpServers/[0-9]+/headers/[^/]+$`)
 	modelKeyNamePattern  = regexp.MustCompile(`^MODEL_KEY_`)
 )
 
@@ -431,7 +431,7 @@ func referenceSecretNames(references []domain.ConfigReference) map[string]bool {
 func applyReferences(document map[string]any, references []domain.ConfigReference) error {
 	for _, reference := range references {
 		if !referencePathPattern.MatchString(reference.Path) {
-			return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference may only rewrite an MCP header or URL value"}
+			return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference may only rewrite an MCP header value"}
 		}
 		if !strings.HasPrefix(reference.Reference, "env:") {
 			return domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "a configuration reference must start with env:"}
@@ -538,7 +538,7 @@ func validateReferences(_ []string, references []domain.ConfigReference, edits [
 	}
 	for _, reference := range references {
 		if !referencePathPattern.MatchString(reference.Path) {
-			return invalidSecretEdit("configuration references may only rewrite MCP header or URL values")
+			return invalidSecretEdit("configuration references may only rewrite MCP header values")
 		}
 		if !strings.HasPrefix(reference.Reference, "env:") {
 			return invalidSecretEdit("configuration reference must start with env:")

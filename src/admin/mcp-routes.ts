@@ -12,7 +12,8 @@ const STATUS_PATH = "/admin/mcp/status";
 const REVOKE_PREFIX = "/admin/mcp/oauth/";
 const CALLBACK_PATH = "/mcp/oauth/callback";
 
-const INVALID_SERVICE = "服务不存在或不需要授权";
+/** Failures the user can act on; any other error stays hidden. */
+const USER_ERRORS = new Set(["服务不存在或不需要授权", "该服务不支持自动注册（DCR）"]);
 
 /** The success and failure pages are fixed: they never echo the query. */
 const SUCCESS_TEXT = "授权完成，可以回到桌面端了";
@@ -85,11 +86,10 @@ export function createMcpAdminRoutes(
     try {
       return json(await mcpAuth().startAuthorization(name));
     } catch (error) {
-      // Only the "not an OAuth service" case is the caller's fault; network
-      // and registration failures must not leak their details.
-      if (errorMessage(error) === INVALID_SERVICE) {
-        return invalid(INVALID_SERVICE);
-      }
+      // Only fixed, user-actionable reasons are returned; network failures
+      // must not leak their details.
+      const message = errorMessage(error);
+      if (USER_ERRORS.has(message)) return invalid(message);
       throw error;
     }
   }

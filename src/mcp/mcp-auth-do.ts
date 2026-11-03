@@ -4,6 +4,7 @@ import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import {
   mcpConnector,
   probeMcpServer,
+  resolveMcpUrl,
   type McpProbeResult,
 } from "../tools/mcp";
 import { McpAuthStore } from "./auth-store";
@@ -64,7 +65,7 @@ export class McpAuthDO extends Agent<Env> {
     const existing = this.store.getClient(name, server.url);
 
     const begun = await beginAuthorization(
-      server.url,
+      resolveMcpUrl(server, this.env),
       this.redirectUri(),
       existing,
       deps,
@@ -90,7 +91,7 @@ export class McpAuthDO extends Agent<Env> {
       if (client === null) return false;
 
       const tokens = await finishAuthorization(
-        server.url,
+        resolveMcpUrl(server, this.env),
         client,
         code,
         pending.verifier,
@@ -199,7 +200,7 @@ export class McpAuthDO extends Agent<Env> {
 
     try {
       const tokens = await refreshTokens(
-        url,
+        resolveMcpUrl({ name, url }, this.env),
         client,
         refreshToken,
         this.oauthDeps(),

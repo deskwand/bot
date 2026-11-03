@@ -173,6 +173,22 @@ describe("/admin/mcp/*", () => {
     });
   });
 
+  it("tells the desktop when a service does not support DCR", async () => {
+    const { stub } = fakeAuth({ startError: "该服务不支持自动注册（DCR）" });
+    const gateway = createAdminGateway(deps(stub));
+
+    const response = await call(gateway, "/admin/mcp/oauth/start", {
+      method: "POST",
+      body: { name: "asana" },
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      code: "MCP_INVALID",
+      message: "该服务不支持自动注册（DCR）",
+    });
+  });
+
   it("revokes a server", async () => {
     const { calls, stub } = fakeAuth();
     const gateway = createAdminGateway(deps(stub));

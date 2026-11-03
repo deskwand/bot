@@ -243,13 +243,11 @@ func (s *Service) RemoveMcpServer(name string) (ResultDTO, error) {
 		return result, err
 	}
 	if oauth, _ := removed["oauth"].(bool); oauth {
-		client, err := s.mcpClient(ctx, target)
-		if err != nil {
-			return result, safeAppError(err)
-		}
 		// The configuration is already gone; a failed cleanup must not make
 		// the card reappear. A later authorization replaces the old entry.
-		_ = client.Revoke(ctx, name)
+		if client, err := s.mcpClient(ctx, target); err == nil {
+			_ = client.Revoke(ctx, name)
+		}
 	}
 	return result, nil
 }

@@ -674,22 +674,19 @@ func TestMergeRejectsMcpServerSchemaViolation(t *testing.T) {
 	}
 }
 
-func TestReferenceRewritesMcpURL(t *testing.T) {
+// URL secrets are written as {env:NAME} placeholders by the catalog; a whole-URL
+// env:NAME reference would never be resolved by the Worker.
+func TestReferenceRejectsMcpURL(t *testing.T) {
 	base := baseSnapshot(t)
 	name := "MCP_NOTION_URL"
-	plan, err := Merge(base, domain.Change{
+	_, err := Merge(base, domain.Change{
 		BaseFingerprint: base.Fingerprint,
 		References: []domain.ConfigReference{{
 			Path: "/mcpServers/0/url", Reference: "env:" + name,
 		}},
 		Secrets: []domain.SecretEdit{domain.NewSecretEdit(name, domain.SecretReplace, "value")},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(plan.ConfigJSON, []byte(`"url":"env:`+name+`"`)) {
-		t.Fatalf("URL reference was not applied: %s", plan.ConfigJSON)
-	}
+	assertMergeCode(t, err, domain.INVALID_SECRET_EDIT)
 }
 
 func TestReferenceRejectsOtherPaths(t *testing.T) {

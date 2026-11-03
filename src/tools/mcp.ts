@@ -81,13 +81,6 @@ class McpUnauthorizedError extends Error {
   }
 }
 
-/** User-facing reason for a server that failed to load. */
-function unavailableReason(error: unknown): string {
-  return error instanceof McpUnauthorizedError
-    ? error.message
-    : errorMessage(error);
-}
-
 /** Reject instead of hanging when a server never answers. */
 async function withTimeout<T>(
   promise: Promise<T>,
@@ -309,7 +302,7 @@ export async function loadMcpTools(
       return;
     }
 
-    const reason = unavailableReason(result.reason);
+    const reason = errorMessage(result.reason);
     console.error(`mcp server ${server.name} unavailable: ${reason}`);
     unavailable.push({ name: server.name, reason });
   });
@@ -415,7 +408,7 @@ export async function probeMcpServer(
       })),
     };
   } catch (error) {
-    return { ok: false, reason: unavailableReason(error) };
+    return { ok: false, reason: errorMessage(error) };
   }
 }
 
