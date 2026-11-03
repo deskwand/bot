@@ -8,6 +8,7 @@
   "durableObjects": [
     { "name": "BUTLER", "className": "ButlerDO" },
     { "name": "TASK", "className": "TaskDO" },
+    { "name": "BOT", "className": "BotDO" },
     { "name": "CHANNELS", "className": "ChannelDO" }
   ],
   "r2Buckets": [
@@ -46,6 +47,10 @@
     {
       "tag": "v2",
       "newSqliteClasses": ["ChannelDO"]
+    },
+    {
+      "tag": "v3",
+      "newSqliteClasses": ["BotDO"]
     }
   ],
   "installParameters": [

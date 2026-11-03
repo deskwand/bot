@@ -4,6 +4,7 @@ import { createGateway } from "./gateway";
 
 export { ButlerDO } from "./butler/butler-do";
 export { TaskDO } from "./task/task-do";
+export { BotDO } from "./bot/bot-do";
 export { ChannelDO };
 
 function channels(env: Env): DurableObjectStub<ChannelDO> {

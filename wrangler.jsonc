@@ -27,6 +27,7 @@
     "bindings": [
       { "name": "BUTLER", "class_name": "ButlerDO" },
       { "name": "TASK", "class_name": "TaskDO" },
+      { "name": "BOT", "class_name": "BotDO" },
       { "name": "CHANNELS", "class_name": "ChannelDO" }
     ]
   },
@@ -38,6 +39,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["ChannelDO"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["BotDO"]
     }
   ],
   "triggers": {
