@@ -183,9 +183,11 @@ export class BotDO extends DurableObject<Env> {
       ? now
       : clampWakeAt(now, now + meta.defaultIntervalMs).at;
     this.store.writeMeta(meta);
-    if (meta.currentTaskId === null) {
-      await this.ctx.storage.setAlarm(meta.nextWakeAt);
-    }
+    // Pausing deleted the watchdog: check an in-flight run right away so a
+    // lost outcome cannot leave the bot stuck on it.
+    await this.ctx.storage.setAlarm(
+      meta.currentTaskId === null ? meta.nextWakeAt : now,
+    );
   }
 
   async finish(reason: string): Promise<void> {
@@ -325,8 +327,9 @@ export class BotDO extends DurableObject<Env> {
       return;
     }
 
+    // Keep nextWakeAt: the run may already have called set_next_wake, and a
+    // past value is ignored by nextBase anyway.
     current.currentTaskId = result.taskId;
-    current.nextWakeAt = null;
     this.store.writeMeta(current);
     await this.ctx.storage.setAlarm(now + WATCHDOG_MS);
   }

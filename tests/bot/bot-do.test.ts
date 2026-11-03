@@ -152,6 +152,24 @@ describe("BotDO lifecycle", () => {
     expect(await alarmAt(stub)).toBe(now + WATCHDOG_MS);
   });
 
+  it("resume during a run re-checks it right away", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-lifecycle-resume-running");
+    await initBot(stub);
+    await fireAlarm(stub);
+    await stub.pause();
+    expect(await alarmAt(stub)).toBeNull();
+
+    await stub.resume(false);
+    expect(await alarmAt(stub)).toBe(now);
+
+    fake.outcome = { outcome: "completed", summary: "看完了" };
+    await fireAlarm(stub);
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.currentTaskId).toBeNull();
+    expect(fake.spawns).toHaveLength(1);
+  });
+
   it("watchdog records a finished run", async () => {
     const fake = fakeButler();
     const stub = botStub("b-lifecycle-watchdog");
