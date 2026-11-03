@@ -58,6 +58,27 @@ func TestAdminClientSendsBearerAndOpHeader(t *testing.T) {
 	}
 }
 
+func TestInfoWithoutBotIDs(t *testing.T) {
+	// An older Worker does not return botIds; the client must still parse it.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"versionId": "version-1",
+			"taskIds":   []string{"task-a"},
+		})
+	}))
+	defer server.Close()
+
+	client := NewAdminClient(server.URL, "tok", "op-1", server.Client())
+	info, err := client.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.BotIDs != nil {
+		t.Fatalf("bot ids = %v, want nil", info.BotIDs)
+	}
+}
+
 func TestAdminClientMapsStatusCodes(t *testing.T) {
 	cases := []struct {
 		name   string

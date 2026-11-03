@@ -19,11 +19,12 @@ var restoreTestRefs = []DORef{
 	{DO: "butler"},
 	{DO: "task", ID: "t1"},
 	{DO: "task", ID: "t2"},
+	{DO: "bot", ID: "b1"},
 	{DO: "channel"},
 }
 
-// seedRestoreWorker fills a fake Worker with one Butler, two tasks and a
-// channel hub, plus two artifacts. Every table has more rows than one fake
+// seedRestoreWorker fills a fake Worker with one Butler, two tasks, a bot and
+// a channel hub, plus two artifacts. Every table has more rows than one fake
 // page, so a restore has to page through them.
 func seedRestoreWorker(t *testing.T) *fakeWorker {
 	t.Helper()
@@ -31,6 +32,7 @@ func seedRestoreWorker(t *testing.T) *fakeWorker {
 	worker.token = "tok"
 	worker.versionID = "version-1"
 	worker.taskIDs = []string{"t1", "t2"}
+	worker.botIDs = []string{"b1"}
 	worker.setDO(DORef{DO: "butler"}, DBSchema{
 		Tables: []TableSchema{
 			{Name: "memories", Create: `CREATE TABLE memories (id TEXT PRIMARY KEY, text TEXT)`},
@@ -60,6 +62,14 @@ func seedRestoreWorker(t *testing.T) *fakeWorker {
 		Tables: []TableSchema{{Name: "meta", Create: `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`}},
 	}, map[string][]json.RawMessage{
 		"meta": {json.RawMessage(`{"__rowid":1,"key":"state","value":"running"}`)},
+	})
+	worker.setDO(DORef{DO: "bot", ID: "b1"}, DBSchema{
+		Tables: []TableSchema{{Name: "meta", Create: `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`}},
+	}, map[string][]json.RawMessage{
+		"meta": {
+			json.RawMessage(`{"__rowid":1,"key":"status","value":"active"}`),
+			json.RawMessage(`{"__rowid":2,"key":"mission","value":"盯住价格"}`),
+		},
 	})
 	worker.setDO(DORef{DO: "channel"}, DBSchema{
 		Tables: []TableSchema{{Name: "__kv", WithoutRowid: true}},
@@ -470,6 +480,59 @@ func TestRestoreClearsExtraTaskDOs(t *testing.T) {
 	}
 }
 
+func TestRestoreClearsBotsMissingFromBackup(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+
+	// The deployment gained a bot after the backup was taken.
+	worker.botIDs = []string{"b1", "b9"}
+	orphan := DORef{DO: "bot", ID: "b9"}
+	worker.setDO(orphan, DBSchema{
+		Tables: []TableSchema{{Name: "meta", Create: `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`}},
+	}, map[string][]json.RawMessage{
+		"meta": {json.RawMessage(`{"__rowid":1,"key":"status","value":"orphan"}`)},
+	})
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := restoreCalls(worker)
+	var orphanCalls []fakeRequest
+	orphanLast := -1
+	backupFirst := -1
+	for i, call := range calls {
+		if call.DO == "bot" && call.ID == "b9" {
+			orphanCalls = append(orphanCalls, call)
+			orphanLast = i
+			continue
+		}
+		if backupFirst < 0 {
+			backupFirst = i
+		}
+	}
+	wantPaths := []string{restoreResetPath, restoreBeginPath, restoreResetPath}
+	if len(orphanCalls) != len(wantPaths) {
+		t.Fatalf("orphan calls = %v", orphanCalls)
+	}
+	for i, want := range wantPaths {
+		if orphanCalls[i].Path != want {
+			t.Fatalf("orphan call %d = %s, want %s", i, orphanCalls[i].Path, want)
+		}
+	}
+	if backupFirst < 0 || orphanLast > backupFirst {
+		t.Fatalf("orphan calls do not precede the backup objects: %v", calls)
+	}
+	if got := worker.resetsOf(orphan); got != 2 {
+		t.Fatalf("orphan resets = %d, want 2", got)
+	}
+	if rows := worker.rowsOf(orphan); len(rows) != 0 {
+		t.Fatalf("orphan rows = %+v, want none", rows)
+	}
+}
+
 func TestRestoreDeletesObjectsNotInBackup(t *testing.T) {
 	worker := seedRestoreWorker(t)
 	original := captureObjects(t, worker)
@@ -525,7 +588,7 @@ func TestRestoreOrder(t *testing.T) {
 			groups = append(groups, group)
 		}
 	}
-	wantGroups := []string{"task/t1", "task/t2", "channel", "butler"}
+	wantGroups := []string{"task/t1", "task/t2", "bot/b1", "channel", "butler"}
 	if !reflect.DeepEqual(groups, wantGroups) {
 		t.Fatalf("restore order = %v, want %v", groups, wantGroups)
 	}
@@ -867,6 +930,25 @@ func TestRestoreRechecksVersionImmediatelyBeforeDestructiveStep(t *testing.T) {
 	}
 	if pending != nil {
 		t.Fatalf("pending = %+v, want nil", pending)
+	}
+}
+
+func TestRestoreOrderPutsBotsBeforeButler(t *testing.T) {
+	objects := []DOManifest{
+		{DORef: DORef{DO: "butler"}},
+		{DORef: DORef{DO: "channel"}},
+		{DORef: DORef{DO: "bot", ID: "b2"}},
+		{DORef: DORef{DO: "task", ID: "t1"}},
+		{DORef: DORef{DO: "bot", ID: "b1"}},
+	}
+	ordered := restoreOrder(objects)
+	var got []string
+	for _, object := range ordered {
+		got = append(got, object.DO+"/"+object.ID)
+	}
+	want := []string{"task/t1", "bot/b2", "bot/b1", "channel/", "butler/"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("restore order = %v, want %v", got, want)
 	}
 }
 

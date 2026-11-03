@@ -518,6 +518,11 @@ func validateDORef(ref DORef) error {
 			return fmt.Errorf("task id is empty")
 		}
 		return nil
+	case "bot":
+		if ref.ID == "" {
+			return fmt.Errorf("bot id is empty")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown durable object %q", ref.DO)
 	}

@@ -63,6 +63,7 @@ func NewAdminClient(baseURL, token, opID string, httpClient *http.Client) *Admin
 type Info struct {
 	VersionID string   `json:"versionId"`
 	TaskIDs   []string `json:"taskIds"`
+	BotIDs    []string `json:"botIds"`
 }
 
 // ObjectInfo describes one artifact listed through the admin routes.
@@ -87,7 +88,7 @@ func (c *AdminClient) Release(ctx context.Context) error {
 	return c.call(ctx, http.MethodPost, releasePath, nil, nil, nil)
 }
 
-// Info reads the deployment's version id and its Task object ids.
+// Info reads the deployment's version id and its Task and Bot object ids.
 func (c *AdminClient) Info(ctx context.Context) (Info, error) {
 	var info Info
 	if err := c.call(ctx, http.MethodGet, infoPath, nil, nil, &info); err != nil {
