@@ -619,3 +619,9 @@ func TestMergePreservesUnknownCustomProviderFields(t *testing.T) {
 		}
 	}
 }
+
+func TestReservedReferenceNamesIncludeBot(t *testing.T) {
+	if !reservedReferenceNames["BOT"] {
+		t.Fatal("BOT binding is not reserved for migrated secrets")
+	}
+}

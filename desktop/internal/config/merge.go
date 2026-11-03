@@ -367,6 +367,7 @@ var reservedReferenceNames = func() map[string]bool {
 		"ACTIVE_CHANNEL":      true,
 		"BUTLER":              true,
 		"TASK":                true,
+		"BOT":                 true,
 		"CHANNELS":            true,
 		"ARTIFACTS":           true,
 	}
