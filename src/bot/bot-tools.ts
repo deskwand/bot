@@ -49,8 +49,8 @@ function iso(ms: number): string {
 
 /**
  * Tools installed on a TaskDO that runs for a bot. They write through to the
- * bot's own storage; `notify_owner` and `finish_bot` have external effects and
- * must not replay after a restart.
+ * bot's own storage. `bot_remember`, `notify_owner` and `finish_bot` are not
+ * idempotent and must not replay after a restart.
  */
 export function createBotTaskTools(
   deps: BotTaskToolDeps,
@@ -61,7 +61,7 @@ export function createBotTaskTools(
     name: "bot_remember",
     description: "Save a long-term memory that later runs of this bot will see.",
     parameters: BotRemember,
-    replay: "safe",
+    // Appends a row: a replay after a restart would store it twice.
     async execute({ content }) {
       try {
         const id = await bot.remember(content);
