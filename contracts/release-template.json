@@ -14,6 +14,7 @@
   "r2Buckets": [
     { "name": "ARTIFACTS", "parameterKey": "r2BucketName" }
   ],
+  "aiBindings": [{ "name": "AI" }],
   "versionMetadataBinding": { "name": "CF_VERSION_METADATA" },
   "observability": {
     "enabled": true,

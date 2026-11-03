@@ -370,6 +370,7 @@ var reservedReferenceNames = func() map[string]bool {
 		"BOT":                 true,
 		"CHANNELS":            true,
 		"ARTIFACTS":           true,
+		"AI":                  true,
 	}
 	for _, name := range templateSecretNames {
 		set[name] = true

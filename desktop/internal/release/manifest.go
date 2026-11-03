@@ -83,6 +83,7 @@ type ResourceTemplate struct {
 	Compatibility      Compatibility      `json:"compatibility"`
 	DurableObjects     []DOBinding        `json:"durableObjects"`
 	R2Buckets          []R2Binding        `json:"r2Buckets"`
+	AIBindings         []AIBinding        `json:"aiBindings"`
 	VersionMetadata    BindingRef         `json:"versionMetadataBinding"`
 	Observability      *Observability     `json:"observability"`
 	ConfigBinding      ConfigBinding      `json:"configBinding"`
@@ -93,6 +94,12 @@ type ResourceTemplate struct {
 	Vars               []VarBinding       `json:"vars"`
 	Migrations         []Migration        `json:"migrations"`
 	InstallParams      []InstallParameter `json:"installParameters"`
+}
+
+// AIBinding is a Workers AI binding the release template declares. It carries
+// no install parameter: the platform provides the model catalogue.
+type AIBinding struct {
+	Name string `json:"name"`
 }
 
 // Observability is the script-level logging configuration required for

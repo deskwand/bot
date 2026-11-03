@@ -22,6 +22,7 @@ const configBindingName = "DESKWAND_CONFIG"
 var supportedBindingTypes = map[string]bool{
 	"durable_object_namespace": true,
 	"r2_bucket":                true,
+	"ai":                       true,
 	"version_metadata":         true,
 	"plain_text":               true,
 	"json":                     true,

@@ -455,6 +455,13 @@ func inspectUpgradeBindings(settingsJSON []byte, template release.ResourceTempla
 					Message: fmt.Sprintf("binding %q is an R2 bucket not declared by the release template", binding.Name),
 				}
 			}
+		case "ai":
+			if !templateHasAI(template, binding.Name) {
+				return bindingInspection{}, domain.Error{
+					Code:    domain.UNSUPPORTED_BINDING,
+					Message: fmt.Sprintf("AI binding %q is not declared by the release template", binding.Name),
+				}
+			}
 		case "version_metadata":
 			if binding.Name != template.VersionMetadata.Name {
 				return bindingInspection{}, domain.Error{

@@ -380,6 +380,12 @@ func validateResourceTemplate(template *ResourceTemplate) error {
 		}
 	}
 
+	for _, binding := range template.AIBindings {
+		if binding.Name == "" {
+			return errors.New("release: resource template contains an empty AI binding")
+		}
+	}
+
 	for _, binding := range template.R2Buckets {
 		if binding.Name == "" || binding.ParameterKey == "" {
 			return errors.New("release: resource template contains an empty R2 binding")

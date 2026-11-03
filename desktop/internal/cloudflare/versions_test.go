@@ -34,6 +34,7 @@ func versionSettings() []byte {
 			map[string]any{"type": "secret_text", "name": "REPLACE"},
 			map[string]any{"type": "secret_text", "name": "CLEAR"},
 			map[string]any{"type": "json", "name": "EXTRA_CONFIG", "json": map[string]any{"keep": true}},
+			map[string]any{"type": "ai", "name": "AI"},
 		},
 	})
 	return raw
@@ -57,6 +58,7 @@ func versionManifest(t *testing.T) release.Manifest {
 				{Name: "TASK", ClassName: "TaskDO"},
 			},
 			R2Buckets:       []release.R2Binding{{Name: "ARTIFACTS", ParameterKey: "r2BucketName"}},
+			AIBindings:      []release.AIBinding{{Name: "AI"}},
 			VersionMetadata: release.BindingRef{Name: "CF_VERSION_METADATA"},
 			ConfigBinding:   release.ConfigBinding{Name: "DESKWAND_CONFIG", Type: "json", SchemaVersion: 1},
 			SecretNames:     []string{"KEEP", "REPLACE", "CLEAR"},
@@ -184,6 +186,9 @@ func TestCreateVersionBuildsPreservingMetadata(t *testing.T) {
 	}
 	if byName["ARTIFACTS"]["bucket_name"] != "my-bucket" {
 		t.Fatalf("R2 binding = %#v", byName["ARTIFACTS"])
+	}
+	if byName["AI"]["type"] != "ai" {
+		t.Fatalf("AI binding = %#v", byName["AI"])
 	}
 	if byName["CF_VERSION_METADATA"]["type"] != "version_metadata" {
 		t.Fatalf("version metadata binding = %#v", byName["CF_VERSION_METADATA"])

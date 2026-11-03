@@ -625,3 +625,9 @@ func TestReservedReferenceNamesIncludeBot(t *testing.T) {
 		t.Fatal("BOT binding is not reserved for migrated secrets")
 	}
 }
+
+func TestReservedReferenceNamesIncludeAI(t *testing.T) {
+	if !reservedReferenceNames["AI"] {
+		t.Fatal("AI binding is not reserved for migrated secrets")
+	}
+}
