@@ -16,6 +16,7 @@
     "PUBLIC_BASE_URL": "https://your-worker.workers.dev"
   },
   "keep_vars": true,
+  "ai": { "binding": "AI" },
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "r2_buckets": [
     {

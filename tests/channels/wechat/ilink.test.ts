@@ -119,6 +119,7 @@ describe("getUpdates", () => {
         text: "hello\nworld",
         messageType: 1,
         image: null,
+        voice: false,
       },
       {
         messageId: "u-2-msg",
@@ -127,6 +128,7 @@ describe("getUpdates", () => {
         text: null,
         messageType: 1,
         image: null,
+        voice: false,
       },
     ]);
   });

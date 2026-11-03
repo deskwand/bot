@@ -323,7 +323,7 @@ describe("TaskDO lifecycle", () => {
     ).resolves.toBeUndefined();
 
     expect(channel.sent).toEqual([
-      { chatId: "1", text: "目前只支持文字消息" },
+      { chatId: "1", text: "目前只支持文字、图片和语音消息" },
     ]);
   });
 

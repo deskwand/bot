@@ -801,6 +801,7 @@ export class ChannelDO extends Agent<Env> {
         chatId: update.fromUserId,
         userId: update.fromUserId,
         text: update.text,
+        ...(update.voice && !update.text ? { voiceFailed: true } : {}),
         eventId,
       };
       this.rememberOwner(event);
@@ -1046,6 +1047,7 @@ export class ChannelDO extends Agent<Env> {
     this.telegramInstance ??= createTelegramAdapter({
       token: this.env.TELEGRAM_BOT_TOKEN,
       webhookSecret: this.env.TELEGRAM_WEBHOOK_SECRET,
+      ai: this.env.AI,
     });
     return this.telegramInstance;
   }

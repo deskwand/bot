@@ -1072,8 +1072,15 @@ export class ButlerDO extends Agent<Env> {
       this.kickReconcile();
       return;
     }
+    if (evt.voiceFailed && evt.text === null && images.length === 0) {
+      await this.sendBestEffort({
+        text: "收到了语音，但没能转成文字，请再发一次或换成文字",
+      });
+      this.kickReconcile();
+      return;
+    }
     if (evt.text === null && images.length === 0) {
-      await this.sendBestEffort({ text: "目前只支持文字消息" });
+      await this.sendBestEffort({ text: "目前只支持文字、图片和语音消息" });
       this.kickReconcile();
       return;
     }

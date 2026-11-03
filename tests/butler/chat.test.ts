@@ -77,6 +77,7 @@ function message(evt: {
   channel?: AdmittedMessage["channel"];
   chatId?: string;
   images?: AdmittedMessage["images"];
+  voiceFailed?: boolean;
 }): AdmittedMessage {
   return {
     type: "message",
@@ -85,6 +86,7 @@ function message(evt: {
     userId: "1",
     text: evt.text,
     ...(evt.images === undefined ? {} : { images: evt.images }),
+    ...(evt.voiceFailed === undefined ? {} : { voiceFailed: evt.voiceFailed }),
     eventId: evt.eventId,
     routeKey: route.routeKey,
   };
@@ -265,7 +267,7 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([
-      { chatId: "42", text: "目前只支持文字消息" },
+      { chatId: "42", text: "目前只支持文字、图片和语音消息" },
     ]);
     expect(calls).toBe(0);
   });
@@ -383,6 +385,35 @@ describe("butler chat", () => {
 
     expect(channel.sent).toEqual([
       { chatId: "42", text: "收到了图片，但没能取到图片内容，请稍后再发一次" },
+    ]);
+    expect(calls).toBe(0);
+  });
+
+  it("says so when a voice message could not be transcribed", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let calls = 0;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "不应出现",
+          observe: () => {
+            calls += 1;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-voice-failed").handleMessage({
+      ...message({ text: null, eventId: "tg:voice-failed" }),
+      voiceFailed: true,
+    });
+
+    expect(channel.sent).toEqual([
+      {
+        chatId: "42",
+        text: "收到了语音，但没能转成文字，请再发一次或换成文字",
+      },
     ]);
     expect(calls).toBe(0);
   });

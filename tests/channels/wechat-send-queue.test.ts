@@ -231,6 +231,7 @@ describe("WeChat outbound queue", () => {
               contextToken: "ctx-2",
               text: "hi",
               messageType: 1,
+              voice: false,
             },
           ],
           "cursor-2",
