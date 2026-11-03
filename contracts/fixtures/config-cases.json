@@ -156,6 +156,70 @@
     "valid": true
   },
   {
+    "name": "MCP catalog fields preserved",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": [
+        {
+          "name": "notion",
+          "description": "Notion：页面与数据库",
+          "catalogId": "notion",
+          "url": "https://mcp.example.com/notion",
+          "headers": {
+            "Authorization": "env:MCP_NOTION_TOKEN"
+          },
+          "oauth": true,
+          "enabled": false,
+          "approvalPolicy": "writes",
+          "requireApproval": ["create_page"],
+          "autoApprove": ["search"],
+          "disabledTools": ["delete_page"]
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "MCP approvalPolicy rejects unknown value",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": [
+        {
+          "name": "notion",
+          "url": "https://mcp.example.com/notion",
+          "approvalPolicy": "all"
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
     "name": "extra advanced field",
     "input": {
       "schemaVersion": 1,

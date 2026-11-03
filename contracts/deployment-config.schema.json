@@ -171,6 +171,49 @@
             "minLength": 1,
             "maxLength": 128
           }
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable summary shown to the butler.",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "catalogId": {
+          "type": "string",
+          "description": "Service catalog entry that produced this server; omitted for custom URLs.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "oauth": {
+          "type": "boolean",
+          "description": "The server authenticates through OAuth handled by McpAuthDO; no token is stored in this document."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Defaults to true when omitted. A disabled server keeps its configuration and stored authorization."
+        },
+        "approvalPolicy": {
+          "type": "string",
+          "enum": ["writes"],
+          "description": "writes requires approval for tools without a readOnlyHint; requireApproval and autoApprove take precedence."
+        },
+        "autoApprove": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "disabledTools": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
         }
       },
       "additionalProperties": true

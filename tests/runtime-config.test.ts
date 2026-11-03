@@ -103,6 +103,28 @@ describe("readRuntimeConfig", () => {
     });
   });
 
+  it("preserves MCP catalog fields", () => {
+    const testCase = (cases as ConfigCase[]).find(
+      (entry) => entry.name === "MCP catalog fields preserved",
+    );
+    expect(testCase).toBeDefined();
+
+    const cfg = readRuntimeConfig(envWith(testCase?.input));
+    expect(cfg.mcpServers[0]).toEqual({
+      name: "notion",
+      description: "Notion：页面与数据库",
+      catalogId: "notion",
+      url: "https://mcp.example.com/notion",
+      headers: { Authorization: "env:MCP_NOTION_TOKEN" },
+      oauth: true,
+      enabled: false,
+      approvalPolicy: "writes",
+      requireApproval: ["create_page"],
+      autoApprove: ["search"],
+      disabledTools: ["delete_page"],
+    });
+  });
+
   it("preserves advanced fields for round-trip", () => {
     const testCase = (cases as ConfigCase[]).find(
       (entry) => entry.name === "extra advanced field",

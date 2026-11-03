@@ -6,6 +6,13 @@ export type McpServerConfig = {
   url: string;
   headers?: Record<string, string>;
   requireApproval?: string[];
+  description?: string;
+  catalogId?: string;
+  oauth?: boolean;
+  enabled?: boolean;
+  approvalPolicy?: "writes";
+  autoApprove?: string[];
+  disabledTools?: string[];
 };
 
 export type ModelsConfig = Record<Role, ModelRef> & {

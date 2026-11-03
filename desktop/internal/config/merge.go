@@ -368,6 +368,7 @@ var reservedReferenceNames = func() map[string]bool {
 		"BUTLER":              true,
 		"TASK":                true,
 		"CHANNELS":            true,
+		"MCP_AUTH":            true,
 		"ARTIFACTS":           true,
 	}
 	for _, name := range templateSecretNames {
@@ -671,6 +672,7 @@ var templateSecretNames = []string{
 // them individually.
 var templateSecretNamePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^MODEL_KEY_[A-Z0-9_]{1,64}$`),
+	regexp.MustCompile(`^MCP_[A-Z0-9_]{1,64}$`),
 }
 
 // secretNameAllowed reports whether an edit may target name: either it is a

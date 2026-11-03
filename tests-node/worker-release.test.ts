@@ -107,11 +107,12 @@ describe("Worker release manifest", () => {
 
     expect(manifest.manifestVersion).toBe(1);
     expect(manifest.configSchemaVersion).toBe(1);
-    expect(manifest.migrations.map((migration) => migration.tag)).toEqual(["v1", "v2"]);
+    expect(manifest.migrations.map((migration) => migration.tag)).toEqual(["v1", "v2", "v3"]);
     expect(manifest.resourceTemplate.durableObjects).toEqual([
       { name: "BUTLER", className: "ButlerDO" },
       { name: "TASK", className: "TaskDO" },
       { name: "CHANNELS", className: "ChannelDO" },
+      { name: "MCP_AUTH", className: "McpAuthDO" },
     ]);
     expect(manifest.resourceTemplate.r2Buckets).toEqual([
       { name: "ARTIFACTS", parameterKey: "r2BucketName" },
@@ -130,6 +131,7 @@ describe("Worker release manifest", () => {
     ]);
     expect(manifest.resourceTemplate.secretNamePatterns).toEqual([
       "^MODEL_KEY_[A-Z0-9_]{1,64}$",
+      "^MCP_[A-Z0-9_]{1,64}$",
     ]);
     expect(manifest.resourceTemplate.plainVars).toEqual(["ACTIVE_CHANNEL", "PUBLIC_BASE_URL"]);
     expect(manifest.resourceTemplate.crons).toEqual(["*/5 * * * *"]);
@@ -328,7 +330,7 @@ describe("Worker release manifest", () => {
 
   it("rejects migrations for unbound DO classes and DO classes without migrations", () => {
     const ghost = readTemplate();
-    ghost.migrations.push({ tag: "v3", newSqliteClasses: ["GhostDO"] });
+    ghost.migrations.push({ tag: "v4", newSqliteClasses: ["GhostDO"] });
     expect(() => build({ template: ghost })).toThrow(/unknown Durable Object class/);
 
     const extra = readTemplate();

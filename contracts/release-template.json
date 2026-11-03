@@ -8,7 +8,8 @@
   "durableObjects": [
     { "name": "BUTLER", "className": "ButlerDO" },
     { "name": "TASK", "className": "TaskDO" },
-    { "name": "CHANNELS", "className": "ChannelDO" }
+    { "name": "CHANNELS", "className": "ChannelDO" },
+    { "name": "MCP_AUTH", "className": "McpAuthDO" }
   ],
   "r2Buckets": [
     { "name": "ARTIFACTS", "parameterKey": "r2BucketName" }
@@ -26,7 +27,7 @@
     "type": "json",
     "schemaVersion": 1
   },
-  "secretNamePatterns": ["^MODEL_KEY_[A-Z0-9_]{1,64}$"],
+  "secretNamePatterns": ["^MODEL_KEY_[A-Z0-9_]{1,64}$", "^MCP_[A-Z0-9_]{1,64}$"],
   "secretNames": [
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
@@ -46,6 +47,10 @@
     {
       "tag": "v2",
       "newSqliteClasses": ["ChannelDO"]
+    },
+    {
+      "tag": "v3",
+      "newSqliteClasses": ["McpAuthDO"]
     }
   ],
   "installParameters": [
