@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createModelsForEnv, modelReadiness } from "../../src/llm/models";
+import {
+  createModelsForEnv,
+  modelAcceptsImages,
+  modelReadiness,
+  setModelOverride,
+} from "../../src/llm/models";
 
 const customConfig = {
   schemaVersion: 1,
@@ -121,5 +126,40 @@ describe("modelReadiness", () => {
     const models = createModelsForEnv(env);
 
     expect(modelReadiness(env, models, ref)).toBeUndefined();
+  });
+});
+
+describe("modelAcceptsImages", () => {
+  it("reports a custom provider model as text-only", () => {
+    const models = createModelsForEnv(
+      envWith({ DESKWAND_CONFIG: customConfig, MODEL_KEY_MY_PROXY: "k" }),
+    );
+
+    expect(modelAcceptsImages(models, { provider: "my-proxy", id: "gpt-5.6" })).toBe(
+      false,
+    );
+  });
+
+  it("follows the built-in catalog for a real model", () => {
+    const models = createModelsForEnv(envWith({ DESKWAND_CONFIG: customConfig }));
+
+    expect(
+      modelAcceptsImages(models, { provider: "deepseek", id: "deepseek-flash" }),
+    ).toBe(models.getModel("deepseek", "deepseek-flash")?.input.includes("image") ?? false);
+  });
+
+  it("lets the test override through", () => {
+    setModelOverride({ provider: "scripted", id: "scripted-x" });
+
+    try {
+      expect(
+        modelAcceptsImages(createModelsForEnv(envWith({})), {
+          provider: "scripted",
+          id: "scripted-x",
+        }),
+      ).toBe(true);
+    } finally {
+      setModelOverride(null);
+    }
   });
 });

@@ -1,6 +1,6 @@
 import { Agent } from "agents";
 import { PiHarness, type PiModel } from "agents/harness/pi";
-import { createRegistry, Harness } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, type UserInput } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
 import type {
@@ -10,7 +10,12 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
-import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
+import {
+  createModelsForEnv,
+  modelAcceptsImages,
+  modelReadiness,
+  resolveModel,
+} from "../llm/models";
 import {
   encodeAction,
   type Address,
@@ -900,7 +905,8 @@ export class ButlerDO extends Agent<Env> {
 
     if (!(await this.admissionHolds(evt))) return;
 
-    if (evt.text === null) {
+    const images = evt.images ?? [];
+    if (evt.text === null && images.length === 0) {
       await this.sendBestEffort({ text: "目前只支持文字消息" });
       this.kickReconcile();
       return;
@@ -915,19 +921,40 @@ export class ButlerDO extends Agent<Env> {
 
     // Answer a missing key or an unavailable model here instead of letting pi
     // fail the run after the input was accepted.
-    const notReady = modelReadiness(
-      this.env,
-      createModelsForEnv(this.env),
-      readRuntimeConfig(this.env).models.butler,
-    );
+    const models = createModelsForEnv(this.env);
+    const butlerModel = readRuntimeConfig(this.env).models.butler;
+    const notReady = modelReadiness(this.env, models, butlerModel);
     if (notReady) {
       await this.sendBestEffort({ text: notReady });
       this.kickReconcile();
       return;
     }
 
+    // pi-ai swaps images for a placeholder on a text-only model; say so instead.
+    if (images.length > 0 && !modelAcceptsImages(models, butlerModel)) {
+      await this.sendBestEffort({
+        text: "当前模型不支持图片，请在桌面端模型页换成支持视觉的模型",
+      });
+      this.kickReconcile();
+      return;
+    }
+
     const operationId = evt.eventId;
-    const receipt = await this.harness.submit(evt.text, { operationId });
+    const input: UserInput =
+      images.length === 0
+        ? // The guard above already ruled out a null text here.
+          (evt.text ?? "")
+        : [
+            ...(evt.text === null || evt.text === ""
+              ? []
+              : [{ type: "text" as const, text: evt.text }]),
+            ...images.map((image) => ({
+              type: "image" as const,
+              data: image.data,
+              mimeType: image.mimeType,
+            })),
+          ];
+    const receipt = await this.harness.submit(input, { operationId });
     // Telegram redelivered an update we already accepted: never answer twice.
     if (!receipt.accepted) return;
 

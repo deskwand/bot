@@ -34,6 +34,7 @@ import {
   versionIdOf,
 } from "./route-identity";
 import { emitChannelEvent } from "./events";
+import { prepareInboundImage } from "./media";
 import { createTelegramAdapter } from "./telegram";
 import { parseTextAction, type TextAction } from "./text-action";
 import { ChannelError, type ChannelAdapter } from "./types";
@@ -47,6 +48,7 @@ import {
   type WeChatCredentials,
   type WeChatUpdate,
 } from "./wechat/ilink";
+import type { WeChatImageRef } from "./wechat/media";
 
 const WECHAT_POLL_RUN_MS = 600_000;
 const WECHAT_POLL_BACKOFF_MS = 1_000;
@@ -696,8 +698,38 @@ export class ChannelDO extends Agent<Env> {
         return;
       }
 
+      if (update.image) {
+        this.ctx.waitUntil(this.dispatchWeChatImage(event, update.image, routeKey));
+        return;
+      }
+
       this.dispatchMessage(event, routeKey);
     });
+  }
+
+  /**
+   * WeChat hands over an image as an encrypted CDN object. Downloading and
+   * decrypting it happens off the poll loop, so one slow image does not hold
+   * the rest of the batch.
+   */
+  private async dispatchWeChatImage(
+    event: MessageEvent,
+    image: WeChatImageRef,
+    routeKey: string,
+  ): Promise<void> {
+    const client = createILinkClient({
+      fetch: getILinkFetchOverride() ?? undefined,
+    });
+    const bytes = await client.downloadImage(image);
+    const prepared = bytes ? await prepareInboundImage(bytes) : undefined;
+
+    if (!prepared) {
+      console.warn(`channel: wechat image dropped (${event.eventId})`);
+      this.dispatchMessage(event, routeKey);
+      return;
+    }
+
+    this.dispatchMessage({ ...event, images: [prepared] }, routeKey);
   }
 
   private dispatchWeChatAction(

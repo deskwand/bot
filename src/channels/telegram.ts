@@ -3,9 +3,11 @@ import {
   type ActionEvent,
   type Button,
   type InboundEvent,
+  type InboundImage,
   type MessageEvent,
   type OutboundMessage,
 } from "../protocol";
+import { prepareInboundImage } from "./media";
 import { renderForTelegram } from "./telegram-render";
 import { ChannelError, type ChannelAdapter } from "./types";
 
@@ -13,11 +15,16 @@ const API_BASE = "https://api.telegram.org";
 
 type TelegramUser = { id: number };
 type TelegramChat = { id: number };
+type TelegramPhotoSize = { file_id: string; width: number; height: number };
+type TelegramDocument = { file_id: string; mime_type?: string };
 type TelegramMessage = {
   message_id: number;
   from?: TelegramUser;
   chat: TelegramChat;
   text?: string;
+  caption?: string;
+  photo?: TelegramPhotoSize[];
+  document?: TelegramDocument;
 };
 type TelegramCallbackQuery = {
   id: string;
@@ -34,7 +41,7 @@ type TelegramUpdate = {
 type TelegramResponse = {
   ok: boolean;
   description?: string;
-  result?: { message_id?: number };
+  result?: { message_id?: number; file_path?: string };
 };
 
 export type TelegramAdapterOptions = {
@@ -42,6 +49,17 @@ export type TelegramAdapterOptions = {
   webhookSecret?: string;
   fetch?: typeof fetch;
 };
+
+/** The `file_id` of the message's image: its largest photo, or an image document. */
+function imageSource(message: TelegramMessage): string | null {
+  const photo = message.photo?.[message.photo.length - 1];
+  if (photo) return photo.file_id;
+  const mimeType = message.document?.mime_type;
+  if (message.document && mimeType?.startsWith("image/")) {
+    return message.document.file_id;
+  }
+  return null;
+}
 
 function toKeyboard(buttons: Button[][]) {
   return {
@@ -58,6 +76,9 @@ export function createTelegramAdapter(
   opts: TelegramAdapterOptions,
 ): ChannelAdapter {
   const fetchImpl = opts.fetch ?? globalThis.fetch;
+
+  /** Bot API caps file downloads at 20 MB; anything larger is not usable. */
+  const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
   async function call(
     method: string,
@@ -120,6 +141,34 @@ export function createTelegramAdapter(
     }
   }
 
+  /**
+   * Fetches one file's bytes. Every failure returns `undefined` so a bad image
+   * drops itself instead of the whole message.
+   */
+  async function downloadFile(fileId: string): Promise<Uint8Array | undefined> {
+    let filePath: string | undefined;
+    try {
+      const response = await call("getFile", { file_id: fileId });
+      filePath = response.result?.file_path;
+    } catch (error) {
+      console.error(`telegram getFile failed: ${(error as Error).message}`);
+      return undefined;
+    }
+    if (!filePath) return undefined;
+
+    try {
+      const response = await fetchImpl(
+        `${API_BASE}/file/bot${opts.token}/${filePath}`,
+      );
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      return bytes.byteLength > MAX_FILE_BYTES ? undefined : bytes;
+    } catch (error) {
+      console.error(`telegram file download failed: ${(error as Error).message}`);
+      return undefined;
+    }
+  }
+
   return {
     async parseInbound(req: Request): Promise<InboundEvent | null> {
       const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
@@ -139,12 +188,22 @@ export function createTelegramAdapter(
         // A message without a sender (e.g. a channel post) has no owner to map.
         if (!message.from) return null;
 
+        const images: InboundImage[] = [];
+        const source = imageSource(message);
+        if (source) {
+          const bytes = await downloadFile(source);
+          const image = bytes ? await prepareInboundImage(bytes) : undefined;
+          if (image) images.push(image);
+          else console.warn(`telegram image dropped (${source})`);
+        }
+
         const event: MessageEvent = {
           type: "message",
           channel: "telegram",
           chatId: String(message.chat.id),
           userId: String(message.from.id),
-          text: message.text ?? null,
+          text: message.caption ?? message.text ?? null,
+          ...(images.length > 0 ? { images } : {}),
           eventId: `tg:${update.update_id}`,
         };
         return event;

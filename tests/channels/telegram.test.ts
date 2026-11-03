@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ChannelError } from "../../src/channels/types";
 import { createTelegramAdapter } from "../../src/channels/telegram";
 
@@ -12,8 +12,19 @@ type RecordedCall = {
 const TOKEN = "123:test-token";
 const SECRET = "s3cret";
 
+/** 真实的 8×8 纯色 PNG。 */
+const PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mM4YWODFTEMLQkAZZlQAS/gME0AAAAASUVORK5CYII=";
+
+function pngBytes(): Uint8Array {
+  const binary = atob(PNG_B64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
 function fakeFetch(
-  responses: Array<{ status: number; body: unknown } | Error> = [],
+  responses: Array<{ status: number; body?: unknown; bytes?: Uint8Array } | Error> = [],
 ) {
   const calls: RecordedCall[] = [];
   let nextMessageId = 100;
@@ -27,10 +38,12 @@ function fakeFetch(
     const queued = responses.shift();
     if (queued instanceof Error) throw queued;
     if (queued) {
-      return new Response(JSON.stringify(queued.body), {
-        status: queued.status,
-        headers: { "content-type": "application/json" },
-      });
+      return queued.bytes
+        ? new Response(queued.bytes, { status: queued.status })
+        : new Response(JSON.stringify(queued.body), {
+            status: queued.status,
+            headers: { "content-type": "application/json" },
+          });
     }
 
     nextMessageId += 1;
@@ -125,6 +138,116 @@ describe("parseInbound", () => {
       text: null,
       eventId: "tg:2",
     });
+  });
+
+  it("downloads the largest photo and keeps the caption as text", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "photos/file_7.png" } } },
+      { status: 200, bytes: pngBytes() },
+    ]);
+
+    const event = await makeAdapter(fetchImpl).parseInbound(
+      updateRequest({
+        update_id: 7,
+        message: {
+          message_id: 70,
+          from: { id: 1 },
+          chat: { id: 42 },
+          caption: "看图",
+          photo: [
+            { file_id: "small", width: 90, height: 90 },
+            { file_id: "large", width: 1280, height: 1280 },
+          ],
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({
+      text: "看图",
+      images: [{ mimeType: "image/png", data: PNG_B64 }],
+    });
+    expect(calls[0].url).toBe(`https://api.telegram.org/bot${TOKEN}/getFile`);
+    expect(calls[0].body).toEqual({ file_id: "large" });
+    expect(calls[1].url).toBe(
+      `https://api.telegram.org/file/bot${TOKEN}/photos/file_7.png`,
+    );
+  });
+
+  it("accepts an image sent as a document", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "documents/f_1.png" } } },
+      { status: 200, bytes: pngBytes() },
+    ]);
+
+    const event = await makeAdapter(fetchImpl).parseInbound(
+      updateRequest({
+        update_id: 8,
+        message: {
+          message_id: 80,
+          from: { id: 1 },
+          chat: { id: 42 },
+          document: { file_id: "doc-1", mime_type: "image/png" },
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({
+      text: null,
+      images: [{ mimeType: "image/png", data: PNG_B64 }],
+    });
+    expect(calls[0].body).toEqual({ file_id: "doc-1" });
+  });
+
+  it("keeps the text when the download fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "photos/x.png" } } },
+      { status: 404, body: { ok: false } },
+    ]);
+
+    const event = await makeAdapter(fetchImpl).parseInbound(
+      updateRequest({
+        update_id: 9,
+        message: {
+          message_id: 90,
+          from: { id: 1 },
+          chat: { id: 42 },
+          caption: "看图",
+          photo: [{ file_id: "large", width: 1280, height: 1280 }],
+        },
+      }),
+    );
+
+    expect(event).toEqual({
+      type: "message",
+      channel: "telegram",
+      chatId: "42",
+      userId: "1",
+      text: "看图",
+      eventId: "tg:9",
+    });
+  });
+
+  it("drops a download that is not an image", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "photos/x.png" } } },
+      { status: 200, bytes: new TextEncoder().encode("<html>denied</html>") },
+    ]);
+
+    const event = await makeAdapter(fetchImpl).parseInbound(
+      updateRequest({
+        update_id: 10,
+        message: {
+          message_id: 100,
+          from: { id: 1 },
+          chat: { id: 42 },
+          photo: [{ file_id: "large", width: 1280, height: 1280 }],
+        },
+      }),
+    );
+
+    expect(event).not.toHaveProperty("images");
   });
 
   it("parses callback query into ActionEvent", async () => {

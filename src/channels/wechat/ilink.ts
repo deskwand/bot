@@ -1,7 +1,14 @@
+import {
+  WECHAT_CDN_BASE_URL,
+  downloadWeChatImage,
+  type WeChatImageRef,
+} from "./media";
+
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 const CHANNEL_VERSION = "1.0.0";
 const DEFAULT_LIMIT = 2000;
 const TEXT_ITEM_TYPE = 1;
+const IMAGE_ITEM_TYPE = 2;
 
 export type WeChatCredentials = {
   token: string;
@@ -74,6 +81,7 @@ export type WeChatUpdate = {
   contextToken: string;
   text: string | null;
   messageType: number;
+  image: WeChatImageRef | null;
 };
 
 type QrStatus = "wait" | "scaned" | "confirmed" | "expired";
@@ -222,6 +230,13 @@ export function createILinkClient(opts: {
         );
       }
     },
+
+    async downloadImage(
+      image: WeChatImageRef,
+      signal?: AbortSignal,
+    ): Promise<Uint8Array | undefined> {
+      return await downloadWeChatImage(fetchImpl, WECHAT_CDN_BASE_URL, image, signal);
+    },
   };
 }
 
@@ -291,19 +306,45 @@ function toWeChatUpdate(value: Record<string, unknown>): WeChatUpdate {
   const contextToken = readString(value, "context_token") ?? "";
   const messageType =
     typeof value.message_type === "number" ? value.message_type : 0;
-  const items = Array.isArray(value.item_list) ? value.item_list : [];
+  const items = (Array.isArray(value.item_list) ? value.item_list : []).filter(
+    isRecord,
+  );
   const texts = items
-    .filter(isRecord)
     .filter((item) => item.type === TEXT_ITEM_TYPE)
     .map((item) =>
       isRecord(item.text_item) ? (readString(item.text_item, "text") ?? "") : "",
     );
+  const image =
+    items
+      .filter((item) => item.type === IMAGE_ITEM_TYPE)
+      .map(toImageRef)
+      .find((ref) => ref !== null) ?? null;
+
   return {
     messageId,
     fromUserId,
     contextToken,
     text: texts.length > 0 ? texts.join("\n") : null,
     messageType,
+    image,
+  };
+}
+
+/** A downloadable image, or `null` when the item has no CDN parameter. */
+function toImageRef(item: Record<string, unknown>): WeChatImageRef | null {
+  const image = item.image_item;
+  if (!isRecord(image)) return null;
+
+  const media = isRecord(image.media) ? image.media : {};
+  const encryptQueryParam = readString(media, "encrypt_query_param");
+  if (!encryptQueryParam) return null;
+
+  const aesKeyHex = readString(image, "aeskey");
+  const mediaAesKey = readString(media, "aes_key");
+  return {
+    encryptQueryParam,
+    ...(aesKeyHex === undefined ? {} : { aesKeyHex }),
+    ...(mediaAesKey === undefined ? {} : { mediaAesKey }),
   };
 }
 

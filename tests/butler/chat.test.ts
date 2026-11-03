@@ -76,6 +76,7 @@ function message(evt: {
   eventId: string;
   channel?: AdmittedMessage["channel"];
   chatId?: string;
+  images?: AdmittedMessage["images"];
 }): AdmittedMessage {
   return {
     type: "message",
@@ -83,10 +84,15 @@ function message(evt: {
     chatId: evt.chatId ?? "42",
     userId: "1",
     text: evt.text,
+    ...(evt.images === undefined ? {} : { images: evt.images }),
     eventId: evt.eventId,
     routeKey: route.routeKey,
   };
 }
+
+/** 真实的 8×8 纯色 PNG。 */
+const PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mM4YWODFTEMLQkAZZlQAS/gME0AAAAASUVORK5CYII=";
 
 /**
  * One scripted provider for both roles. The Butler and the Task DO normally
@@ -262,6 +268,138 @@ describe("butler chat", () => {
       { chatId: "42", text: "目前只支持文字消息" },
     ]);
     expect(calls).toBe(0);
+  });
+
+  it("submits text and image together", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "看到了",
+          observe: (context) => {
+            seen = context;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-110").handleMessage(
+      message({
+        text: "图里写了什么？",
+        eventId: "tg:110",
+        images: [{ mimeType: "image/png", data: PNG_B64 }],
+      }),
+    );
+
+    const last = seen?.messages.filter((entry) => entry.role === "user").at(-1);
+    expect(last?.content).toEqual([
+      { type: "text", text: "图里写了什么？" },
+      { type: "image", data: PNG_B64, mimeType: "image/png" },
+    ]);
+    expect(channel.sent).toEqual([{ chatId: "42", text: "看到了" }]);
+  });
+
+  it("submits an image on its own when there is no text", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "是一张纯色图",
+          observe: (context) => {
+            seen = context;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-111").handleMessage(
+      message({
+        text: null,
+        eventId: "tg:111",
+        images: [{ mimeType: "image/png", data: PNG_B64 }],
+      }),
+    );
+
+    const last = seen?.messages.filter((entry) => entry.role === "user").at(-1);
+    expect(last?.content).toEqual([
+      { type: "image", data: PNG_B64, mimeType: "image/png" },
+    ]);
+    expect(channel.sent).toEqual([{ chatId: "42", text: "是一张纯色图" }]);
+  });
+
+  it("drops an empty text block when the image is the whole message", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "是一张纯色图",
+          observe: (context) => {
+            seen = context;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-113").handleMessage(
+      message({
+        text: "",
+        eventId: "tg:113",
+        images: [{ mimeType: "image/png", data: PNG_B64 }],
+      }),
+    );
+
+    const last = seen?.messages.filter((entry) => entry.role === "user").at(-1);
+    expect(last?.content).toEqual([
+      { type: "image", data: PNG_B64, mimeType: "image/png" },
+    ]);
+    expect(channel.sent).toEqual([{ chatId: "42", text: "是一张纯色图" }]);
+  });
+
+  it("answers images with a fixed note when the model cannot see them", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(null);
+    setEnv({
+      DESKWAND_CONFIG: {
+        schemaVersion: 1,
+        owner: { telegramUserIds: [1] },
+        models: {
+          butler: { provider: "my-proxy", id: "gpt-5.6" },
+          task: { provider: "my-proxy", id: "gpt-5.6" },
+          customProviders: [
+            {
+              id: "my-proxy",
+              api: "openai-completions",
+              baseUrl: "https://proxy.example.com/v1",
+              models: [{ id: "gpt-5.6" }],
+            },
+          ],
+        },
+        mcpServers: [],
+      },
+      MODEL_KEY_MY_PROXY: "k",
+    });
+
+    await butler("chat-112").handleMessage(
+      message({
+        text: null,
+        eventId: "tg:112",
+        images: [{ mimeType: "image/png", data: PNG_B64 }],
+      }),
+    );
+
+    expect(channel.sent).toEqual([
+      {
+        chatId: "42",
+        text: "当前模型不支持图片，请在桌面端模型页换成支持视觉的模型",
+      },
+    ]);
   });
 
   it("spawns a task and sends a progress message with a cancel button", async () => {

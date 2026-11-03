@@ -1,3 +1,4 @@
+import { createCipheriv } from "node:crypto";
 import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -539,6 +540,139 @@ describe("pollWeChat", () => {
     expect(await readContexts()).toEqual([
       { user_id: OWNER, context_token: "ctx-img" },
     ]);
+  });
+
+  it("downloads an image message and hands it to the Butler", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    setPollTimingOverride({ runMs: 20, baseBackoffMs: 2 });
+
+    const keyHex = "00112233445566778899aabbccddeeff";
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mM4YWODFTEMLQkAZZlQAS/gME0AAAAASUVORK5CYII=";
+    const plain = Uint8Array.from(atob(pngB64), (c) => c.charCodeAt(0));
+    const cipher = createCipheriv("aes-128-ecb", Buffer.from(keyHex, "hex"), null);
+    const ciphertext = new Uint8Array(
+      Buffer.concat([cipher.update(plain), cipher.final()]),
+    );
+
+    let first = true;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/ilink/bot/getupdates")) {
+        if (!first) {
+          return new Response(
+            JSON.stringify({ get_updates_buf: "cursor-img", msgs: [] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        first = false;
+        return new Response(
+          JSON.stringify({
+            get_updates_buf: "cursor-img",
+            msgs: [
+              {
+                message_id: "img-1",
+                from_user_id: OWNER,
+                context_token: "ctx-1",
+                message_type: 1,
+                item_list: [
+                  {
+                    type: 2,
+                    image_item: {
+                      media: { encrypt_query_param: "p-1" },
+                      aeskey: keyHex,
+                    },
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(ciphertext, { status: 200 });
+    }) as typeof fetch;
+    setILinkFetchOverride(fetchImpl);
+
+    const events = await captureButler();
+    await pollThroughDO();
+
+    const route = await channels().currentRoute();
+    await vi.waitFor(() => {
+      expect(events).toEqual([
+        {
+          type: "message",
+          channel: "wechat",
+          chatId: OWNER,
+          userId: OWNER,
+          text: null,
+          images: [{ mimeType: "image/png", data: pngB64 }],
+          eventId: "wx:img-1",
+          routeKey: route.routeKey,
+        },
+      ]);
+    });
+  });
+
+  it("falls back to a text-only event when the image cannot be fetched", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    setPollTimingOverride({ runMs: 20, baseBackoffMs: 2 });
+
+    let first = true;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/ilink/bot/getupdates")) {
+        if (!first) {
+          return new Response(
+            JSON.stringify({ get_updates_buf: "cursor-img-bad", msgs: [] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        first = false;
+        return new Response(
+          JSON.stringify({
+            get_updates_buf: "cursor-img-bad",
+            msgs: [
+              {
+                message_id: "img-2",
+                from_user_id: OWNER,
+                context_token: "ctx-1",
+                message_type: 1,
+                item_list: [
+                  { type: 2, image_item: { media: { encrypt_query_param: "p-2" } } },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("denied", { status: 403 });
+    }) as typeof fetch;
+    setILinkFetchOverride(fetchImpl);
+
+    const events = await captureButler();
+    await pollThroughDO();
+
+    const route = await channels().currentRoute();
+    await vi.waitFor(() => {
+      expect(events).toEqual([
+        {
+          type: "message",
+          channel: "wechat",
+          chatId: OWNER,
+          userId: OWNER,
+          text: null,
+          eventId: "wx:img-2",
+          routeKey: route.routeKey,
+        },
+      ]);
+    });
   });
 
   it("backs off after a 5xx and keeps polling", async () => {

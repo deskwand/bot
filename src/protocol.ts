@@ -4,12 +4,17 @@ export type ChannelId = "telegram" | "wechat";
 
 export type Address = { channel: ChannelId; conversationId: string };
 
+/** 一条已按额度处理过的入站图片；base64 不带 data: 前缀。 */
+export type InboundImage = { mimeType: string; data: string };
+
 export type MessageEvent = {
   type: "message";
   channel: ChannelId;
   chatId: string;
   userId: string;
   text: string | null;
+  /** 最多 1 张；缺省表示这条消息没有图片。 */
+  images?: InboundImage[];
   eventId: string;
 };
 

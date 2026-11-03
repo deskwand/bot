@@ -1,3 +1,4 @@
+import { createCipheriv } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   ILinkError,
@@ -117,6 +118,7 @@ describe("getUpdates", () => {
         contextToken: "ctx-1",
         text: "hello\nworld",
         messageType: 1,
+        image: null,
       },
       {
         messageId: "u-2-msg",
@@ -124,8 +126,64 @@ describe("getUpdates", () => {
         contextToken: "",
         text: null,
         messageType: 1,
+        image: null,
       },
     ]);
+  });
+
+  it("reads an image item's CDN reference", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({
+        msgs: [
+          {
+            message_id: 9,
+            from_user_id: "u-1",
+            message_type: 1,
+            item_list: [
+              {
+                type: 2,
+                image_item: {
+                  media: {
+                    encrypt_query_param: "param-1",
+                    aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+                  },
+                  aeskey: "00112233445566778899aabbccddeeff",
+                  mid_size: 1024,
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await client(fetchImpl).getUpdates(CREDS, "");
+
+    expect(result.updates[0].image).toEqual({
+      encryptQueryParam: "param-1",
+      aesKeyHex: "00112233445566778899aabbccddeeff",
+      mediaAesKey: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+    });
+    expect(result.updates[0].text).toBeNull();
+  });
+
+  it("downloads and decrypts an image through the CDN", async () => {
+    const key = Buffer.from("00112233445566778899aabbccddeeff", "hex");
+    const plain = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    const cipher = createCipheriv("aes-128-ecb", key, null);
+    const ciphertext = Buffer.concat([cipher.update(plain), cipher.final()]);
+
+    const { calls, fetchImpl } = fakeFetch([new Response(ciphertext, { status: 200 })]);
+
+    const bytes = await client(fetchImpl).downloadImage({
+      encryptQueryParam: "p 1",
+      aesKeyHex: "00112233445566778899aabbccddeeff",
+    });
+
+    expect(Array.from(bytes ?? [])).toEqual(Array.from(plain));
+    expect(calls[0].url).toBe(
+      "https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param=p%201",
+    );
   });
 
   it("keeps the old cursor when the response has none", async () => {

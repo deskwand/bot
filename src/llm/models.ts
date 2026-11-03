@@ -114,6 +114,16 @@ export function modelReadiness(
   return undefined;
 }
 
+/**
+ * Whether the configured model can take images; test overrides and scripted
+ * providers say yes, matching `modelReadiness`'s bypass. pi-ai replaces images
+ * with a placeholder for models whose `input` lacks `"image"`.
+ */
+export function modelAcceptsImages(models: Models, ref: ModelRef): boolean {
+  if (modelOverride || testProviders.has(ref.provider)) return true;
+  return models.getModel(ref.provider, ref.id)?.input.includes("image") ?? false;
+}
+
 function readCustomProviders(env: Env): CustomProviderConfig[] {
   try {
     return readRuntimeConfig(env).models.customProviders ?? [];

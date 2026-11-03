@@ -16,6 +16,13 @@
 - 微信（iLink）：协议只有纯文本 item，但微信客户端会就地渲染一部分 Markdown（粗体、代码块、行内代码、表格、H1-H4、水平线）；`src/channels/wechat/markdown.ts` 在代码范围以外只剥掉客户端不渲染的三类（中文斜体、H5/H6、图片），代码和转义标记保持原文。客户端能力依据社区结论，仍需真实客户端冒烟确认。
 - 将来接入飞书 / 企业微信：在 adapter 内新增各自的渲染层，`src/protocol.ts`、`src/butler/*`、`src/channels/channel-do.ts` 都不需要改动。
 
+图片：用户发来的图片会交给模型看（入站支持，bot 不会主动发图）。两渠道行为一致：
+
+- Telegram：照片（可带说明文字）或"以文件发送"的 `image/*`，经 `getFile` 下载。
+- 微信（iLink）：`item_list` 的图片项从 CDN 下载后用 AES-128-ECB 解密。
+- 共通：只接受 JPEG / PNG / GIF / WebP，按魔数判断；进入模型前压到 2000px、base64 ≤ 500KB，一条消息最多一张。
+- 当前模型不支持图片时会回固定提示，不会把图片悄悄换成占位文字。
+
 ## 前置条件
 
 - Node.js 22.6+（推荐 Node 26；`npm run set-webhook` 使用 Node 原生 TypeScript 类型擦除）
