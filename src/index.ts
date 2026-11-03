@@ -5,6 +5,7 @@ import { createGateway } from "./gateway";
 export { ButlerDO } from "./butler/butler-do";
 export { TaskDO } from "./task/task-do";
 export { ChannelDO };
+export { McpAuthDO } from "./mcp/mcp-auth-do";
 
 function channels(env: Env): DurableObjectStub<ChannelDO> {
   return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));

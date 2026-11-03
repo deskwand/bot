@@ -1053,6 +1053,11 @@ export class ButlerDO extends Agent<Env> {
     await this.sendBestEffort({ text });
   }
 
+  /** System notice to the owner's current channel, best effort. */
+  async systemNotice(text: string): Promise<void> {
+    await this.sendBestEffort({ text: clampMessage(text) });
+  }
+
   /** Adds a column to an object created by an older release. */
   private ensureColumn(table: string, column: string, type: string): void {
     const columns = this.db

@@ -27,7 +27,8 @@
     "bindings": [
       { "name": "BUTLER", "class_name": "ButlerDO" },
       { "name": "TASK", "class_name": "TaskDO" },
-      { "name": "CHANNELS", "class_name": "ChannelDO" }
+      { "name": "CHANNELS", "class_name": "ChannelDO" },
+      { "name": "MCP_AUTH", "class_name": "McpAuthDO" }
     ]
   },
   "migrations": [
@@ -38,6 +39,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["ChannelDO"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["McpAuthDO"]
     }
   ],
   "triggers": {
