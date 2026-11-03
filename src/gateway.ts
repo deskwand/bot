@@ -1,12 +1,17 @@
+import { createMcpAdminRoutes } from "./admin/mcp-routes";
+import type { McpAuthDO } from "./mcp/mcp-auth-do";
+
 export type GatewayDeps = {
   channels(): {
     handleTelegramWebhook(req: Request): Promise<"accepted" | "maintenance">;
   };
   artifacts: R2Bucket;
   admin: { fetch(req: Request): Promise<Response> };
+  mcpAuth(): DurableObjectStub<McpAuthDO>;
 };
 
 const ARTIFACT_PREFIX = "/a/";
+const MCP_CALLBACK_PATH = "/mcp/oauth/callback";
 
 /** Types safe to display inline; everything else is a download. */
 const INLINE_CONTENT_TYPES = new Set([
@@ -35,6 +40,8 @@ function notFound(): Response {
 export function createGateway(deps: GatewayDeps): {
   fetch(req: Request): Promise<Response>;
 } {
+  const mcp = createMcpAdminRoutes(deps.mcpAuth);
+
   async function handleWebhook(req: Request): Promise<Response> {
     // Telegram retries failed deliveries; always acknowledge and log instead.
     let outcome: "accepted" | "maintenance";
@@ -86,6 +93,10 @@ export function createGateway(deps: GatewayDeps): {
 
       if (url.pathname.startsWith("/admin/")) {
         return deps.admin.fetch(req);
+      }
+
+      if (req.method === "GET" && url.pathname === MCP_CALLBACK_PATH) {
+        return mcp.fetch(req);
       }
 
       if (req.method === "POST" && url.pathname === "/telegram/webhook") {

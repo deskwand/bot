@@ -15,6 +15,10 @@ function butler(env: Env) {
   return env.BUTLER.get(env.BUTLER.idFromName("owner"));
 }
 
+function mcpAuth(env: Env) {
+  return env.MCP_AUTH.get(env.MCP_AUTH.idFromName("global"));
+}
+
 function admin(env: Env) {
   return createAdminGateway({
     token: env.ADMIN_TOKEN,
@@ -23,6 +27,7 @@ function admin(env: Env) {
     channel: () => channels(env),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     artifacts: env.ARTIFACTS,
+    mcpAuth: () => mcpAuth(env),
   });
 }
 
@@ -32,6 +37,7 @@ export default {
       channels: () => channels(env),
       artifacts: env.ARTIFACTS,
       admin: admin(env),
+      mcpAuth: () => mcpAuth(env),
     });
 
     return gateway.fetch(req);

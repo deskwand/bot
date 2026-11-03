@@ -9,7 +9,9 @@
 
 import type { ButlerDO } from "../butler/butler-do";
 import type { ChannelDO } from "../channels/channel-do";
+import type { McpAuthDO } from "../mcp/mcp-auth-do";
 import type { TaskDO } from "../task/task-do";
+import { createMcpAdminRoutes } from "./mcp-routes";
 import { createR2Routes } from "./r2-routes";
 import type {
   DbSchema,
@@ -25,6 +27,7 @@ export type AdminDeps = {
   channel(): DurableObjectStub<ChannelDO>;
   task(id: string): DurableObjectStub<TaskDO>;
   artifacts: R2Bucket;
+  mcpAuth(): DurableObjectStub<McpAuthDO>;
 };
 
 /** The DO RPC surface used by the backup and restore routes. */
@@ -194,6 +197,7 @@ export function createAdminGateway(deps: AdminDeps): {
   fetch(req: Request): Promise<Response>;
 } {
   const r2 = createR2Routes(deps.artifacts);
+  const mcp = createMcpAdminRoutes(deps.mcpAuth);
 
   async function handle(req: Request, url: URL): Promise<Response> {
     if (req.method === "POST" && url.pathname === ACQUIRE_PATH) {
@@ -201,6 +205,11 @@ export function createAdminGateway(deps: AdminDeps): {
     }
     if (req.method === "POST" && url.pathname === RELEASE_PATH) {
       return release(deps, req);
+    }
+
+    // MCP management works during backup/restore and needs no lease.
+    if (url.pathname.startsWith("/admin/mcp/")) {
+      return mcp.fetch(req);
     }
 
     if (url.pathname.startsWith(R2_PREFIX)) {

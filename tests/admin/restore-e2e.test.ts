@@ -46,6 +46,7 @@ function deps(): AdminDeps {
     channel: () => env.CHANNELS.get(env.CHANNELS.idFromName("channels")),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     artifacts: env.ARTIFACTS,
+    mcpAuth: () => env.MCP_AUTH.get(env.MCP_AUTH.idFromName("global")),
   };
 }
 

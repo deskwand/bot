@@ -21,6 +21,7 @@ function deps(name: string, token: string | null = TOKEN): AdminDeps {
       env.CHANNELS.get(env.CHANNELS.idFromName(`${name}-channels`)),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     artifacts: env.ARTIFACTS,
+    mcpAuth: () => env.MCP_AUTH.get(env.MCP_AUTH.idFromName("global")),
   };
 }
 
@@ -186,6 +187,7 @@ describe("admin gateway", () => {
         throw new Error("unused");
       },
       artifacts: env.ARTIFACTS,
+      mcpAuth: () => env.MCP_AUTH.get(env.MCP_AUTH.idFromName("global")),
     });
 
     const response = await acquire(gateway);

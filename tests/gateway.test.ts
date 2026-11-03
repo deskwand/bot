@@ -1,6 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { createGateway } from "../src/gateway";
+import type { McpAuthDO } from "../src/mcp/mcp-auth-do";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -11,11 +12,14 @@ type WebhookOutcome = "accepted" | "maintenance";
 function setup(
   handleTelegramWebhook: (req: Request) => Promise<WebhookOutcome> = async () =>
     "accepted",
+  mcpAuth: () => DurableObjectStub<McpAuthDO> = () =>
+    env.MCP_AUTH.get(env.MCP_AUTH.idFromName("gateway-test")),
 ) {
   const gateway = createGateway({
     channels: () => ({ handleTelegramWebhook }),
     artifacts: env.ARTIFACTS,
     admin: { fetch: async () => new Response(null, { status: 404 }) },
+    mcpAuth,
   });
   return { gateway };
 }
@@ -101,6 +105,35 @@ describe("GET /a/<key>", () => {
       expect(response.headers.get("content-security-policy")).toBe("sandbox");
     },
   );
+});
+
+describe("GET /mcp/oauth/callback", () => {
+  it("serves the success page without admin authentication", async () => {
+    const auth = {
+      completeAuthorization: async () => true,
+    } as unknown as DurableObjectStub<McpAuthDO>;
+    const h = setup(undefined, () => auth);
+
+    const response = await h.gateway.fetch(
+      new Request(
+        "https://example.com/mcp/oauth/callback?code=code-1&state=state-1",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("授权完成，可以回到桌面端了");
+  });
+
+  it("serves the failure page when state or code is missing", async () => {
+    const h = setup();
+
+    const response = await h.gateway.fetch(
+      new Request("https://example.com/mcp/oauth/callback"),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("授权失败，请回到桌面端重试");
+  });
 });
 
 describe("worker entry", () => {
