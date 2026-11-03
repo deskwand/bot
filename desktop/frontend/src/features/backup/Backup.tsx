@@ -188,7 +188,7 @@ export function Backup() {
           <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">维护</p>
           <h1 className="text-2xl font-semibold tracking-tight">数据备份</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            把云端的记忆、对话、任务和产物导出为本地文件，或从一个备份整体恢复。备份文件未加密，请妥善保管。
+            导出云端数据，或从备份整体恢复。备份未加密，请妥善保管。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -223,7 +223,7 @@ export function Backup() {
         <CardHeader>
           <CardTitle>导出</CardTitle>
           <CardDescription>
-            导出包含全部业务表和产物，不包含部署配置与 secret。导出和恢复期间消息会暂停；维护租约最多 10 分钟，微信轮询会在下一次定时检查时恢复，最坏约 15 分钟。
+            不含部署配置和密钥。期间消息暂停，最长约 15 分钟。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -246,7 +246,7 @@ export function Backup() {
               </div>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">尚未开始导出。</p>
+            <p className="text-sm text-muted-foreground">还没有导出过。</p>
           )}
 
           {exportSummary ? (
@@ -260,7 +260,7 @@ export function Backup() {
               {exportSummary.oversized.length > 0 ? (
                 <p className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
                   <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-                  {exportSummary.oversized.length} 个产物超过 100 MiB，未包含在备份中，因此这个备份不能直接恢复：
+                  {exportSummary.oversized.length} 个产物超过 100 MiB，未导出；这份备份不能直接恢复：
                   {exportSummary.oversized.join("、")}
                 </p>
               ) : null}
@@ -280,7 +280,7 @@ export function Backup() {
         <CardHeader>
           <CardTitle>恢复</CardTitle>
           <CardDescription>
-            只能恢复到与备份相同的云端版本。恢复会整体覆盖当前部署；开始前会先自动保存一份当前数据快照。
+            只能恢复到同一版本。开始前会自动保存当前数据快照。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -303,7 +303,7 @@ export function Backup() {
                 </dl>
                 {preview.summary.oversized.length > 0 ? (
                   <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
-                    备份中有无法恢复的超大产物：{preview.summary.oversized.join("、")}
+                    备份里有超大产物：{preview.summary.oversized.join("、")}
                   </p>
                 ) : null}
               </div>
@@ -329,13 +329,13 @@ export function Backup() {
                   覆盖并恢复
                 </Button>
                 <span className="text-xs text-muted-foreground">
-                  恢复失败时可以从恢复前快照回到当前数据。
+                  失败时可回到恢复前快照。
                 </span>
               </div>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              选择一个本地备份后，这里会显示导出时间、版本、行数和产物数量。
+              选择一个备份后显示摘要。
             </p>
           )}
 

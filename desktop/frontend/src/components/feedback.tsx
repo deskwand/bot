@@ -11,8 +11,18 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/components/app-context";
-import { describeCode, toClientError } from "@/services/errors";
+import {
+  STATE_LABELS,
+  detailLabel,
+  sourceLabel,
+  stateLabel,
+  statusKindLabel,
+  verificationBadge,
+} from "@/lib/copy";
+import { codeCopy, toClientError } from "@/services/errors";
 import type { StatusItemDTO, StepDTO } from "@/services/types";
+
+export { STATE_LABELS, detailLabel, sourceLabel, stateLabel, statusKindLabel } from "@/lib/copy";
 
 export function ErrorAlert({
   error,
@@ -30,6 +40,12 @@ export function ErrorAlert({
   const { navigate, navigateImport } = useApp();
   if (!error) return null;
   const parsed = toClientError(error);
+  const { short, known } = codeCopy(parsed.code);
+  const bridgeText = parsed.message && parsed.message !== short ? parsed.message : "";
+  // A code with no copy of its own has only the bridge sentence, so that is the
+  // line. A known code shows its own line and keeps the bridge text folded.
+  const line = known ? short : bridgeText || short;
+  const folded = known ? bridgeText : "";
   const goUpdates = parsed.code === "UPGRADE_REQUIRED";
   const importAgain = parsed.code === "VERSION_UNKNOWN_REIMPORT";
   const waitForPending =
@@ -38,15 +54,21 @@ export function ErrorAlert({
     <Alert variant="destructive" role="alert" data-testid="error-alert" className="my-4">
       <AlertCircle />
       <AlertTitle className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className="font-mono text-[11px]">
+        <Badge variant="outline" className="font-mono text-[11px]" data-testid="error-code">
           {parsed.code}
         </Badge>
-        <span>操作未完成</span>
       </AlertTitle>
       <AlertDescription>
-        <span className="block">{parsed.message}</span>
-        {parsed.message !== describeCode(parsed.code) ? (
-          <span className="mt-1 block text-xs opacity-80">{describeCode(parsed.code)}</span>
+        <span className="block" data-testid="error-short">
+          {line}
+        </span>
+        {folded ? (
+          <details className="mt-2">
+            <summary className="cursor-pointer text-xs opacity-80">详情</summary>
+            <span className="mt-1 block text-xs opacity-80" data-testid="error-detail">
+              {folded}
+            </span>
+          </details>
         ) : null}
         {onRetry || onReload || goUpdates || importAgain || waitForPending ? (
           <span className="mt-3 flex flex-wrap gap-2">
@@ -67,7 +89,7 @@ export function ErrorAlert({
                 variant="outline"
                 onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
               >
-                先用顶部「继续」处理未完成操作
+                先用顶部的「继续」处理
               </Button>
             ) : null}
             {onReload ? (
@@ -85,31 +107,6 @@ export function ErrorAlert({
       </AlertDescription>
     </Alert>
   );
-}
-
-const STATE_LABELS: Record<string, { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
-  configured: { label: "已配置", variant: "secondary" },
-  unverified: { label: "未验证", variant: "outline" },
-  verified: { label: "已验证", variant: "default" },
-  expired: { label: "已过期", variant: "destructive" },
-  unavailable: { label: "不可用", variant: "outline" },
-  unknown: { label: "未知", variant: "outline" },
-  planned: { label: "计划中", variant: "outline" },
-  applying: { label: "执行中", variant: "secondary" },
-  verifying: { label: "核实中", variant: "secondary" },
-  published: { label: "已发布", variant: "default" },
-  needs_input: { label: "需要输入", variant: "outline" },
-  partial: { label: "部分完成", variant: "destructive" },
-  failed: { label: "失败", variant: "destructive" },
-  cancelled: { label: "已取消", variant: "outline" },
-  completed: { label: "完成", variant: "secondary" },
-  completed_with_warnings: { label: "完成（有警告）", variant: "secondary" },
-  unchanged: { label: "无变化", variant: "outline" },
-  publish_failed: { label: "发布失败", variant: "destructive" },
-};
-
-export function stateLabel(state: string): string {
-  return STATE_LABELS[state]?.label ?? state;
 }
 
 export function StateBadge({ state }: { state: string }) {
@@ -158,18 +155,6 @@ export function StepList({ steps, compact = false }: { steps: StepDTO[]; compact
   );
 }
 
-const SOURCE_LABELS: Record<string, string> = {
-  "cloudflare-logs": "Cloudflare 日志",
-  local: "本机测试",
-  user: "用户确认",
-  config: "Cloudflare 配置",
-};
-
-export function sourceLabel(source?: string): string {
-  if (!source) return "无来源";
-  return SOURCE_LABELS[source] ?? source;
-}
-
 export function formatObserved(value?: string): string {
   if (!value) return "未记录观察时间";
   const date = new Date(value);
@@ -177,43 +162,24 @@ export function formatObserved(value?: string): string {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
-export function detailLabel(detail?: string): string {
-  const value = (detail ?? "").trim();
-  if (!value) return "没有事件说明";
-  const labels: Record<string, string> = {
-    configured: "已配置；尚无当前版本的云端日志",
-    user_confirmed: "用户已确认收发（非云端日志）",
-    confirmed: "用户已确认收发（非云端日志）",
-    probe_ok: "本机探测成功（不代表云端收发正常）",
-    probe_error: "本机探测失败",
-    poll_ok: "收到轮询响应",
-    send_ok: "消息发送成功",
-    webhook_ok: "Webhook 校验通过",
-    heartbeat: "轮询心跳（不代表成功响应）",
-    poll_expired: "轮询会话已过期",
-    poll_error: "轮询请求失败",
-    webhook_rejected: "Webhook 请求被拒绝",
-    no_evidence: "未找到可用证据（日志可能未保存或被采样）",
-    not_configured: "未配置",
-    telegram_configured: "已配置（不等于收发正常）",
-    wechat_configured: "已配置（不等于收发正常）",
-  };
-  return labels[value] ?? value;
-}
-
 export function StatusRow({ item }: { item: StatusItemDTO }) {
-  const runtimeKind = item.kind === "telegram" || item.kind === "wechat";
-  const cloudVerified =
-    runtimeKind && item.state === "verified" && item.source === "cloudflare-logs";
-  const userConfirmed = runtimeKind && item.state === "verified" && item.source === "user";
+  const verify = verificationBadge(item);
   return (
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border py-3 last:border-0" data-testid={`status-${item.kind}`}>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{statusKindLabel(item.kind)}</span>
-          <StateBadge state={item.state} />
-          {cloudVerified ? <Badge variant="secondary">收发已验证</Badge> : null}
-          {userConfirmed ? <Badge variant="secondary">用户确认收发</Badge> : null}
+          <Badge
+            variant={STATE_LABELS[item.state]?.variant ?? "outline"}
+            data-testid={`state-${item.kind}`}
+          >
+            {stateLabel(item.state)}
+          </Badge>
+          {verify ? (
+            <Badge variant="secondary" data-testid={`verification-${item.kind}-${verify.key}`}>
+              {verify.label}
+            </Badge>
+          ) : null}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">{detailLabel(item.detail)}</p>
       </div>
@@ -223,17 +189,4 @@ export function StatusRow({ item }: { item: StatusItemDTO }) {
       </div>
     </div>
   );
-}
-
-export function statusKindLabel(kind: string): string {
-  switch (kind) {
-    case "model":
-      return "模型";
-    case "telegram":
-      return "Telegram";
-    case "wechat":
-      return "微信";
-    default:
-      return kind;
-  }
 }

@@ -57,6 +57,7 @@ type Scenario =
   | "entry-unchanged"
   | "diagnostics-unknown"
   | "user-evidence"
+  | "verified-local"
   | "backup"
   | "backup-progress"
   | "backup-version-mismatch"
@@ -184,6 +185,7 @@ function scenarioFromLocation(): Scenario {
     case "entry-unchanged":
     case "diagnostics-unknown":
     case "user-evidence":
+    case "verified-local":
     case "backup":
     case "backup-progress":
     case "backup-version-mismatch":
@@ -220,6 +222,7 @@ function initialState(): MockState {
     "entry-unchanged",
     "diagnostics-unknown",
     "user-evidence",
+    "verified-local",
     "cf-signout-failed",
     "backup",
     "backup-progress",
@@ -996,6 +999,19 @@ function statusItemsFor(state: MockState): StatusItemDTO[] {
             source: "user",
             observedAt: NOW,
             detail: "user_confirmed（用户确认，非云端日志）",
+          },
+        ];
+      }
+      if (state.scenario === "verified-local") {
+        // Contract violation from the bridge: a "verified" state backed by a
+        // local probe. The UI must not render it as verified delivery.
+        return [
+          {
+            kind: "wechat",
+            state: "verified",
+            source: "local",
+            observedAt: NOW,
+            detail: "probe_ok（本机探测，不代表云端收发正常）",
           },
         ];
       }

@@ -140,7 +140,7 @@ export function Entries() {
           setLoginError(null);
           setWechatPublished(true);
           setLoginState("published");
-          setLoginMessage("凭据已保存并发布。等待云端启动；真实消息仍需单独验证。");
+          setLoginMessage("已发布，等待云端启动。");
           void load();
           break;
         case "publish_failed":
@@ -235,11 +235,11 @@ export function Entries() {
         setWechatPublished(true);
         setLoginState("published");
         setPublishFailure(null);
-        setLoginMessage("凭据已保存并发布。等待云端启动；真实消息仍需单独验证。");
+        setLoginMessage("已发布，等待云端启动。");
         await load();
       } else {
         setLoginState("publish_failed");
-        setLoginMessage(`继续操作后状态：${result.state || "未知"}。请查看步骤后重试。`);
+        setLoginMessage(`继续后状态：${result.state || "未知"}。`);
         setPublishFailure((current) =>
           current ? { ...current, operationId: result.operationId || current.operationId } : current,
         );
@@ -344,7 +344,7 @@ export function Entries() {
           <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">服务配置</p>
           <h1 className="text-2xl font-semibold tracking-tight">消息入口</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            通过微信或 Telegram 联系你的 DeskWand Bot。无论从哪里发消息，都是同一个助手。同一时间只启用一个入口，对话和通知都通过它收发；故障时不自动切换。
+            微信或 Telegram，任选一个。故障时不会自动切换。
           </p>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
@@ -363,7 +363,7 @@ export function Entries() {
                 <Smartphone className="size-4" aria-hidden />
                 微信
               </CardTitle>
-              <CardDescription>扫码主人专用 · 文字消息 · 文字指令审批</CardDescription>
+              <CardDescription>扫码登录你的微信</CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {wechatStatus ? <StateBadge state={wechatStatus.state} /> : <Badge variant="outline">状态未知</Badge>}
@@ -375,9 +375,9 @@ export function Entries() {
           {wechatStatus ? <StatusRow item={wechatStatus} /> : null}
           {wechatPublished ? (
             <Alert className="mt-3 border-emerald-300 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20">
-              <AlertTitle>凭据已发布，等待真实消息</AlertTitle>
+              <AlertTitle>已连接，等待第一条消息</AlertTitle>
               <AlertDescription>
-                请向 DeskWand Bot 发送一条消息。只有云端日志证据或你确认收到回复后，才会显示“收发已验证”。
+                给它发条消息，确认能收到回复。
               </AlertDescription>
             </Alert>
           ) : null}
@@ -386,9 +386,6 @@ export function Entries() {
               <QrCode aria-hidden />
               {wechatConfigured ? "重新扫码" : "连接微信"}
             </Button>
-            <span className="self-center text-xs text-muted-foreground">
-              二维码过期后自动换码，最多 3 张；客户端不接收 bot token。
-            </span>
           </div>
         </CardContent>
       </Card>
@@ -398,7 +395,7 @@ export function Entries() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle>Telegram</CardTitle>
-              <CardDescription>保存后验证 Bot Token、发布 secret 并设置 webhook。</CardDescription>
+              <CardDescription>验证令牌，发布密钥并设置 webhook。</CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {telegramStatus ? <StateBadge state={telegramStatus.state} /> : <Badge variant="outline">状态未知</Badge>}
@@ -407,6 +404,7 @@ export function Entries() {
           </div>
         </CardHeader>
         <CardContent>
+          {telegramStatus ? <StatusRow item={telegramStatus} /> : null}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="telegram-token">Bot Token</Label>
@@ -430,14 +428,14 @@ export function Entries() {
               <span>
                 轮换 webhook secret
                 <span className="block text-xs text-muted-foreground">
-                  默认保留不可读的已有 secret；只有明确选择时才重新生成。
+                  默认保留现有密钥。
                 </span>
               </span>
             </label>
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground">
-              未选择 Telegram 也可以保存配置；保存不会自动把它设为当前入口。
+              保存不会切换当前入口。
             </span>
             <Button
               type="button"
@@ -451,13 +449,13 @@ export function Entries() {
           {telegramResult ? (
             <div className="mt-3 rounded-md border border-border p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">Telegram 配置结果</span>
+                <span className="text-sm font-medium">配置结果</span>
                 <StateBadge state={telegramResult.state} />
               </div>
               <StepList steps={telegramResult.steps ?? []} />
               {telegramResult.state === "unknown" || telegramResult.state === "partial" ? (
-                <Button type="button" size="sm" variant="outline" onClick={() => void resumeTelegram()} disabled={telegramRunning}>
-                  继续操作
+                <Button type="button" size="sm" variant="outline" data-testid="telegram-resume" onClick={() => void resumeTelegram()} disabled={telegramRunning}>
+                  继续
                 </Button>
               ) : null}
             </div>
@@ -470,7 +468,7 @@ export function Entries() {
         <CardHeader>
           <CardTitle>当前消息入口</CardTitle>
           <CardDescription>
-            以 ACTIVE_CHANNEL 为唯一权威。没有默认入口；未设置时必须显式选择。可以选中尚未配置的入口，但会提示暂时不可用。
+            没有默认入口，必须手动选。也可以先选尚未配置的入口。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -503,19 +501,19 @@ export function Entries() {
           </RadioGroup>
           {!config?.activeChannel ? (
             <p className="mt-2 text-xs text-muted-foreground">
-              云端尚未设置 ACTIVE_CHANNEL。旧版部署可能默认 Telegram，但客户端不会替你选择。
+              还没设置入口。
             </p>
           ) : null}
           {channel === "wechat" && !wechatConfigured ? (
             <Alert className="mt-3">
-              <AlertTitle>该入口尚未就绪</AlertTitle>
-              <AlertDescription>可以发布选择，但云端在完成扫码登录前无法收发消息；不会自动切换到 Telegram。</AlertDescription>
+              <AlertTitle>入口未就绪</AlertTitle>
+              <AlertDescription>可以发布，但扫码完成前收不到消息。</AlertDescription>
             </Alert>
           ) : null}
           {channel === "telegram" && !telegramConfigured ? (
             <Alert className="mt-3">
-              <AlertTitle>该入口尚未就绪</AlertTitle>
-              <AlertDescription>可以发布选择，但缺少 Bot Token 时云端无法收发消息；不会自动切换到微信。</AlertDescription>
+              <AlertTitle>入口未就绪</AlertTitle>
+              <AlertDescription>可以发布，但缺少令牌前收不到消息。</AlertDescription>
             </Alert>
           ) : null}
           <div className="mt-4 flex flex-wrap justify-end gap-2">
@@ -531,21 +529,18 @@ export function Entries() {
           {channelResult ? (
             <div className="mt-3 rounded-md border border-border p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">入口选择</span>
+                <span className="text-sm font-medium">发布结果</span>
                 <StateBadge state={channelResult.state ?? ""} />
                 <Badge variant={channelResult.configured ? "secondary" : "outline"}>
                   {channelResult.configured ? "已配置" : "尚未配置"}
                 </Badge>
               </div>
               {channelResult.state === "unchanged" ? (
-                <p className="mt-2 text-sm text-muted-foreground">入口未变化，未发布新版本。</p>
+                <p className="mt-2 text-sm text-muted-foreground">入口未变化。</p>
               ) : null}
               {channelResult.warning ? (
                 <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">{channelResult.warning}</p>
               ) : null}
-              <p className="mt-2 text-xs text-muted-foreground">
-                发布选择不等于已验证收发。请用真实消息验证当前入口。
-              </p>
               {(channelResult.state === "unknown" || channelResult.state === "partial") &&
               channelResult.operationId ? (
                 <Button
@@ -553,19 +548,20 @@ export function Entries() {
                   size="sm"
                   variant="outline"
                   className="mt-2"
+                  data-testid="channel-resume"
                   onClick={() => void resumeChannel()}
                   disabled={channelResumeRunning}
                 >
                   {channelResumeRunning ? (
                     <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
                   ) : null}
-                  继续操作
+                  继续
                 </Button>
               ) : null}
             </div>
           ) : null}
           <ErrorAlert error={channelError} onRetry={() => void publishChannel()} retryLabel="重新发布" />
-          <ErrorAlert error={channelResumeError} onRetry={() => void resumeChannel()} retryLabel="继续操作" />
+          <ErrorAlert error={channelResumeError} onRetry={() => void resumeChannel()} retryLabel="继续" />
         </CardContent>
       </Card>
 
@@ -603,13 +599,13 @@ export function Entries() {
               <Send />
               <AlertTitle>发送一条真实消息</AlertTitle>
               <AlertDescription>
-                请向 DeskWand Bot 发送“你好”。收到云端证据或你确认收到回复前，收发状态仍为未验证。
+                收到回复即验证通过。
               </AlertDescription>
             </Alert>
           ) : null}
 
           <p className="text-xs text-muted-foreground">
-            扫码登录只把 QR 内容发送给界面，bot token 与凭据保留在 Go 侧。二维码过期后自动换码，最多 3 张。
+            二维码过期会自动换，最多 3 张。
           </p>
           {publishFailure ? (
             <ErrorAlert
@@ -657,17 +653,17 @@ function loginTitle(state: LoginState): string {
     case "scaned":
       return "请在手机上确认";
     case "confirmed":
-      return "正在保存并发布凭据";
+      return "正在发布密钥";
     case "published":
-      return "凭据已发布";
+      return "已连接";
     case "publish_failed":
-      return "凭据发布失败";
+      return "发布失败";
     case "expired":
       return "二维码已过期";
     case "cancelled":
       return "登录已取消";
     case "error":
-      return "登录遇到问题";
+      return "登录失败";
     default:
       return "连接微信";
   }
@@ -676,21 +672,19 @@ function loginTitle(state: LoginState): string {
 function loginDescription(state: LoginState): string {
   switch (state) {
     case "scaned":
-      return "已扫码，等待你在手机上确认登录。";
+      return "已扫码，请在手机上确认。";
     case "confirmed":
-      return "扫码已确认。凭据经 Cloudflare 保存并发布后，等待云端启动；没有即时保证。";
+      return "确认成功，正在发布密钥。";
     case "published":
-      return "凭据已保存并发布。真实收发仍需单独验证。";
+      return "已发布，等待云端启动。";
     case "publish_failed":
-      return "凭据已确认，但发布没有完成。请用“继续”核实远端状态并完成发布。";
+      return "发布没完成，可以继续。";
     case "expired":
-      return "当前二维码已过期。请重新扫码；不会覆盖其他新操作。";
+      return "二维码过期，请重新扫码。";
     case "cancelled":
-      return "本次扫码已取消。已经完成的云端操作不会自动撤销。";
-    case "publish_failed":
-      return "凭据已确认，但发布失败。继续时会先核实远端状态，不会盲目重复写入。";
+      return "已取消。";
     case "error":
-      return "扫码登录未完成。请重试或检查网络。";
+      return "登录失败，请重试。";
     default:
       return "用主人微信扫描下方二维码。";
   }
@@ -714,7 +708,7 @@ function loginSteps(state: LoginState): StepDTO[] {
     "显示二维码",
     "手机扫码",
     "手机确认",
-    "保存并发布 WECHAT_CREDENTIALS",
+    "保存并发布密钥",
     "等待云端启动",
     "真实消息验证",
   ];

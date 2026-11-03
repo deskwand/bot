@@ -87,7 +87,7 @@ export function Diagnostics() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
-      setExportMessage(`诊断导出已生成（${new Blob([json]).size} 字节）。导出内容已按允许字段脱敏。`);
+      setExportMessage(`已导出（${new Blob([json]).size} 字节），敏感字段已脱敏。`);
     } catch (cause) {
       setExportError(cause);
     } finally {
@@ -119,7 +119,7 @@ export function Diagnostics() {
           <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">维护</p>
           <h1 className="text-2xl font-semibold tracking-tight">诊断</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            按证据检查连接，查看来源与观察时间。无法连接服务时，先检查网络和授权；客户端不会把网络失败判定为云端服务停止。
+            按证据检查连接，显示来源和时间。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -150,12 +150,12 @@ export function Diagnostics() {
             状态证据
           </CardTitle>
           <CardDescription>
-            没有日志证据时显示“未知”，不据此宣告故障或实时就绪。心跳不是成功响应的证据。
+            没有证据时显示“未知”。
           </CardDescription>
         </CardHeader>
         <CardContent>
           {items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">没有可用状态项；这不代表服务停止。</p>
+            <p className="text-sm text-muted-foreground">暂无状态数据。这不代表服务停止。</p>
           ) : (
             items.map((item) => <StatusRow key={item.kind} item={item} />)
           )}
@@ -166,7 +166,7 @@ export function Diagnostics() {
         <CardHeader>
           <CardTitle>模型连接测试</CardTitle>
           <CardDescription>
-            使用本次输入的密钥直接调用供应商，只证明本机路径与当时凭据有效，不验证已部署的 Worker。
+            用你输入的密钥直接调用供应商。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -182,7 +182,7 @@ export function Diagnostics() {
                 type="password"
                 value={probeKey}
                 onChange={(event) => setProbeKey(event.target.value)}
-                placeholder="已有 secret 不可读；测试需要重新输入"
+                placeholder="已有密钥不可读，需重新输入"
                 autoComplete="new-password"
                 spellCheck={false}
               />
@@ -193,7 +193,6 @@ export function Diagnostics() {
               {probeRunning ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <Zap aria-hidden />}
               {probeRunning ? "正在测试…" : "测试模型连接"}
             </Button>
-            <span className="text-xs text-muted-foreground">测试前会提示可能产生模型调用费用。</span>
           </div>
           {probeResult ? (
             <div className="mt-3 rounded-md border border-border p-3">
@@ -213,7 +212,7 @@ export function Diagnostics() {
           <DialogHeader>
             <DialogTitle>运行模型连接测试？</DialogTitle>
             <DialogDescription>
-              这会向模型供应商发送一次最小请求，可能产生模型调用费用。测试只用本机内存中的密钥，不写入云端，也不会自动执行。
+              会真实调用一次模型，可能产生费用；密钥不写入云端。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

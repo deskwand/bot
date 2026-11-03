@@ -76,35 +76,35 @@ function customDraftError(
 ): string {
   const id = draft.id.trim();
   if (!PROVIDER_ID_PATTERN.test(id)) {
-    return "端点 ID 只能使用小写字母、数字和 -，且以字母或数字开头";
+    return "ID 只能用小写字母、数字和 -，以字母或数字开头";
   }
   if (catalog?.providers.some((provider) => provider.id === id)) {
     return `与内置厂商重名：${id}`;
   }
   if (providers.some((provider, index) => index !== draft.index && provider.id === id)) {
-    return `自定义端点的 id 不能重复：${id}`;
+    return `端点 ID 重复：${id}`;
   }
   if (draft.name.trim().length > 128) {
-    return "显示名称不能超过 128 个字符";
+    return "名称最多 128 字符";
   }
   if (draft.api !== "openai-completions" && draft.api !== "anthropic-messages") {
     return "协议必须是 openai-completions 或 anthropic-messages";
   }
   if (!BASE_URL_PATTERN.test(draft.baseUrl.trim())) {
-    return "Base URL 必须以 https:// 开头，只有 localhost 或 127.0.0.1 可以使用 http://";
+    return "必须 https://；localhost 可用 http://";
   }
   const models = parseModelIDs(draft.models);
   if (models.length === 0) {
-    return "至少添加一个模型";
+    return "至少一个模型";
   }
   if (models.length > 64) {
-    return "最多添加 64 个模型";
+    return "最多 64 个模型";
   }
   if (new Set(models).size !== models.length) {
     return "模型 ID 不能重复";
   }
   if (draft.index === null && providers.length >= 16) {
-    return "最多添加 16 个自定义端点";
+    return "最多 16 个端点";
   }
   return "";
 }
@@ -323,8 +323,8 @@ export function Models() {
       setResult(publishedResult);
       setSuccess(
         publishedResult.state === "published"
-          ? "配置已发布。控制面发布完成，不代表云端消息收发已验证。"
-          : "发布操作需要继续处理。请查看步骤并继续核实远端状态。",
+          ? "配置已发布。"
+          : "发布未完成，可继续。",
       );
       await load();
     } catch (cause) {
@@ -403,7 +403,7 @@ export function Models() {
           <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">服务配置</p>
           <h1 className="text-2xl font-semibold tracking-tight">模型</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            管家负责对话与分派，任务模型负责执行。所有消息入口共用这些设置。保存会发布 Worker 配置版本，运行中的请求可能受到发布影响。
+            管家对话分派，任务执行。所有入口共用。
           </p>
         </div>
         <Badge variant="outline">
@@ -445,7 +445,7 @@ export function Models() {
             {result.state === "unknown" || result.state === "needs_input" ? (
               <Button type="button" className="mt-2" onClick={() => void resume()} disabled={running === "publish"}>
                 {running === "publish" ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-                继续操作
+                继续
               </Button>
             ) : null}
           </CardContent>
@@ -456,7 +456,7 @@ export function Models() {
         <CardHeader>
           <CardTitle>角色模型</CardTitle>
           <CardDescription>
-            先为管家和任务各选一个供应商和模型，再在下方填写所选供应商的 API 密钥。所有消息入口共用这两个角色模型。
+            所有入口共用这两个角色模型。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -471,13 +471,13 @@ export function Models() {
             </div>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            供应商列表里没有你要的服务？可在下方“自定义端点”添加 OpenAI 或 Anthropic 兼容地址。
+            找不到供应商？可以在下面加自定义端点。
           </p>
 
           <section className="mt-5 border-t border-border pt-4" aria-labelledby="provider-keys-title">
             <h3 id="provider-keys-title" className="text-sm font-medium">供应商密钥</h3>
             <p className="mt-1 mb-3 text-xs text-muted-foreground">
-              上面选中的每个供应商各需一个 key。密钥只写入 Cloudflare secret；输入框提交后清空，已有值不可读取。
+              每个供应商一个密钥，只写入 Cloudflare。
             </p>
             {keyProviders.length === 0 ? (
               <p className="text-sm text-muted-foreground">请先选择管家模型或任务模型。</p>
@@ -553,11 +553,11 @@ export function Models() {
                             }
                             disabled={!configured}
                           >
-                            {draft.clear ? "已标记清除" : "清除已保存密钥"}
+                            {draft.clear ? "待清除" : "清除已保存密钥"}
                           </Button>
                           {!draft.value.trim() ? (
                             <span className="text-xs text-muted-foreground">
-                              已有密钥不可读，测试连接需要重新输入密钥。
+                              测试需重新输入密钥。
                             </span>
                           ) : null}
                         </div>
@@ -576,7 +576,7 @@ export function Models() {
                         <div className="mt-3 rounded-md border border-border p-3">
                           <StatusRow item={rowProbeItem} />
                           <p className="mt-2 text-xs text-muted-foreground">
-                            本机测试只证明该凭据在这台机器上可用，不代表云端已应用或消息收发正常。
+                            只验证这台机器上的密钥。
                           </p>
                         </div>
                       ) : null}
@@ -587,7 +587,7 @@ export function Models() {
             )}
           </section>
           <p className="mt-4 text-xs text-muted-foreground">
-            保存会发布 Worker 配置版本。未编辑的 vars、secrets、bindings 和迁移历史会保留。
+            未编辑的配置会保留。
           </p>
         </CardContent>
       </Card>
@@ -598,7 +598,7 @@ export function Models() {
             <div>
               <CardTitle>自定义端点</CardTitle>
               <CardDescription>
-                接入任意 OpenAI 或 Anthropic 兼容端点。保存后随下一次“保存并发布”写入云端配置。
+                保存后随下一次发布生效。
               </CardDescription>
             </div>
             <Button
@@ -615,7 +615,7 @@ export function Models() {
         </CardHeader>
         <CardContent>
           {customProviders.length === 0 ? (
-            <p className="text-sm text-muted-foreground">尚未添加自定义端点。</p>
+            <p className="text-sm text-muted-foreground">还没有自定义端点。</p>
           ) : (
             <ul className="space-y-2">
               {customProviders.map((provider, index) => (
@@ -676,19 +676,18 @@ export function Models() {
           <DialogHeader>
             <DialogTitle>确认保存并发布</DialogTitle>
             <DialogDescription>
-              将按以下步骤修改当前部署。发布结果与真实消息收发会分开呈现。
+              将按以下步骤修改部署。
             </DialogDescription>
           </DialogHeader>
           <StepList steps={previewSteps ?? []} />
           <Alert>
             <AlertTitle>已知限制</AlertTitle>
             <AlertDescription>
-              他人仅替换 secret 值无法被察觉：secret 值不可读取，指纹只能覆盖名称和可读元数据。若其他人在 Cloudflare
-              控制台替换了同名 secret 的值，本客户端不能检测或还原。
+              别人在控制台改过同名密钥的值，本机无法发现。
             </AlertDescription>
           </Alert>
           <p className="text-xs text-muted-foreground">
-            读取与上传之间平台没有条件写入能力；若期间发生外部修改，发布后仍会重新核实版本与指纹。
+            发布后会重新核对版本。
           </p>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setPreviewOpen(false)} disabled={running === "publish"}>
@@ -707,8 +706,7 @@ export function Models() {
           <DialogHeader>
             <DialogTitle>运行模型连接测试？</DialogTitle>
             <DialogDescription>
-              测试会向模型供应商发送一次最小请求，可能产生模型调用费用。它只证明本机与当时凭据有效，不会验证已部署的
-              Worker。
+              会真实调用一次模型，可能产生费用。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -738,7 +736,7 @@ export function Models() {
                 : "编辑自定义端点"}
             </DialogTitle>
             <DialogDescription>
-              端点 id 决定 secret 名（MODEL_KEY_&lt;ID&gt;）。保存端点后仍需“保存并发布”才会写入云端。
+              端点 ID 决定密钥名 MODEL_KEY_&lt;ID&gt;。
             </DialogDescription>
           </DialogHeader>
           {customDraft ? (
@@ -805,7 +803,7 @@ export function Models() {
                   spellCheck={false}
                 />
                 <p className="text-xs text-muted-foreground">
-                  OpenAI 兼容地址通常以 /v1 结尾；Anthropic 兼容地址不要带 /v1
+                  OpenAI 兼容通常带 /v1，Anthropic 不带
                 </p>
               </div>
               <div className="space-y-2 sm:col-span-2">

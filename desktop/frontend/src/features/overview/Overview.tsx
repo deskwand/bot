@@ -91,7 +91,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
     setRetryMessage("");
     try {
       await client.retryRestore(useSnapshot);
-      setRetryMessage("数据恢复已重新执行。");
+      setRetryMessage("恢复已重新执行。");
       await load();
     } catch (cause) {
       setRetryError(cause);
@@ -107,7 +107,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
       await client.abandonPendingRestore();
       setAbandonOpen(false);
       setRetryError(null);
-      setRetryMessage("已清除未完成的恢复记录；云端数据没有改变。");
+      setRetryMessage("已清除本机记录，云端未改动。");
       await load();
     } catch (cause) {
       setAbandonError(cause);
@@ -123,16 +123,13 @@ export function Overview({ initialError }: { initialError?: unknown }) {
           <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">我的云端服务</p>
           <h1 className="text-2xl font-semibold tracking-tight">服务概览</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {config ? `${config.workerName} · Cloudflare` : "正在读取部署信息"}
+            {config ? `${config.workerName} · Cloudflare` : "正在读取…"}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={config ? "secondary" : "outline"}>
-            {config ? "已读取部署配置" : "尚未读取部署配置"}
-          </Badge>
           <Button type="button" variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
             {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw aria-hidden />}
-            重新检查
+            刷新
           </Button>
         </div>
       </div>
@@ -143,9 +140,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
         <Card className="mt-4 border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
           <CardContent className="pt-4">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-sm font-semibold">
-                {pendingRestore.state === "running" ? "数据恢复仍在进行或已中断" : "数据恢复未完成"}
-              </h2>
+              <h2 className="text-sm font-semibold">数据恢复未完成</h2>
               <Badge variant="outline">
                 {pendingRestore.state === "running" ? "进行中" : "失败"}
               </Badge>
@@ -155,8 +150,8 @@ export function Overview({ initialError }: { initialError?: unknown }) {
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {pendingRestore.state === "running"
-                ? "恢复记录显示上次操作没有正常结束（客户端可能已重启）。云端可能只写入了部分数据；可以重试，或回到恢复前的快照。"
-                : "上次恢复在中途失败。云端可能只写入了部分数据；可以从原备份重试，或回到恢复前的快照。"}
+                ? "上次恢复没有正常结束。云端可能只写入了一部分。"
+                : "上次恢复中途失败。云端可能只写入了一部分。"}
             </p>
             <div className="mt-2 space-y-1 text-xs text-muted-foreground">
               <p className="break-all">备份：{pendingRestore.backupPath}</p>
@@ -172,7 +167,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
                 {retrying === "backup" ? (
                   <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
                 ) : null}
-                用该文件重试
+                重试恢复
               </Button>
               <Button
                 type="button"
@@ -184,7 +179,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
                 {retrying === "snapshot" ? (
                   <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
                 ) : null}
-                恢复到恢复前快照
+                回到恢复前快照
               </Button>
               <Button
                 type="button"
@@ -193,7 +188,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
                 disabled={retrying !== null || abandoning}
                 onClick={() => setAbandonOpen(true)}
               >
-                放弃恢复记录
+                放弃记录
               </Button>
             </div>
             {retryMessage ? (
@@ -210,7 +205,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
           <CardContent className="pt-4">
             <h2 className="text-sm font-semibold">本机恢复记录无法读取</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              本机的恢复记录已损坏，无法读取重试所需的信息。放弃这条记录只会删除本机的恢复记录，不会恢复或回滚任何云端数据。
+              记录已损坏，读不出重试需要的信息。放弃只删本机记录，不碰云端数据。
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <Button
@@ -220,7 +215,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
                 disabled={abandoning}
                 onClick={() => setAbandonOpen(true)}
               >
-                放弃恢复记录
+                放弃记录
               </Button>
             </div>
             <ErrorAlert error={abandonError} />
@@ -230,7 +225,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
 
       {pendingCheckFailed ? (
         <p className="mt-4 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          暂时无法检查未完成的恢复记录；请点击“重新检查”重试。
+          暂时无法检查未完成的恢复，请刷新。
         </p>
       ) : null}
 
@@ -239,7 +234,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
           <DialogHeader>
             <DialogTitle>放弃未完成的恢复记录？</DialogTitle>
             <DialogDescription>
-              这只会删除本机的恢复记录，不会恢复任何云端数据，也不会回滚已经写入的内容。清除后，概览页不再提示重试；如需找回数据，请重新选择一个备份文件恢复。
+              只删除本机记录，不恢复也不回滚云端数据。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -263,8 +258,8 @@ export function Overview({ initialError }: { initialError?: unknown }) {
 
       {connection?.state === "reauth_required" ? (
         <Alert className="mt-4">
-          <AlertTitle>Cloudflare 授权已过期，请重新登录</AlertTitle>
-          <AlertDescription>部署和诊断会暂停，直到你重新登录。</AlertDescription>
+          <AlertTitle>授权已过期</AlertTitle>
+          <AlertDescription>重新登录后可继续。</AlertDescription>
         </Alert>
       ) : null}
 
@@ -274,18 +269,17 @@ export function Overview({ initialError }: { initialError?: unknown }) {
             <CardDescription>云端服务</CardDescription>
             <CardTitle className="flex items-center gap-2 text-2xl">
               <Server className="size-5 text-muted-foreground" aria-hidden />
-              {config ? "已读取部署配置" : "状态未知"}
+              {config ? config.workerName : "未读取"}
             </CardTitle>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
             {config ? (
               <>
-                <p className="text-xs text-muted-foreground">来源：Cloudflare 配置 · {formatObserved(new Date().toISOString())}</p>
-                <p>当前发布版本 {config.releaseVersion || "未知"}</p>
-                <p>接收流量的版本数 {config.activeVersionCount}</p>
+                <p>发布版本 {config.releaseVersion || "未知"}</p>
+                <p>接收流量：{config.activeVersionCount} 个版本</p>
               </>
             ) : (
-              <p>无法读取当前部署。API 失败不等于服务停止。</p>
+              <p>读取失败，请稍后重试。</p>
             )}
           </CardContent>
         </Card>
@@ -302,12 +296,9 @@ export function Overview({ initialError }: { initialError?: unknown }) {
               <>
                 <p>来源：{sourceLabel(entryStatus.source)}</p>
                 <p>{formatObserved(entryStatus.observedAt)}</p>
-                <p className="mt-2">
-                  已配置或已选择不等于云端收发正常。没有云端证据时不会显示“收发已验证”。
-                </p>
               </>
             ) : (
-              <p>连接消息入口后开始使用。同一时间只启用一个入口。</p>
+              <p>还没有连接入口。</p>
             )}
           </CardContent>
         </Card>
@@ -317,12 +308,12 @@ export function Overview({ initialError }: { initialError?: unknown }) {
         <CardHeader>
           <CardTitle>状态证据</CardTitle>
           <CardDescription>
-            每项状态都注明来源和检查时间。本机测试通过不等于云端收发正常。
+            每项都标明来源和检查时间。
           </CardDescription>
         </CardHeader>
         <CardContent>
           {status.length === 0 ? (
-            <p className="text-sm text-muted-foreground">没有可用状态证据；这不代表服务停止。</p>
+            <p className="text-sm text-muted-foreground">暂无状态数据。这不代表服务停止。</p>
           ) : (
             status.map((item) => <StatusRow key={item.kind} item={item} />)
           )}
@@ -337,7 +328,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
           <ChecklistRow
             done={Boolean(config)}
             title="云端服务已部署"
-            description={config ? `${config.workerName}` : "尚未读取到部署"}
+            description={config ? `${config.workerName}` : "尚未部署"}
           />
           <ChecklistRow
             done={modelsConfigured}
@@ -345,33 +336,27 @@ export function Overview({ initialError }: { initialError?: unknown }) {
             description={
               config?.butlerModel
                 ? `管家 ${config.butlerModel.id} · 任务 ${config.taskModel?.id ?? "未设置"}`
-                : "尚未配置角色模型"
+                : "未配置"
             }
             action={
               <Button type="button" size="sm" variant="outline" onClick={() => navigate("models")}>
-                查看设置 <ArrowRight aria-hidden />
+                去设置 <ArrowRight aria-hidden />
               </Button>
             }
           />
           <ChecklistRow
             done={Boolean(config?.activeChannel)}
             title="连接微信或 Telegram"
-            description={config?.activeChannel ? "当前入口已发布；请用真实消息验证" : "尚未选择消息入口"}
+            description={config?.activeChannel ? "已发布，待验证收发" : "未选择"}
             action={
               <Button type="button" size="sm" variant="outline" onClick={() => navigate("entries")}>
-                设置消息入口 <ArrowRight aria-hidden />
+                去设置 <ArrowRight aria-hidden />
               </Button>
             }
           />
         </CardContent>
       </Card>
 
-      <Alert className="mt-4">
-        <AlertTitle>客户端关闭后云端继续运行</AlertTitle>
-        <AlertDescription>
-          配置发布只证明 Cloudflare 接受了版本。真实收发需要云端日志证据，或由你确认收到回复；两者会分别展示。
-        </AlertDescription>
-      </Alert>
     </div>
   );
 }

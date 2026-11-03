@@ -113,7 +113,7 @@ export function Updates() {
           <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">维护</p>
           <h1 className="text-2xl font-semibold tracking-tight">更新</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            客户端与云端服务分别更新，由你决定何时升级。升级沿用现有资源与数据，不新增公网管理接口。
+            客户端和云端分开更新，由你决定何时升级。
           </p>
         </div>
         <Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>
@@ -132,7 +132,7 @@ export function Updates() {
                 <ArrowUpCircle className="size-4" aria-hidden />
                 云端服务
               </CardTitle>
-              <CardDescription>发布包由客户端内置的受信任公钥验证后再上传。</CardDescription>
+              <CardDescription>上传前会验证发布包签名。</CardDescription>
             </div>
             {upgrade?.available ? (
               <Badge>有新版本</Badge>
@@ -156,7 +156,7 @@ export function Updates() {
                 <Alert>
                   <AlertTitle>模型 key 需要重新填写</AlertTitle>
                   <AlertDescription>
-                    升级后需要在模型页重新填写这些 key：{upgrade.modelKeysMissing.join("、")}
+                    升级后需在模型页重填：{upgrade.modelKeysMissing.join("、")}
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -168,12 +168,12 @@ export function Updates() {
               <Alert>
                 <AlertTitle>升级前确认</AlertTitle>
                 <AlertDescription>
-                  升级会替换 Worker 代码并沿用原 DO namespace、R2 数据、ACTIVE_CHANNEL 和全部 secrets。仅在数据结构兼容时提供回退；密钥更新可能不能随代码回退撤销。
+                  沿用现有数据、资源和密钥。
                 </AlertDescription>
               </Alert>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">尚未读取版本比较结果。</p>
+            <p className="text-sm text-muted-foreground">正在读取版本信息。</p>
           )}
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button
@@ -192,9 +192,7 @@ export function Updates() {
                 <StateBadge state={result.state} />
               </div>
               <StepList steps={result.steps ?? []} />
-              <p className="text-xs text-muted-foreground">
-                控制面升级完成不等于业务已恢复。请用真实消息或云端日志证据验证。
-              </p>
+              <p className="text-xs text-muted-foreground">已发布，接着验证收发。</p>
               {result.state === "unknown" || result.state === "needs_input" ? (
                 <Button
                   type="button"
@@ -211,7 +209,7 @@ export function Updates() {
                       .finally(() => setRunning(false));
                   }}
                 >
-                  继续操作
+                  继续
                 </Button>
               ) : null}
             </div>
@@ -229,7 +227,7 @@ export function Updates() {
                 桌面客户端
               </CardTitle>
               <CardDescription>
-                客户端版本与云端版本独立管理。只有你点击安装时才会更新客户端，且永远不会自动修改云端服务。
+                只有你点了才会更新。
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -248,7 +246,7 @@ export function Updates() {
             <Alert>
               <AlertTitle>未配置更新源</AlertTitle>
               <AlertDescription>
-                此构建没有配置客户端更新源，因此无法检查或安装客户端更新。云端服务仍可正常管理。
+                此构建没有更新源，无法检查更新。云端照常可用。
               </AlertDescription>
             </Alert>
           ) : clientUpdate?.state === "available" ? (
@@ -264,13 +262,13 @@ export function Updates() {
                 <p className="whitespace-pre-wrap text-muted-foreground">{clientUpdate.notes}</p>
               ) : null}
               <p className="text-xs text-muted-foreground">
-                更新包由独立的客户端更新密钥签名；客户端更新与 Worker 发布包互不替代。安装后重启客户端生效。
+                安装后重启生效。
               </p>
             </div>
           ) : clientUpdate?.state === "up_to_date" ? (
-            <p className="text-sm text-muted-foreground">客户端已是最新版本。</p>
+            <p className="text-sm text-muted-foreground">客户端已是最新。</p>
           ) : (
-            <p className="text-sm text-muted-foreground">尚未读取客户端更新状态。</p>
+            <p className="text-sm text-muted-foreground">正在读取更新状态。</p>
           )}
 
           {clientResult ? (
@@ -319,21 +317,20 @@ export function Updates() {
           <DialogHeader>
             <DialogTitle>升级前确认</DialogTitle>
             <DialogDescription>
-              将把云端服务从 {upgrade?.currentVersion || "未知"} 升级到{" "}
-              {upgrade?.availableVersion || "未知"}。升级会保留现有资源、数据和 secrets；涉及不可逆迁移时会单独提示。
+              从 {upgrade?.currentVersion || "未知"} 升级到 {upgrade?.availableVersion || "未知"}，保留资源和数据。
             </DialogDescription>
           </DialogHeader>
           <Alert>
             <AlertTitle>兼容性</AlertTitle>
             <AlertDescription>
-              客户端已验证发布包签名、配置 schema 与迁移历史。下载或预检失败不会修改远端。
+              签名、schema 和迁移历史已验证；失败不会改云端。
             </AlertDescription>
           </Alert>
           {upgrade?.modelKeysMissing?.length ? (
             <Alert>
               <AlertTitle>模型 key 需要重新填写</AlertTitle>
               <AlertDescription>
-                升级后需要在模型页重新填写这些 key：{upgrade.modelKeysMissing.join("、")}
+                升级后需在模型页重填：{upgrade.modelKeysMissing.join("、")}
               </AlertDescription>
             </Alert>
           ) : null}

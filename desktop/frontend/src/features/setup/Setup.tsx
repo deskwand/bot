@@ -158,10 +158,9 @@ function Welcome({
 
   return (
     <div className="mx-auto max-w-3xl">
-      <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">让云端服务更容易开始</p>
       <h1 className="text-3xl font-semibold tracking-tight">部署一次，随时管理。</h1>
       <p className="mt-3 max-w-2xl text-muted-foreground">
-        将 DeskWand Bot 运行在你自己的 Cloudflare 账号中。这个客户端帮你完成部署、配置和日常维护。
+        运行在你自己的 Cloudflare 账号里。
       </p>
 
       {!connected ? (
@@ -181,7 +180,7 @@ function Welcome({
                     <Cloud className="size-4" aria-hidden />
                     部署新服务
                   </CardTitle>
-                  <CardDescription>第一次使用？从检查资源开始，发布一套新的云端服务。</CardDescription>
+                  <CardDescription>创建一套新的云端服务。</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <span className="inline-flex items-center gap-1 text-sm font-medium text-primary">
@@ -202,7 +201,7 @@ function Welcome({
                     <RefreshCw className="size-4" aria-hidden />
                     连接已有服务
                   </CardTitle>
-                  <CardDescription>接管已部署的 DeskWand Bot，保留现有数据和 Cloudflare secret。</CardDescription>
+                  <CardDescription>接管已有部署，保留数据。</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <span className="inline-flex items-center gap-1 text-sm font-medium text-primary">
@@ -216,7 +215,7 @@ function Welcome({
             <p className="mt-4 text-xs text-muted-foreground">已连接 Cloudflare 账号：{accountName}</p>
           ) : null}
           <p className="mt-1 text-xs text-muted-foreground">
-            目前支持 Cloudflare · 服务在客户端关闭后继续运行
+            客户端关闭后云端继续运行
           </p>
         </>
       )}
@@ -336,7 +335,7 @@ function ConnectCard({
           连接你的 Cloudflare
         </CardTitle>
         <CardDescription>
-          登录时 Cloudflare 会列出需要授权的权限（Worker 脚本、R2 存储、账号信息、运行日志）。
+          Cloudflare 会列出需要授权的权限。
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -354,7 +353,7 @@ function ConnectCard({
 
         {state === "waiting" ? (
           <div className="space-y-3">
-            <p className="text-sm">已在浏览器打开 Cloudflare 授权页，完成后会自动继续</p>
+            <p className="text-sm">已在浏览器打开授权页，完成后自动继续。</p>
             <Button type="button" variant="outline" onClick={cancel}>
               取消
             </Button>
@@ -365,7 +364,7 @@ function ConnectCard({
           <div className="space-y-3">
             <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
               <Check className="size-4" aria-hidden />
-              Cloudflare 已连接，正在读取云端服务。
+              已连接，正在读取云端服务。
             </p>
             <Button type="button" variant="outline" onClick={() => onConnected()}>
               重新检查
@@ -375,7 +374,7 @@ function ConnectCard({
 
         {state === "select" ? (
           <div className="space-y-3">
-            <p className="text-sm">这个 Cloudflare 用户有多个账号，请选择要部署到的账号。</p>
+            <p className="text-sm">有多个账号，请选择要部署的这一个。</p>
             <RadioGroup value={selected} onValueChange={setSelected}>
               {accounts.map((account) => (
                 <div key={account.id} className="flex items-center gap-2">
@@ -483,7 +482,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
       setWorkers(scripts);
       if (scripts.some((script) => script.name === workerName.trim())) {
         setError(
-          new Error("NAME_TAKEN: Worker 名称已被占用。请换一个名称，或改用“连接已有服务”。"),
+          new Error("NAME_TAKEN: 名称已被占用，请换一个。"),
         );
         return;
       }
@@ -546,7 +545,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
           <CardHeader>
             <CardTitle>部署检查</CardTitle>
             <CardDescription>
-              将创建一个 Worker 和一个 R2 存储桶。实际费用以 Cloudflare 用量和套餐为准。
+              会创建 Worker 和 R2 桶；费用按用量计。
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -587,7 +586,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                     id="install-owners"
                     value={ownerIDs}
                     onChange={(event) => setOwnerIDs(event.target.value)}
-                    placeholder="可留空；发布 owner 前 Worker 会忽略所有消息"
+                    placeholder="可留空（留空则不响应任何消息）"
                     inputMode="numeric"
                   />
                 </div>
@@ -604,7 +603,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               <fieldset className="space-y-2">
                 <legend className="text-sm font-medium">初始消息入口</legend>
                 <p className="text-xs text-muted-foreground">
-                  必须显式选择。同一时间只启用一个入口；未就绪的入口会暂时不可用，不会自动切换。
+                  必须选一个；故障时不会自动切换。
                 </p>
                 <RadioGroup
                   value={channel}
@@ -629,9 +628,9 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                   Cloudflare 账户已连接
                 </div>
                 <p className="mt-1">
-                  部署前会检查名称冲突、Worker 与 R2 可用性。中断后会保留进度，可稍后继续。
+                  中断后可稍后继续。
                 </p>
-                {workers.length > 0 ? <p className="mt-1">已检查 {workers.length} 个现有 Worker 名称。</p> : null}
+                {workers.length > 0 ? <p className="mt-1">已检查 {workers.length} 个 Worker 名称。</p> : null}
               </div>
 
               <div className="flex flex-wrap justify-end gap-2">
@@ -658,7 +657,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               <div className="mt-5" aria-live="polite">
                 <Progress value={progress} aria-label="部署进度" />
                 <p className="mt-2 text-xs text-muted-foreground">
-                  {progress < 30 ? "正在创建并检查资源…" : "正在发布服务包并核实部署…"}
+                  {progress < 30 ? "正在创建资源…" : "正在发布…"}
                 </p>
               </div>
             ) : null}
@@ -671,7 +670,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
         </Card>
       ) : (
         <ResultPanel
-          title={published ? "服务已部署" : "部署需要继续处理"}
+          title={published ? "服务已部署" : "部署未完成"}
           result={result}
           running={running}
           error={error}
@@ -804,7 +803,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
       <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">已有部署</p>
       <h1 className="text-2xl font-semibold tracking-tight">连接已有服务</h1>
       <p className="mt-2 text-sm text-muted-foreground">
-        授权后选择要管理的服务。接管时保留已有任务、记忆、文件和 Cloudflare secret。
+        接管已有部署，保留数据、文件和密钥。
       </p>
 
       <ErrorAlert
@@ -818,7 +817,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle>候选 Worker</CardTitle>
-              <CardDescription>通过绑定和发布元数据识别；名称本身不足以证明归属。</CardDescription>
+              <CardDescription>按绑定和发布信息识别，不只看名字。</CardDescription>
             </div>
             <Button type="button" variant="outline" size="sm" onClick={() => void loadWorkers()} disabled={loading}>
               {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
@@ -828,7 +827,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
         </CardHeader>
         <CardContent>
           {workers.length === 0 && !loading ? (
-            <p className="text-sm text-muted-foreground">没有找到可连接的 Worker。</p>
+            <p className="text-sm text-muted-foreground">没有可连接的 Worker。</p>
           ) : null}
           <ul className="space-y-2">
             {workers.map((worker) => (
@@ -864,7 +863,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               {preview.legacy ? <Badge variant="outline">需要兼容升级</Badge> : <Badge variant="secondary">配置可读取</Badge>}
             </CardTitle>
             <CardDescription>
-              通过 Cloudflare 读取配置和资源。旧版源码配置需要重新填写；原资源与 secrets 沿用，不新增公网管理接口。
+              旧版配置需要重新填写；资源和密钥沿用。
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -873,7 +872,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               <Info label="DESKWAND_CONFIG" value={preview.configPresent ? "存在" : "不存在"} />
               <Info label="owner" value={preview.ownerConfigured ? "已配置" : "需重新填写"} />
               <Info label="角色模型" value={preview.modelsConfigured ? "已配置" : "需重新填写"} />
-              <Info label="ACTIVE_CHANNEL" value={preview.activeChannel || "未设置（旧版默认 Telegram，需确认）"} />
+              <Info label="ACTIVE_CHANNEL" value={preview.activeChannel || "未设置"} />
               <Info label="现有 secrets" value={preview.secretNames.join("、") || "无"} />
             </dl>
 
@@ -882,14 +881,14 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                 <ShieldCheck />
                 <AlertTitle>沿用已有 secret</AlertTitle>
                 <AlertDescription>
-                  {preview.preserveSecretNames.join("、")} 保持原值。客户端不读取、不导出，也不会把它们迁移到普通配置。
+                  {preview.preserveSecretNames.join("、")} 保持原值，客户端不读取。
                 </AlertDescription>
               </Alert>
             ) : null}
 
             {preview.plaintextSecrets?.length ? (
               <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50/70 p-3 dark:border-amber-900 dark:bg-amber-950/20">
-                <h3 className="text-sm font-medium">发现内联凭据，需要迁移为 secret</h3>
+                <h3 className="text-sm font-medium">发现明文凭据，需要迁移为密钥</h3>
                 {preview.plaintextSecrets.map((migration) => (
                   <div key={migration.secretName} className="space-y-2">
                     <p className="text-xs text-muted-foreground">
@@ -904,7 +903,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                       onChange={(event) =>
                         setSecrets((current) => ({ ...current, [migration.secretName]: event.target.value }))
                       }
-                      placeholder="只写入一次，提交后清空"
+                      placeholder="只写一次，提交后清空"
                     />
                   </div>
                 ))}
@@ -939,7 +938,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
 
             {preview.warnings?.length ? (
               <Alert>
-                <AlertTitle>接管说明</AlertTitle>
+                <AlertTitle>说明</AlertTitle>
                 <AlertDescription>
                   <ul className="list-disc space-y-1 pl-4">
                     {preview.warnings.map((warning) => (
@@ -968,7 +967,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                 />
                 {submitError && !canRetryImport ? (
                   <p className="text-xs text-muted-foreground">
-                    请重新输入上方标记的 secret 值后再重试；已提交的值已在失败后清空。
+                    请重填上方密钥后再试；已提交的值已清空。
                   </p>
                 ) : null}
               </>
@@ -979,7 +978,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
 
       {result ? (
         <ResultPanel
-          title={published ? "已有服务已连接" : "接管需要继续处理"}
+          title={published ? "已有服务已连接" : "接管未完成"}
           result={result}
           running={running}
           error={submitError}
@@ -1029,8 +1028,8 @@ export function ResultPanel({
         </CardTitle>
         <CardDescription>
           {result.state === "published"
-            ? "控制面发布完成。云端是否实际收发消息仍需真实消息或云端证据验证。"
-            : "客户端保留了操作 ID。继续时会先核实远端状态，不会盲目重复写入。"}
+            ? "已发布，接着验证收发。"
+            : "继续前会先核对云端状态。"}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -1051,9 +1050,9 @@ export function ResultPanel({
           </Alert>
         ) : null}
         {onResume ? (
-          <Button type="button" className="mt-2" onClick={onResume} disabled={running}>
+          <Button type="button" className="mt-2" data-testid="result-resume" onClick={onResume} disabled={running}>
             {running ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-            继续操作
+            继续
           </Button>
         ) : null}
         <ErrorAlert error={error} onRetry={onResume} retryLabel="重试" />

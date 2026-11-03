@@ -67,7 +67,7 @@ export function CloudflareAccountCard({
       <Badge variant="secondary" className="mb-2">
         Cloudflare 已连接
       </Badge>
-      <p>一套服务 · 客户端关闭后云端继续运行</p>
+      <p>云端常驻，可关闭客户端</p>
       <Button
         type="button"
         variant="ghost"
@@ -86,12 +86,12 @@ export function CloudflareAccountCard({
           <DialogHeader>
             <DialogTitle>退出 Cloudflare 账号？</DialogTitle>
             <DialogDescription>
-              会撤销这台客户端的授权并清除本机凭据。云端服务不受影响，消息照常收发。已选的部署和密钥留在本机，重新登录后可以继续管理。
+              会清除本机授权；云端服务照常运行。重新登录后可继续管理。
             </DialogDescription>
           </DialogHeader>
           {dirty ? (
             <p className="text-sm text-muted-foreground">
-              当前页面未发布的更改会丢弃，云端配置不变。
+              未发布的修改会丢弃。
             </p>
           ) : null}
           <ErrorAlert error={error} />

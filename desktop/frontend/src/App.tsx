@@ -82,7 +82,7 @@ export function App({ client }: { client: ClientService }) {
           const connectionError =
             connection.state === "unavailable"
               ? new Error(
-                  "CREDENTIAL_STORE_UNAVAILABLE: 系统凭据库不可用，无法读取本地授权。客户端不会改用明文保存。",
+                  "CREDENTIAL_STORE_UNAVAILABLE: 钥匙串不可用，未改用明文保存。",
                 )
               : connection.state === "reauth_required"
                 ? new Error(
@@ -195,7 +195,7 @@ export function App({ client }: { client: ClientService }) {
                     <span aria-hidden className="text-primary">◈</span>
                     {productName}
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">部署与管理</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Cloudflare 管理</p>
                 </div>
                 <Button
                   type="button"
@@ -245,7 +245,7 @@ export function App({ client }: { client: ClientService }) {
             {session.kind === "loading" ? (
               <div className="flex min-h-[60svh] items-center justify-center gap-3 text-muted-foreground">
                 <Loader2 className="size-5 animate-spin motion-reduce:animate-none" aria-hidden />
-                正在读取客户端状态…
+                正在读取状态…
               </div>
             ) : shell && setupImport ? (
               <Setup
@@ -274,7 +274,7 @@ export function App({ client }: { client: ClientService }) {
                   {page === "overview" ? <Overview initialError={session.bootError} /> : null}
                   {page === "models" ? <Models /> : null}
                   {page === "entries" ? (
-                    <Suspense fallback={<PageLoading label="正在加载消息入口…" />}>
+                    <Suspense fallback={<PageLoading label="正在加载…" />}>
                       <Entries />
                     </Suspense>
                   ) : null}
@@ -302,7 +302,7 @@ export function App({ client }: { client: ClientService }) {
           <DialogHeader>
             <DialogTitle>有未保存的更改</DialogTitle>
             <DialogDescription>
-              离开当前页面会丢弃尚未发布的表单内容。云端配置不会被修改。
+              离开会丢弃未发布的修改，云端不受影响。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -310,7 +310,7 @@ export function App({ client }: { client: ClientService }) {
               继续编辑
             </Button>
             <Button type="button" onClick={confirmDiscard}>
-              放弃更改并离开
+              放弃更改
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -365,13 +365,16 @@ function PendingOperations({
 
   return (
     <>
-    <Card className="mb-6 border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
+    <Card
+      data-testid="pending-operations"
+      className="mb-6 border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20"
+    >
       <CardContent className="pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold">有未完成的部署操作</h2>
+            <h2 className="text-sm font-semibold">有未完成的操作</h2>
             <p className="text-xs text-muted-foreground">
-              继续前会先核实远端状态，不会盲目重复写入。
+              继续前会先核对云端状态。
             </p>
           </div>
           <Badge variant="outline">{operations.length} 项</Badge>
@@ -418,7 +421,7 @@ function PendingOperations({
               </div>
               <div className="flex gap-2">
                 <Button type="button" variant="ghost" size="sm" onClick={() => onDismiss(operation.operationId)}>
-                  {["failed", "cancelled", "published"].includes(operation.state) ? "忽略" : "稍后处理"}
+                  忽略
                 </Button>
                 <Button
                   type="button"
@@ -432,6 +435,7 @@ function PendingOperations({
                 <Button
                   type="button"
                   size="sm"
+                  data-testid="pending-resume"
                   disabled={running === operation.operationId}
                   onClick={() => {
                     setError(null);
@@ -461,12 +465,12 @@ function PendingOperations({
         <DialogHeader>
           <DialogTitle>确认放弃操作</DialogTitle>
           <DialogDescription>
-            放弃只会取消客户端的待处理记录，不会删除已创建的 Cloudflare 资源、云端数据或 secrets。若上传结果未知，远端状态仍需核对。
+            只取消本机的待处理记录，云端资源不受影响。
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => setAbandonTarget(null)}>
-            继续处理
+            返回
           </Button>
           <Button type="button" variant="destructive" onClick={() => void runAbandon()}>
             确认放弃
