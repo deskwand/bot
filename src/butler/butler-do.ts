@@ -951,6 +951,8 @@ export class ButlerDO extends Agent<Env> {
     const row = this.repo.get(taskId);
     if (!row) return;
     if (row.botId !== null) {
+      // Keep the reason for the watchdog path (`botTaskOutcome`).
+      this.repo.update(taskId, { summary: reason, updatedAt: now });
       await this.forwardToBot(row.botId, taskId, "failed", reason);
       return;
     }

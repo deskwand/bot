@@ -197,6 +197,25 @@ describe("ButlerDO bot runs", () => {
     ]);
   });
 
+  it("failed bot task keeps its reason for the watchdog", async () => {
+    const stub = butler("bots-failed-reason");
+    await seedBot(stub, "b1", "价格哨兵");
+    await seedTask(stub, { botId: "b1", status: "running" });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "failed",
+      reason: "网页打不开",
+      retryable: false,
+    });
+
+    expect(await stub.botTaskOutcome("t1")).toEqual({
+      outcome: "failed",
+      summary: "网页打不开",
+    });
+  });
+
   it("bot task approval carries the bot name", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
