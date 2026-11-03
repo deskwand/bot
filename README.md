@@ -248,7 +248,7 @@ Telegram 需要公网 HTTPS 地址，所以本地调试需用隧道地址执行 
 
 ## 升级与迁移说明
 
-- 本次升级不重建 Durable Object，不新增 DO class migration；业务表只追加列（`tasks.progress_message_ref_json`、`approval_messages.message_ref_json`），旧行保持原样。
+- 升级不重建已有的 Durable Object：业务表只追加列（`tasks.progress_message_ref_json`、`approval_messages.message_ref_json`、`tasks.bot_id`），旧行保持原样。自主机器人新增了 `BotDO` 类（migration `v3`），只新建、不改动已有类。
 - 消息引用（`ChannelMessageRef`）记录渠道、会话、部署归属和消息 ID。引用只在同一部署、同一选择、同一会话时才能编辑；旧版本只留下裸消息 ID 的记录无法推断归属，会安全降级为新发一条消息。
 - 普通代码发布会改变 route key：切换后或有旧消息引用时，下一条进度改发新消息，这是预期代价。A→B→A 切换即使中间版本没有唤醒 Channel DO，也不会复用旧引用。
 - 旧版本在途的长轮询或模型请求可能在新配置发布后完成；新版本处理的请求使用新选择。不承诺跨版本同时在途请求的原子切换。
