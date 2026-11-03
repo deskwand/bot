@@ -81,6 +81,7 @@ export interface ConfigDTO {
   butlerModel: ModelDTO | null;
   taskModel: ModelDTO | null;
   customProviders: CustomProviderDTO[];
+  mcpServers: unknown;
   secrets: SecretNameDTO[];
 }
 
@@ -94,6 +95,7 @@ export interface ConfigEditDTO {
   butlerModel?: ModelDTO;
   taskModel?: ModelDTO;
   customProviders?: CustomProviderDTO[];
+  mcpServers?: unknown;
   secrets?: unknown[];
 }
 
@@ -187,6 +189,75 @@ export interface LoginStatusDTO {
   qrContent?: string;
   message?: string;
   code?: string;
+}
+
+/**
+ * McpAddInput is the add-service form. Exactly one of CatalogID or Custom is
+ * set; Values carries the catalog fields.
+ */
+export interface McpAddInput {
+  catalogId: string;
+  name: string;
+  values?: Record<string, string>;
+  custom?: McpCustomInput;
+}
+
+/** McpAuthDTO is one server's OAuth state. */
+export interface McpAuthDTO {
+  name: string;
+  state: string;
+}
+
+/** McpCatalogEntryDTO is one service offered by the built-in catalog. */
+export interface McpCatalogEntryDTO {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  oauth: boolean;
+  fields: McpFieldDTO[];
+}
+
+/**
+ * McpCustomInput describes a server entered by URL. Secret header values are
+ * write-only and never returned.
+ */
+export interface McpCustomInput {
+  url: string;
+  oauth: boolean;
+  headers?: McpHeaderInput[];
+}
+
+/** McpFieldDTO describes one value the user supplies for a catalog entry. */
+export interface McpFieldDTO {
+  key: string;
+  label: string;
+  help: string;
+  helpUrl: string;
+}
+
+/** McpHeaderInput is one custom header. Secret selects MCP_<NAME>_<HEADER>. */
+export interface McpHeaderInput {
+  name: string;
+  value?: string;
+  secret: boolean;
+}
+
+/** McpProbeDTO is the connection test shown on a service card. */
+export interface McpProbeDTO {
+  ok: boolean;
+  reason?: string;
+  /** ok|needs_reauth|unauthorized */
+  auth?: string;
+  tools: McpToolDTO[];
+}
+
+/** McpToolDTO is one tool reported by a probe. */
+export interface McpToolDTO {
+  name: string;
+  description: string;
+  /** disabled|approval|auto */
+  mode: string;
 }
 
 /** ModelCatalogDTO is the built-in provider and model list shown in the UI. */
@@ -339,6 +410,13 @@ export const Service = {
   abandonPendingRestore(): Promise<void> {
     return call("Service.AbandonPendingRestore");
   },
+  /**
+   * AddMcpServer builds one catalog or custom entry, appends it to the current
+   * list, and publishes the secrets and configuration together.
+   */
+  addMcpServer(input: McpAddInput): Promise<ResultDTO> {
+    return call("Service.AddMcpServer", input);
+  },
   /** CancelCloudflareLogin stops an unfinished OAuth login. */
   cancelCloudflareLogin(opID: string): Promise<void> {
     return call("Service.CancelCloudflareLogin", opID);
@@ -422,6 +500,14 @@ export const Service = {
   listWorkers(): Promise<WorkerDTO[]> {
     return call("Service.ListWorkers");
   },
+  /** McpCatalog returns the built-in service catalog. */
+  mcpCatalog(): Promise<McpCatalogEntryDTO[]> {
+    return call("Service.McpCatalog");
+  },
+  /** McpStatus lists every configured server's authorization state. */
+  mcpStatus(): Promise<McpAuthDTO[]> {
+    return call("Service.McpStatus");
+  },
   /**
    * ModelCatalog returns the built-in providers and models shared with the
    * Worker and the desktop client.
@@ -445,6 +531,10 @@ export const Service = {
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]> {
     return call("Service.PreviewConfig", input);
   },
+  /** ProbeMcp connects to one server through the Worker and returns its tools. */
+  probeMcp(name: string): Promise<McpProbeDTO> {
+    return call("Service.ProbeMcp", name);
+  },
   /**
    * ProbeModel makes one user-triggered local model request. The key is used in
    * memory only and never returned in the status item or an error.
@@ -455,6 +545,13 @@ export const Service = {
   /** PublishConfig merges and publishes the editable configuration (保存并发布). */
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO> {
     return call("Service.PublishConfig", input);
+  },
+  /**
+   * RemoveMcpServer removes one entry, clears MCP_* secrets only it referenced,
+   * and asks the Worker to forget its OAuth client and tokens.
+   */
+  removeMcpServer(name: string): Promise<ResultDTO> {
+    return call("Service.RemoveMcpServer", name);
   },
   /** RestoreData overwrites the deployment with the backup chosen by ChooseBackup. */
   restoreData(): Promise<void> {
@@ -501,6 +598,13 @@ export const Service = {
     return call("Service.StartCloudflareLogin");
   },
   /**
+   * StartMcpOAuth asks the Worker for an authorization URL and opens it in the
+   * system browser. The token never leaves the Worker.
+   */
+  startMcpOAuth(name: string): Promise<void> {
+    return call("Service.StartMcpOAuth", name);
+  },
+  /**
    * StartWeChatLogin starts a QR login in the background and returns the
    * operation id used by CancelWeChatLogin. Status is pushed through the
    * login-status event; credentials never leave Go.
@@ -511,6 +615,13 @@ export const Service = {
   /** Status returns one evidence-based status item per kind. */
   status(): Promise<StatusItemDTO[]> {
     return call("Service.Status");
+  },
+  /**
+   * UpdateMcpServer replaces one entry. The embedded name must stay the same so
+   * a tool list edit cannot silently rename a card.
+   */
+  updateMcpServer(name: string, server: unknown, secrets: unknown[]): Promise<ResultDTO> {
+    return call("Service.UpdateMcpServer", name, server, secrets);
   },
   /** Upgrade applies the embedded release to the managed deployment. */
   upgrade(): Promise<ResultDTO> {

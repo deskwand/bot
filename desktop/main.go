@@ -98,6 +98,8 @@ func main() {
 		Journal:     journal,
 		Store:       targets,
 		Browser:     platform.NewSystemBrowserOpener(),
+		McpBrowser:  platform.NewMcpOAuthBrowserOpener(),
+		Credentials: credentials,
 		Release:     app.EmbeddedRelease{Pkg: pkg, Err: releaseErr},
 		Backup: app.NewBackupRunner(backup.Deps{
 			Token: backup.TokenDeps{

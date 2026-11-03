@@ -418,7 +418,7 @@ func TestWaitForAdminRetriesTransientErrors(t *testing.T) {
 
 	deps := Deps{ReadyTimeout: time.Second}
 	client := NewAdminClient(worker.URL(), "tok", "op-1", nil)
-	if err := waitForAdmin(context.Background(), deps, client); err != nil {
+	if err := WaitForAdmin(context.Background(), deps, client); err != nil {
 		t.Fatal(err)
 	}
 	if got := worker.requestCount("GET", infoPath); got != 2 {

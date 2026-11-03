@@ -150,6 +150,9 @@ type ServiceOptions struct {
 	Journal     OperationJournal
 	Store       TargetStore
 	Browser     platform.BrowserOpener
+	// McpBrowser opens provider consent pages. It defaults to Browser.
+	McpBrowser  platform.BrowserOpener
+	Credentials platform.CredentialStore
 	Release     ReleaseSource
 	Backup      BackupService
 	FileDialogs FileDialogs
@@ -177,6 +180,8 @@ type Service struct {
 	journal        OperationJournal
 	store          TargetStore
 	browser        platform.BrowserOpener
+	mcpBrowser     platform.BrowserOpener
+	credentials    platform.CredentialStore
 	release        ReleaseSource
 	backup         BackupService
 	dialogs        FileDialogs
@@ -222,6 +227,10 @@ func NewService(options ServiceOptions) *Service {
 	if now == nil {
 		now = time.Now
 	}
+	mcpBrowser := options.McpBrowser
+	if mcpBrowser == nil {
+		mcpBrowser = options.Browser
+	}
 	clientUpdates := options.ClientUpdates
 	if clientUpdates == nil {
 		clientUpdates = NewMyGoClientUpdateProvider(ClientUpdateFeedURL)
@@ -237,6 +246,8 @@ func NewService(options ServiceOptions) *Service {
 		journal:        options.Journal,
 		store:          options.Store,
 		browser:        options.Browser,
+		mcpBrowser:     mcpBrowser,
+		credentials:    options.Credentials,
 		release:        options.Release,
 		backup:         options.Backup,
 		dialogs:        options.FileDialogs,

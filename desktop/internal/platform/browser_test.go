@@ -54,3 +54,23 @@ func TestBrowserOpenerRejectsDisallowedURLBeforeOpening(t *testing.T) {
 		t.Fatalf("open called %d times, want 1", calls)
 	}
 }
+
+func TestMcpOAuthBrowserOpenerAcceptsProviderConsentURLs(t *testing.T) {
+	var opened string
+	opener := newConsentBrowserOpener(func(rawURL string) error {
+		opened = rawURL
+		return nil
+	})
+	want := "https://mcp.notion.com/authorize?client_id=abc&state=xyz"
+	if err := opener.Open(want); err != nil {
+		t.Fatalf("consent URL: %v", err)
+	}
+	if opened != want {
+		t.Fatalf("opened = %q, want %q", opened, want)
+	}
+	for _, raw := range []string{"", "http://mcp.notion.com/authorize", "javascript:alert(1)", "https://user:pass@mcp.notion.com/", "https://mcp.notion.com/\n"} {
+		if err := opener.Open(raw); err == nil {
+			t.Errorf("opener accepted %q", raw)
+		}
+	}
+}

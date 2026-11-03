@@ -371,6 +371,7 @@ export function createMockClient(): ClientService {
       butlerModel: state.butlerModel,
       taskModel: state.taskModel,
       customProviders: state.customProviders,
+      mcpServers: [],
       secrets: Object.keys(state.secrets)
         .sort()
         .map((name) => ({ name, configured: state.secrets[name] === true })),

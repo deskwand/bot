@@ -198,7 +198,7 @@ func connect(ctx context.Context, deps Deps, target domain.Target, opID string) 
 	if err != nil {
 		return nil, domain.Snapshot{}, false, err
 	}
-	baseURL := publicBaseURL(snapshot.SettingsJSON)
+	baseURL := PublicBaseURL(snapshot.SettingsJSON)
 	if baseURL == "" {
 		return nil, snapshot, false, domain.Error{
 			Code:    CodeAdminUnavailable,
@@ -211,17 +211,17 @@ func connect(ctx context.Context, deps Deps, target domain.Target, opID string) 
 	}
 	client := NewAdminClient(baseURL, token, opID, deps.HTTP)
 	if published {
-		if err := waitForAdmin(ctx, deps, client); err != nil {
+		if err := WaitForAdmin(ctx, deps, client); err != nil {
 			return nil, snapshot, published, err
 		}
 	}
 	return client, snapshot, published, nil
 }
 
-// waitForAdmin polls Info until the Worker answers for the new token. A 409
+// WaitForAdmin polls Info until the Worker answers for the new token. A 409
 // MAINTENANCE_REQUIRED or a 401 already proves the route and token are live;
 // a 404 or a transient failure may still clear before the deadline.
-func waitForAdmin(ctx context.Context, deps Deps, client *AdminClient) error {
+func WaitForAdmin(ctx context.Context, deps Deps, client *AdminClient) error {
 	deadline := time.Now().Add(deps.readyTimeout())
 	interval := deps.pollInterval()
 	for {
@@ -560,9 +560,9 @@ func sleepContext(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-// publicBaseURL mirrors app.ReadPlainVar for the one binding the backup flow
+// PublicBaseURL mirrors app.ReadPlainVar for the one binding the backup flow
 // needs. It lives here so the backup package does not depend on the app layer.
-func publicBaseURL(settingsJSON []byte) string {
+func PublicBaseURL(settingsJSON []byte) string {
 	if len(settingsJSON) == 0 {
 		return ""
 	}

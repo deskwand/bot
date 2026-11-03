@@ -59,3 +59,36 @@ func allowedBrowserURL(rawURL string) bool {
 	}
 	return false
 }
+
+// NewMcpOAuthBrowserOpener returns a BrowserOpener for an MCP provider's
+// consent page. Provider consent URLs vary, so any https origin is accepted,
+// but only for a URL returned by the authenticated admin route.
+func NewMcpOAuthBrowserOpener() BrowserOpener {
+	return newConsentBrowserOpener(mygo.Shell.OpenExternal)
+}
+
+type consentBrowserOpener struct {
+	open func(string) error
+}
+
+func newConsentBrowserOpener(open func(string) error) BrowserOpener {
+	return consentBrowserOpener{open: open}
+}
+
+func (o consentBrowserOpener) Open(rawURL string) error {
+	if !allowedConsentURL(rawURL) {
+		return fmt.Errorf("platform: refusing to open disallowed consent URL %q", rawURL)
+	}
+	return o.open(rawURL)
+}
+
+func allowedConsentURL(rawURL string) bool {
+	if rawURL == "" || strings.ContainsAny(rawURL, "\x00\r\n") {
+		return false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "https" && parsed.User == nil && parsed.Host != ""
+}
