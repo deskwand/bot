@@ -13,6 +13,11 @@ import type {
   ImportPreviewDTO,
   InstallInputDTO,
   LoginStatusDTO,
+  McpAddInput,
+  McpAuthDTO,
+  McpCatalogEntryDTO,
+  McpProbeDTO,
+  McpToolDTO,
   ModelCatalogDTO,
   ModelDTO,
   OperationDTO,
@@ -65,7 +70,9 @@ type Scenario =
   | "backup-pending-corrupt"
   | "backup-pending-unavailable"
   | "backup-restore-snapshot-failed"
-  | "backup-restore-midway-failed";
+  | "backup-restore-midway-failed"
+  | "mcp-many-tools"
+  | "mcp-admin-unavailable";
 
 interface MockState {
   scenario: Scenario;
@@ -80,12 +87,84 @@ interface MockState {
   taskModel: ModelDTO | null;
   customProviders: CustomProviderDTO[];
   secrets: Record<string, boolean>;
+  mcpServers: MockMcpServer[];
+  mcpAuth: Record<string, string>;
   installAttempts: number;
   pending: OperationDTO[];
   loginTimers: Map<string, number[]>;
 }
 
 const NOW = "2026-11-02T09:00:00Z";
+
+type MockMcpServer = {
+  name: string;
+  url: string;
+  description?: string;
+  catalogId?: string;
+  oauth?: boolean;
+  enabled?: boolean;
+  approvalPolicy?: string;
+  autoApprove?: string[];
+  requireApproval?: string[];
+  disabledTools?: string[];
+  headers?: Record<string, string>;
+};
+
+const MCP_CATALOG: McpCatalogEntryDTO[] = [
+  {
+    id: "deepwiki",
+    name: "DeepWiki",
+    category: "开发",
+    description: "DeepWiki：GitHub 仓库的 AI 文档与问答",
+    oauth: false,
+    fields: [],
+  },
+  {
+    id: "github",
+    name: "GitHub",
+    category: "开发",
+    description: "GitHub：仓库、issue、PR 与代码检索",
+    oauth: false,
+    fields: [
+      {
+        key: "token",
+        label: "Personal Access Token",
+        help: "GitHub 个人访问令牌。",
+        helpUrl: "https://github.com/settings/tokens",
+      },
+    ],
+  },
+  {
+    id: "notion",
+    name: "Notion",
+    category: "文档 / 知识",
+    description: "Notion：页面、数据库与工作区内容",
+    oauth: true,
+    fields: [],
+  },
+];
+
+const MCP_TOOLS: Record<string, McpToolDTO[]> = {
+  deepwiki: [
+    { name: "read_wiki_structure", description: "读取仓库 wiki 目录", mode: "auto" },
+    { name: "ask_question", description: "向仓库提问", mode: "approval" },
+  ],
+  github: [
+    { name: "get_file_contents", description: "读取仓库文件", mode: "auto" },
+    { name: "create_issue", description: "创建 issue", mode: "approval" },
+  ],
+  notion: [
+    { name: "search_pages", description: "搜索页面", mode: "auto" },
+    { name: "create_page", description: "创建页面", mode: "approval" },
+  ],
+};
+
+function mcpToolMode(server: MockMcpServer, tool: McpToolDTO): string {
+  if (server.disabledTools?.includes(tool.name)) return "disabled";
+  if (server.requireApproval?.includes(tool.name)) return "approval";
+  if (server.autoApprove?.includes(tool.name)) return "auto";
+  return tool.mode;
+}
 
 const BACKUP_SUMMARY: BackupSummaryDTO = {
   path: "deskwand-backup-deskwand-bot-20261102-090000.zip",
@@ -194,6 +273,8 @@ function scenarioFromLocation(): Scenario {
     case "backup-pending-unavailable":
     case "backup-restore-snapshot-failed":
     case "backup-restore-midway-failed":
+    case "mcp-many-tools":
+    case "mcp-admin-unavailable":
       return value;
     default:
       return "default";
@@ -232,6 +313,8 @@ function initialState(): MockState {
     "backup-pending-unavailable",
     "backup-restore-snapshot-failed",
     "backup-restore-midway-failed",
+    "mcp-many-tools",
+    "mcp-admin-unavailable",
   ].includes(scenario);
   return {
     scenario,
@@ -256,6 +339,19 @@ function initialState(): MockState {
       TELEGRAM_WEBHOOK_SECRET: false,
       WECHAT_CREDENTIALS: scenario === "user-evidence",
     },
+    mcpServers:
+      scenario === "mcp-many-tools"
+        ? [
+            {
+              name: "deepwiki",
+              url: "https://mcp.deepwiki.com/mcp",
+              catalogId: "deepwiki",
+              description: "DeepWiki：GitHub 仓库的 AI 文档与问答",
+              approvalPolicy: "writes",
+            },
+          ]
+        : [],
+    mcpAuth: {},
     installAttempts: 0,
     pending:
       scenario === "pending-operations" || scenario === "pending-other-account"
@@ -338,6 +434,16 @@ export function createMockClient(): ClientService {
       };
     }
   ).__backupCalls = backupCalls;
+  const mcpCalls = {
+    update: [] as { name: string; server: MockMcpServer; secrets: unknown[] }[],
+    remove: [] as string[],
+    start: [] as string[],
+  };
+  (
+    window as unknown as {
+      __mcpCalls?: typeof mcpCalls;
+    }
+  ).__mcpCalls = mcpCalls;
   let pendingAbandoned = false;
   let restoreAttempts = 0;
   let cfOperationID = "";
@@ -371,7 +477,7 @@ export function createMockClient(): ClientService {
       butlerModel: state.butlerModel,
       taskModel: state.taskModel,
       customProviders: state.customProviders,
-      mcpServers: [],
+      mcpServers: state.mcpServers,
       secrets: Object.keys(state.secrets)
         .sort()
         .map((name) => ({ name, configured: state.secrets[name] === true })),
@@ -674,6 +780,140 @@ export function createMockClient(): ClientService {
 
     async getConfig() {
       return config();
+    },
+
+    async mcpCatalog() {
+      return MCP_CATALOG;
+    },
+
+    async addMcpServer(input: McpAddInput) {
+      const name = input.name.trim();
+      if (!/^[a-z0-9_]{1,32}$/.test(name)) {
+        fail("INVALID_REQUEST", "服务名称只能使用小写字母、数字和下划线（1-32 个字符）");
+      }
+      if (state.mcpServers.some((server) => server.name === name)) {
+        fail("INVALID_REQUEST", "已存在同名服务");
+      }
+      let server: MockMcpServer;
+      if (input.custom) {
+        const url = input.custom.url.trim();
+        if (!url) fail("INVALID_REQUEST", "请填写服务 URL");
+        const headers: Record<string, string> = {};
+        for (const header of input.custom.headers ?? []) {
+          if (!header.name.trim()) continue;
+          if (!header.value?.trim()) fail("INVALID_REQUEST", `请填写 header ${header.name} 的值`);
+          headers[header.name] = header.secret
+            ? `env:MCP_${name.toUpperCase()}_${header.name.toUpperCase().replaceAll("-", "_")}`
+            : header.value;
+        }
+        server = {
+          name,
+          url,
+          oauth: input.custom.oauth,
+          description: "自定义服务",
+          approvalPolicy: "writes",
+          ...(Object.keys(headers).length > 0 ? { headers } : {}),
+        };
+      } else {
+        const entry = MCP_CATALOG.find((item) => item.id === input.catalogId);
+        if (!entry) fail("INVALID_REQUEST", "服务目录中没有该条目");
+        for (const field of entry.fields) {
+          if (!input.values?.[field.key]?.trim()) {
+            fail("INVALID_REQUEST", `${entry.name}：请填写${field.label}`);
+          }
+        }
+        server = {
+          name,
+          url:
+            entry.id === "deepwiki"
+              ? "https://mcp.deepwiki.com/mcp"
+              : entry.id === "github"
+                ? "https://api.githubcopilot.com/mcp/"
+                : "https://mcp.notion.com/mcp",
+          description: entry.description,
+          catalogId: entry.id,
+          oauth: entry.oauth,
+          approvalPolicy: "writes",
+          autoApprove: [],
+          requireApproval: [],
+          ...(entry.id === "github"
+            ? { headers: { Authorization: "env:MCP_GITHUB_TOKEN" } }
+            : {}),
+        };
+      }
+      state.mcpServers.push(server);
+      if (server.oauth) state.mcpAuth[name] = "unauthorized";
+      return published(`op-mcp-add-${++sequence}`);
+    },
+
+    async updateMcpServer(name: string, server: unknown, secrets: unknown[]) {
+      mcpCalls.update.push({
+        name,
+        server: server as MockMcpServer,
+        secrets,
+      });
+      const index = state.mcpServers.findIndex((entry) => entry.name === name);
+      if (index < 0) fail("INVALID_REQUEST", "服务不存在");
+      state.mcpServers[index] = server as MockMcpServer;
+      state.fingerprint = `fp-${++sequence}`;
+      return published(`op-mcp-update-${sequence}`);
+    },
+
+    async removeMcpServer(name: string) {
+      mcpCalls.remove.push(name);
+      state.mcpServers = state.mcpServers.filter((server) => server.name !== name);
+      delete state.mcpAuth[name];
+      return published(`op-mcp-remove-${++sequence}`);
+    },
+
+    async probeMcp(name: string): Promise<McpProbeDTO> {
+      const server = state.mcpServers.find((entry) => entry.name === name);
+      if (!server) fail("INVALID_REQUEST", "服务不存在");
+      if (server.oauth && state.mcpAuth[name] !== "ok") {
+        return {
+          ok: false,
+          auth: state.mcpAuth[name] ?? "unauthorized",
+          reason: "需要在桌面端登录授权",
+          tools: [],
+        };
+      }
+      const base =
+        state.scenario === "mcp-many-tools"
+          ? Array.from({ length: 101 }, (_, index) => ({
+              name: `tool_${index + 1}`,
+              description: `工具 ${index + 1}`,
+              mode: "auto",
+            }))
+          : (MCP_TOOLS[server.catalogId ?? ""] ?? MCP_TOOLS.deepwiki ?? []);
+      return {
+        ok: true,
+        tools: base.map((tool) => ({ ...tool, mode: mcpToolMode(server, tool) })),
+      };
+    },
+
+    async mcpStatus(): Promise<McpAuthDTO[]> {
+      if (state.scenario === "mcp-admin-unavailable") {
+        fail(
+          "MCP_ADMIN_UNAVAILABLE",
+          "无法连接云端管理接口，请检查 PUBLIC_BASE_URL 与部署状态",
+        );
+      }
+      return state.mcpServers
+        .filter((server) => server.oauth)
+        .map((server) => ({
+          name: server.name,
+          state: state.mcpAuth[server.name] ?? "unauthorized",
+        }));
+    },
+
+    async startMcpOAuth(name: string) {
+      mcpCalls.start.push(name);
+      state.mcpAuth[name] = state.mcpAuth[name] ?? "unauthorized";
+      window.setTimeout(() => {
+        if (state.mcpServers.some((server) => server.name === name)) {
+          state.mcpAuth[name] = "ok";
+        }
+      }, 1200);
     },
 
     async previewConfig(input: ConfigEditDTO) {

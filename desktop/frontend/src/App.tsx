@@ -8,6 +8,7 @@ import {
   Loader2,
   Menu,
   MessageSquare,
+  Plug,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ import type { ClientService, ConnectionDTO, OperationDTO } from "@/services/type
 import { useUiStore } from "@/store/ui";
 import { Diagnostics } from "@/features/diagnostics/Diagnostics";
 import { Backup } from "@/features/backup/Backup";
+import { Mcp } from "@/features/mcp/Mcp";
 import { Models } from "@/features/models/Models";
 import { Overview } from "@/features/overview/Overview";
 import { Setup } from "@/features/setup/Setup";
@@ -46,6 +48,7 @@ type Session =
 const NAV: { page: Page; icon: typeof LayoutDashboard }[] = [
   { page: "overview", icon: LayoutDashboard },
   { page: "models", icon: Bot },
+  { page: "mcp", icon: Plug },
   { page: "entries", icon: MessageSquare },
   { page: "diagnostics", icon: Activity },
   { page: "backup", icon: Archive },
@@ -273,6 +276,7 @@ export function App({ client }: { client: ClientService }) {
                 >
                   {page === "overview" ? <Overview initialError={session.bootError} /> : null}
                   {page === "models" ? <Models /> : null}
+                  {page === "mcp" ? <Mcp /> : null}
                   {page === "entries" ? (
                     <Suspense fallback={<PageLoading label="正在加载…" />}>
                       <Entries />

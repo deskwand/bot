@@ -17,6 +17,14 @@ import type {
   ImportPreviewDTO,
   InstallInputDTO,
   LoginStatusDTO,
+  McpAddInput,
+  McpAuthDTO,
+  McpCatalogEntryDTO,
+  McpCustomInput,
+  McpFieldDTO,
+  McpHeaderInput,
+  McpProbeDTO,
+  McpToolDTO,
   ModelCatalogDTO,
   ModelDTO,
   ModelEntryDTO,
@@ -48,6 +56,14 @@ export type {
   ImportPreviewDTO,
   InstallInputDTO,
   LoginStatusDTO,
+  McpAddInput,
+  McpAuthDTO,
+  McpCatalogEntryDTO,
+  McpCustomInput,
+  McpFieldDTO,
+  McpHeaderInput,
+  McpProbeDTO,
+  McpToolDTO,
   ModelCatalogDTO,
   ModelDTO,
   ModelEntryDTO,
@@ -112,6 +128,17 @@ export interface ClientService {
   installClientUpdate(): Promise<ClientUpdateResultDTO>;
   getConfig(): Promise<ConfigDTO>;
   modelCatalog(): Promise<ModelCatalogDTO>;
+  mcpCatalog(): Promise<McpCatalogEntryDTO[]>;
+  addMcpServer(input: McpAddInput): Promise<ResultDTO>;
+  updateMcpServer(
+    name: string,
+    server: unknown,
+    secrets: SecretEditDTO[],
+  ): Promise<ResultDTO>;
+  removeMcpServer(name: string): Promise<ResultDTO>;
+  probeMcp(name: string): Promise<McpProbeDTO>;
+  mcpStatus(): Promise<McpAuthDTO[]>;
+  startMcpOAuth(name: string): Promise<void>;
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]>;
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO>;
   resumeOperation(id: string): Promise<ResultDTO>;

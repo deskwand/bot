@@ -102,6 +102,8 @@ const SHORT_COPY: Record<string, string> = {
   INVALID_SECRET_EDIT: "密钥操作无效，需选保留或替换。",
   NOT_SENT: "请求未写入云端，无部分写入。",
   ADMIN_UNAVAILABLE: "云端服务尚不支持数据备份，请先在更新页升级。",
+  MCP_ADMIN_UNAVAILABLE: "云端管理接口不可用。",
+  MCP_FAILED: "云端管理请求失败。",
   ADMIN_UNAUTHORIZED: "备份凭据被拒绝，请重新登录。",
   MAINTENANCE_REQUIRED: "维护租约失效，请重试。",
   MAINTENANCE_BUSY: "另一个备份操作正在进行。",
