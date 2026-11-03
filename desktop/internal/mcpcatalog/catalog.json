@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "firecrawl",
+      "name": "Firecrawl",
+      "category": "搜索 / 抓取",
+      "description": "Firecrawl：网页抓取、搜索与内容解析（免密额度有限）",
+      "url": "https://mcp.firecrawl.dev/v2/mcp",
+      "oauth": false,
+      "fields": []
+    },
+    {
+      "id": "tavily",
+      "name": "Tavily",
+      "category": "搜索 / 抓取",
+      "description": "Tavily：面向 AI 的联网搜索、抓取与研究",
+      "url": "https://mcp.tavily.com/mcp",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "category": "开发",
+      "description": "GitHub：仓库、issue、PR 与代码检索",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "oauth": false,
+      "fields": [
+        {
+          "key": "token",
+          "label": "Personal Access Token",
+          "help": "GitHub 个人访问令牌，需包含要访问的仓库与组织权限。",
+          "helpUrl": "https://github.com/settings/tokens",
+          "placement": "header",
+          "headerName": "Authorization",
+          "prefix": "Bearer "
+        }
+      ]
+    },
+    {
+      "id": "deepwiki",
+      "name": "DeepWiki",
+      "category": "开发",
+      "description": "DeepWiki：GitHub 仓库的 AI 文档与问答",
+      "url": "https://mcp.deepwiki.com/mcp",
+      "oauth": false,
+      "fields": []
+    },
+    {
+      "id": "context7",
+      "name": "Context7",
+      "category": "开发",
+      "description": "Context7：查询最新的库与框架文档",
+      "url": "https://mcp.context7.com/mcp",
+      "oauth": false,
+      "fields": []
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry",
+      "category": "开发",
+      "description": "Sentry：错误、性能与项目数据",
+      "url": "https://mcp.sentry.dev/mcp",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "vercel",
+      "name": "Vercel",
+      "category": "开发",
+      "description": "Vercel：项目、部署与运行日志",
+      "url": "https://mcp.vercel.com",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare",
+      "category": "开发",
+      "description": "Cloudflare：账户 API 与开发者文档",
+      "url": "https://mcp.cloudflare.com/mcp",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "supabase",
+      "name": "Supabase",
+      "category": "开发",
+      "description": "Supabase：项目、数据库与日志",
+      "url": "https://mcp.supabase.com/mcp",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "category": "文档 / 知识",
+      "description": "Notion：页面、数据库与工作区内容",
+      "url": "https://mcp.notion.com/mcp",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "atlassian",
+      "name": "Atlassian",
+      "category": "文档 / 知识",
+      "description": "Atlassian：Jira 与 Confluence",
+      "url": "https://mcp.atlassian.com/v2/mcp",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "microsoft_learn",
+      "name": "Microsoft Learn",
+      "category": "文档 / 知识",
+      "description": "Microsoft Learn：微软官方文档检索",
+      "url": "https://learn.microsoft.com/api/mcp",
+      "oauth": false,
+      "fields": []
+    },
+    {
+      "id": "huggingface",
+      "name": "Hugging Face",
+      "category": "文档 / 知识",
+      "description": "Hugging Face：模型、数据集与 Spaces",
+      "url": "https://huggingface.co/mcp",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "category": "项目 / 协作",
+      "description": "Linear：issue、项目与团队协作",
+      "url": "https://mcp.linear.app/mcp",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "stripe",
+      "name": "Stripe",
+      "category": "支付 / 商业",
+      "description": "Stripe：客户、支付与账单",
+      "url": "https://mcp.stripe.com",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "paypal",
+      "name": "PayPal",
+      "category": "支付 / 商业",
+      "description": "PayPal：发票、订单与交易",
+      "url": "https://mcp.paypal.com/mcp",
+      "oauth": true,
+      "fields": []
+    },
+    {
+      "id": "zapier",
+      "name": "Zapier",
+      "category": "自动化桥接",
+      "description": "Zapier：通过 Zap 调用数千个应用的 action",
+      "url": "https://mcp.zapier.com/api/mcp/mcp",
+      "oauth": false,
+      "fields": [
+        {
+          "key": "token",
+          "label": "连接令牌",
+          "help": "在 Zapier MCP 服务器的 Settings 页生成 API token。",
+          "helpUrl": "https://mcp.zapier.com",
+          "placement": "header",
+          "headerName": "Authorization",
+          "prefix": "Bearer "
+        }
+      ]
+    },
+    {
+      "id": "amap",
+      "name": "高德地图",
+      "category": "国内服务",
+      "description": "高德地图：地理编码、路线与周边搜索",
+      "url": "https://mcp.amap.com/sse?key={field:key}",
+      "oauth": false,
+      "fields": [
+        {
+          "key": "key",
+          "label": "API Key",
+          "help": "高德开放平台的 Web 服务 API Key。",
+          "helpUrl": "https://console.amap.com/dev/key/app",
+          "placement": "url"
+        }
+      ]
+    },
+    {
+      "id": "baidu",
+      "name": "百度地图",
+      "category": "国内服务",
+      "description": "百度地图：地理编码、路线与地点检索",
+      "url": "https://mcp.map.baidu.com/mcp?ak={field:ak}",
+      "oauth": false,
+      "fields": [
+        {
+          "key": "ak",
+          "label": "服务端 AK",
+          "help": "百度地图开放平台的服务器端 AK，并勾选 MCP 服务。",
+          "helpUrl": "https://lbsyun.baidu.com/apiconsole/key",
+          "placement": "url"
+        }
+      ]
+    }
+  ]
+}
