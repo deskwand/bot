@@ -356,6 +356,39 @@ func TestRejectUnknownManifestVersion(t *testing.T) {
 	}
 }
 
+func TestRejectMinFromVersionNewerThanRelease(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.Version = "0.1.1"
+	manifest.Upgrade.MinFromVersion = "1.0.0"
+	raw, signature, pub := signed(t, manifest)
+
+	if err := Verify(raw, signature, pub, fixtureFiles()); err == nil {
+		t.Fatal("a release whose minFromVersion is newer than its own version was accepted")
+	}
+}
+
+func TestRejectUnparseableMinFromVersion(t *testing.T) {
+	manifest := validManifest(t)
+	manifest.Upgrade.MinFromVersion = "latest"
+	raw, signature, pub := signed(t, manifest)
+
+	if err := Verify(raw, signature, pub, fixtureFiles()); err == nil {
+		t.Fatal("an unparseable minFromVersion was accepted")
+	}
+}
+
+func TestAcceptMinFromVersionAtOrBelowRelease(t *testing.T) {
+	for _, minFrom := range []string{"1.0.0", "0.9.9", "1.0.0-beta.1"} {
+		manifest := validManifest(t)
+		manifest.Upgrade.MinFromVersion = minFrom
+		raw, signature, pub := signed(t, manifest)
+
+		if err := Verify(raw, signature, pub, fixtureFiles()); err != nil {
+			t.Fatalf("minFromVersion %q was rejected: %v", minFrom, err)
+		}
+	}
+}
+
 func TestRejectUnknownConfigSchema(t *testing.T) {
 	manifest := validManifest(t)
 	manifest.ConfigSchemaVersion = 2

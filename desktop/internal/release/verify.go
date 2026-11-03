@@ -239,6 +239,13 @@ func validateManifest(manifest *Manifest, files map[string][]byte) error {
 	if manifest.Upgrade.MinFromVersion == "" {
 		return errors.New("release: upgrade.minFromVersion is empty")
 	}
+	minFromComparison, comparable := CompareVersions(manifest.Upgrade.MinFromVersion, manifest.Version)
+	if !comparable {
+		return fmt.Errorf("release: upgrade.minFromVersion %q is not comparable with release version %q", manifest.Upgrade.MinFromVersion, manifest.Version)
+	}
+	if minFromComparison > 0 {
+		return fmt.Errorf("release: upgrade.minFromVersion %q is newer than release version %q", manifest.Upgrade.MinFromVersion, manifest.Version)
+	}
 	if manifest.Upgrade.IrreversibleMigrations == nil {
 		return errors.New("release: upgrade.irreversibleMigrations is missing or null")
 	}

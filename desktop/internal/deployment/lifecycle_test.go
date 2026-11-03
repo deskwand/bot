@@ -881,6 +881,41 @@ func TestUpgradeRejectsMigrationHistoryMismatch(t *testing.T) {
 	}
 }
 
+func TestUpgradeRejectsVersionBelowMinFrom(t *testing.T) {
+	pkg := lifecyclePackage(t, "1.0.1", "1.0.0", nil)
+	f := newLifecycleFixture(t, pkg)
+	f.API.configJSON = lifecycleConfig(t, "")
+	f.API.settingsJSON = lifecycleSettings(t, pkg.Manifest().ResourceTemplate, f.API.configJSON, ChannelTelegram, true)
+	f.API.releaseVersion = "0.9.0"
+	f.API.scripts = []cloudflare.ScriptSummary{{ID: "deskwand-bot", MigrationTag: "v2"}}
+
+	result, err := f.Lifecycle.Upgrade(context.Background(), f.target(), pkg)
+	assertCode(t, err, CodeUpgradeRequiresIntermediate)
+	if result.State != StateFailed {
+		t.Fatalf("state = %q, want %q", result.State, StateFailed)
+	}
+	if f.API.uploadCalls != 0 || f.API.createVersionCalls != 0 {
+		t.Fatal("a blocked upgrade mutated the remote deployment")
+	}
+}
+
+// A points release must stay upgradeable from the release it follows: the
+// signed floor is the previous release (0.1.0), not some larger version.
+func TestUpgradeAcceptsPointsRelease(t *testing.T) {
+	pkg := lifecyclePackage(t, "0.1.1", "0.1.0", nil)
+	f := newLifecycleFixture(t, pkg)
+	f.API.configJSON = lifecycleConfig(t, "")
+	f.API.settingsJSON = lifecycleSettings(t, pkg.Manifest().ResourceTemplate, f.API.configJSON, ChannelTelegram, true)
+	f.API.releaseVersion = "0.1.0"
+	f.API.scripts = []cloudflare.ScriptSummary{{ID: "deskwand-bot", MigrationTag: "v2"}}
+
+	result, err := f.Lifecycle.Upgrade(context.Background(), f.target(), pkg)
+	if err != nil {
+		t.Fatalf("Upgrade() = %v, want nil", err)
+	}
+	assertLifecycleState(t, result, StatePublished)
+}
+
 func TestUpgradeRejectsDowngrade(t *testing.T) {
 	pkg := lifecyclePackage(t, "1.0.0", "1.0.0", nil)
 	f := newLifecycleFixture(t, pkg)

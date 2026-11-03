@@ -7,7 +7,7 @@ package deployment
 // Build and sign a disposable release with the committed TEST-ONLY fixture key
 // (never a production key):
 //
-//   npm run release:worker -- --version 1.0.0 --key-id test-only-do-not-use
+//   npm run release:worker -- --version 1.0.0 --key-id test-only-do-not-use --min-from-version 0.9.0
 //   DESKWAND_RELEASE_SIGNING_KEY_FILE=contracts/fixtures/release/TEST-ONLY-signing-key.pem npm run release:sign
 //   DESKWAND_CF_LIVE_TEST=1 \
 //   DESKWAND_CF_TEST_ACCOUNT=<32 hex account id> \

@@ -253,8 +253,11 @@ DESKWAND_RELEASE_SIGNING_KEY_FILE=/secure/release-signing-key.pem \
   npm run build:desktop
 ```
 
-产物在 `desktop/build/<os>-<arch>/`。`desktop/mygo.json` 配置：
+产物在 `desktop/build/<os>-<arch>/`。
 
+发布包 manifest 的 `upgrade.minFromVersion` 是能直接升级到本版本的最低版本，由 `build:desktop` 传入，默认 `0.1.0`（首个对外发布版本），可用 `DESKWAND_MIN_FROM_VERSION` 覆盖。它必须不高于本次发布的版本号，否则构建直接失败：那样的 manifest 会让旧部署永远报 `UPGRADE_REQUIRES_INTERMEDIATE`。只有当某个版本要求先经过中间版本时才提高它。
+
+`desktop/mygo.json` 配置：
 - macOS：`.app` + `.dmg`，`minimumSystemVersion` 12.0；
 - Windows：NSIS 安装器，当前用户安装，不需要管理员权限。
 

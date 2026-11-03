@@ -15,6 +15,7 @@ import {
   buildManifestFromFiles,
   canonicalJson,
   collectModuleFiles,
+  compareReleaseVersions,
   compressedSizeOf,
   generateModules,
   pathComparisonKey,
@@ -56,6 +57,7 @@ function build(overrides: {
   files?: Map<string, Uint8Array>;
   template?: ReleaseTemplate;
   entrypoint?: string;
+  minFromVersion?: string;
 } = {}) {
   return buildManifestFromFiles({
     template: overrides.template ?? readTemplate(),
@@ -64,6 +66,7 @@ function build(overrides: {
     keyId: overrides.keyId ?? "deskwand-release-test",
     files: overrides.files ?? sampleFiles(),
     entrypoint: overrides.entrypoint,
+    minFromVersion: overrides.minFromVersion ?? "1.0.0",
   });
 }
 
@@ -137,6 +140,56 @@ describe("Worker release manifest", () => {
       "owner",
     ]);
     expect(manifest.upgrade).toEqual({ minFromVersion: "1.0.0", irreversibleMigrations: [] });
+  });
+
+  it("requires an explicit minFromVersion", () => {
+    expect(() =>
+      buildManifestFromFiles({
+        template: readTemplate(),
+        configSchema: readSchema(),
+        version: "0.1.1",
+        keyId: "deskwand-release-test",
+        files: sampleFiles(),
+      }),
+    ).toThrow(/minFromVersion/);
+  });
+
+  it("rejects a minFromVersion newer than the release version", () => {
+    expect(() => build({ version: "0.1.1", minFromVersion: "1.0.0" })).toThrow(/minFromVersion/);
+    expect(() => build({ version: "0.1.1", minFromVersion: "0.1.2" })).toThrow(/minFromVersion/);
+  });
+
+  it("accepts a minFromVersion at or below the release version", () => {
+    expect(build({ version: "0.1.1", minFromVersion: "0.1.0" }).manifest.upgrade.minFromVersion).toBe(
+      "0.1.0",
+    );
+    expect(build({ version: "0.1.1", minFromVersion: "0.1.1" }).manifest.upgrade.minFromVersion).toBe(
+      "0.1.1",
+    );
+  });
+
+  it("treats a prerelease minFromVersion as older than its release", () => {
+    expect(build({ version: "0.1.1", minFromVersion: "0.1.1-beta.1" }).manifest.upgrade.minFromVersion).toBe(
+      "0.1.1-beta.1",
+    );
+    expect(() => build({ version: "0.1.1-beta.1", minFromVersion: "0.1.1" })).toThrow(/minFromVersion/);
+  });
+
+  it("orders versions exactly as the Go verifier does", () => {
+    // Shared table: desktop/internal/release/version_test.go asserts the same
+    // expectations, so the builder cannot sign a floor the client reads
+    // differently.
+    const fixture: { cases: { left: string; right: string; expect: number | null }[] } = JSON.parse(
+      readFileSync(join(repoRoot, "contracts", "fixtures", "release", "version-order.json"), "utf8"),
+    );
+    expect(fixture.cases.length).toBeGreaterThan(0);
+    for (const testCase of fixture.cases) {
+      const comparison = compareReleaseVersions(testCase.left, testCase.right);
+      expect(
+        comparison ?? null,
+        `${testCase.left} vs ${testCase.right}`,
+      ).toBe(testCase.expect);
+    }
   });
 
   it("requires secret name patterns in the template", () => {

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/domain"
@@ -89,7 +87,7 @@ func (l *Lifecycle) Upgrade(ctx context.Context, target domain.Target, pkg relea
 	}
 
 	manifest := pkg.Manifest()
-	comparison, comparable := compareVersions(snapshot.ReleaseVersion, pkg.Version())
+	comparison, comparable := release.CompareVersions(snapshot.ReleaseVersion, pkg.Version())
 	if !comparable {
 		return domain.Result{State: StateNeedsInput}, domain.Error{
 			Code:    CodeVersionUnknown,
@@ -103,7 +101,17 @@ func (l *Lifecycle) Upgrade(ctx context.Context, target domain.Target, pkg relea
 		}
 	}
 	if comparison < 0 && manifest.Upgrade.MinFromVersion != "" {
-		if minComparison, ok := compareVersions(snapshot.ReleaseVersion, manifest.Upgrade.MinFromVersion); ok && minComparison < 0 {
+		minComparison, ok := release.CompareVersions(snapshot.ReleaseVersion, manifest.Upgrade.MinFromVersion)
+		if !ok {
+			// Fail closed: the verifier already rejects such a manifest, so an
+			// unreadable floor means the floor cannot be trusted to permit this
+			// upgrade.
+			return domain.Result{State: StateFailed}, domain.Error{
+				Code:    CodeVersionUnknown,
+				Message: fmt.Sprintf("the upgrade floor %q is not comparable with the current release version %q", manifest.Upgrade.MinFromVersion, snapshot.ReleaseVersion),
+			}
+		}
+		if minComparison < 0 {
 			return domain.Result{State: StateFailed}, domain.Error{
 				Code:    CodeUpgradeRequiresIntermediate,
 				Message: fmt.Sprintf("release %s requires at least %s; upgrade through an intermediate supported release", pkg.Version(), manifest.Upgrade.MinFromVersion),
@@ -537,146 +545,8 @@ func cloudflareScriptPlan(configJSON []byte, bucketName string, plainVars map[st
 
 // CompareVersions compares two semver-like release versions. It returns
 // comparable=false when either value is not a version this client understands.
+// The comparison itself lives in the release package so the manifest verifier
+// and the upgrade gate agree on ordering.
 func CompareVersions(left, right string) (int, bool) {
-	return compareVersions(left, right)
-}
-
-// compareVersions compares semver-like versions, including prerelease
-// precedence. A release is newer than its own prerelease, so upgrading
-// 1.0.0 to 1.0.0-beta is rejected as a downgrade. Build metadata is ignored.
-func compareVersions(left, right string) (int, bool) {
-	leftVersion, ok := parseVersion(left)
-	if !ok {
-		return 0, false
-	}
-	rightVersion, ok := parseVersion(right)
-	if !ok {
-		return 0, false
-	}
-	size := len(leftVersion.core)
-	if len(rightVersion.core) > size {
-		size = len(rightVersion.core)
-	}
-	for i := 0; i < size; i++ {
-		var a, b int
-		if i < len(leftVersion.core) {
-			a = leftVersion.core[i]
-		}
-		if i < len(rightVersion.core) {
-			b = rightVersion.core[i]
-		}
-		if a < b {
-			return -1, true
-		}
-		if a > b {
-			return 1, true
-		}
-	}
-	switch {
-	case !leftVersion.hasPre && !rightVersion.hasPre:
-		return 0, true
-	case !leftVersion.hasPre:
-		return 1, true
-	case !rightVersion.hasPre:
-		return -1, true
-	}
-	size = len(leftVersion.pre)
-	if len(rightVersion.pre) > size {
-		size = len(rightVersion.pre)
-	}
-	for i := 0; i < size; i++ {
-		if i >= len(leftVersion.pre) {
-			return -1, true
-		}
-		if i >= len(rightVersion.pre) {
-			return 1, true
-		}
-		a, b := leftVersion.pre[i], rightVersion.pre[i]
-		aNumber, aNumeric := numericIdentifier(a)
-		bNumber, bNumeric := numericIdentifier(b)
-		switch {
-		case aNumeric && bNumeric:
-			if aNumber < bNumber {
-				return -1, true
-			}
-			if aNumber > bNumber {
-				return 1, true
-			}
-		case aNumeric:
-			return -1, true
-		case bNumeric:
-			return 1, true
-		default:
-			if a < b {
-				return -1, true
-			}
-			if a > b {
-				return 1, true
-			}
-		}
-	}
-	return 0, true
-}
-
-type parsedVersion struct {
-	core   []int
-	pre    []string
-	hasPre bool
-}
-
-func parseVersion(value string) (parsedVersion, bool) {
-	trimmed := strings.TrimSpace(strings.TrimPrefix(value, "v"))
-	if trimmed == "" {
-		return parsedVersion{}, false
-	}
-	if index := strings.IndexByte(trimmed, '+'); index >= 0 {
-		trimmed = trimmed[:index]
-	}
-	var prerelease string
-	if index := strings.IndexByte(trimmed, '-'); index >= 0 {
-		prerelease = trimmed[index+1:]
-		trimmed = trimmed[:index]
-	}
-	if trimmed == "" {
-		return parsedVersion{}, false
-	}
-	parts := strings.Split(trimmed, ".")
-	if len(parts) > 8 {
-		return parsedVersion{}, false
-	}
-	result := parsedVersion{core: make([]int, len(parts))}
-	for i, part := range parts {
-		if part == "" {
-			return parsedVersion{}, false
-		}
-		number, err := strconv.Atoi(part)
-		if err != nil || number < 0 {
-			return parsedVersion{}, false
-		}
-		result.core[i] = number
-	}
-	if prerelease != "" {
-		identifiers := strings.Split(prerelease, ".")
-		result.hasPre = true
-		result.pre = identifiers
-		for _, identifier := range identifiers {
-			if identifier == "" {
-				return parsedVersion{}, false
-			}
-			for _, r := range identifier {
-				if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
-					return parsedVersion{}, false
-				}
-			}
-		}
-	}
-	return result, true
-}
-
-func numericIdentifier(value string) (int, bool) {
-	number, err := strconv.Atoi(value)
-	if err != nil || number < 0 {
-		return 0, false
-	}
-	return number, true
+	return release.CompareVersions(left, right)
 }

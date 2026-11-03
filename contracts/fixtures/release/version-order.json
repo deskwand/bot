@@ -1,0 +1,22 @@
+{
+  "description": "Version ordering shared by scripts/build-worker-release.ts and desktop/internal/release/version.go. Both test suites consume this table, so the release builder and the client cannot disagree about which versions may upgrade. expect is -1, 0 or 1, or null when either value is not a comparable version.",
+  "cases": [
+    { "left": "0.1.0", "right": "0.1.1", "expect": -1 },
+    { "left": "0.1.1", "right": "1.0.0", "expect": -1 },
+    { "left": "0.10.0", "right": "0.9.0", "expect": 1 },
+    { "left": "1.0.0", "right": "1.0.0", "expect": 0 },
+    { "left": "v1.2.3", "right": "1.2.3", "expect": 0 },
+    { "left": "1.0", "right": "1.0.0", "expect": 0 },
+    { "left": "1.0.0+build.5", "right": "1.0.0", "expect": 0 },
+    { "left": "1.0.0", "right": "1.0.0-beta", "expect": 1 },
+    { "left": "1.0.0-beta", "right": "1.0.0-beta.1", "expect": -1 },
+    { "left": "1.0.0-alpha", "right": "1.0.0-alpha.beta", "expect": -1 },
+    { "left": "1.0.0-alpha", "right": "1.0.0-beta", "expect": -1 },
+    { "left": "1.0.0-beta.2", "right": "1.0.0-beta.10", "expect": -1 },
+    { "left": "2.0.0-rc.1", "right": "1.9.9", "expect": 1 },
+    { "left": "1.0.0-beta.12345678901234567", "right": "1.0.0-beta.2", "expect": 1 },
+    { "left": " v1.0.0", "right": "1.0.0", "expect": null },
+    { "left": "latest", "right": "1.0.0", "expect": null },
+    { "left": "1.0.0", "right": "1.0.0-", "expect": 0 }
+  ]
+}

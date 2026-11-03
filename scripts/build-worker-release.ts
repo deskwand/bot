@@ -2,7 +2,7 @@
  * Builds a deterministic, signed-release-ready Worker package.
  *
  * Usage:
- *   npm run release:worker -- --version 1.0.0 --key-id deskwand-release-1
+ *   npm run release:worker -- --version 1.0.0 --key-id deskwand-release-1 --min-from-version 0.9.0
  *
  * The script only runs `wrangler deploy --dry-run`; it never contacts
  * Cloudflare. Generated modules and `manifest.json` are written to
@@ -448,6 +448,82 @@ export function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+type ParsedReleaseVersion = { core: number[]; pre: string[] };
+
+/**
+ * Parses a semver-like release version. Mirrors parseVersion in the Go
+ * verifier (desktop/internal/release/version.go): an optional `v` prefix, up
+ * to eight numeric core segments, dot-separated prerelease identifiers and
+ * ignored build metadata.
+ */
+export function parseReleaseVersion(value: string): ParsedReleaseVersion | undefined {
+  // Strip the optional `v` before trimming so both sides reject " v1.0.0",
+  // matching parseVersion in desktop/internal/release/version.go.
+  const trimmed = value.replace(/^v/, "").trim();
+  if (!trimmed) return undefined;
+  const withoutBuild = trimmed.split("+")[0];
+  const dash = withoutBuild.indexOf("-");
+  const corePart = dash >= 0 ? withoutBuild.slice(0, dash) : withoutBuild;
+  const prePart = dash >= 0 ? withoutBuild.slice(dash + 1) : "";
+  if (!corePart) return undefined;
+
+  const segments = corePart.split(".");
+  if (segments.length > 8) return undefined;
+  const core: number[] = [];
+  for (const segment of segments) {
+    // At most 15 digits keeps the value inside int64, where the Go verifier
+    // would otherwise report it as not comparable.
+    if (!/^\d{1,15}$/.test(segment)) return undefined;
+    core.push(Number(segment));
+  }
+
+  const pre = prePart ? prePart.split(".") : [];
+  for (const identifier of pre) {
+    if (!/^[0-9A-Za-z-]+$/.test(identifier)) return undefined;
+  }
+  return { core, pre };
+}
+
+/**
+ * Compares two release versions, returning -1, 0 or 1, or undefined when
+ * either value is not comparable. The ordering matches the Go verifier so a
+ * manifest this builder accepts is one the client reads the same way.
+ */
+export function compareReleaseVersions(left: string, right: string): number | undefined {
+  const a = parseReleaseVersion(left);
+  const b = parseReleaseVersion(right);
+  if (!a || !b) return undefined;
+
+  for (let i = 0; i < Math.max(a.core.length, b.core.length); i += 1) {
+    const leftCore = a.core[i] ?? 0;
+    const rightCore = b.core[i] ?? 0;
+    if (leftCore !== rightCore) return leftCore < rightCore ? -1 : 1;
+  }
+
+  if (a.pre.length === 0 && b.pre.length === 0) return 0;
+  if (a.pre.length === 0) return 1;
+  if (b.pre.length === 0) return -1;
+
+  for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i += 1) {
+    const leftPre = a.pre[i];
+    const rightPre = b.pre[i];
+    if (leftPre === undefined) return -1;
+    if (rightPre === undefined) return 1;
+    const leftNumeric = /^\d{1,15}$/.test(leftPre);
+    const rightNumeric = /^\d{1,15}$/.test(rightPre);
+    if (leftNumeric && rightNumeric) {
+      const leftNumber = Number(leftPre);
+      const rightNumber = Number(rightPre);
+      if (leftNumber !== rightNumber) return leftNumber < rightNumber ? -1 : 1;
+      continue;
+    }
+    if (leftNumeric) return -1;
+    if (rightNumeric) return 1;
+    if (leftPre !== rightPre) return leftPre < rightPre ? -1 : 1;
+  }
+  return 0;
+}
+
 function compareModulePaths(left: string, right: string): number {
   // The Go verifier compares Go strings, which are UTF-8 bytes. Sorting by
   // UTF-16 code units would disagree for some non-BMP characters.
@@ -495,6 +571,26 @@ export function buildManifestFromFiles(options: BuildManifestOptions): BuiltMani
     );
   }
 
+  const minFromVersion = requireString(options.minFromVersion, "upgrade.minFromVersion");
+  const minComparison = compareReleaseVersions(minFromVersion, version);
+  if (minComparison === undefined) {
+    throw new Error(
+      `upgrade.minFromVersion ${minFromVersion} or release version ${version} is not a semver-like version`,
+    );
+  }
+  // A release whose floor is newer than itself can never be upgraded into, and
+  // the client would report UPGRADE_REQUIRES_INTERMEDIATE for every deployment.
+  if (minComparison > 0) {
+    throw new Error(
+      `upgrade.minFromVersion ${minFromVersion} is newer than release version ${version}; no deployment could ever upgrade into this release`,
+    );
+  }
+  if (minComparison === 0 && version !== "") {
+    console.warn(
+      `warning: upgrade.minFromVersion ${minFromVersion} equals release version ${version}; only a deployment already on ${version} can upgrade into it`,
+    );
+  }
+
   const irreversibleMigrations = options.irreversibleMigrations ?? [];
   for (const tag of irreversibleMigrations) {
     if (!template.migrations.some((migration) => migration.tag === tag)) {
@@ -521,7 +617,7 @@ export function buildManifestFromFiles(options: BuildManifestOptions): BuiltMani
     resourceTemplate: template,
     migrations: template.migrations,
     upgrade: {
-      minFromVersion: options.minFromVersion ?? "1.0.0",
+      minFromVersion,
       irreversibleMigrations: [...irreversibleMigrations],
     },
   };
@@ -676,7 +772,12 @@ async function main(): Promise<void> {
       version: version as string,
       keyId: keyId as string,
       files,
-      minFromVersion: argument("min-from-version", argv),
+      minFromVersion:
+        argument("min-from-version", argv) ??
+        process.env.DESKWAND_MIN_FROM_VERSION ??
+        fail(
+          "缺少升级下限版本：使用 --min-from-version <semver> 或 DESKWAND_MIN_FROM_VERSION 指定可被直接升级的最低版本",
+        ),
     });
 
     const moduleOutput = join(outputDir, "modules");
