@@ -173,6 +173,23 @@ func TestReadSnapshotRejectsUnknownBinding(t *testing.T) {
 	}
 }
 
+func TestReadSnapshotAcceptsAnAIBinding(t *testing.T) {
+	settings := baseSettings()
+	settings["bindings"] = append(
+		settings["bindings"].([]any),
+		map[string]any{"type": "ai", "name": "AI"},
+	)
+	client := fixtureClient(t, settings, baseDeployments(activeVersion("v1", 100)), baseVersions("v1"))
+
+	snapshot, err := client.ReadSnapshot(context.Background(), domain.Target{AccountID: testAccountID, ScriptName: "w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(snapshot.SettingsJSON), `"name":"AI"`) {
+		t.Fatalf("AI binding missing from the round-tripped settings: %s", snapshot.SettingsJSON)
+	}
+}
+
 func TestReadSnapshotMissingConfigBinding(t *testing.T) {
 	settings := baseSettings()
 	settings["bindings"] = settings["bindings"].([]any)[:4]

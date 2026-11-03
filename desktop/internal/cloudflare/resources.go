@@ -283,6 +283,15 @@ func (c *Client) UploadScript(ctx context.Context, target domain.Target, manifes
 			"bucket_name": plan.BucketName,
 		})
 	}
+	for _, binding := range template.AIBindings {
+		if binding.Name == "" {
+			return ScriptResult{}, domain.Error{Code: domain.NOT_SENT, Message: "the release template contains an invalid AI binding"}
+		}
+		bindings = append(bindings, map[string]any{
+			"type": "ai",
+			"name": binding.Name,
+		})
+	}
 	if template.VersionMetadata.Name != "" {
 		bindings = append(bindings, map[string]any{
 			"type": "version_metadata",

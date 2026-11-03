@@ -118,6 +118,7 @@ describe("Worker release manifest", () => {
     expect(manifest.resourceTemplate.r2Buckets).toEqual([
       { name: "ARTIFACTS", parameterKey: "r2BucketName" },
     ]);
+    expect(manifest.resourceTemplate.aiBindings).toEqual([{ name: "AI" }]);
     expect(manifest.resourceTemplate.versionMetadataBinding.name).toBe("CF_VERSION_METADATA");
     expect(manifest.resourceTemplate.configBinding).toEqual({
       name: "DESKWAND_CONFIG",
@@ -327,6 +328,16 @@ describe("Worker release manifest", () => {
     const unsafe = readTemplate();
     unsafe.entrypoint = "../escape.js";
     expect(() => build({ template: unsafe, entrypoint: "../escape.js" })).toThrow();
+  });
+
+  it("rejects empty or repeated AI binding names", () => {
+    const empty = readTemplate();
+    empty.aiBindings = [{ name: "" }];
+    expect(() => build({ template: empty })).toThrow(/aiBindings\[0\]\.name/);
+
+    const repeated = readTemplate();
+    repeated.aiBindings = [{ name: "AI" }, { name: "AI" }];
+    expect(() => build({ template: repeated })).toThrow(/repeats the name AI/);
   });
 
   it("rejects migrations for unbound DO classes and DO classes without migrations", () => {

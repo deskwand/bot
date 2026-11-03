@@ -39,6 +39,7 @@ func resourceManifest(t *testing.T) release.Manifest {
 			Compatibility:   compatibility,
 			DurableObjects:  []release.DOBinding{{Name: "BUTLER", ClassName: "ButlerDO"}, {Name: "TASK", ClassName: "TaskDO"}, {Name: "CHANNELS", ClassName: "ChannelDO"}},
 			R2Buckets:       []release.R2Binding{{Name: "ARTIFACTS", ParameterKey: "r2BucketName"}},
+			AIBindings:      []release.AIBinding{{Name: "AI"}},
 			VersionMetadata: release.BindingRef{Name: "CF_VERSION_METADATA"},
 			Observability: &release.Observability{
 				Enabled:          true,
@@ -144,6 +145,7 @@ func TestUploadScriptFirstInstallMetadata(t *testing.T) {
 			map[string]any{"type": "durable_object_namespace", "name": "TASK", "class_name": "TaskDO"},
 			map[string]any{"type": "durable_object_namespace", "name": "CHANNELS", "class_name": "ChannelDO"},
 			map[string]any{"type": "r2_bucket", "name": "ARTIFACTS", "bucket_name": "deskwand-probe-bucket"},
+			map[string]any{"type": "ai", "name": "AI"},
 			map[string]any{"type": "version_metadata", "name": "CF_VERSION_METADATA"},
 			map[string]any{"type": "json", "name": "DESKWAND_CONFIG", "json": map[string]any{
 				"schemaVersion": json.Number("1"),

@@ -79,6 +79,11 @@ func verify(manifest, signature []byte, key ed25519.PublicKey, files map[string]
 		return nil, err
 	}
 
+	// Unknown fields are refused rather than dropped, so a release that adds one
+	// is un-installable by an older client until that client is updated. That is
+	// the intended fail-closed direction: silently ignoring a field could install
+	// a Worker wired differently from what the release declared. The error
+	// surfaces as "json: unknown field \"...\"", which means "update the app".
 	decoder := json.NewDecoder(bytes.NewReader(manifest))
 	decoder.DisallowUnknownFields()
 	var parsed Manifest
@@ -377,6 +382,12 @@ func validateResourceTemplate(template *ResourceTemplate) error {
 	for key, present := range required {
 		if !present {
 			return fmt.Errorf("release: resource template is missing install parameter %q", key)
+		}
+	}
+
+	for _, binding := range template.AIBindings {
+		if binding.Name == "" {
+			return errors.New("release: resource template contains an empty AI binding")
 		}
 	}
 

@@ -404,6 +404,7 @@ var reservedReferenceNames = func() map[string]bool {
 		"CHANNELS":            true,
 		"MCP_AUTH":            true,
 		"ARTIFACTS":           true,
+		"AI":                  true,
 	}
 	for _, name := range templateSecretNames {
 		set[name] = true

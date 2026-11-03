@@ -230,6 +230,13 @@ func buildVersionMetadata(base domain.Snapshot, manifest release.Manifest, plan 
 		})
 		rebuilt[binding.Name] = true
 	}
+	for _, binding := range template.AIBindings {
+		metadata.Bindings = append(metadata.Bindings, map[string]any{
+			"type": "ai",
+			"name": binding.Name,
+		})
+		rebuilt[binding.Name] = true
+	}
 	if template.VersionMetadata.Name != "" {
 		metadata.Bindings = append(metadata.Bindings, map[string]any{
 			"type": "version_metadata",
@@ -277,7 +284,7 @@ func buildVersionMetadata(base domain.Snapshot, manifest release.Manifest, plan 
 				Code:    domain.UNSUPPORTED_BINDING,
 				Message: fmt.Sprintf("binding %q is a Durable Object not declared by the release template", name),
 			}
-		case "json", "r2_bucket", "version_metadata", "plain_text", "secret_text":
+		case "json", "r2_bucket", "ai", "version_metadata", "plain_text", "secret_text":
 			metadata.Bindings = append(metadata.Bindings, json.RawMessage(append([]byte(nil), binding.Raw...)))
 		default:
 			return versionMetadata{}, domain.Error{

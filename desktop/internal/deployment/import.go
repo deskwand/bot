@@ -283,6 +283,15 @@ func templateHasDO(template release.ResourceTemplate, name string) bool {
 	return false
 }
 
+func templateHasAI(template release.ResourceTemplate, name string) bool {
+	for _, binding := range template.AIBindings {
+		if binding.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func templateHasR2(template release.ResourceTemplate, name string) bool {
 	for _, binding := range template.R2Buckets {
 		if binding.Name == name {
@@ -348,6 +357,9 @@ func reservedTemplateNames(template release.ResourceTemplate) map[string]bool {
 		names[binding.Name] = true
 	}
 	for _, binding := range template.R2Buckets {
+		names[binding.Name] = true
+	}
+	for _, binding := range template.AIBindings {
 		names[binding.Name] = true
 	}
 	for _, variable := range template.Vars {
