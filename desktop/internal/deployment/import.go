@@ -359,6 +359,9 @@ func reservedTemplateNames(template release.ResourceTemplate) map[string]bool {
 	for _, binding := range template.R2Buckets {
 		names[binding.Name] = true
 	}
+	for _, binding := range template.AIBindings {
+		names[binding.Name] = true
+	}
 	for _, variable := range template.Vars {
 		names[variable.Name] = true
 	}

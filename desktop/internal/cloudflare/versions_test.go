@@ -225,6 +225,67 @@ func TestCreateVersionBuildsPreservingMetadata(t *testing.T) {
 	}
 }
 
+// settingsWithoutAI drops the AI binding an older deployment would not have,
+// so the only way it can appear in the upload is the template rebuild.
+func settingsWithoutAI(t *testing.T) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(versionSettings(), &document); err != nil {
+		t.Fatal(err)
+	}
+	bindings := document["bindings"].([]any)
+	kept := make([]any, 0, len(bindings))
+	for _, raw := range bindings {
+		if raw.(map[string]any)["type"] == "ai" {
+			continue
+		}
+		kept = append(kept, raw)
+	}
+	document["bindings"] = kept
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func TestCreateVersionAddsAMissingAIBinding(t *testing.T) {
+	var uploads []capturedVersionUpload
+	client, _ := cloudflaretest.NewServerClient(t, versionServer(t, versionBaseID, &uploads))
+
+	manifestJSON, err := json.Marshal(versionManifest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := versionBase()
+	base.SettingsJSON = settingsWithoutAI(t)
+
+	if _, err := client.CreateVersion(
+		context.Background(),
+		base,
+		manifestJSON,
+		map[string][]byte{"index.js": []byte("export default {};")},
+		domain.PublishPlan{BaseVersionID: versionBaseID, ConfigJSON: []byte(`{"schemaVersion":1}`)},
+		cloudflare.PreservePolicy{SecretNames: []string{"KEEP"}, OperationID: "op-ai"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(uploads) != 1 {
+		t.Fatalf("uploads = %d", len(uploads))
+	}
+
+	for _, raw := range uploads[0].metadata["bindings"].([]any) {
+		binding := raw.(map[string]any)
+		if binding["name"] == "AI" {
+			if binding["type"] != "ai" {
+				t.Fatalf("AI binding = %#v", binding)
+			}
+			return
+		}
+	}
+	t.Fatalf("AI binding was not added: %#v", uploads[0].metadata["bindings"])
+}
+
 func TestCreateVersionAppliesPlainVarOverrides(t *testing.T) {
 	var uploads []capturedVersionUpload
 	client, _ := cloudflaretest.NewServerClient(t, versionServer(t, versionBaseID, &uploads))

@@ -62,6 +62,7 @@ export type ReleaseTemplate = {
   compatibility: { date: string; flags: string[] };
   durableObjects: Array<{ name: string; className: string }>;
   r2Buckets: Array<{ name: string; parameterKey: string }>;
+  aiBindings: Array<{ name: string }>;
   versionMetadataBinding: { name: string };
   observability: {
     enabled: boolean;
@@ -166,10 +167,21 @@ export function assertReleaseTemplate(value: unknown): asserts value is ReleaseT
   requireString(compatibility.date, "release template compatibility.date");
   requireStringArray(compatibility.flags, "release template compatibility.flags");
 
-  for (const key of ["durableObjects", "r2Buckets", "vars", "installParameters", "crons"] as const) {
+  for (const key of ["durableObjects", "r2Buckets", "aiBindings", "vars", "installParameters", "crons"] as const) {
     if (!Array.isArray(template[key])) {
       throw new Error(`release template ${key} must be an array`);
     }
+  }
+  // AI bindings are signed into every release, so a name may not be empty or
+  // repeated: the client would otherwise emit duplicates at publish time.
+  const aiNames = new Set<string>();
+  for (const [index, binding] of (template.aiBindings as unknown[]).entries()) {
+    const entry = requireRecord(binding, `release template aiBindings[${index}]`);
+    const name = requireString(entry.name, `release template aiBindings[${index}].name`);
+    if (aiNames.has(name)) {
+      throw new Error(`release template aiBindings repeats the name ${name}`);
+    }
+    aiNames.add(name);
   }
   const versionMetadata = requireRecord(
     template.versionMetadataBinding,

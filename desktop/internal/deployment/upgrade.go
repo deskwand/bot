@@ -455,6 +455,9 @@ func inspectUpgradeBindings(settingsJSON []byte, template release.ResourceTempla
 					Message: fmt.Sprintf("binding %q is an R2 bucket not declared by the release template", binding.Name),
 				}
 			}
+		// Stricter than the publish carry-through, on purpose: an upgrade may
+		// only inherit an AI binding the signed template names, while a publish
+		// passes an existing one through so it is never silently dropped.
 		case "ai":
 			if !templateHasAI(template, binding.Name) {
 				return bindingInspection{}, domain.Error{
