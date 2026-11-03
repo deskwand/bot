@@ -337,13 +337,7 @@ function toImageRef(item: Record<string, unknown>): WeChatImageRef | null {
 
   const media = isRecord(image.media) ? image.media : {};
   const encryptQueryParam = readString(media, "encrypt_query_param");
-  if (!encryptQueryParam) {
-    // Field names only: the payload shape is the thing worth knowing here.
-    console.warn(
-      `wechat image item without cdn param (image: ${Object.keys(image).join(",")}; media: ${Object.keys(media).join(",")})`,
-    );
-    return null;
-  }
+  if (!encryptQueryParam) return null;
 
   const aesKeyHex = readString(image, "aeskey");
   const mediaAesKey = readString(media, "aes_key");
