@@ -3,6 +3,7 @@ import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { BotInit, BotSnapshot } from "../bot/bot-do";
 import { clampWakeAt, parseDuration } from "../bot/wake";
 import type { BotsRepo } from "./bots-repo";
+import { RENDER_LIMIT } from "./memory";
 import { getClock } from "./notifier";
 import type { TaskControl } from "./tools";
 
@@ -161,7 +162,7 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
 
         lines.push("记忆：");
         if (memories.length === 0) lines.push("无");
-        for (const memory of memories) {
+        for (const memory of memories.slice(-RENDER_LIMIT)) {
           lines.push(`- #${memory.id} ${memory.content}`);
         }
         return output(lines.join("\n"));

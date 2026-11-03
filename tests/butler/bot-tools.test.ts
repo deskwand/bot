@@ -147,6 +147,30 @@ describe("butler bot tools", () => {
     });
   });
 
+  it("get_bot shows only the newest memories", async () => {
+    await runTool(
+      "create_bot",
+      {
+        name: "价格哨兵",
+        mission: "盯着价格",
+        default_interval: "2h",
+      },
+      [],
+      "bot-tools-get",
+    );
+    const bot = botStub("b1");
+    for (let index = 1; index <= 60; index += 1) {
+      await bot.remember(`记忆 ${index}`);
+    }
+
+    const result = await runTool("get_bot", { id: "b1" }, [], "bot-tools-get");
+
+    expect(result.text.match(/^- #\d+ 记忆 \d+$/gm)).toHaveLength(50);
+    expect(result.text).toContain("记忆 11");
+    expect(result.text).toContain("记忆 60");
+    expect(result.text).not.toContain("记忆 10");
+  });
+
   it("steer_bot also steers the running task", async () => {
     const calls: string[] = [];
     await runTool(
