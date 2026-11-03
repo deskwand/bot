@@ -1,4 +1,5 @@
 import { Agent } from "agents";
+import { normalizeServerId } from "agents/mcp/client";
 import type { McpServerConfig } from "../config";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import {
@@ -175,12 +176,16 @@ export class McpAuthDO extends Agent<Env> {
         }
       }
 
-      return await probeMcpServer(
-        server,
-        mcpConnector(this.mcp, this.env, (target) =>
-          this.accessToken(target.name, target.url),
-        ),
-      );
+      try {
+        return await probeMcpServer(
+          server,
+          mcpConnector(this.mcp, this.env, (target) =>
+            this.accessToken(target.name, target.url),
+          ),
+        );
+      } finally {
+        await this.mcp.removeServer(normalizeServerId(server.name));
+      }
     } catch (error) {
       return { ok: false, reason: errorMessage(error) };
     }

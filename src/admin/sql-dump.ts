@@ -12,6 +12,13 @@
 export const PAGE_BYTES = 1 << 20;
 export const EXCLUDED_TABLES = ["admin_maintenance"] as const;
 
+/**
+ * Tables exported as structure only. The Agents SDK expects them to exist
+ * after a restore, but their rows hold resolved MCP URLs and auth headers,
+ * which must never reach a local backup file.
+ */
+export const ROWLESS_TABLES = ["cf_agents_mcp_servers"] as const;
+
 export type DumpValue =
   | string
   | number
@@ -240,6 +247,9 @@ export function readPage(
   cursor: string | null,
   maxBytes: number = PAGE_BYTES,
 ): DumpPage {
+  if ((ROWLESS_TABLES as readonly string[]).includes(table.name)) {
+    return { rows: [], next: null };
+  }
   const cols = columns(sql, table.name);
   // Read each value twice: quote() is lossless for numbers and blobs, while
   // the raw value keeps NUL bytes in TEXT that quote() would truncate.

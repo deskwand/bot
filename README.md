@@ -31,7 +31,7 @@
 - Telegram Bot Token（在 [@BotFather](https://t.me/BotFather) 创建 bot）
 - OpenCode Go API Key（模型调用）
 - 联网搜索使用 Exa 免费 MCP，无需 API Key
-- 可选：MCP 服务器（在 `DESKWAND_CONFIG` 中配置）
+- 可选：外部服务（远程 MCP），在桌面端"服务"页添加
 
 ## 1. 安装依赖
 
@@ -113,7 +113,10 @@ cp .dev.vars.example .dev.vars
 
 - `owner.telegramUserIds`：允许使用该 bot 的 Telegram 用户 ID（正整数）。空数组是合法配置，表示不授权任何人；不存在仓库内置 owner，也不会回退到源码常量。
 - `models`：按角色（`butler` / `task`）配置模型，provider 只接受现有适配器支持的 `anthropic` 与 `opencode-go`。
-- `mcpServers`：MCP 服务器列表；对需要人工确认的工具在 `requireApproval` 中列出工具名，触发时会先发 ✅/❌ 审批按钮。header 值可以写 `env:NAME` 引用 Worker secret，引用会原样保留，不会把值展开进普通 var。
+- `mcpServers`：远程 MCP 服务器列表，推荐在桌面端"服务"页从目录添加（GitHub、Notion、Linear、Sentry、高德地图等），不必手写。只支持远程 MCP（Streamable HTTP / SSE），不支持 `npx` 启动的本地 stdio 服务。
+  - 审批：桌面端添加的服务默认"读免审、写要审"（`approvalPolicy: "writes"`，依据工具的 `readOnlyHint`），可逐个工具改为免审、要审或停用（`autoApprove` / `requireApproval` / `disabledTools`）。要审的工具触发时先发 ✅/❌ 审批按钮。
+  - 密钥：header 值写 `env:NAME`，URL 中写 `{env:NAME}` 占位，`NAME` 为 `MCP_` 开头的 Worker secret；引用原样保留，不会把值展开进普通 var。
+  - 登录授权（OAuth）：由 Worker 完成，回调地址为 `${PUBLIC_BASE_URL}/mcp/oauth/callback`，token 存在 `McpAuthDO` 并自动续期，不进入本地备份；恢复到新部署后需在"服务"页重新授权。
 - `schemaVersion` 必须为 `1`；未知版本、非整数/越界用户 ID、未知 provider 或非法 JSON 都会以固定错误拒绝，不会猜测或回退。
 
 `MODEL_KEY_<ID>`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_WEBHOOK_SECRET` 都是可选 secret：缺失时只影响对应业务路径（例如缺少 webhook secret 时所有 Telegram webhook 都会被拒绝）。

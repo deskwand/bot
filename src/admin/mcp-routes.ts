@@ -13,7 +13,11 @@ const REVOKE_PREFIX = "/admin/mcp/oauth/";
 const CALLBACK_PATH = "/mcp/oauth/callback";
 
 /** Failures the user can act on; any other error stays hidden. */
-const USER_ERRORS = new Set(["服务不存在或不需要授权", "该服务不支持自动注册（DCR）"]);
+const USER_ERRORS = new Set([
+  "服务不存在",
+  "服务不存在或不需要授权",
+  "该服务不支持自动注册（DCR）",
+]);
 
 /** The success and failure pages are fixed: they never echo the query. */
 const SUCCESS_TEXT = "授权完成，可以回到桌面端了";

@@ -71,13 +71,6 @@ function toTokens(
   };
 }
 
-async function metadataFor(serverUrl: string, deps: OAuthDeps) {
-  const info = await discoverOAuthServerInfo(serverUrl, {
-    fetchFn: deps.fetch,
-  });
-  return info;
-}
-
 /**
  * Discover the authorization server, register a client with DCR when needed,
  * and build the authorization URL with a fresh PKCE verifier and `state`.
@@ -93,7 +86,7 @@ export async function beginAuthorization(
   verifier: string;
   state: string;
 }> {
-  const info = await metadataFor(serverUrl, deps);
+  const info = await discoverOAuthServerInfo(serverUrl, { fetchFn: deps.fetch });
   const issuer = info.authorizationServerUrl;
   const metadata = info.authorizationServerMetadata;
 
@@ -142,7 +135,7 @@ export async function finishAuthorization(
   redirectUri: string,
   deps: OAuthDeps,
 ): Promise<OAuthTokens> {
-  const info = await metadataFor(serverUrl, deps);
+  const info = await discoverOAuthServerInfo(serverUrl, { fetchFn: deps.fetch });
   const tokens = await exchangeAuthorization(client.issuer, {
     metadata: info.authorizationServerMetadata,
     clientInformation: clientInformation(client),
@@ -164,7 +157,7 @@ export async function refreshTokens(
   deps: OAuthDeps,
 ): Promise<OAuthTokens> {
   try {
-    const info = await metadataFor(serverUrl, deps);
+    const info = await discoverOAuthServerInfo(serverUrl, { fetchFn: deps.fetch });
     const tokens = await refreshAuthorization(client.issuer, {
       metadata: info.authorizationServerMetadata,
       clientInformation: clientInformation(client),

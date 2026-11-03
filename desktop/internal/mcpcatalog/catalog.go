@@ -95,7 +95,7 @@ func Build(entry Entry, name string, values map[string]string) (map[string]any, 
 	serverURL := entry.URL
 
 	for _, field := range entry.Fields {
-		value := values[field.Key]
+		value := strings.TrimSpace(values[field.Key])
 		if value == "" {
 			return nil, nil, fmt.Errorf("%s：请填写%s", entry.Name, field.Label)
 		}

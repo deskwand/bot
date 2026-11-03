@@ -126,4 +126,19 @@ describe("McpAuthStore", () => {
     expect(result.late).toBeNull();
     expect(result.after).toBeNull();
   });
+
+  it("purges abandoned authorizations when a new one starts", async () => {
+    nextId += 1;
+    const stub = env.BUTLER.get(env.BUTLER.idFromName(`auth-store-${nextId}`));
+    const states = await runInDurableObject(stub, (_instance, state) => {
+      const store = new McpAuthStore(state.storage.sql);
+      store.putPending("old", "notion", "v-old", 1000);
+      store.putPending("new", "notion", "v-new", 1000 + 10 * 60 * 1000);
+      return state.storage.sql
+        .exec<{ state: string }>(`SELECT state FROM pending ORDER BY state`)
+        .toArray()
+        .map((row) => row.state);
+    });
+    expect(states).toEqual(["new"]);
+  });
 });

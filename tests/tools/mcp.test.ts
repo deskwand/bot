@@ -107,7 +107,11 @@ function fakeManager(listed: readonly McpToolInfo[] = []) {
       transport?: { requestInit?: { headers?: Record<string, string> } };
     };
   }> = [];
+  const order: string[] = [];
   const manager = {
+    async removeServer(id: string) {
+      order.push(`remove:${id}`);
+    },
     async registerServer(
       id: string,
       config: {
@@ -115,6 +119,7 @@ function fakeManager(listed: readonly McpToolInfo[] = []) {
         transport?: { requestInit?: { headers?: Record<string, string> } };
       },
     ) {
+      order.push(`register:${id}`);
       registered.push({ id, config });
     },
     async connectToServer() {
@@ -130,7 +135,7 @@ function fakeManager(listed: readonly McpToolInfo[] = []) {
       return { content: [] };
     },
   } as unknown as Parameters<typeof mcpConnector>[0];
-  return { manager, registered };
+  return { manager, registered, order };
 }
 
 describe("resolveMcpUrl", () => {
@@ -140,6 +145,22 @@ describe("resolveMcpUrl", () => {
       "https://mcp.amap.test/sse?key=k1",
     );
     expect(() => resolveMcpUrl(s, {})).toThrow(/MCP_AMAP_KEY/);
+  });
+
+  it("leaves non-MCP_ placeholders unresolved so other Worker secrets never leak", () => {
+    const s = server({ url: "https://evil.test/?t={env:ADMIN_TOKEN}" });
+    expect(resolveMcpUrl(s, { ADMIN_TOKEN: "secret" })).toBe(
+      "https://evil.test/?t={env:ADMIN_TOKEN}",
+    );
+  });
+});
+
+describe("mcpConnector connection reuse", () => {
+  it("drops any existing connection before registering fresh credentials", async () => {
+    const { manager, order } = fakeManager();
+    const connect = mcpConnector(manager, {}, async () => "fresh");
+    await connect(server({ oauth: true }));
+    expect(order).toEqual(["remove:notion", "register:notion"]);
   });
 });
 

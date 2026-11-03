@@ -339,6 +339,58 @@ func TestProbeMcpMapsWorkerProbe(t *testing.T) {
 	}
 }
 
+func TestProbeMcpWaitsForAJustPublishedServer(t *testing.T) {
+	mcpPropagationInterval = time.Millisecond
+	t.Cleanup(func() { mcpPropagationInterval = 2 * time.Second })
+	calls := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/admin/mcp/probe" {
+			calls++
+			if calls < 3 {
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "reason": "服务不存在"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "tools": []map[string]string{}})
+			return
+		}
+		http.NotFound(w, r)
+	})
+	f := newMcpFixture(t, `[]`, []string{"ADMIN_TOKEN"}, handler)
+	probe, err := f.service.ProbeMcp("deepwiki")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !probe.OK || calls != 3 {
+		t.Fatalf("probe = %#v after %d calls", probe, calls)
+	}
+}
+
+func TestStartMcpOAuthWaitsForAJustPublishedServer(t *testing.T) {
+	mcpPropagationInterval = time.Millisecond
+	t.Cleanup(func() { mcpPropagationInterval = 2 * time.Second })
+	calls := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/admin/mcp/oauth/start" {
+			calls++
+			if calls == 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"code": "MCP_INVALID", "message": "服务不存在"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"url": "https://auth.example/authorize?state=2"})
+			return
+		}
+		http.NotFound(w, r)
+	})
+	f := newMcpFixture(t, `[{"name":"notion","url":"https://mcp.notion.com/mcp","oauth":true}]`, []string{"ADMIN_TOKEN"}, handler)
+	if err := f.service.StartMcpOAuth("notion"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || len(f.browser.opened) != 1 {
+		t.Fatalf("calls = %d, opened = %#v", calls, f.browser.opened)
+	}
+}
+
 func TestMcpStatusMapsStates(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/admin/mcp/status" {

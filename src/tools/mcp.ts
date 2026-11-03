@@ -138,7 +138,7 @@ function toToolResult(result: McpCallToolResult): ToolExecutionResult {
  * which `loadMcpTools` reports and skips.
  */
 export function resolveMcpUrl(server: McpServerConfig, env: object): string {
-  return server.url.replace(/\{env:([A-Z0-9_]+)\}/g, (_match, name: string) => {
+  return server.url.replace(/\{env:(MCP_[A-Z0-9_]+)\}/g, (_match, name: string) => {
     const value = (env as Record<string, unknown>)[name];
     if (typeof value !== "string") {
       throw new Error(
@@ -226,6 +226,9 @@ export function mcpConnector(
       headers = { ...headers, Authorization: `Bearer ${token}` };
     }
 
+    // The SDK reuses an existing connection (live or restored from storage)
+    // with its old URL and headers, so drop it to apply fresh credentials.
+    await manager.removeServer(id);
     await manager.registerServer(id, {
       url: resolveMcpUrl(server, env),
       name: server.name,

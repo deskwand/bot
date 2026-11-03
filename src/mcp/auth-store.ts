@@ -221,6 +221,10 @@ export class McpAuthStore {
     createdAt: number,
   ): void {
     this.sql.exec(
+      `DELETE FROM pending WHERE created_at <= ?`,
+      createdAt - PENDING_TTL_MS,
+    );
+    this.sql.exec(
       `INSERT OR REPLACE INTO pending (state, name, verifier, created_at)
        VALUES (?, ?, ?, ?)`,
       state,

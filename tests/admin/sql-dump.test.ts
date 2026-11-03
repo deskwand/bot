@@ -257,6 +257,27 @@ describe("sql-dump", () => {
     expect(schema.indexes.some((sql) => sql.includes("autoinc_v"))).toBe(true);
   });
 
+  it("exports the SDK MCP connection table without its rows", async () => {
+    const source = harness("dump-rowless");
+    const result = await runInDurableObject(source, (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec(
+        `CREATE TABLE IF NOT EXISTS cf_agents_mcp_servers (id TEXT PRIMARY KEY, server_options TEXT)`,
+      );
+      sql.exec(
+        `INSERT OR REPLACE INTO cf_agents_mcp_servers VALUES ('notion', '{"Authorization":"Bearer secret"}')`,
+      );
+      const schema = readSchema(sql);
+      const table = schema.tables.find(
+        (entry) => entry.name === "cf_agents_mcp_servers",
+      );
+      return { table, page: table ? readPage(sql, table, null) : null };
+    });
+
+    expect(result.table).toBeDefined();
+    expect(result.page).toEqual({ rows: [], next: null });
+  });
+
   it("skips FTS virtual tables and their shadow tables", async () => {
     const source = harness("dump-fts");
     const captured = await runInDurableObject(source, (_instance, state) => {

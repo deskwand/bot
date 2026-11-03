@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/deployment"
@@ -14,6 +16,37 @@ import (
 	"github.com/deskwand/bot/desktop/internal/mcpadmin"
 	"github.com/deskwand/bot/desktop/internal/mcpcatalog"
 )
+
+// A server published moments ago is unknown to the Worker until the new
+// version takes traffic; probe and OAuth start retry while it says so.
+const mcpServerMissing = "服务不存在"
+
+var (
+	mcpPropagationTimeout  = 30 * time.Second
+	mcpPropagationInterval = 2 * time.Second
+)
+
+// untilMcpServerLive retries call while the Worker does not know the server
+// yet. missing reports whether a result or error means "not live yet".
+func untilMcpServerLive[T any](ctx context.Context, call func() (T, error), missing func(T, error) bool) (T, error) {
+	deadline := time.Now().Add(mcpPropagationTimeout)
+	for {
+		result, err := call()
+		if !missing(result, err) || time.Now().After(deadline) {
+			return result, err
+		}
+		select {
+		case <-ctx.Done():
+			return result, err
+		case <-time.After(mcpPropagationInterval):
+		}
+	}
+}
+
+func isMcpServerMissing(err error) bool {
+	var derr domain.Error
+	return errors.As(err, &derr) && derr.Message == mcpServerMissing
+}
 
 var (
 	mcpServerNamePattern = regexp.MustCompile(`^[a-z0-9_]{1,32}$`)
@@ -263,7 +296,11 @@ func (s *Service) ProbeMcp(name string) (McpProbeDTO, error) {
 	if err != nil {
 		return McpProbeDTO{}, safeAppError(err)
 	}
-	result, err := client.Probe(ctx, strings.TrimSpace(name))
+	result, err := untilMcpServerLive(ctx,
+		func() (mcpadmin.Probe, error) { return client.Probe(ctx, strings.TrimSpace(name)) },
+		func(probe mcpadmin.Probe, err error) bool {
+			return err == nil && !probe.OK && probe.Reason == mcpServerMissing
+		})
 	if err != nil {
 		return McpProbeDTO{}, safeAppError(err)
 	}
@@ -313,7 +350,9 @@ func (s *Service) StartMcpOAuth(name string) error {
 	if err != nil {
 		return safeAppError(err)
 	}
-	authorizeURL, err := client.StartOAuth(ctx, strings.TrimSpace(name))
+	authorizeURL, err := untilMcpServerLive(ctx,
+		func() (string, error) { return client.StartOAuth(ctx, strings.TrimSpace(name)) },
+		func(_ string, err error) bool { return isMcpServerMissing(err) })
 	if err != nil {
 		return safeAppError(err)
 	}

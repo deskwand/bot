@@ -128,6 +128,17 @@ func TestBuildHeaderPrefixStoresFullValue(t *testing.T) {
 	}
 }
 
+func TestBuildTrimsPastedValues(t *testing.T) {
+	entry, _ := Lookup("github")
+	_, secrets, err := Build(entry, "github", map[string]string{"token": "  abc\n"})
+	if err != nil {
+		t.Fatalf("Build() = %v", err)
+	}
+	if secrets[0].Value() != "Bearer abc" {
+		t.Fatalf("secret value was not trimmed: %q", secrets[0].Value())
+	}
+}
+
 func TestBuildURLField(t *testing.T) {
 	entry, ok := Lookup("amap")
 	if !ok {
