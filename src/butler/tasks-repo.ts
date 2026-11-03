@@ -18,6 +18,7 @@ export type TaskRow = {
   lastSeq: number;
   createdAt: number;
   updatedAt: number;
+  botId: string | null;
 };
 
 type RawTaskRow = {
@@ -31,6 +32,7 @@ type RawTaskRow = {
   last_seq: number;
   created_at: number;
   updated_at: number;
+  bot_id: string | null;
 };
 
 const COUNTER_KEY = "task_counter";
@@ -63,16 +65,22 @@ export class TasksRepo {
     return `t${next}`;
   }
 
-  insert(row: { id: string; title: string; chatId: string | null }): void {
+  insert(row: {
+    id: string;
+    title: string;
+    chatId: string | null;
+    botId?: string | null;
+  }): void {
     const now = Date.now();
     this.sql.exec(
-      `INSERT INTO tasks (id, title, status, created_at, updated_at, chat_id, artifacts_json, last_seq)
-       VALUES (?, ?, 'queued', ?, ?, ?, '[]', 0)`,
+      `INSERT INTO tasks (id, title, status, created_at, updated_at, chat_id, artifacts_json, last_seq, bot_id)
+       VALUES (?, ?, 'queued', ?, ?, ?, '[]', 0, ?)`,
       row.id,
       row.title,
       now,
       now,
       row.chatId,
+      row.botId ?? null,
     );
   }
 
@@ -137,6 +145,10 @@ export class TasksRepo {
       sets.push("created_at = ?");
       values.push(patch.createdAt);
     }
+    if (patch.botId !== undefined) {
+      sets.push("bot_id = ?");
+      values.push(patch.botId);
+    }
     sets.push("updated_at = ?");
     values.push(patch.updatedAt ?? Date.now());
 
@@ -160,6 +172,7 @@ function toTaskRow(row: RawTaskRow): TaskRow {
     lastSeq: row.last_seq,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    botId: row.bot_id,
   };
 }
 

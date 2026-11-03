@@ -77,6 +77,8 @@ export type TaskSpec = {
   title: string;
   instructions: string;
   model?: ModelRef;
+  /** Set when the Butler spawned this task for a bot run. */
+  botId?: string;
 };
 
 const ACTION_KINDS: readonly ActionKind[] = ["approve", "reject", "cancel"];
