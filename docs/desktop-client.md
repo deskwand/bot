@@ -217,11 +217,20 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。若打开后
 
 客户端更新与 Worker 发布包不能互相替代：Worker 发布包不能安装成桌面更新，桌面更新也不会携带或替换云端代码。
 
-## 11. 维护者：发布密钥、构建、签名与更新源
+## 11. 外观（浅色 / 深色）
+
+侧边栏底部有三个外观选项：
+
+- **跟随系统**（默认）：系统切换深浅色时，客户端立即一起变；
+- **浅色** / **深色**：固定一种外观，不再随系统变。
+
+选择保存在本机（应用数据目录里的 `preferences.json`，不含任何凭据），下次启动直接生效；它只影响外观，不触碰 Cloudflare 账号、部署或云端配置。没有 `preferences.json`、文件损坏或值无效时，客户端回到「跟随系统」。
+
+## 12. 维护者：发布密钥、构建、签名与更新源
 
 以下步骤只属于维护者，不是普通用户安装步骤。
 
-### 11.1 两套独立的 Ed25519 密钥
+### 12.1 两套独立的 Ed25519 密钥
 
 **Worker 发布密钥**（key id `deskwand-release-1`）：
 
@@ -244,7 +253,7 @@ npm run generate:release-key -- --client
 
 脚本拒绝覆盖已有密钥。私钥绝不进入仓库、日志、构建产物或客户端包。两套密钥不能混用。轮换密钥时，先发布同时信任旧、新 key id 的客户端，再切换签名密钥。
 
-### 11.2 构建 Worker 发布包和桌面安装包
+### 12.2 构建 Worker 发布包和桌面安装包
 
 一次完成签名 Worker 发布包、嵌入和 macOS 打包：
 
@@ -267,7 +276,7 @@ Windows 交叉构建可以编译出 `.exe`，但本仓库的 macOS 环境在执�
 
 **应用图标**：母版是 `desktop/icon/icon.svg`（轨道星球，设计见 `docs/superpowers/specs/2026-11-02-app-icon-design.md`）。`desktop/mygo.json` 的 `icon` 指向 `icon/icon.png`，MyGo 由它生成 macOS `.icns` 与 Windows `.ico`。修改图标：改 SVG → 运行 `bash desktop/scripts/render-icon.sh` → 同时提交 SVG 与 PNG。渲染需要本机 Google Chrome（可用 `CHROME=` 指定路径）；构建只读已提交的 PNG，不需要 Chrome。图标源文件不放在 `desktop/resources/`：MyGo 会把该目录的全部内容打进应用。`desktop/icon_test.go` 校验 PNG 尺寸、透明角和关键配色。
 
-### 11.3 macOS 签名与公证
+### 12.3 macOS 签名与公证
 
 在 `desktop/mygo.json` 中配置（示例，未写入仓库）：
 
@@ -290,7 +299,7 @@ xcrun notarytool store-credentials notary
 
 Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配置；证书密码来自 `MYGO_WINDOWS_CERTIFICATE_PASSWORD`。未签名安装器会触发 SmartScreen 警告。
 
-### 11.4 客户端更新源
+### 12.4 客户端更新源
 
 客户端更新使用 MyGo 的签名更新机制，但密钥与 Worker 发布包分离：
 
@@ -303,7 +312,7 @@ Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配�
 
 `ClientUpdateFeedURL` 默认为空，因此普通源码构建和本仓库的 CI 不检查更新；UI 显示“未配置更新源”。只有同时存在可信公钥、有效更新源和可写安装位置时，MyGo 才会启用更新。客户端源码不嵌入公钥文件；`mygo.json` 的 `updates.publicKey` 是唯一验签来源。
 
-### 11.5 CI
+### 12.5 CI
 
 `.github/workflows/desktop-build.yml` 在 `macos-latest` 和 `windows-latest` 上：
 
@@ -316,7 +325,7 @@ Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配�
 
 secret 缺失时会输出明确 notice 并跳过打包，不会用开发密钥伪造正式产物。
 
-### 11.6 验收记录
+### 12.6 验收记录
 
 当前仓库实际执行过的验证、环境限制和 NOT RUN 项见：
 

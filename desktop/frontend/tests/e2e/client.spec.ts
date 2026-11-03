@@ -914,3 +914,31 @@ test("a verified state without cloud evidence never claims verified delivery", a
   await expect(page.getByTestId("verification-wechat-unverified")).toHaveText("待验证收发");
   await expectNoVerifiedClaim(page);
 });
+
+test("appearance switch stores the choice and leaves the painting to the media query", async ({
+  page,
+}) => {
+  await page.goto("/test.html?fixture=configured");
+
+  const group = page.getByRole("group", { name: "外观" });
+  await expect(group).toBeVisible();
+  const system = group.getByRole("button", { name: "跟随系统" });
+  const dark = group.getByRole("button", { name: "深色" });
+
+  await expect(system).toHaveAttribute("aria-pressed", "true");
+  await expect(dark).toHaveAttribute("aria-pressed", "false");
+
+  await dark.click();
+  await expect(dark).toHaveAttribute("aria-pressed", "true");
+  await expect(system).toHaveAttribute("aria-pressed", "false");
+
+  // The packaged app paints from prefers-color-scheme, which mygo points at the
+  // app's appearance. A class swap here would not survive a system change.
+  await expect(page.locator("html")).not.toHaveClass(/dark/);
+  await screenshot(page, "99-appearance-dark.png");
+
+  // The navigation collapses on narrow windows; the footer must not.
+  await page.setViewportSize({ width: 420, height: 800 });
+  await expect(dark).toBeVisible();
+  await expect(group.getByRole("button", { name: "浅色" })).toBeEnabled();
+});

@@ -104,6 +104,9 @@ export type ImportInputDTO = Omit<GeneratedImportInputDTO, "secrets"> & {
   secrets?: ImportSecretDTO[];
 };
 
+/** The appearance the client stores. Go rejects anything else. */
+export type ThemeSource = "system" | "light" | "dark";
+
 /**
  * The narrow application-service surface consumed by the UI. It mirrors the
  * bound Service methods exactly, so a Go DTO change only requires updating this
@@ -111,6 +114,8 @@ export type ImportInputDTO = Omit<GeneratedImportInputDTO, "secrets"> & {
  */
 export interface ClientService {
   name(): Promise<string>;
+  theme(): Promise<ThemeSource>;
+  setTheme(source: ThemeSource): Promise<void>;
   cloudflareStatus(): Promise<ConnectionDTO>;
   startCloudflareLogin(): Promise<string>;
   cancelCloudflareLogin(opId: string): Promise<void>;

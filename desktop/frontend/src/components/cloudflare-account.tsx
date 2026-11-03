@@ -63,7 +63,7 @@ export function CloudflareAccountCard({
   };
 
   return (
-    <div className="mt-6 border-t border-border pt-4 text-xs text-muted-foreground md:mt-auto">
+    <div className="mt-2 border-t border-border pt-4 text-xs text-muted-foreground">
       <Badge variant="secondary" className="mb-2">
         Cloudflare 已连接
       </Badge>

@@ -1,11 +1,15 @@
 // Production adapter. This is the only production module that imports the
 // generated MyGo client. Tests use src/testing/fixtures.ts instead.
 import { Service, events } from "../mygo";
-import type { ClientService } from "./types";
+import type { ClientService, ThemeSource } from "./types";
 
 export function createProductionClient(): ClientService {
   return {
     name: () => Service.name(),
+    // Go owns the value, so this cast is the trust boundary: SetTheme rejects
+    // anything but the three sources before it can be stored.
+    theme: async () => (await Service.theme()) as ThemeSource,
+    setTheme: (source) => Service.setTheme(source),
     cloudflareStatus: () => Service.cloudflareStatus(),
     startCloudflareLogin: () => Service.startCloudflareLogin(),
     cancelCloudflareLogin: (opId) => Service.cancelCloudflareLogin(opId),

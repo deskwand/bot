@@ -48,6 +48,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	themes, err := app.NewFileThemeStore(dataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Before Run, so the first paint is already in the saved appearance.
+	savedTheme, themeErr := themes.Theme()
+	if themeErr != nil {
+		log.Printf("appearance preference: %v", themeErr)
+	}
+	mygo.Theme.SetSource(mygo.ThemeSource(savedTheme))
 	restoreJournal, err := backup.NewRestoreJournal(filepath.Join(dataDir, "restore"))
 	if err != nil {
 		log.Fatal(err)
@@ -97,6 +107,8 @@ func main() {
 		Scripts:     api,
 		Journal:     journal,
 		Store:       targets,
+		Theme:       themes,
+		ApplyTheme:  func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) },
 		Browser:     platform.NewSystemBrowserOpener(),
 		McpBrowser:  platform.NewMcpOAuthBrowserOpener(),
 		Credentials: credentials,
@@ -133,6 +145,9 @@ func main() {
 			MinHeight: 480,
 			StateKey:  "main",
 			URL:       "/",
+			// The page follows prefers-color-scheme; its background must match
+			// before it paints, or a dark start flashes white.
+			BackgroundColor: "light-dark(#ffffff, #0a0a0a)",
 		})
 		restrictNavigation(window)
 	})

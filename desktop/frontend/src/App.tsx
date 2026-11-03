@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { AppContext, PAGE_LABELS, type Page } from "@/components/app-context";
 import { CloudflareAccountCard } from "@/components/cloudflare-account";
+import { ThemeSwitcher } from "@/components/theme-switcher";
 import { ErrorAlert, StepList, StateBadge } from "@/components/feedback";
 import { toClientError } from "@/services/errors";
 import type { ClientService, ConnectionDTO, OperationDTO } from "@/services/types";
@@ -232,15 +233,18 @@ export function App({ client }: { client: ClientService }) {
                   </Button>
                 ))}
               </nav>
-              <CloudflareAccountCard
-                dirty={dirty}
-                onSignedOut={() => {
-                  // The shell is about to unmount; the import flow lives in the
-                  // parent, so it would otherwise survive the next session.
-                  setSetupImport(false);
-                  void refresh(false);
-                }}
-              />
+              <div className="mt-6 md:mt-auto">
+                <ThemeSwitcher />
+                <CloudflareAccountCard
+                  dirty={dirty}
+                  onSignedOut={() => {
+                    // The shell is about to unmount; the import flow lives in the
+                    // parent, so it would otherwise survive the next session.
+                    setSetupImport(false);
+                    void refresh(false);
+                  }}
+                />
+              </div>
             </aside>
           ) : null}
 

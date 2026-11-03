@@ -26,6 +26,7 @@ import type {
   ResultDTO,
   StatusItemDTO,
   StepDTO,
+  ThemeSource,
   WorkerDTO,
 } from "../services/types";
 import type { ClientService } from "../services/types";
@@ -76,6 +77,7 @@ type Scenario =
 
 interface MockState {
   scenario: Scenario;
+  theme: ThemeSource;
   connected: boolean;
   accountId: string;
   target: string | null;
@@ -318,6 +320,7 @@ function initialState(): MockState {
   ].includes(scenario);
   return {
     scenario,
+    theme: "system",
     connected: shellScenario,
     accountId: "a".repeat(32),
     target: shellScenario ? "deskwand-bot" : null,
@@ -537,6 +540,17 @@ export function createMockClient(): ClientService {
   return {
     async name() {
       return "DeskWand Bot";
+    },
+
+    async theme(): Promise<ThemeSource> {
+      return state.theme;
+    },
+
+    async setTheme(next: ThemeSource) {
+      if (next !== "system" && next !== "light" && next !== "dark") {
+        fail("INVALID_REQUEST", "外观设置无效");
+      }
+      state.theme = next;
     },
 
     async cloudflareStatus() {

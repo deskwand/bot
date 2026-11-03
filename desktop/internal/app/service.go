@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -45,6 +46,9 @@ const (
 	CodeCloudflareLoginInProgress = "CLOUDFLARE_LOGIN_IN_PROGRESS"
 	CodeCloudflareLoginNotFound   = "CLOUDFLARE_LOGIN_NOT_FOUND"
 	CodeInvalidEntryChannel       = "INVALID_ENTRY_CHANNEL"
+	// CodeThemeSaveFailed reports a preference write the disk refused. The
+	// message stays generic: the store's error names a home directory path.
+	CodeThemeSaveFailed = "THEME_SAVE_FAILED"
 )
 
 // legacyModelSecretNames are the pre-MODEL_KEY_* names. A publish clears any
@@ -158,6 +162,12 @@ type ServiceOptions struct {
 	FileDialogs FileDialogs
 	// ClientUpdates defaults to the pinned MyGo updater with an empty feed.
 	ClientUpdates ClientUpdateProvider
+	// Theme is the persisted appearance choice; nil makes SetTheme
+	// appearance-only for this run.
+	Theme ThemeStore
+	// ApplyTheme defaults to mygo.Theme.SetSource. Tests inject a recorder so
+	// they do not need a running app.
+	ApplyTheme func(source string)
 	// EmitLoginStatus defaults to LoginStatusEvent.Broadcast.
 	EmitLoginStatus func(LoginStatusDTO)
 	// EmitCloudflareLogin defaults to CloudflareLoginEvent.Broadcast.
@@ -186,6 +196,8 @@ type Service struct {
 	backup         BackupService
 	dialogs        FileDialogs
 	clientUpdates  ClientUpdateProvider
+	theme          ThemeStore
+	applyTheme     func(string)
 	emitLogin      func(LoginStatusDTO)
 	emitCloudflare func(CloudflareLoginDTO)
 	newOpID        func() (string, error)
@@ -235,6 +247,10 @@ func NewService(options ServiceOptions) *Service {
 	if clientUpdates == nil {
 		clientUpdates = NewMyGoClientUpdateProvider(ClientUpdateFeedURL)
 	}
+	applyTheme := options.ApplyTheme
+	if applyTheme == nil {
+		applyTheme = func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) }
+	}
 	return &Service{
 		auth:           options.Auth,
 		publish:        options.Publish,
@@ -252,6 +268,8 @@ func NewService(options ServiceOptions) *Service {
 		backup:         options.Backup,
 		dialogs:        options.FileDialogs,
 		clientUpdates:  clientUpdates,
+		theme:          options.Theme,
+		applyTheme:     applyTheme,
 		emitLogin:      emit,
 		emitCloudflare: emitCloudflare,
 		newOpID:        newOpID,
@@ -262,6 +280,38 @@ func NewService(options ServiceOptions) *Service {
 
 // Name returns the product name for the shell header.
 func (s *Service) Name() string { return "DeskWand Bot" }
+
+// Theme returns the appearance the client shows: "system", "light" or "dark".
+// ThemeSystem when nothing was chosen yet or the stored value cannot be used.
+func (s *Service) Theme() string {
+	if s.theme == nil {
+		return ThemeSystem
+	}
+	source, err := s.theme.Theme()
+	if err != nil {
+		return ThemeSystem
+	}
+	return source
+}
+
+// SetTheme stores the appearance and applies it to the native chrome and to
+// the pages, which follow prefers-color-scheme. The order is deliberate: a
+// store that refuses the write leaves the appearance as it was, so the
+// switcher never shows a choice that would be gone after a restart.
+func (s *Service) SetTheme(source string) error {
+	normalized, ok := normalizeTheme(source)
+	if !ok {
+		return domain.Error{Code: deployment.CodeInvalidRequest, Message: "外观设置无效"}
+	}
+	if s.theme != nil {
+		if err := s.theme.SetTheme(normalized); err != nil {
+			slog.Error("app: save appearance", "error", err)
+			return domain.Error{Code: CodeThemeSaveFailed, Message: "外观设置未保存"}
+		}
+	}
+	s.applyTheme(normalized)
+	return nil
+}
 
 // StartCloudflareLogin opens Cloudflare's authorization page and waits for the
 // loopback callback in the background. It returns the operation id used by
@@ -1736,35 +1786,5 @@ func (s *FileTargetStore) Save(target domain.Target) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	temp, err := os.CreateTemp(filepath.Dir(s.path), ".settings-*.tmp")
-	if err != nil {
-		return fmt.Errorf("app: create temporary settings file: %w", err)
-	}
-	tempName := temp.Name()
-	renamed := false
-	defer func() {
-		if !renamed {
-			_ = os.Remove(tempName)
-		}
-	}()
-	if err := temp.Chmod(0o600); err != nil {
-		_ = temp.Close()
-		return fmt.Errorf("app: set settings permissions: %w", err)
-	}
-	if _, err := temp.Write(data); err != nil {
-		_ = temp.Close()
-		return fmt.Errorf("app: write settings: %w", err)
-	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return fmt.Errorf("app: sync settings: %w", err)
-	}
-	if err := temp.Close(); err != nil {
-		return fmt.Errorf("app: close settings: %w", err)
-	}
-	if err := os.Rename(tempName, s.path); err != nil {
-		return fmt.Errorf("app: replace settings: %w", err)
-	}
-	renamed = true
-	return nil
+	return writeFileAtomic(s.path, data)
 }

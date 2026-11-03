@@ -53,6 +53,7 @@ const SHORT_COPY: Record<string, string> = {
   CREDENTIAL_STORE_UNAVAILABLE: "钥匙串不可用，未改用明文保存。",
   CREDENTIAL_STORE_FAILURE: "钥匙串写入失败，未降级为明文。",
   SERVICE_UNAVAILABLE: "服务未初始化，请重启客户端。",
+  THEME_SAVE_FAILED: "外观设置未保存，请检查磁盘。",
   TARGET_NOT_SELECTED: "请先选择一个部署。",
   TARGET_ACCOUNT_MISMATCH: "部署不属于当前账号，请重新选择。",
   TARGET_MISMATCH: "部署不属于当前账号，请重新选择。",

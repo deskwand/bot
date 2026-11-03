@@ -590,6 +590,15 @@ export const Service = {
     return call("Service.SelectEntry", channel);
   },
   /**
+   * SetTheme stores the appearance and applies it to the native chrome and to
+   * the pages, which follow prefers-color-scheme. The order is deliberate: a
+   * store that refuses the write leaves the appearance as it was, so the
+   * switcher never shows a choice that would be gone after a restart.
+   */
+  setTheme(source: string): Promise<void> {
+    return call("Service.SetTheme", source);
+  },
+  /**
    * StartCloudflareLogin opens Cloudflare's authorization page and waits for the
    * loopback callback in the background. It returns the operation id used by
    * CancelCloudflareLogin; progress arrives through CloudflareLoginEvent.
@@ -615,6 +624,13 @@ export const Service = {
   /** Status returns one evidence-based status item per kind. */
   status(): Promise<StatusItemDTO[]> {
     return call("Service.Status");
+  },
+  /**
+   * Theme returns the appearance the client shows: "system", "light" or "dark".
+   * ThemeSystem when nothing was chosen yet or the stored value cannot be used.
+   */
+  theme(): Promise<string> {
+    return call("Service.Theme");
   },
   /**
    * UpdateMcpServer replaces one entry. The embedded name must stay the same so
