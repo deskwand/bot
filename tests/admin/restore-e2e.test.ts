@@ -18,6 +18,8 @@ import {
 } from "../../src/butler/memory";
 import type { ScheduleRow, ScheduleStore } from "../../src/butler/schedules";
 import { setChannelOverride } from "../../src/channels/override";
+import { MIN_WAKE_MS } from "../../src/bot/wake";
+import { setClockOverride } from "../../src/butler/notifier";
 import { seedOwnerAddress } from "../helpers/channel-ref";
 import { fakeChannel } from "../helpers/fake-channel";
 
@@ -45,6 +47,7 @@ function deps(): AdminDeps {
     butler: () => env.BUTLER.get(env.BUTLER.idFromName("owner")),
     channel: () => env.CHANNELS.get(env.CHANNELS.idFromName("channels")),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
+    bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     artifacts: env.ARTIFACTS,
     mcpAuth: () => env.MCP_AUTH.get(env.MCP_AUTH.idFromName("global")),
   };
@@ -294,5 +297,51 @@ describe("backup and restore end to end", () => {
           .toArray(),
     );
     expect(addresses).toEqual([{ channel: "telegram", conversation_id: "42" }]);
+  });
+
+  it("bot memory and alarm survive a restore", async () => {
+    const now = Date.UTC(2030, 0, 1, 9, 0, 0);
+    setClockOverride({
+      now: () => now,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    });
+
+    try {
+      const bot = env.BOT.get(env.BOT.idFromName("b1"));
+      await bot.init({
+        botId: "b1",
+        name: "价格哨兵",
+        mission: "盯着价格",
+        defaultIntervalMs: 86_400_000,
+        // Already due: the restore must not wake the bot immediately.
+        firstWakeAt: now - 60_000,
+      });
+      await bot.remember("喜欢绿茶");
+
+      await acquire("export");
+      const botDump = await dumpDo({ do: "bot", id: "b1" });
+      await release();
+
+      await acquire("restore");
+      await restoreDo({ do: "bot", id: "b1" }, botDump);
+      await release();
+
+      // `restoreReset` aborted the old instance; fetch a fresh stub the way a
+      // real request would.
+      const botAfter = env.BOT.get(env.BOT.idFromName("b1"));
+      const snapshot = await botAfter.snapshot();
+      expect(snapshot?.memories.map((item) => item.content)).toEqual([
+        "喜欢绿茶",
+      ]);
+
+      const alarm = await runInDurableObject(
+        botAfter,
+        (_instance, state) => state.storage.getAlarm(),
+      );
+      expect(alarm).toBe(now + MIN_WAKE_MS);
+    } finally {
+      setClockOverride(null);
+    }
   });
 });

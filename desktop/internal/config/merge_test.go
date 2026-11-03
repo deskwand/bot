@@ -711,3 +711,9 @@ func TestSecretEditAllowsMcpNames(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReservedReferenceNamesIncludeBot(t *testing.T) {
+	if !reservedReferenceNames["BOT"] {
+		t.Fatal("BOT binding is not reserved for migrated secrets")
+	}
+}

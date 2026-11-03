@@ -3,6 +3,8 @@ import { PiHarness, type PiModel } from "agents/harness/pi";
 import { createRegistry, Harness, type UserInput } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
+import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
+import type { RunOutcome } from "../bot/bot-store";
 import type {
   DbSchema,
   DumpPage,
@@ -33,6 +35,8 @@ import {
   type ProgressPolicy,
 } from "./notifier";
 import { MemoryStore, renderMemorySection } from "./memory";
+import { BotsRepo } from "./bots-repo";
+import { createBotTools } from "./bot-tools";
 import { butlerSystemPrompt } from "./prompt";
 import {
   InvalidCronError,
@@ -100,6 +104,8 @@ export class ButlerDO extends Agent<Env> {
   private readonly db: SqlStorage;
 
   private readonly repo: TasksRepo;
+
+  private readonly bots: BotsRepo;
 
   private readonly memory: MemoryStore;
 
@@ -173,12 +179,21 @@ export class ButlerDO extends Agent<Env> {
         message_ref_json TEXT
       )`,
     );
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS bots (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`,
+    );
 
     // Appended columns keep existing objects: no rebuild, no data loss.
     this.ensureColumn("tasks", "progress_message_ref_json", "TEXT");
     this.ensureColumn("approval_messages", "message_ref_json", "TEXT");
+    this.ensureColumn("tasks", "bot_id", "TEXT");
 
     this.repo = new TasksRepo(this.db);
+    this.bots = new BotsRepo(this.db);
     this.memory = new MemoryStore(this.db);
     this.schedules = new ScheduleStore(this.db);
     this.lease = new MaintenanceStore(this.db);
@@ -188,16 +203,23 @@ export class ButlerDO extends Agent<Env> {
     // a storage error, so registry changes must not depend on it.
     this.registry.install({
       name: "butler",
-      tools: createButlerTools({
-        repo: this.repo,
-        task: (id) => this.taskFor(id),
-        spawn: (title, instructions) => this.spawn(title, instructions),
-        memory: this.memory,
-        createSchedule: (cron, title, instructions) =>
-          this.createSchedule(cron, title, instructions),
-        listSchedules: () => this.schedules.list(),
-        removeSchedule: (id) => this.removeSchedule(id),
-      }),
+      tools: [
+        ...createButlerTools({
+          repo: this.repo,
+          task: (id) => this.taskFor(id),
+          spawn: (title, instructions) => this.spawn(title, instructions),
+          memory: this.memory,
+          createSchedule: (cron, title, instructions) =>
+            this.createSchedule(cron, title, instructions),
+          listSchedules: () => this.schedules.list(),
+          removeSchedule: (id) => this.removeSchedule(id),
+        }),
+        ...createBotTools({
+          bots: this.bots,
+          bot: (id) => this.botFor(id),
+          task: (id) => this.taskFor(id),
+        }),
+      ],
       sections: [
         {
           key: "butler",
@@ -278,6 +300,11 @@ export class ButlerDO extends Agent<Env> {
       .exec<{ id: string }>(`SELECT id FROM tasks ORDER BY created_at`)
       .toArray()
       .map((row) => row.id);
+  }
+
+  /** The bots this Butler indexes (backup discovery and management). */
+  listBotIds(): string[] {
+    return this.bots.list().map((row) => row.id);
   }
 
   async backupSchema(): Promise<DbSchema> {
@@ -366,6 +393,42 @@ export class ButlerDO extends Agent<Env> {
     }
 
     return id;
+  }
+
+  /**
+   * Dispatches one bot run. Unlike `spawn` this is silent: a bot wakes on its
+   * own schedule, so a start/progress/completion message would only be noise.
+   */
+  async spawnForBot(
+    botId: string,
+    title: string,
+    instructions: string,
+  ): Promise<SpawnForBotResult> {
+    if (this.lease.current() !== null) {
+      return { ok: false, reason: "maintenance", message: "维护中" };
+    }
+
+    const route = await this.channels().currentRoute();
+    if (route.channel === null) {
+      return {
+        ok: false,
+        reason: "channel_disabled",
+        message: "没有可用渠道",
+      };
+    }
+
+    const id = this.repo.nextId();
+    this.repo.insert({ id, title, chatId: null, botId });
+
+    try {
+      await this.taskFor(id).start({ taskId: id, title, instructions, botId });
+    } catch (error) {
+      const message = errorText(error);
+      this.repo.update(id, { status: "failed", summary: message });
+      return { ok: false, reason: "failed", message };
+    }
+
+    return { ok: true, taskId: id };
   }
 
   /** Persists a schedule and registers its cron on the Agent lifecycle. */
@@ -457,8 +520,40 @@ export class ButlerDO extends Agent<Env> {
     // Display-only progress is dropped while the deployment is quiesced; the
     // Task outbox keeps the durable events for after the lease.
     if (this.lease.current() !== null) return;
-    if (!this.repo.get(taskId)) return;
+    const row = this.repo.get(taskId);
+    if (!row || row.botId !== null) return;
     await this.handleProgress(taskId, text, getClock().now());
+  }
+
+  /** The run status a BotDO watchdog polls. `null` means still in flight. */
+  async botTaskOutcome(
+    taskId: string,
+  ): Promise<{ outcome: RunOutcome | null; summary: string }> {
+    const row = this.repo.get(taskId);
+    if (!row) return { outcome: "cancelled", summary: "任务不存在" };
+    if (
+      row.status === "completed" ||
+      row.status === "failed" ||
+      row.status === "cancelled"
+    ) {
+      return { outcome: row.status, summary: row.summary ?? "" };
+    }
+    return { outcome: null, summary: "" };
+  }
+
+  /** Sends a bot message as-is (the text already carries any prefix). */
+  async botNotice(_botId: string, text: string): Promise<void> {
+    await this.sendBestEffort({ text: clampMessage(text) });
+  }
+
+  /** Sends `notify_owner` output, prefixed with the bot's name. */
+  async notifyFromBot(botId: string, text: string): Promise<boolean> {
+    const bot = this.bots.get(botId);
+    if (!bot) return false;
+    const ref = await this.sendBestEffort({
+      text: clampMessage(`🤖 ${bot.name}：${text}`),
+    });
+    return ref !== null;
   }
 
   async report(event: TaskEvent): Promise<void> {
@@ -595,7 +690,7 @@ export class ButlerDO extends Agent<Env> {
     now: number,
   ): Promise<void> {
     const row = this.repo.get(taskId);
-    if (!row) return;
+    if (!row || row.botId !== null) return;
 
     const text = progressText(row, detail);
     const allowed = this.progressPolicy(row).offer(taskId, text, now);
@@ -714,10 +809,13 @@ export class ButlerDO extends Agent<Env> {
       argsSummary: string;
     },
   ): Promise<boolean> {
-    if (!this.repo.get(taskId)) return false;
+    const row = this.repo.get(taskId);
+    if (!row) return false;
 
+    const bot = row.botId === null ? null : this.bots.get(row.botId);
+    const prefix = row.botId === null ? "" : `🤖 ${bot?.name ?? row.botId} `;
     const text = clampMessage(
-      `🔐 ${taskId} 请求执行 ${approval.tool}\n${approval.argsSummary}`,
+      `${prefix}🔐 ${taskId} 请求执行 ${approval.tool}\n${approval.argsSummary}`,
     );
     const ref = await this.sendBestEffort({
       text,
@@ -796,6 +894,10 @@ export class ButlerDO extends Agent<Env> {
 
     const row = this.repo.get(taskId);
     if (!row) return;
+    if (row.botId !== null) {
+      await this.forwardToBot(row.botId, taskId, "completed", summary);
+      return;
+    }
     const append = this.progressPolicy(row) === this.heartbeat;
     if (append) {
       // The single terminal message carries the status line, so the reference
@@ -875,6 +977,12 @@ export class ButlerDO extends Agent<Env> {
 
     const row = this.repo.get(taskId);
     if (!row) return;
+    if (row.botId !== null) {
+      // Keep the reason for the watchdog path (`botTaskOutcome`).
+      this.repo.update(taskId, { summary: reason, updatedAt: now });
+      await this.forwardToBot(row.botId, taskId, "failed", reason);
+      return;
+    }
     const hint = retryable ? `\n回复"重试 ${taskId}"可继续` : "";
     const body = `❌ ${taskId} ${row.title}：${reason}`;
     await this.showTerminal(
@@ -891,6 +999,10 @@ export class ButlerDO extends Agent<Env> {
 
     const row = this.repo.get(taskId);
     if (!row) return;
+    if (row.botId !== null) {
+      await this.forwardToBot(row.botId, taskId, "cancelled", "");
+      return;
+    }
     await this.showTerminal(taskId, `🚫 ${taskId} ${row.title}：已取消`);
   }
 
@@ -975,8 +1087,15 @@ export class ButlerDO extends Agent<Env> {
       this.kickReconcile();
       return;
     }
+    if (evt.voiceFailed && evt.text === null && images.length === 0) {
+      await this.sendBestEffort({
+        text: "收到了语音，但没能转成文字，请再发一次或换成文字",
+      });
+      this.kickReconcile();
+      return;
+    }
     if (evt.text === null && images.length === 0) {
-      await this.sendBestEffort({ text: "目前只支持文字消息" });
+      await this.sendBestEffort({ text: "目前只支持文字、图片和语音消息" });
       this.kickReconcile();
       return;
     }
@@ -1088,6 +1207,27 @@ export class ButlerDO extends Agent<Env> {
 
   private taskFor(id: string): TaskControl {
     return this.env.TASK.get(this.env.TASK.idFromName(id));
+  }
+
+  private botFor(id: string): DurableObjectStub<BotDO> {
+    return this.env.BOT.get(this.env.BOT.idFromName(id));
+  }
+
+  /**
+   * Hands a terminal event to the owning bot. A failed call is only logged:
+   * the bot's watchdog asks `botTaskOutcome` later and records the run then.
+   */
+  private async forwardToBot(
+    botId: string,
+    taskId: string,
+    outcome: RunOutcome,
+    summary: string,
+  ): Promise<void> {
+    try {
+      await this.botFor(botId).onRunEnded(taskId, outcome, summary);
+    } catch (error) {
+      console.error(`butler bot ${botId} outcome failed:`, error);
+    }
   }
 }
 

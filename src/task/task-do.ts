@@ -15,6 +15,7 @@ import type {
   DumpRow,
   TableSchema,
 } from "../admin/sql-dump";
+import { createBotTaskTools } from "../bot/bot-tools";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
 import type {
@@ -95,6 +96,9 @@ export class TaskDO extends Agent<Env> {
 
   /** Resolves once MCP tools were loaded and installed on this instance. */
   private mcpTools: Promise<void> | undefined;
+
+  /** Resolves once this bot run installed its write-back tools. */
+  private botTools: Promise<void> | undefined;
 
   private readonly db: SqlStorage;
 
@@ -226,6 +230,7 @@ export class TaskDO extends Agent<Env> {
     const state = this.readMeta("state");
     if (state === "queued" || state === "running") {
       await this.ensureMcpTools();
+      await this.ensureBotTools();
     }
 
     // `wait` reads storage, so this survives restarts: re-attach to a run
@@ -365,6 +370,7 @@ export class TaskDO extends Agent<Env> {
     // MCP tools are loaded outside the harness factory so a restart never
     // rebuilds them mid-run; install them before the model can ask for one.
     await this.ensureMcpTools();
+    await this.ensureBotTools();
 
     await this.harness.submit(effective.instructions, { operationId });
 
@@ -480,6 +486,32 @@ export class TaskDO extends Agent<Env> {
   private ensureMcpTools(): Promise<void> {
     this.mcpTools ??= this.installMcpTools();
     return this.mcpTools;
+  }
+
+  /**
+   * Install the bot's write-back tools once per object instance. Only tasks
+   * spawned for a bot get them; the registry is installed in the constructor
+   * but its extension list is published live.
+   */
+  private ensureBotTools(): Promise<void> {
+    this.botTools ??= this.installBotTools();
+    return this.botTools;
+  }
+
+  private async installBotTools(): Promise<void> {
+    const botId = this.spec?.botId;
+    if (!botId) return;
+
+    const bot = this.env.BOT.get(this.env.BOT.idFromName(botId));
+    const butler = this.env.BUTLER.get(this.env.BUTLER.idFromName("owner"));
+    this.registry.install({
+      name: "bot",
+      tools: createBotTaskTools({
+        bot,
+        taskId: () => this.currentTaskId() ?? "",
+        notify: (text) => butler.notifyFromBot(botId, text),
+      }),
+    });
   }
 
   private async installMcpTools(): Promise<void> {

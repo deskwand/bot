@@ -82,6 +82,8 @@ export type WeChatUpdate = {
   text: string | null;
   messageType: number;
   image: WeChatImageRef | null;
+  /** 该条消息的 item 里有 `voice_item`，即这是一条语音。 */
+  voice: boolean;
 };
 
 type QrStatus = "wait" | "scaned" | "confirmed" | "expired";
@@ -309,24 +311,40 @@ function toWeChatUpdate(value: Record<string, unknown>): WeChatUpdate {
   const items = (Array.isArray(value.item_list) ? value.item_list : []).filter(
     isRecord,
   );
+  // An empty text item is not text: it must not shadow a voice transcript.
   const texts = items
     .filter((item) => item.type === TEXT_ITEM_TYPE)
     .map((item) =>
       isRecord(item.text_item) ? (readString(item.text_item, "text") ?? "") : "",
-    );
+    )
+    .filter((text) => text !== "");
   const image =
     items
       .filter((item) => item.type === IMAGE_ITEM_TYPE)
       .map(toImageRef)
       .find((ref) => ref !== null) ?? null;
 
+  // WeChat recognizes voice on its side and ships the transcript in the item.
+  // Nothing is downloaded or decoded: no SILK, no audio model, no CPU cost.
+  const voice = items.some((item) => item.voice_item !== undefined);
+  const voiceText = voice
+    ? items
+        .map((item) =>
+          isRecord(item.voice_item)
+            ? readString(item.voice_item, "text")?.trim()
+            : undefined,
+        )
+        .find((text) => text !== undefined && text !== "")
+    : undefined;
+
   return {
     messageId,
     fromUserId,
     contextToken,
-    text: texts.length > 0 ? texts.join("\n") : null,
+    text: texts.length > 0 ? texts.join("\n") : (voiceText ?? null),
     messageType,
     image,
+    voice,
   };
 }
 

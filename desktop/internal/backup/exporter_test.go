@@ -94,6 +94,7 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 	worker.token = "tok"
 	worker.versionID = "version-1"
 	worker.taskIDs = []string{"t1", "t2"}
+	worker.botIDs = []string{"b1"}
 
 	butlerRows := map[string][]json.RawMessage{
 		"memories": {
@@ -121,6 +122,11 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 	}, map[string][]json.RawMessage{
 		"meta": {json.RawMessage(`{"__rowid":1,"key":"state","value":"running"}`)},
 	})
+	worker.setDO(DORef{DO: "bot", ID: "b1"}, DBSchema{
+		Tables: []TableSchema{{Name: "meta", Create: `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`}},
+	}, map[string][]json.RawMessage{
+		"meta": {json.RawMessage(`{"__rowid":1,"key":"status","value":"active"}`)},
+	})
 	worker.setDO(DORef{DO: "channel"}, DBSchema{
 		Tables: []TableSchema{{Name: "__kv", WithoutRowid: true}},
 	}, map[string][]json.RawMessage{
@@ -146,7 +152,7 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 	if got := manifest.ExportedAt; got != deps.Now() {
 		t.Fatalf("exportedAt = %v", got)
 	}
-	if len(manifest.DurableObjects) != 4 {
+	if len(manifest.DurableObjects) != 5 {
 		t.Fatalf("durable objects = %d", len(manifest.DurableObjects))
 	}
 	var butler *DOManifest
@@ -158,7 +164,7 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 			butler = object
 		}
 	}
-	if want := []string{"task/t1", "task/t2", "channel/", "butler/"}; !reflect.DeepEqual(order, want) {
+	if want := []string{"task/t1", "task/t2", "bot/b1", "channel/", "butler/"}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("export order = %v, want %v", order, want)
 	}
 	if butler == nil || butler.Rows["memories"] != 2 || butler.Rows["schedules"] != 1 {
@@ -201,6 +207,18 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 		if !ok || string(data) != string(want) {
 			t.Fatalf("object %s bytes mismatch", item.Key)
 		}
+	}
+}
+
+func TestExportRefsOrdersBotsAfterTasks(t *testing.T) {
+	refs := exportRefs([]string{"t1", "t2"}, []string{"b1", "b2"})
+	var got []string
+	for _, ref := range refs {
+		got = append(got, ref.DO+"/"+ref.ID)
+	}
+	want := []string{"task/t1", "task/t2", "bot/b1", "bot/b2", "channel/", "butler/"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("export order = %v, want %v", got, want)
 	}
 }
 

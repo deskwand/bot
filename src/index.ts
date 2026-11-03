@@ -4,6 +4,7 @@ import { createGateway } from "./gateway";
 
 export { ButlerDO } from "./butler/butler-do";
 export { TaskDO } from "./task/task-do";
+export { BotDO } from "./bot/bot-do";
 export { ChannelDO };
 export { McpAuthDO } from "./mcp/mcp-auth-do";
 
@@ -26,6 +27,7 @@ function admin(env: Env) {
     butler: () => butler(env),
     channel: () => channels(env),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
+    bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     artifacts: env.ARTIFACTS,
     mcpAuth: () => mcpAuth(env),
   });

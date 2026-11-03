@@ -17,6 +17,8 @@ export type MessageEvent = {
   images?: InboundImage[];
   /** 消息带了图片，但取不到可用的内容（下载、解密或格式失败）。 */
   imageFailed?: boolean;
+  /** 消息是语音，但没能转成文字。 */
+  voiceFailed?: boolean;
   eventId: string;
 };
 
@@ -77,6 +79,8 @@ export type TaskSpec = {
   title: string;
   instructions: string;
   model?: ModelRef;
+  /** Set when the Butler spawned this task for a bot run. */
+  botId?: string;
 };
 
 const ACTION_KINDS: readonly ActionKind[] = ["approve", "reject", "cancel"];

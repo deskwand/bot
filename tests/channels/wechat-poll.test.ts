@@ -542,6 +542,140 @@ describe("pollWeChat", () => {
     ]);
   });
 
+  it("reads the text WeChat already recognized for a voice message", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    const { fetchImpl } = scriptedILink([
+      jsonResponse({
+        get_updates_buf: "cursor-voice",
+        msgs: [
+          {
+            message_id: "v1",
+            from_user_id: OWNER,
+            context_token: "ctx-voice",
+            message_type: 1,
+            item_list: [
+              {
+                type: 3,
+                create_time_ms: 1,
+                voice_item: {
+                  text: "明天下午三点提醒我开会",
+                  playtime: 8000,
+                  encode_type: 4,
+                  media: { encrypt_query_param: "q", aes_key: "k" },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+    const events = await captureButler();
+
+    await pollThroughDO();
+
+    const route = await channels().currentRoute();
+    await vi.waitFor(() => {
+      expect(events).toEqual([
+        {
+          type: "message",
+          channel: "wechat",
+          chatId: OWNER,
+          userId: OWNER,
+          text: "明天下午三点提醒我开会",
+          eventId: "wx:v1",
+          routeKey: route.routeKey,
+        },
+      ]);
+    });
+  });
+
+  it("marks a voice message as failed when WeChat recognized no text", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    const { fetchImpl } = scriptedILink([
+      jsonResponse({
+        get_updates_buf: "cursor-voice-empty",
+        msgs: [
+          {
+            message_id: "v2",
+            from_user_id: OWNER,
+            context_token: "ctx-voice-empty",
+            message_type: 1,
+            item_list: [
+              { type: 3, voice_item: { text: "", playtime: 8000, media: {} } },
+            ],
+          },
+        ],
+      }),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+    const events = await captureButler();
+
+    await pollThroughDO();
+
+    const route = await channels().currentRoute();
+    await vi.waitFor(() => {
+      expect(events).toEqual([
+        {
+          type: "message",
+          channel: "wechat",
+          chatId: OWNER,
+          userId: OWNER,
+          text: null,
+          voiceFailed: true,
+          eventId: "wx:v2",
+          routeKey: route.routeKey,
+        },
+      ]);
+    });
+  });
+
+  it("does not let an empty text item hide the voice transcript", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    const { fetchImpl } = scriptedILink([
+      jsonResponse({
+        get_updates_buf: "cursor-voice-empty-text",
+        msgs: [
+          {
+            message_id: "v3",
+            from_user_id: OWNER,
+            context_token: "ctx-voice-empty-text",
+            message_type: 1,
+            item_list: [
+              { type: 1, text_item: { text: "" } },
+              { type: 3, voice_item: { text: "提醒我开会", playtime: 8000 } },
+            ],
+          },
+        ],
+      }),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+    const events = await captureButler();
+
+    await pollThroughDO();
+
+    const route = await channels().currentRoute();
+    await vi.waitFor(() => {
+      expect(events).toEqual([
+        {
+          type: "message",
+          channel: "wechat",
+          chatId: OWNER,
+          userId: OWNER,
+          text: "提醒我开会",
+          eventId: "wx:v3",
+          routeKey: route.routeKey,
+        },
+      ]);
+    });
+  });
+
   it("downloads an image message and hands it to the Butler", async () => {
     setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
     await channels().ensurePolling();

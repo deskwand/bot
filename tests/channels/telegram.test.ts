@@ -56,11 +56,17 @@ function fakeFetch(
   return { calls, fetchImpl };
 }
 
-function makeAdapter(fetchImpl: typeof fetch) {
+function makeAdapter(
+  fetchImpl: typeof fetch,
+  ai?: {
+    run(model: string, inputs: { audio: string }): Promise<{ text?: string }>;
+  },
+) {
   return createTelegramAdapter({
     token: TOKEN,
     webhookSecret: SECRET,
     fetch: fetchImpl,
+    ai,
   });
 }
 
@@ -125,7 +131,7 @@ describe("parseInbound", () => {
           message_id: 11,
           from: { id: 7 },
           chat: { id: 42 },
-          voice: { file_id: "abc", duration: 3 },
+          sticker: { file_id: "abc" },
         },
       }),
     );
@@ -250,6 +256,100 @@ describe("parseInbound", () => {
 
     expect(event).not.toHaveProperty("images");
     expect(event).toMatchObject({ imageFailed: true });
+  });
+
+  it("transcribes a voice message into the message text", async () => {
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "voice/x.oga" } } },
+      { status: 200, bytes: pngBytes() },
+    ]);
+    const ai = { run: async () => ({ text: "明天下午三点提醒我开会" }) };
+
+    const event = await makeAdapter(fetchImpl, ai).parseInbound(
+      updateRequest({
+        update_id: 11,
+        message: {
+          message_id: 101,
+          from: { id: 1 },
+          chat: { id: 42 },
+          voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({
+      text: "明天下午三点提醒我开会",
+      eventId: "tg:11",
+    });
+    expect(event).not.toHaveProperty("voiceFailed");
+  });
+
+  it("marks a voice message as failed when the download fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "voice/x.oga" } } },
+      new Error("network down"),
+    ]);
+
+    const event = await makeAdapter(fetchImpl).parseInbound(
+      updateRequest({
+        update_id: 12,
+        message: {
+          message_id: 102,
+          from: { id: 1 },
+          chat: { id: 42 },
+          voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({ text: null, voiceFailed: true });
+  });
+
+  it("keeps both the caption and the transcript", async () => {
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "voice/x.oga" } } },
+      { status: 200, bytes: pngBytes() },
+    ]);
+    const ai = { run: async () => ({ text: "把这段发给张三" }) };
+
+    const event = await makeAdapter(fetchImpl, ai).parseInbound(
+      updateRequest({
+        update_id: 13,
+        message: {
+          message_id: 103,
+          from: { id: 1 },
+          chat: { id: 42 },
+          caption: "转发一下",
+          voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({ text: "转发一下\n把这段发给张三" });
+  });
+
+  it("answers the caption when the voice could not be transcribed", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "voice/x.oga" } } },
+      new Error("network down"),
+    ]);
+
+    const event = await makeAdapter(fetchImpl).parseInbound(
+      updateRequest({
+        update_id: 14,
+        message: {
+          message_id: 104,
+          from: { id: 1 },
+          chat: { id: 42 },
+          caption: "看这个",
+          voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
+        },
+      }),
+    );
+
+    expect(event).toMatchObject({ text: "看这个", voiceFailed: true });
   });
 
   it("parses callback query into ActionEvent", async () => {

@@ -389,7 +389,7 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 
 	progress := Progress{Op: "export", Phase: PhaseDatabase}
 	deps.report(progress)
-	for _, ref := range exportRefs(info.TaskIDs) {
+	for _, ref := range exportRefs(info.TaskIDs, info.BotIDs) {
 		object, err := exportDurableObject(ctx, client, writer, ref, &progress, deps)
 		if err != nil {
 			return Manifest{}, err
@@ -417,15 +417,19 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 	return manifest, nil
 }
 
-// exportRefs lists the objects in export order: tasks first, then the channel
-// hub, and the Butler last. A delivered task event is therefore either in both
-// the TaskDO and the Butler, or in the TaskDO with delivered = 0 (which the
-// Butler dedupes on restore). The Butler is never archived before the task
-// copy it indexes.
-func exportRefs(taskIDs []string) []DORef {
-	refs := make([]DORef, 0, len(taskIDs)+2)
+// exportRefs lists the objects in export order: tasks first, then bots, the
+// channel hub, and the Butler last. A delivered task event is therefore either
+// in both the TaskDO and the Butler, or in the TaskDO with delivered = 0 (which
+// the Butler dedupes on restore). A bot is archived after the tasks it points
+// at, and the Butler is never archived before the task and bot copies it
+// indexes.
+func exportRefs(taskIDs, botIDs []string) []DORef {
+	refs := make([]DORef, 0, len(taskIDs)+len(botIDs)+2)
 	for _, id := range taskIDs {
 		refs = append(refs, DORef{DO: "task", ID: id})
+	}
+	for _, id := range botIDs {
+		refs = append(refs, DORef{DO: "bot", ID: id})
 	}
 	refs = append(refs, DORef{DO: "channel"})
 	return append(refs, DORef{DO: "butler"})

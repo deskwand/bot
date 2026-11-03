@@ -29,6 +29,7 @@
     "bindings": [
       { "name": "BUTLER", "class_name": "ButlerDO" },
       { "name": "TASK", "class_name": "TaskDO" },
+      { "name": "BOT", "class_name": "BotDO" },
       { "name": "TEST_HARNESS", "class_name": "TestHarnessDO" },
       { "name": "CHANNELS", "class_name": "ChannelDO" },
       { "name": "MCP_AUTH", "class_name": "McpAuthDO" }
@@ -45,6 +46,10 @@
     },
     {
       "tag": "v3",
+      "new_sqlite_classes": ["BotDO"]
+    },
+    {
+      "tag": "v4",
       "new_sqlite_classes": ["McpAuthDO"]
     }
   ],

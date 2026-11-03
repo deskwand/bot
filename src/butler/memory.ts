@@ -1,7 +1,7 @@
 export type MemoryItem = { id: number; content: string };
 
 /** How many memories the system prompt section renders each turn. */
-const RENDER_LIMIT = 50;
+export const RENDER_LIMIT = 50;
 
 /**
  * The memory prompt section: every known fact about the owner, newest last,

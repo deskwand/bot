@@ -187,7 +187,13 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     parameters: TaskId,
     async execute({ id }) {
       try {
-        if (!repo.get(id)) return output(`没有任务 ${id}`);
+        const row = repo.get(id);
+        if (!row) return output(`没有任务 ${id}`);
+        if (row.botId !== null) {
+          return output(
+            `任务 ${id} 属于机器人 ${row.botId}，请用 wake_bot 让它重新运行`,
+          );
+        }
         return output((await task(id).retryTask()).message);
       } catch (error) {
         return output(errorText(error));

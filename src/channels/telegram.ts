@@ -8,6 +8,7 @@ import {
   type OutboundMessage,
 } from "../protocol";
 import { prepareInboundImage } from "./media";
+import { transcribeVoice, type VoiceAi } from "./voice";
 import { renderForTelegram } from "./telegram-render";
 import { ChannelError, type ChannelAdapter } from "./types";
 
@@ -17,6 +18,7 @@ type TelegramUser = { id: number };
 type TelegramChat = { id: number };
 type TelegramPhotoSize = { file_id: string; width: number; height: number };
 type TelegramDocument = { file_id: string; mime_type?: string };
+type TelegramVoice = { file_id: string; duration: number; mime_type?: string };
 type TelegramMessage = {
   message_id: number;
   from?: TelegramUser;
@@ -25,6 +27,7 @@ type TelegramMessage = {
   caption?: string;
   photo?: TelegramPhotoSize[];
   document?: TelegramDocument;
+  voice?: TelegramVoice;
 };
 type TelegramCallbackQuery = {
   id: string;
@@ -48,6 +51,8 @@ export type TelegramAdapterOptions = {
   token?: string;
   webhookSecret?: string;
   fetch?: typeof fetch;
+  /** 缺省时语音降级为 `voiceFailed`，不影响其他消息。 */
+  ai?: VoiceAi;
 };
 
 /** The `file_id` of the message's image: its largest photo, or an image document. */
@@ -195,14 +200,36 @@ export function createTelegramAdapter(
         if (image) images.push(image);
         else if (source) console.warn(`telegram image dropped (${source})`);
 
+        // A voice note is transcribed here, not in the model: the transcript
+        // becomes the message text, so the butler never sees audio.
+        let transcript: string | undefined;
+        if (message.voice) {
+          const audio = await downloadFile(message.voice.file_id);
+          if (!audio) {
+            console.warn(`telegram voice download failed (${message.voice.file_id})`);
+          }
+          transcript = audio
+            ? await transcribeVoice(audio, opts.ai)
+            : undefined;
+        }
+
+        // A caption (voice notes may carry one) and the transcript both count
+        // as text; neither may be dropped.
+        const parts = [message.caption ?? message.text, transcript].filter(
+          (part): part is string => typeof part === "string" && part !== "",
+        );
+
         const event: MessageEvent = {
           type: "message",
           channel: "telegram",
           chatId: String(message.chat.id),
           userId: String(message.from.id),
-          text: message.caption ?? message.text ?? null,
+          text: parts.length > 0 ? parts.join("\n") : null,
           ...(images.length > 0 ? { images } : {}),
           ...(source && images.length === 0 ? { imageFailed: true } : {}),
+          ...(message.voice && transcript === undefined
+            ? { voiceFailed: true }
+            : {}),
           eventId: `tg:${update.update_id}`,
         };
         return event;

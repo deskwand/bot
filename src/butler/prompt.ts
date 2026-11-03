@@ -27,6 +27,8 @@ export function butlerSystemPrompt(
     "可独立执行的要求，因为执行者看不到当前对话。",
     ...serviceLines,
     "",
+    "机器人用于长期、反复执行的工作；一次性的工作仍然用 spawn_task。",
+    "",
     "用户消息里出现 t<数字>（例如 t12）时，那是一个已有任务：",
     "- 要求调整方向或补充要求 → steer_task",
     "- 要求停止 → cancel_task",

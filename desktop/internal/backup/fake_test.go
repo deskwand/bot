@@ -75,6 +75,7 @@ type fakeWorker struct {
 	token     string
 	versionID string
 	taskIDs   []string
+	botIDs    []string
 
 	dos     map[string]*fakeDO
 	objects map[string]*fakeObject
@@ -232,9 +233,14 @@ func (f *fakeWorker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if taskIDs == nil {
 			taskIDs = []string{}
 		}
+		botIDs := f.botIDs
+		if botIDs == nil {
+			botIDs = []string{}
+		}
 		f.writeJSON(w, http.StatusOK, map[string]any{
 			"versionId": f.versionID,
 			"taskIds":   taskIDs,
+			"botIds":    botIDs,
 		})
 	case schemaPath:
 		f.writeJSON(w, http.StatusOK, f.doFor(record).schema)
@@ -503,7 +509,7 @@ func fakeOffset(w http.ResponseWriter, cursor string, length int) (int, bool) {
 
 func validDOKind(kind string) bool {
 	switch kind {
-	case "butler", "task", "channel":
+	case "butler", "task", "bot", "channel":
 		return true
 	default:
 		return false

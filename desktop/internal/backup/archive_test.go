@@ -443,6 +443,15 @@ func TestOpenRejectsTaskWithoutID(t *testing.T) {
 	requireCode(t, err, CodeBackupInvalid)
 }
 
+func TestValidateDORefRequiresBotID(t *testing.T) {
+	if err := validateDORef(DORef{DO: "bot"}); err == nil {
+		t.Fatal("a bot without an id was accepted")
+	}
+	if err := validateDORef(DORef{DO: "bot", ID: "b1"}); err != nil {
+		t.Fatalf("a bot with an id was rejected: %v", err)
+	}
+}
+
 func TestOpenRejectsObjectSizeMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "backup.zip")
 	manifest := minimalManifest()
