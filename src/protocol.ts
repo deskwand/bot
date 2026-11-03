@@ -15,6 +15,8 @@ export type MessageEvent = {
   text: string | null;
   /** 最多 1 张；缺省表示这条消息没有图片。 */
   images?: InboundImage[];
+  /** 消息带了图片，但取不到可用的内容（下载、解密或格式失败）。 */
+  imageFailed?: boolean;
   eventId: string;
 };
 

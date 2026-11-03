@@ -361,6 +361,32 @@ describe("butler chat", () => {
     expect(channel.sent).toEqual([{ chatId: "42", text: "是一张纯色图" }]);
   });
 
+  it("says so when an image could not be fetched", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let calls = 0;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "不应出现",
+          observe: () => {
+            calls += 1;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-114").handleMessage({
+      ...message({ text: null, eventId: "tg:114" }),
+      imageFailed: true,
+    });
+
+    expect(channel.sent).toEqual([
+      { chatId: "42", text: "收到了图片，但没能取到图片内容，请稍后再发一次" },
+    ]);
+    expect(calls).toBe(0);
+  });
+
   it("answers images with a fixed note when the model cannot see them", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);

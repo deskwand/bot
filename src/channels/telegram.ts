@@ -190,12 +190,10 @@ export function createTelegramAdapter(
 
         const images: InboundImage[] = [];
         const source = imageSource(message);
-        if (source) {
-          const bytes = await downloadFile(source);
-          const image = bytes ? await prepareInboundImage(bytes) : undefined;
-          if (image) images.push(image);
-          else console.warn(`telegram image dropped (${source})`);
-        }
+        const bytes = source ? await downloadFile(source) : undefined;
+        const image = bytes ? await prepareInboundImage(bytes) : undefined;
+        if (image) images.push(image);
+        else if (source) console.warn(`telegram image dropped (${source})`);
 
         const event: MessageEvent = {
           type: "message",
@@ -204,6 +202,7 @@ export function createTelegramAdapter(
           userId: String(message.from.id),
           text: message.caption ?? message.text ?? null,
           ...(images.length > 0 ? { images } : {}),
+          ...(source && images.length === 0 ? { imageFailed: true } : {}),
           eventId: `tg:${update.update_id}`,
         };
         return event;

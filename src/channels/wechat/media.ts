@@ -73,7 +73,11 @@ export function decryptImage(
   }
 }
 
-/** Downloads and decrypts one inbound image; `undefined` when any step fails. */
+/**
+ * Downloads one inbound image, decrypting it when the payload carries a key.
+ * Without a usable key the CDN object is taken as it comes: iLink does not
+ * always send `aeskey`, and the reference clients download those in the clear.
+ */
 export async function downloadWeChatImage(
   fetchImpl: typeof fetch,
   cdnBaseUrl: string,
@@ -81,7 +85,6 @@ export async function downloadWeChatImage(
   signal?: AbortSignal,
 ): Promise<Uint8Array | undefined> {
   const key = decodeAesKey(image);
-  if (!key) return undefined;
 
   try {
     const response = await fetchImpl(
@@ -89,7 +92,8 @@ export async function downloadWeChatImage(
       signal ? { signal } : {},
     );
     if (!response.ok) return undefined;
-    return decryptImage(new Uint8Array(await response.arrayBuffer()), key);
+    const body = new Uint8Array(await response.arrayBuffer());
+    return key ? decryptImage(body, key) : body;
   } catch {
     return undefined;
   }

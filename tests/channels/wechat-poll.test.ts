@@ -668,6 +668,7 @@ describe("pollWeChat", () => {
           chatId: OWNER,
           userId: OWNER,
           text: null,
+          imageFailed: true,
           eventId: "wx:img-2",
           routeKey: route.routeKey,
         },

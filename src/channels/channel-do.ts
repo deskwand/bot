@@ -836,11 +836,16 @@ export class ChannelDO extends Agent<Env> {
       fetch: getILinkFetchOverride() ?? undefined,
     });
     const bytes = await client.downloadImage(image);
-    const prepared = bytes ? await prepareInboundImage(bytes) : undefined;
+    if (!bytes) {
+      console.warn(`channel: wechat image download failed (${event.eventId})`);
+      this.dispatchMessage({ ...event, imageFailed: true }, routeKey);
+      return;
+    }
 
+    const prepared = await prepareInboundImage(bytes);
     if (!prepared) {
-      console.warn(`channel: wechat image dropped (${event.eventId})`);
-      this.dispatchMessage(event, routeKey);
+      console.warn(`channel: wechat image unusable (${event.eventId})`);
+      this.dispatchMessage({ ...event, imageFailed: true }, routeKey);
       return;
     }
 

@@ -953,6 +953,13 @@ export class ButlerDO extends Agent<Env> {
     if (!(await this.admissionHolds(evt))) return;
 
     const images = evt.images ?? [];
+    if (evt.imageFailed && images.length === 0) {
+      await this.sendBestEffort({
+        text: "收到了图片，但没能取到图片内容，请稍后再发一次",
+      });
+      this.kickReconcile();
+      return;
+    }
     if (evt.text === null && images.length === 0) {
       await this.sendBestEffort({ text: "目前只支持文字消息" });
       this.kickReconcile();

@@ -125,7 +125,7 @@ describe("parseInbound", () => {
           message_id: 11,
           from: { id: 7 },
           chat: { id: 42 },
-          photo: [{ file_id: "abc" }],
+          voice: { file_id: "abc", duration: 3 },
         },
       }),
     );
@@ -224,6 +224,7 @@ describe("parseInbound", () => {
       chatId: "42",
       userId: "1",
       text: "看图",
+      imageFailed: true,
       eventId: "tg:9",
     });
   });
@@ -248,6 +249,7 @@ describe("parseInbound", () => {
     );
 
     expect(event).not.toHaveProperty("images");
+    expect(event).toMatchObject({ imageFailed: true });
   });
 
   it("parses callback query into ActionEvent", async () => {

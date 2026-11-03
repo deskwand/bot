@@ -96,6 +96,23 @@ describe("downloadWeChatImage", () => {
     ]);
   });
 
+  it("downloads plaintext when the item carries no key", async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      calls.push(typeof input === "string" ? input : input.toString());
+      return new Response(PLAIN, { status: 200 });
+    }) as typeof fetch;
+
+    const bytes = await downloadWeChatImage(fetchImpl, "https://cdn.example.com", {
+      encryptQueryParam: "p-2",
+    });
+
+    expect(Array.from(bytes ?? [])).toEqual(Array.from(PLAIN));
+    expect(calls).toEqual([
+      "https://cdn.example.com/download?encrypted_query_param=p-2",
+    ]);
+  });
+
   it("returns undefined when the CDN fails or the key is missing", async () => {
     const failing = (async () => new Response("nope", { status: 500 })) as typeof fetch;
 
