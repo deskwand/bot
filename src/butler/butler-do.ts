@@ -36,6 +36,7 @@ import {
 } from "./notifier";
 import { MemoryStore, renderMemorySection } from "./memory";
 import { BotsRepo } from "./bots-repo";
+import { createBotTools } from "./bot-tools";
 import { butlerSystemPrompt } from "./prompt";
 import {
   InvalidCronError,
@@ -190,16 +191,23 @@ export class ButlerDO extends Agent<Env> {
     // a storage error, so registry changes must not depend on it.
     this.registry.install({
       name: "butler",
-      tools: createButlerTools({
-        repo: this.repo,
-        task: (id) => this.taskFor(id),
-        spawn: (title, instructions) => this.spawn(title, instructions),
-        memory: this.memory,
-        createSchedule: (cron, title, instructions) =>
-          this.createSchedule(cron, title, instructions),
-        listSchedules: () => this.schedules.list(),
-        removeSchedule: (id) => this.removeSchedule(id),
-      }),
+      tools: [
+        ...createButlerTools({
+          repo: this.repo,
+          task: (id) => this.taskFor(id),
+          spawn: (title, instructions) => this.spawn(title, instructions),
+          memory: this.memory,
+          createSchedule: (cron, title, instructions) =>
+            this.createSchedule(cron, title, instructions),
+          listSchedules: () => this.schedules.list(),
+          removeSchedule: (id) => this.removeSchedule(id),
+        }),
+        ...createBotTools({
+          bots: this.bots,
+          bot: (id) => this.botFor(id),
+          task: (id) => this.taskFor(id),
+        }),
+      ],
       sections: [
         { key: "butler", render: () => butlerSystemPrompt() },
         {
