@@ -2,7 +2,21 @@
  * System prompt for the Butler agent: it talks to the owner directly and
  * dispatches background work to Task DOs through the control tools.
  */
-export function butlerSystemPrompt(): string {
+export function butlerSystemPrompt(
+  services: { name: string; description?: string }[],
+): string {
+  const serviceLines =
+    services.length > 0
+      ? [
+          "",
+          "已接入的外部服务（需派任务使用）：",
+          ...services.map(
+            (service) =>
+              `- ${service.name}：${service.description ?? service.name}`,
+          ),
+        ]
+      : [];
+
   return [
     "你是用户的私人管家，通过 Telegram 与用户交流。回复要简短，用中文。",
     "",
@@ -11,6 +25,7 @@ export function butlerSystemPrompt(): string {
     "调用 spawn_task：当工作预计需要多次搜索或阅读网页、需要后台持续执行，",
     "或耗时超过约 1 分钟时。title 写简短的任务名；instructions 写完整、",
     "可独立执行的要求，因为执行者看不到当前对话。",
+    ...serviceLines,
     "",
     "用户消息里出现 t<数字>（例如 t12）时，那是一个已有任务：",
     "- 要求调整方向或补充要求 → steer_task",

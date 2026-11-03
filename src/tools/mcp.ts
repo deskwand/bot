@@ -4,6 +4,7 @@ import {
 } from "agents/mcp/client";
 import { Type, type Static, type TSchema } from "@earendil-works/pi-ai";
 import type {
+  Extension,
   ToolExecutionResult,
   ToolRegistration,
 } from "@earendil-works/pi-durable";
@@ -425,4 +426,25 @@ export function unavailableNotice(
   if (unavailable.length === 0) return undefined;
   const parts = unavailable.map((item) => `${item.name}（${item.reason}）`);
   return `以下服务本次不可用：${parts.join("；")}`;
+}
+
+/**
+ * Wrap a load result as the extension `TaskDO` installs. The notice section
+ * tells the model which servers were skipped this run; without any tools and
+ * nothing to report there is nothing to install.
+ */
+export function mcpExtension(loaded: {
+  tools: ToolRegistration[];
+  unavailable: McpUnavailable[];
+}): Extension | null {
+  if (loaded.tools.length === 0 && loaded.unavailable.length === 0) {
+    return null;
+  }
+  return {
+    name: "mcp",
+    tools: loaded.tools,
+    sections: [
+      { key: "mcp", render: () => unavailableNotice(loaded.unavailable) },
+    ],
+  };
 }

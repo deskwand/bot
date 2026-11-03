@@ -25,7 +25,7 @@ import type {
   TaskSpec,
 } from "../protocol";
 import { saveArtifactTool } from "../tools/artifacts";
-import { loadMcpTools, mcpConnector } from "../tools/mcp";
+import { loadMcpTools, mcpConnector, mcpExtension } from "../tools/mcp";
 import { webFetchTool } from "../tools/web-fetch";
 import { webSearchTool } from "../tools/web-search";
 import { withProgress } from "../tools/wrap";
@@ -487,13 +487,18 @@ export class TaskDO extends Agent<Env> {
       const servers = readRuntimeConfig(this.env).mcpServers;
       if (servers.length === 0) return;
 
-      const { tools } = await loadMcpTools(
+      const loaded = await loadMcpTools(
         servers,
         this.approvals,
-        mcpConnector(this.mcp, this.env),
+        mcpConnector(this.mcp, this.env, (server) =>
+          this.env.MCP_AUTH.get(
+            this.env.MCP_AUTH.idFromName("global"),
+          ).accessToken(server.name, server.url),
+        ),
         (body) => this.emitProgress(body),
       );
-      if (tools.length > 0) this.registry.install({ name: "mcp", tools });
+      const ext = mcpExtension(loaded);
+      if (ext) this.registry.install(ext);
     } catch (error) {
       if (error instanceof RuntimeConfigError) {
         // Configuration is not a transient MCP failure: run without MCP tools

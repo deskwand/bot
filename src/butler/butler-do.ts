@@ -67,6 +67,18 @@ const DECISION_LABELS = {
   expired: "已过期",
 } as const;
 
+/** Enabled MCP services the butler can hand to tasks, without their tools. */
+function enabledServices(env: Env): { name: string; description?: string }[] {
+  try {
+    return readRuntimeConfig(env).mcpServers
+      .filter((server) => server.enabled !== false)
+      .map(({ name, description }) => ({ name, description }));
+  } catch (error) {
+    if (error instanceof RuntimeConfigError) return [];
+    throw error;
+  }
+}
+
 /**
  * What an edit attempt achieved for a saved message reference.
  *
@@ -187,7 +199,10 @@ export class ButlerDO extends Agent<Env> {
         removeSchedule: (id) => this.removeSchedule(id),
       }),
       sections: [
-        { key: "butler", render: () => butlerSystemPrompt() },
+        {
+          key: "butler",
+          render: () => butlerSystemPrompt(enabledServices(this.env)),
+        },
         {
           key: "memory",
           render: () => renderMemorySection(this.memory.all()),

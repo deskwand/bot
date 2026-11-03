@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   loadMcpTools,
   mcpConnector,
+  mcpExtension,
   mcpToolMode,
   mcpToolName,
   probeMcpServer,
@@ -608,5 +609,38 @@ describe("unavailableNotice", () => {
         { name: "b", reason: "y" },
       ]),
     ).toBe("以下服务本次不可用：a（x）；b（y）");
+  });
+});
+
+describe("mcpExtension", () => {
+  const noInput = {} as never;
+  const noContext = {} as never;
+
+  it("returns null when there is nothing to install", () => {
+    expect(mcpExtension({ tools: [], unavailable: [] })).toBeNull();
+  });
+
+  it("installs only a notice section when every server is unavailable", async () => {
+    const ext = mcpExtension({
+      tools: [],
+      unavailable: [{ name: "notion", reason: "需要在桌面端登录授权" }],
+    });
+    expect(ext?.tools).toEqual([]);
+    await expect(
+      Promise.resolve(ext!.sections![0]!.render(noInput, noContext)),
+    ).resolves.toBe("以下服务本次不可用：notion（需要在桌面端登录授权）");
+  });
+
+  it("installs tools without a notice when every server loaded", async () => {
+    const tool = { name: "notion__search", description: "Search" };
+    const ext = mcpExtension({
+      tools: [tool as never],
+      unavailable: [],
+    });
+    expect(ext?.tools).toEqual([tool]);
+    expect(ext?.name).toBe("mcp");
+    await expect(
+      Promise.resolve(ext!.sections![0]!.render(noInput, noContext)),
+    ).resolves.toBeUndefined();
   });
 });
