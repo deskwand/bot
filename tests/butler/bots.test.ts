@@ -216,6 +216,30 @@ describe("ButlerDO bot runs", () => {
     });
   });
 
+  it("botTaskOutcome reports a missing task as cancelled", async () => {
+    const stub = butler("bots-missing-outcome");
+
+    expect(await stub.botTaskOutcome("t404")).toEqual({
+      outcome: "cancelled",
+      summary: "任务不存在",
+    });
+  });
+
+  it("spawnForBot defers while maintenance is active", async () => {
+    const stub = butler("bots-maintenance-spawn");
+    const specs = await stubStart(stub);
+    await stub.acquireMaintenance("export", "op1");
+
+    const result = await stub.spawnForBot("b1", "价格哨兵", "盯着价格");
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "maintenance",
+      message: "维护中",
+    });
+    expect(specs).toEqual([]);
+  });
+
   it("bot task approval carries the bot name", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);

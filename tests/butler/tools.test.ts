@@ -134,6 +134,52 @@ describe("butler control tools", () => {
     expect(result).toBe("任务 t1 启动失败：boom");
   });
 
+  it("retry_task refuses a bot task", async () => {
+    const result = await runInDurableObject(
+      butler("tools-retry-bot"),
+      async (_instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        repo.insert({ id: "t1", title: "盯价格", chatId: null, botId: "b1" });
+        let retried = false;
+        const tools = createButlerTools({
+          repo,
+          task: () => ({
+            start: async () => {},
+            status: async () => ({ state: "failed", title: "盯价格" }),
+            steer: async () => ({ ok: false, message: "" }),
+            cancel: async () => ({ ok: false, message: "" }),
+            retryTask: async () => {
+              retried = true;
+              return { ok: true, message: "已重试" };
+            },
+            pendingApprovals: async () => [],
+          }),
+          spawn: async () => "t2",
+          memory: new MemoryStore(state.storage.sql),
+          createSchedule: async () => "s1",
+          listSchedules: () => [],
+          removeSchedule: async () => false,
+        });
+
+        const retry = tools.find((tool) => tool.name === "retry_task");
+        const outcome = await retry!.execute(
+          { id: "t1" } as never,
+          {} as never,
+          {} as never,
+        );
+        return {
+          text: (outcome.output?.[0] as { text: string }).text,
+          retried,
+        };
+      },
+    );
+
+    expect(result).toEqual({
+      text: "任务 t1 属于机器人 b1，请用 wake_bot 让它重新运行",
+      retried: false,
+    });
+  });
+
   it("asks the Task DO to flush before get_task reads the row", async () => {
     const result = await runInDurableObject(
       butler("tools-get-flush"),

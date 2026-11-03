@@ -389,6 +389,10 @@ export class ButlerDO extends Agent<Env> {
     title: string,
     instructions: string,
   ): Promise<SpawnForBotResult> {
+    if (this.lease.current() !== null) {
+      return { ok: false, reason: "maintenance", message: "维护中" };
+    }
+
     const route = await this.channels().currentRoute();
     if (route.channel === null) {
       return {
@@ -511,7 +515,7 @@ export class ButlerDO extends Agent<Env> {
     taskId: string,
   ): Promise<{ outcome: RunOutcome | null; summary: string }> {
     const row = this.repo.get(taskId);
-    if (!row) return { outcome: "failed", summary: "任务不存在" };
+    if (!row) return { outcome: "cancelled", summary: "任务不存在" };
     if (
       row.status === "completed" ||
       row.status === "failed" ||

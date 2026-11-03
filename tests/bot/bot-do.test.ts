@@ -625,4 +625,23 @@ describe("BotDO lifecycle", () => {
     expect(snapshot?.meta.nextWakeAt).toBe(now);
     expect(await alarmAt(stub)).toBe(now);
   });
+
+  it("maintenance spawn result defers without counting", async () => {
+    const fake = fakeButler();
+    fake.spawnResult = () => ({
+      ok: false,
+      reason: "maintenance",
+      message: "维护中",
+    });
+    const stub = botStub("b-spawn-maintenance");
+    await initBot(stub);
+
+    await fireAlarm(stub);
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.wakesCount).toBe(0);
+    expect(snapshot?.meta.consecutiveFailures).toBe(0);
+    expect(snapshot?.runs).toHaveLength(0);
+    expect(await alarmAt(stub)).toBe(now + DEFER_MS);
+  });
 });

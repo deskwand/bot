@@ -47,7 +47,7 @@ export type SpawnForBotResult =
   | { ok: true; taskId: string }
   | {
       ok: false;
-      reason: "channel_disabled" | "failed";
+      reason: "channel_disabled" | "failed" | "maintenance";
       message: string;
     };
 
@@ -373,7 +373,9 @@ export class BotDO extends DurableObject<Env> {
     }
 
     if (!result.ok) {
-      if (result.reason === "channel_disabled") {
+      if (result.reason === "maintenance") {
+        await this.ctx.storage.setAlarm(now + DEFER_MS);
+      } else if (result.reason === "channel_disabled") {
         await this.ctx.storage.setAlarm(now + CHANNEL_DISABLED_RETRY_MS);
       } else {
         const current = this.store.readMeta();
