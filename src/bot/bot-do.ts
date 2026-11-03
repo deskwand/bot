@@ -277,7 +277,18 @@ export class BotDO extends DurableObject<Env> {
     const now = getClock().now();
     const meta = this.store.readMeta();
     if (meta === null) return;
-    if (!this.store.endRun(taskId, outcome, summary, now)) return;
+    if (!this.store.endRun(taskId, outcome, summary, now)) {
+      // Already recorded, but a run that ended while its spawn was in flight
+      // can still be current: release it so the bot is not stuck on it.
+      if (meta.currentTaskId !== taskId) return;
+      meta.currentTaskId = null;
+      this.store.writeMeta(meta);
+      if (meta.status !== "active") return;
+      meta.nextWakeAt = clampWakeAt(now, nextBase(meta, now)).at;
+      this.store.writeMeta(meta);
+      await this.ctx.storage.setAlarm(meta.nextWakeAt);
+      return;
+    }
     // A late end from an older run must not move the current run's schedule.
     if (meta.currentTaskId !== null && meta.currentTaskId !== taskId) return;
 

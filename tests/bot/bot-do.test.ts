@@ -545,6 +545,49 @@ describe("BotDO lifecycle", () => {
     });
   });
 
+  it("a run that ends during dispatch is not left current", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-ends-during-dispatch");
+    await initBot(stub);
+    const gate = deferred();
+    fake.spawnGate = gate.promise;
+
+    const fired = runDurableObjectAlarm(stub);
+    await waitUntil(() => fake.spawns.length === 1);
+    await stub.onRunEnded("t1", "completed", "很快");
+    gate.resolve();
+    await fired;
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.currentTaskId).toBeNull();
+    expect(snapshot?.runs).toHaveLength(1);
+    expect(await alarmAt(stub)).toBe(now + snapshot!.meta.defaultIntervalMs);
+  });
+
+  it("a paused bot whose run ended during dispatch is released on resume", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-pause-ends-during-dispatch");
+    await initBot(stub);
+    setBotTaskOverride(taskStub([]));
+    const gate = deferred();
+    fake.spawnGate = gate.promise;
+
+    const fired = runDurableObjectAlarm(stub);
+    await waitUntil(() => fake.spawns.length === 1);
+    await stub.pause();
+    await stub.onRunEnded("t1", "completed", "很快");
+    gate.resolve();
+    await fired;
+
+    await stub.resume(false);
+    fake.outcome = { outcome: "completed", summary: "很快" };
+    await fireAlarm(stub);
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.currentTaskId).toBeNull();
+    expect(await alarmAt(stub)).not.toBeNull();
+  });
+
   it("cancels a run stuck for more than a day", async () => {
     const fake = fakeButler();
     const stub = botStub("b-stuck-run");
