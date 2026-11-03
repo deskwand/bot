@@ -487,7 +487,7 @@ export class TaskDO extends Agent<Env> {
       const servers = readRuntimeConfig(this.env).mcpServers;
       if (servers.length === 0) return;
 
-      const tools = await loadMcpTools(
+      const { tools } = await loadMcpTools(
         servers,
         this.approvals,
         mcpConnector(this.mcp, this.env),

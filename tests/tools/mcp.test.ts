@@ -7,6 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   loadMcpTools,
   mcpConnector,
+  mcpToolMode,
+  mcpToolName,
+  probeMcpServer,
+  resolveMcpUrl,
+  unavailableNotice,
   type McpCallToolResult,
   type McpClientLike,
   type McpConnector,
@@ -93,10 +98,11 @@ function recorder(): {
   };
 }
 
-function fakeManager() {
+function fakeManager(listed: readonly McpToolInfo[] = []) {
   const registered: Array<{
     id: string;
     config: {
+      url: string;
       transport?: { requestInit?: { headers?: Record<string, string> } };
     };
   }> = [];
@@ -104,6 +110,7 @@ function fakeManager() {
     async registerServer(
       id: string,
       config: {
+        url: string;
         transport?: { requestInit?: { headers?: Record<string, string> } };
       },
     ) {
@@ -115,8 +122,8 @@ function fakeManager() {
     async discoverIfConnected() {
       return { success: true };
     },
-    async listTools() {
-      return [];
+    listTools() {
+      return listed;
     },
     async callTool() {
       return { content: [] };
@@ -124,6 +131,51 @@ function fakeManager() {
   } as unknown as Parameters<typeof mcpConnector>[0];
   return { manager, registered };
 }
+
+describe("resolveMcpUrl", () => {
+  it("resolves {env:NAME} in the URL and names a missing variable without its value", () => {
+    const s = server({ url: "https://mcp.amap.test/sse?key={env:MCP_AMAP_KEY}" });
+    expect(resolveMcpUrl(s, { MCP_AMAP_KEY: "k1" })).toBe(
+      "https://mcp.amap.test/sse?key=k1",
+    );
+    expect(() => resolveMcpUrl(s, {})).toThrow(/MCP_AMAP_KEY/);
+  });
+});
+
+describe("mcpToolMode", () => {
+  it("decides tool modes in spec order", () => {
+    const ro = { name: "search", annotations: { readOnlyHint: true } };
+    const rw = { name: "create_page" };
+    const s = server({
+      approvalPolicy: "writes",
+      requireApproval: [],
+      autoApprove: ["create_page"],
+      disabledTools: [],
+    });
+    expect(mcpToolMode(s, ro)).toBe("auto");
+    expect(mcpToolMode(s, rw)).toBe("auto"); // autoApprove beats policy
+    expect(mcpToolMode({ ...s, autoApprove: [] }, rw)).toBe("approval");
+    expect(mcpToolMode({ ...s, requireApproval: ["search"] }, ro)).toBe(
+      "approval",
+    );
+    expect(
+      mcpToolMode(
+        { ...s, disabledTools: ["search"], requireApproval: ["search"] },
+        ro,
+      ),
+    ).toBe("disabled");
+    expect(mcpToolMode(server({ requireApproval: [] }), rw)).toBe("auto"); // legacy: no policy
+  });
+});
+
+describe("mcpToolName", () => {
+  it("sanitizes tool names and rejects ones over 64 characters", () => {
+    expect(mcpToolName("atlassian", "jira.get-issue")).toBe(
+      "atlassian__jira_get-issue",
+    );
+    expect(mcpToolName("s", "x".repeat(70))).toBeNull();
+  });
+});
 
 describe("mcpConnector", () => {
   it("resolves env: header values from the environment at connect time", async () => {
@@ -167,7 +219,7 @@ describe("mcpConnector", () => {
     const connect = mcpConnector(manager, {});
 
     try {
-      const tools = await loadMcpTools(
+      const { tools } = await loadMcpTools(
         [server({ headers: { Authorization: "env:MISSING_TOKEN" } })],
         gate("approved"),
         connect,
@@ -179,6 +231,55 @@ describe("mcpConnector", () => {
       error.mockRestore();
     }
   });
+  it("resolves URL placeholders when registering", async () => {
+    const { manager, registered } = fakeManager();
+    const connect = mcpConnector(manager, { MCP_AMAP_KEY: "k1" });
+
+    await connect(
+      server({ url: "https://mcp.amap.test/sse?key={env:MCP_AMAP_KEY}" }),
+    );
+
+    expect(registered[0]?.config.url).toBe(
+      "https://mcp.amap.test/sse?key=k1",
+    );
+  });
+
+  it("adds the Bearer token for an OAuth server", async () => {
+    const { manager, registered } = fakeManager();
+    const connect = mcpConnector(manager, {}, async () => "tok");
+
+    await connect(server({ oauth: true, headers: { "X-Static": "yes" } }));
+
+    expect(
+      registered[0]?.config.transport?.requestInit?.headers,
+    ).toEqual({ "X-Static": "yes", Authorization: "Bearer tok" });
+  });
+
+  it("refuses to connect an OAuth server without a token", async () => {
+    const { manager, registered } = fakeManager();
+    const connect = mcpConnector(manager, {}, async () => null);
+
+    await expect(connect(server({ oauth: true }))).rejects.toThrow(
+      "需要在桌面端登录授权",
+    );
+    expect(registered).toHaveLength(0);
+  });
+
+  it("passes tool annotations through listTools", async () => {
+    const { manager } = fakeManager([
+      { name: "search", annotations: { readOnlyHint: true } },
+    ]);
+    const client = await mcpConnector(manager)(server());
+
+    await expect(client.listTools()).resolves.toEqual([
+      {
+        name: "search",
+        description: undefined,
+        inputSchema: undefined,
+        annotations: { readOnlyHint: true },
+      },
+    ]);
+  });
 });
 
 describe("loadMcpTools", () => {
@@ -189,7 +290,12 @@ describe("loadMcpTools", () => {
     const connect: McpConnector = async () => client;
     const progress = recorder();
 
-    const tools = await loadMcpTools([server()], approval, connect, progress.emit);
+    const { tools } = await loadMcpTools(
+      [server()],
+      approval,
+      connect,
+      progress.emit,
+    );
 
     expect(tools.map((tool) => tool.name)).toEqual([
       "notion__create_page",
@@ -242,7 +348,7 @@ describe("loadMcpTools", () => {
     };
     const controller = new AbortController();
 
-    const tools = await loadMcpTools(
+    const { tools } = await loadMcpTools(
       [server()],
       gate("approved"),
       async () => client,
@@ -271,7 +377,7 @@ describe("loadMcpTools", () => {
       },
     };
 
-    const tools = await loadMcpTools(
+    const { tools } = await loadMcpTools(
       [server({ requireApproval: [] })],
       gate("approved"),
       async () => client,
@@ -291,7 +397,7 @@ describe("loadMcpTools", () => {
       return fakeClient(calls);
     };
 
-    const tools = await loadMcpTools(
+    const { tools } = await loadMcpTools(
       [server(), server({ name: "broken", url: "https://broken.test" })],
       gate("approved"),
       connect,
@@ -316,7 +422,7 @@ describe("loadMcpTools", () => {
         : Promise.resolve(fakeClient(calls));
 
     const started = Date.now();
-    const tools = await loadMcpTools(
+    const { tools } = await loadMcpTools(
       [server({ name: "slow", url: "https://slow.test" }), server()],
       gate("approved"),
       connect,
@@ -339,7 +445,168 @@ describe("loadMcpTools", () => {
 
     await expect(
       loadMcpTools([], gate("approved"), connect, recorder().emit),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ tools: [], unavailable: [] });
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("skips enabled:false servers and disabled tools", async () => {
+    const connect = vi.fn(async () => fakeClient([]));
+
+    const loaded = await loadMcpTools(
+      [
+        server({ name: "off", url: "https://off.test", enabled: false }),
+        server({ disabledTools: ["search"] }),
+      ],
+      gate("approved"),
+      connect,
+      recorder().emit,
+    );
+
+    expect(loaded.tools.map((tool) => tool.name)).toEqual([
+      "notion__create_page",
+    ]);
+    expect(loaded.unavailable).toEqual([]);
+    expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("connects servers concurrently and reports a timed-out one as unavailable", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const connect: McpConnector = (server) =>
+      server.name === "slow"
+        ? new Promise<McpClientLike>(() => {})
+        : new Promise((resolve) =>
+            setTimeout(() => resolve(fakeClient([])), 80),
+          );
+
+    try {
+      const started = Date.now();
+      const loaded = await loadMcpTools(
+        [server({ name: "slow", url: "https://slow.test" }), server()],
+        gate("approved"),
+        connect,
+        recorder().emit,
+        100,
+      );
+      const elapsed = Date.now() - started;
+
+      // Sequentially the good server would finish only after the slow timeout.
+      expect(elapsed).toBeLessThan(150);
+      expect(loaded.tools.map((tool) => tool.name)).toEqual([
+        "notion__create_page",
+        "notion__search",
+      ]);
+      expect(loaded.unavailable).toEqual([
+        { name: "slow", reason: expect.stringMatching(/timed out/) },
+      ]);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("reports an unauthorized OAuth server as unavailable without connecting", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { manager, registered } = fakeManager();
+    const connect = mcpConnector(manager, {}, async () => null);
+
+    try {
+      const loaded = await loadMcpTools(
+        [server({ oauth: true })],
+        gate("approved"),
+        connect,
+        recorder().emit,
+      );
+
+      expect(loaded.tools).toEqual([]);
+      expect(loaded.unavailable).toEqual([
+        { name: "notion", reason: "需要在桌面端登录授权" },
+      ]);
+      expect(registered).toHaveLength(0);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("skips a tool whose sanitized name collides with an earlier one or is too long", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const client: McpClientLike = {
+      async listTools() {
+        return [
+          { name: "a.b" },
+          { name: "a_b" },
+          { name: "x".repeat(70) },
+          { name: "c" },
+        ];
+      },
+      async callTool() {
+        return { content: [] };
+      },
+    };
+
+    try {
+      const loaded = await loadMcpTools(
+        [server({ name: "s", requireApproval: [] })],
+        gate("approved"),
+        async () => client,
+        recorder().emit,
+      );
+
+      expect(loaded.tools.map((tool) => tool.name)).toEqual(["s__a_b", "s__c"]);
+      expect(error).toHaveBeenCalledTimes(2);
+    } finally {
+      error.mockRestore();
+    }
+  });
+});
+
+describe("probeMcpServer", () => {
+  it("returns tools with modes, or the failure reason", async () => {
+    const client: McpClientLike = {
+      async listTools() {
+        return [
+          {
+            name: "search",
+            description: "Search",
+            annotations: { readOnlyHint: true },
+          },
+          { name: "create_page" },
+        ];
+      },
+      async callTool() {
+        return { content: [] };
+      },
+    };
+
+    await expect(
+      probeMcpServer(
+        server({ approvalPolicy: "writes", requireApproval: [] }),
+        async () => client,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      tools: [
+        { name: "search", description: "Search", mode: "auto" },
+        { name: "create_page", description: "", mode: "approval" },
+      ],
+    });
+
+    const failing: McpConnector = async () => {
+      throw new Error("connection refused");
+    };
+    await expect(probeMcpServer(server(), failing)).resolves.toEqual({
+      ok: false,
+      reason: "connection refused",
+    });
+  });
+});
+
+describe("unavailableNotice", () => {
+  it("formats the unavailable notice", () => {
+    expect(unavailableNotice([])).toBeUndefined();
+    expect(
+      unavailableNotice([
+        { name: "a", reason: "x" },
+        { name: "b", reason: "y" },
+      ]),
+    ).toBe("以下服务本次不可用：a（x）；b（y）");
   });
 });
