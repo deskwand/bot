@@ -4,6 +4,7 @@ import {
   createAdminGateway,
   type AdminDeps,
 } from "../../src/admin/admin-gateway";
+import { BotsRepo } from "../../src/butler/bots-repo";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -20,6 +21,7 @@ function deps(name: string, token: string | null = TOKEN): AdminDeps {
     channel: () =>
       env.CHANNELS.get(env.CHANNELS.idFromName(`${name}-channels`)),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
+    bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     artifacts: env.ARTIFACTS,
   };
 }
@@ -131,6 +133,40 @@ describe("admin gateway", () => {
     expect(await second.json()).toEqual({ code: "MAINTENANCE_BUSY" });
   });
 
+  it("info lists bot ids", async () => {
+    const name = "admin-bot-ids";
+    const gateway = createAdminGateway(deps(name));
+    await runInDurableObject(
+      env.BUTLER.get(env.BUTLER.idFromName(name)),
+      (_instance, state) => {
+        new BotsRepo(state.storage.sql).insert({
+          id: "b1",
+          name: "价格哨兵",
+        });
+      },
+    );
+    expect((await acquire(gateway)).status).toBe(200);
+
+    const response = await call(gateway, "/admin/backup/info");
+
+    expect(response.status).toBe(200);
+    const info = (await response.json()) as { botIds: string[] };
+    expect(info.botIds).toEqual(["b1"]);
+  });
+
+  it("schema accepts do=bot", async () => {
+    const gateway = createAdminGateway(deps("admin-bot-schema"));
+    expect((await acquire(gateway)).status).toBe(200);
+
+    const response = await call(gateway, "/admin/backup/schema?do=bot&id=b1");
+
+    expect(response.status).toBe(200);
+    const schema = (await response.json()) as {
+      tables: { name: string }[];
+    };
+    expect(schema.tables.map((table) => table.name)).toContain("runs");
+  });
+
   it("returns 400 for an unknown do kind", async () => {
     const gateway = createAdminGateway(deps("admin-unknown-do"));
     expect((await acquire(gateway)).status).toBe(200);
@@ -183,6 +219,9 @@ describe("admin gateway", () => {
           },
         }) as unknown as ReturnType<AdminDeps["channel"]>,
       task: () => {
+        throw new Error("unused");
+      },
+      bot: () => {
         throw new Error("unused");
       },
       artifacts: env.ARTIFACTS,

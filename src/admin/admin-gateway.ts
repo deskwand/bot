@@ -7,6 +7,7 @@
  * lease on both the Butler and the Channel hub before touching data.
  */
 
+import type { BotDO } from "../bot/bot-do";
 import type { ButlerDO } from "../butler/butler-do";
 import type { ChannelDO } from "../channels/channel-do";
 import type { TaskDO } from "../task/task-do";
@@ -24,6 +25,7 @@ export type AdminDeps = {
   butler(): DurableObjectStub<ButlerDO>;
   channel(): DurableObjectStub<ChannelDO>;
   task(id: string): DurableObjectStub<TaskDO>;
+  bot(id: string): DurableObjectStub<BotDO>;
   artifacts: R2Bucket;
 };
 
@@ -99,6 +101,8 @@ function backupStub(deps: AdminDeps, url: URL): BackupStub | Response {
       return deps.channel();
     case "task":
       return deps.task(id);
+    case "bot":
+      return deps.bot(id);
     default:
       return json(
         { code: "BACKUP_INVALID", message: `unknown do kind: ${kind ?? ""}` },
@@ -226,6 +230,7 @@ export function createAdminGateway(deps: AdminDeps): {
       return json({
         versionId: deps.versionId,
         taskIds: await deps.butler().listTaskIds(),
+        botIds: await deps.butler().listBotIds(),
       });
     }
 

@@ -24,6 +24,7 @@ function deps(name: string): AdminDeps {
     channel: () =>
       env.CHANNELS.get(env.CHANNELS.idFromName(`${name}-channels`)),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
+    bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     artifacts: env.ARTIFACTS,
   };
 }

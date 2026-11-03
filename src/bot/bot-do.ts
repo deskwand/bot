@@ -1,5 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
+import { BackupRpc } from "../admin/backup-rpc";
 import { DEFER_MS } from "../admin/maintenance";
+import type {
+  DbSchema,
+  DumpPage,
+  DumpRow,
+  TableSchema,
+} from "../admin/sql-dump";
 import { MemoryStore, type MemoryItem } from "../butler/memory";
 import { getClock } from "../butler/notifier";
 import {
@@ -12,6 +19,7 @@ import { buildBotInstructions } from "./instructions";
 import {
   CHANNEL_DISABLED_RETRY_MS,
   DAILY_WAKE_LIMIT,
+  MIN_WAKE_MS,
   PAUSE_AFTER_FAILURES,
   WATCHDOG_MS,
   clampWakeAt,
@@ -73,10 +81,54 @@ export class BotDO extends DurableObject<Env> {
 
   memories: MemoryStore;
 
+  private readonly backup: BackupRpc;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = new BotStore(ctx.storage.sql);
     this.memories = new MemoryStore(ctx.storage.sql);
+    // Bots have no maintenance lease of their own; the Butler holds it.
+    this.backup = new BackupRpc(ctx, null);
+  }
+
+  async backupSchema(): Promise<DbSchema> {
+    return this.backup.backupSchema();
+  }
+
+  async backupPage(
+    table: TableSchema,
+    cursor: string | null,
+  ): Promise<DumpPage> {
+    return this.backup.backupPage(table, cursor);
+  }
+
+  async restoreBegin(schema: DbSchema): Promise<void> {
+    await this.backup.restoreBegin(schema);
+  }
+
+  async restorePage(table: TableSchema, rows: DumpRow[]): Promise<void> {
+    await this.backup.restorePage(table, rows);
+  }
+
+  async restoreCommit(schema: DbSchema): Promise<void> {
+    await this.backup.restoreCommit(schema);
+    const meta = this.store.readMeta();
+    if (meta === null) return;
+
+    const now = getClock().now();
+    if (meta.currentTaskId !== null) {
+      // The task may be gone: the watchdog asks the Butler and records the run.
+      await this.ctx.storage.setAlarm(now + WATCHDOG_MS);
+      return;
+    }
+    const next = meta.nextWakeAt ?? now;
+    // A wake time saved before the restore is usually stale; still respect the
+    // minimum interval so the bot does not spin right after coming back.
+    await this.ctx.storage.setAlarm(Math.max(next, now + MIN_WAKE_MS));
+  }
+
+  async restoreReset(): Promise<void> {
+    this.backup.restoreReset();
   }
 
   async init(spec: BotInit): Promise<void> {

@@ -22,6 +22,7 @@ function admin(env: Env) {
     butler: () => butler(env),
     channel: () => channels(env),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
+    bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     artifacts: env.ARTIFACTS,
   });
 }
