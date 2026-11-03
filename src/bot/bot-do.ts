@@ -21,6 +21,7 @@ import {
   DAILY_WAKE_LIMIT,
   MIN_WAKE_MS,
   PAUSE_AFTER_FAILURES,
+  RUN_MAX_MS,
   WATCHDOG_MS,
   clampWakeAt,
   failureDelayMs,
@@ -64,11 +65,23 @@ export type BotButler = {
   maintenanceActive(): Promise<boolean>;
 };
 
+/** The Task RPC a bot uses to cancel a run. */
+export type BotTask = { cancel(): Promise<unknown> };
+
 let butlerOverride: BotButler | null = null;
+
+let taskOverride: ((taskId: string) => BotTask) | null = null;
 
 /** Test-only Butler override, mirroring `setChannelOverride`. */
 export function setBotButlerOverride(stub: BotButler | null): void {
   butlerOverride = stub;
+}
+
+/** Test-only Task override, mirroring `setBotButlerOverride`. */
+export function setBotTaskOverride(
+  fn: ((taskId: string) => BotTask) | null,
+): void {
+  taskOverride = fn;
 }
 
 /**
@@ -205,15 +218,20 @@ export class BotDO extends DurableObject<Env> {
     return { currentTaskId: meta.currentTaskId };
   }
 
-  async wakeNow(): Promise<void> {
+  async wakeNow(): Promise<"scheduled" | "after_run" | "inactive"> {
     const meta = this.store.readMeta();
-    if (meta === null || meta.status !== "active") return;
+    if (meta === null || meta.status !== "active") return "inactive";
     const now = getClock().now();
+    if (meta.currentTaskId !== null) {
+      // The run in flight cannot be preempted: schedule right after it ends.
+      meta.nextWakeAt = now + MIN_WAKE_MS;
+      this.store.writeMeta(meta);
+      return "after_run";
+    }
     meta.nextWakeAt = now;
     this.store.writeMeta(meta);
-    if (meta.currentTaskId === null) {
-      await this.ctx.storage.setAlarm(now);
-    }
+    await this.ctx.storage.setAlarm(now);
+    return "scheduled";
   }
 
   async pause(): Promise<void> {
@@ -260,6 +278,8 @@ export class BotDO extends DurableObject<Env> {
     const meta = this.store.readMeta();
     if (meta === null) return;
     if (!this.store.endRun(taskId, outcome, summary, now)) return;
+    // A late end from an older run must not move the current run's schedule.
+    if (meta.currentTaskId !== null && meta.currentTaskId !== taskId) return;
 
     if (outcome === "completed") meta.consecutiveFailures = 0;
     if (meta.currentTaskId === taskId) meta.currentTaskId = null;
@@ -311,6 +331,12 @@ export class BotDO extends DurableObject<Env> {
       return;
     }
 
+    // An alarm may fire early after a restore or a manually armed wake.
+    if (meta.nextWakeAt !== null && meta.nextWakeAt > now + 60_000) {
+      await this.ctx.storage.setAlarm(meta.nextWakeAt);
+      return;
+    }
+
     const day = utcDay(now);
     if (meta.wakesDay !== day) {
       meta.wakesDay = day;
@@ -329,6 +355,7 @@ export class BotDO extends DurableObject<Env> {
       runs: this.store.recentRuns(3),
       steer: meta.pendingSteer,
     });
+    const consumed = meta.pendingSteer.length;
 
     let result: SpawnForBotResult;
     try {
@@ -358,9 +385,20 @@ export class BotDO extends DurableObject<Env> {
     }
 
     const current = this.store.readMeta();
-    if (current === null) return;
+    if (current === null || current.status !== "active") {
+      // The bot was paused, finished or deleted while the spawn was in flight.
+      await this.cancelTask(result.taskId);
+      if (current === null) return;
+      // Keep the run so the cancelled outcome is recorded against it.
+      current.wakesCount += 1;
+      current.pendingSteer = current.pendingSteer.slice(consumed);
+      this.store.insertRun(result.taskId, now);
+      current.currentTaskId = result.taskId;
+      this.store.writeMeta(current);
+      return;
+    }
     current.wakesCount += 1;
-    current.pendingSteer = [];
+    current.pendingSteer = current.pendingSteer.slice(consumed);
     this.store.writeMeta(current);
 
     this.store.insertRun(result.taskId, now);
@@ -395,6 +433,21 @@ export class BotDO extends DurableObject<Env> {
     );
   }
 
+  private task(taskId: string): BotTask {
+    if (taskOverride !== null) return taskOverride(taskId);
+    return this.env.TASK.get(
+      this.env.TASK.idFromName(taskId),
+    ) as unknown as BotTask;
+  }
+
+  private async cancelTask(taskId: string): Promise<void> {
+    try {
+      await this.task(taskId).cancel();
+    } catch (error) {
+      console.error("bot task cancel failed:", error);
+    }
+  }
+
   /** Watchdog path: ask the Butler whether the in-flight task has finished. */
   private async checkRunningTask(meta: BotMeta, now: number): Promise<void> {
     const taskId = meta.currentTaskId!;
@@ -405,7 +458,15 @@ export class BotDO extends DurableObject<Env> {
       await this.ctx.storage.setAlarm(now + WATCHDOG_MS);
       return;
     }
+    const current = this.store.readMeta();
+    if (current === null || current.currentTaskId !== taskId) return;
     if (result.outcome === null) {
+      const startedAt = this.store.runStartedAt(taskId);
+      if (startedAt !== null && now - startedAt > RUN_MAX_MS) {
+        await this.cancelTask(taskId);
+        await this.onRunEnded(taskId, "failed", "运行超过 24 小时，已取消");
+        return;
+      }
       await this.ctx.storage.setAlarm(now + WATCHDOG_MS);
       return;
     }

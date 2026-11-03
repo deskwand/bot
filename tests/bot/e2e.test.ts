@@ -69,6 +69,7 @@ async function runFirstRun(bot: BotStub): Promise<void> {
     async () => {
       const snapshot = await bot.snapshot();
       expect(snapshot?.runs[0]?.outcome).toBe("completed");
+      expect(snapshot?.meta.currentTaskId).toBeNull();
     },
     { timeout: 20_000 },
   );
@@ -135,17 +136,23 @@ describe("bot run end to end", () => {
     await runFirstRun(bot);
 
     setModelOverride(scriptedModel([{ text: "done" }]));
-    await runDurableObjectAlarm(bot);
+    // The first run scheduled a wake two hours out; pull it in for the test.
+    await bot.wakeNow();
+    const spec = await vi.waitFor(
+      async () => {
+        const rows = await runInDurableObject(butler(), (_instance, state) => {
+          return new TasksRepo(state.storage.sql)
+            .list()
+            .filter((row) => row.botId === "e2e-b3");
+        });
+        expect(rows).toHaveLength(2);
+        const stored = await storedSpec(rows[1]!.id);
+        expect(stored.botId).toBe("e2e-b3");
+        return stored;
+      },
+      { timeout: 20_000 },
+    );
 
-    const second = await runInDurableObject(butler(), (_instance, state) => {
-      const rows = new TasksRepo(state.storage.sql)
-        .list()
-        .filter((row) => row.botId === "e2e-b3");
-      return rows[rows.length - 1];
-    });
-    expect(second).toBeDefined();
-    const spec = await storedSpec(second!.id);
-    expect(spec.botId).toBe("e2e-b3");
     expect(spec.instructions).toContain("上次价格 239");
     expect(spec.instructions).toContain("明早再看");
   });

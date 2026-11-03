@@ -199,6 +199,80 @@ describe("butler bot tools", () => {
     ]);
   });
 
+  it("wake_bot explains a run in flight", async () => {
+    // Bot DO names are shared across tests in this file, so start clean.
+    await botStub("b1").destroy();
+    await runTool(
+      "create_bot",
+      {
+        name: "价格哨兵",
+        mission: "盯着价格",
+        default_interval: "2h",
+      },
+      [],
+      "bot-tools-wake-running",
+    );
+    await setRunningTask("b1", "t1");
+
+    const result = await runTool(
+      "wake_bot",
+      { id: "b1" },
+      [],
+      "bot-tools-wake-running",
+    );
+
+    expect(result.text).toBe("b1 正在运行，结束后约 5 分钟再唤醒");
+  });
+
+  it("wake_bot asks to resume a paused bot", async () => {
+    // Bot DO names are shared across tests in this file, so start clean.
+    await botStub("b1").destroy();
+    await runTool(
+      "create_bot",
+      {
+        name: "价格哨兵",
+        mission: "盯着价格",
+        default_interval: "2h",
+      },
+      [],
+      "bot-tools-wake-paused",
+    );
+    await botStub("b1").pause();
+
+    const result = await runTool(
+      "wake_bot",
+      { id: "b1" },
+      [],
+      "bot-tools-wake-paused",
+    );
+
+    expect(result.text).toBe("b1 已暂停或已完成，先恢复再唤醒");
+  });
+
+  it("wake_bot schedules an idle bot", async () => {
+    // Bot DO names are shared across tests in this file, so start clean.
+    await botStub("b1").destroy();
+    await runTool(
+      "create_bot",
+      {
+        name: "价格哨兵",
+        mission: "盯着价格",
+        default_interval: "2h",
+      },
+      [],
+      "bot-tools-wake-idle",
+    );
+
+    const result = await runTool(
+      "wake_bot",
+      { id: "b1" },
+      [],
+      "bot-tools-wake-idle",
+    );
+
+    expect(result.text).toBe("已安排 b1 立即唤醒");
+  });
+
   it("delete_bot cancels the run and empties the bot", async () => {
     const calls: string[] = [];
     await runTool(

@@ -14,6 +14,9 @@ export const CHANNEL_DISABLED_RETRY_MS = 3_600_000;
 /** Consecutive failed runs before a bot pauses itself. */
 export const PAUSE_AFTER_FAILURES = 3;
 
+/** Longest a single run may stay in flight before the watchdog cancels it. */
+export const RUN_MAX_MS = 86_400_000;
+
 const UNIT_MS: Record<string, number> = {
   m: 60_000,
   h: 3_600_000,

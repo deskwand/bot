@@ -34,7 +34,7 @@ export type BotControl = {
   init(spec: BotInit): Promise<void>;
   snapshot(): Promise<BotSnapshot | null>;
   steer(text: string): Promise<{ currentTaskId: string | null }>;
-  wakeNow(): Promise<void>;
+  wakeNow(): Promise<"scheduled" | "after_run" | "inactive">;
   pause(): Promise<void>;
   resume(wakeNow: boolean): Promise<void>;
   destroy(): Promise<void>;
@@ -198,7 +198,13 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     async execute({ id }) {
       try {
         if (!bots.get(id)) return output(`没有机器人 ${id}`);
-        await bot(id).wakeNow();
+        const result = await bot(id).wakeNow();
+        if (result === "after_run") {
+          return output(`${id} 正在运行，结束后约 5 分钟再唤醒`);
+        }
+        if (result === "inactive") {
+          return output(`${id} 已暂停或已完成，先恢复再唤醒`);
+        }
         return output(`已安排 ${id} 立即唤醒`);
       } catch (error) {
         return output(errorText(error));

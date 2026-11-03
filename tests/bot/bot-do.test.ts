@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFER_MS } from "../../src/admin/maintenance";
 import {
   setBotButlerOverride,
+  setBotTaskOverride,
   type BotButler,
   type BotInit,
   type SpawnForBotResult,
@@ -18,6 +19,7 @@ import {
 } from "../../src/bot/bot-store";
 import {
   CHANNEL_DISABLED_RETRY_MS,
+  MIN_WAKE_MS,
   WATCHDOG_MS,
   nextUtcMidnight,
   utcDay,
@@ -43,6 +45,9 @@ type FakeState = {
   notices: { botId: string; text: string }[];
   spawnResult: (index: number) => SpawnForBotResult;
   outcome: { outcome: RunOutcome | null; summary: string };
+  outcomeCalls: number;
+  spawnGate: Promise<void> | null;
+  outcomeGate: Promise<void> | null;
   maintenance: boolean;
   maintenanceThrows: boolean;
 };
@@ -54,6 +59,9 @@ function fakeButler(): FakeState {
     notices: [],
     spawnResult: (index) => ({ ok: true, taskId: `t${index}` }),
     outcome: { outcome: null, summary: "" },
+    outcomeCalls: 0,
+    spawnGate: null,
+    outcomeGate: null,
     maintenance: false,
     maintenanceThrows: false,
   };
@@ -61,9 +69,12 @@ function fakeButler(): FakeState {
   const butler: BotButler = {
     async spawnForBot(botId, title, instructions) {
       state.spawns.push({ botId, title, instructions });
+      if (state.spawnGate !== null) await state.spawnGate;
       return state.spawnResult(state.spawns.length);
     },
     async botTaskOutcome() {
+      state.outcomeCalls += 1;
+      if (state.outcomeGate !== null) await state.outcomeGate;
       return state.outcome;
     },
     async botNotice(botId, text) {
@@ -94,6 +105,32 @@ async function fireAlarm(stub: BotStub): Promise<void> {
   expect(await runDurableObjectAlarm(stub)).toBe(true);
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+/** Polls until the alarm reached the awaited RPC. */
+async function waitUntil(condition: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !condition(); i += 1) {
+    await new Promise((done) => setTimeout(done, 0));
+  }
+  expect(condition()).toBe(true);
+}
+
+/** A Task DO stand-in that records cancels. */
+function taskStub(cancelled: string[]) {
+  return (taskId: string) => ({
+    cancel: async () => {
+      cancelled.push(taskId);
+      return { ok: true, message: "" };
+    },
+  });
+}
+
 async function alarmAt(stub: BotStub): Promise<number | null> {
   return runInDurableObject(stub, (_instance, state) =>
     state.storage.getAlarm(),
@@ -122,6 +159,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setBotButlerOverride(null);
+  setBotTaskOverride(null);
   setClockOverride(null);
 });
 
@@ -218,17 +256,17 @@ describe("BotDO lifecycle", () => {
     expect(snapshot?.runs).toHaveLength(1);
   });
 
-  it("run that ends before spawn returns", async () => {
+  it("does not spawn when a fast run already scheduled a later wake", async () => {
     const fake = fakeButler();
     const stub = botStub("b-lifecycle-fast-run");
     await initBot(stub);
-    // The run reports back before `spawnForBot` returns, so its row is already
-    // ended when the alarm tries to claim it.
+    // The run reported back before the alarm fired and already scheduled the
+    // next wake, so this alarm is not due yet.
     await stub.onRunEnded("t1", "completed", "抢跑");
 
     await fireAlarm(stub);
 
-    expect(fake.spawns).toHaveLength(1);
+    expect(fake.spawns).toHaveLength(0);
 
     const snapshot = await stub.snapshot();
     expect(snapshot?.meta.currentTaskId).toBeNull();
@@ -404,5 +442,187 @@ describe("BotDO lifecycle", () => {
 
     expect(fake.spawns[0]?.instructions).toContain("先看主站");
     expect((await stub.snapshot())?.meta.pendingSteer).toEqual([]);
+  });
+
+  it("keeps steer that arrives during dispatch", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-steer-during-dispatch");
+    await initBot(stub);
+    await stub.steer("先看主站");
+    const gate = deferred();
+    fake.spawnGate = gate.promise;
+
+    const fired = runDurableObjectAlarm(stub);
+    await waitUntil(() => fake.spawns.length === 1);
+    await stub.steer("再看备份站");
+    gate.resolve();
+    await fired;
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.pendingSteer).toEqual(["再看备份站"]);
+    expect(fake.spawns[0]?.instructions).toContain("先看主站");
+    expect(fake.spawns[0]?.instructions).not.toContain("再看备份站");
+  });
+
+  it("does not spawn before the saved wake time", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-not-due");
+    await initBot(stub);
+    await stub.setNextWake({ at: now + 7_200_000 });
+
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(0);
+    expect(await alarmAt(stub)).toBe(now + 7_200_000);
+  });
+
+  it("watchdog ignores an outcome after the bot is destroyed", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-watchdog-destroyed");
+    await initBot(stub);
+    await fireAlarm(stub);
+    const gate = deferred();
+    fake.outcome = { outcome: "completed", summary: "看完了" };
+    fake.outcomeGate = gate.promise;
+
+    const fired = runDurableObjectAlarm(stub);
+    await waitUntil(() => fake.outcomeCalls === 1);
+    await stub.destroy();
+    gate.resolve();
+    await fired;
+
+    expect(await stub.snapshot()).toBeNull();
+  });
+
+  it("destroy during dispatch cancels the new task", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-destroy-during-dispatch");
+    await initBot(stub);
+    const cancelled: string[] = [];
+    setBotTaskOverride(taskStub(cancelled));
+    const gate = deferred();
+    fake.spawnGate = gate.promise;
+
+    const fired = runDurableObjectAlarm(stub);
+    await waitUntil(() => fake.spawns.length === 1);
+    await stub.destroy();
+    gate.resolve();
+    await fired;
+
+    expect(cancelled).toEqual(["t1"]);
+    expect(await stub.snapshot()).toBeNull();
+  });
+
+  it("pause during dispatch cancels and records the run", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-pause-during-dispatch");
+    await initBot(stub);
+    const cancelled: string[] = [];
+    setBotTaskOverride(taskStub(cancelled));
+    const gate = deferred();
+    fake.spawnGate = gate.promise;
+
+    const fired = runDurableObjectAlarm(stub);
+    await waitUntil(() => fake.spawns.length === 1);
+    await stub.pause();
+    gate.resolve();
+    await fired;
+
+    expect(cancelled).toEqual(["t1"]);
+    const paused = await stub.snapshot();
+    expect(paused?.runs).toEqual([
+      expect.objectContaining({ taskId: "t1", outcome: null }),
+    ]);
+    expect(paused?.meta.currentTaskId).toBe("t1");
+    expect(await alarmAt(stub)).toBeNull();
+
+    await stub.onRunEnded("t1", "cancelled", "停掉了");
+    const ended = await stub.snapshot();
+    expect(ended?.meta.currentTaskId).toBeNull();
+    expect(ended?.runs[0]).toMatchObject({
+      outcome: "cancelled",
+      summary: "停掉了",
+    });
+  });
+
+  it("cancels a run stuck for more than a day", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-stuck-run");
+    await initBot(stub);
+    await fireAlarm(stub);
+    const cancelled: string[] = [];
+    setBotTaskOverride(taskStub(cancelled));
+
+    now += 25 * 3_600_000;
+    await fireAlarm(stub);
+
+    expect(cancelled).toEqual(["t1"]);
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.runs[0]).toMatchObject({
+      taskId: "t1",
+      outcome: "failed",
+      summary: "运行超过 24 小时，已取消",
+    });
+    expect(snapshot?.meta.consecutiveFailures).toBe(1);
+    expect(snapshot?.meta.currentTaskId).toBeNull();
+  });
+
+  it("ignores the end of a run that is not current", async () => {
+    fakeButler();
+    const stub = botStub("b-stale-run-end");
+    await initBot(stub);
+    await stub.setNextWake({ at: now + 7_200_000 });
+    await patchMeta(stub, { currentTaskId: "t2" });
+    const before = await alarmAt(stub);
+
+    await stub.onRunEnded("t1", "failed", "boom");
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.consecutiveFailures).toBe(0);
+    expect(snapshot?.meta.nextWakeAt).toBe(now + 7_200_000);
+    expect(await alarmAt(stub)).toBe(before);
+    expect(snapshot?.runs).toEqual([
+      expect.objectContaining({ taskId: "t1", outcome: "failed" }),
+    ]);
+  });
+
+  it("wakeNow during a run defers to the end of the run", async () => {
+    fakeButler();
+    const stub = botStub("b-wake-now-running");
+    await initBot(stub);
+    await fireAlarm(stub);
+
+    expect(await stub.wakeNow()).toBe("after_run");
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.nextWakeAt).toBe(now + MIN_WAKE_MS);
+    expect(await alarmAt(stub)).toBe(now + WATCHDOG_MS);
+  });
+
+  it("wakeNow on a paused bot does nothing", async () => {
+    fakeButler();
+    const stub = botStub("b-wake-now-paused");
+    await initBot(stub);
+    await stub.pause();
+
+    expect(await stub.wakeNow()).toBe("inactive");
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.status).toBe("paused");
+    expect(snapshot?.meta.nextWakeAt).toBeNull();
+    expect(await alarmAt(stub)).toBeNull();
+  });
+
+  it("wakeNow schedules an immediate wake", async () => {
+    fakeButler();
+    const stub = botStub("b-wake-now-idle");
+    await initBot(stub);
+    await stub.setNextWake({ at: now + 7_200_000 });
+
+    expect(await stub.wakeNow()).toBe("scheduled");
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.nextWakeAt).toBe(now);
+    expect(await alarmAt(stub)).toBe(now);
   });
 });

@@ -84,6 +84,17 @@ export class BotStore {
     );
   }
 
+  /** When a run started, or null when it is not in the log. */
+  runStartedAt(taskId: string): number | null {
+    const row = this.sql
+      .exec<{ started_at: number }>(
+        `SELECT started_at FROM runs WHERE task_id = ?`,
+        taskId,
+      )
+      .toArray()[0];
+    return row ? row.started_at : null;
+  }
+
   /** Whether this run already recorded its end. */
   runEnded(taskId: string): boolean {
     const row = this.sql
