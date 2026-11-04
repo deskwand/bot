@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   WORKERS_AI_PAID_PLAN_MARKER,
   WORKERS_AI_QUOTA_MARKER,
@@ -82,7 +82,13 @@ function fakeBinding(
   };
 }
 
-describe("workersAiProvider", () => {
+describe("workersAiProvider", { timeout: 30_000 }, () => {
+  beforeAll(async () => {
+    // The lazy entry is heavy to transform. Warm it once so the first test
+    // keeps its own budget when the full suite imports every file in parallel.
+    await import("@earendil-works/pi-ai/api/openai-completions.lazy");
+  });
+
   it("streams through the AI binding with placeholder auth", async () => {
     const fakeAi = fakeBinding(sseBody);
     const env = { ...baseEnv, AI: fakeAi } as unknown as Env;
