@@ -372,6 +372,7 @@ async function loadServerTools(
     if (mode === "approval") {
       tool = withApproval(tool, gate);
     }
+    tool = { ...tool, deferred: true };
     tools.push(
       withProgress(tool, emit, () => `MCP ${server.name}：${info.name}`),
     );

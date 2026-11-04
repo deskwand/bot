@@ -41,6 +41,9 @@ describe("TaskDO execution tools", () => {
         "web_search",
         "web_fetch",
         "save_artifact",
+        "now",
+        "get_artifact",
+        "http_request",
       ]),
     );
   });

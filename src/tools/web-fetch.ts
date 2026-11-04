@@ -1,3 +1,4 @@
+import { BODY_TRUNCATION_MARKER, readCapped, truncate } from "./http-body";
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 
@@ -6,10 +7,6 @@ const Fetch = Type.Object({
 });
 
 const FETCH_TIMEOUT_MS = 30_000;
-const MAX_TEXT_CHARS = 20_000;
-const MAX_BODY_BYTES = 2 * 1024 * 1024;
-const TRUNCATION_MARKER = "\n\n[已截断]";
-const BODY_TRUNCATION_MARKER = "\n\n[内容超过 2 MB，已截断]";
 
 function textResult(text: string): ToolExecutionResult {
   return { output: [{ type: "text", text }] };
@@ -24,12 +21,6 @@ function abortReason(signal: AbortSignal): unknown {
   const error = new Error("aborted");
   error.name = "AbortError";
   return error;
-}
-
-function truncate(text: string): string {
-  return text.length <= MAX_TEXT_CHARS
-    ? text
-    : text.slice(0, MAX_TEXT_CHARS) + TRUNCATION_MARKER;
 }
 
 async function fetchWithAbort(
@@ -53,50 +44,6 @@ async function fetchWithAbort(
   } finally {
     cleanup();
   }
-}
-
-/**
- * Read at most 2 MB from the response. Streaming stops early so a huge body
- * cannot exhaust the Worker's memory; the caller notes the truncation.
- */
-async function readCapped(
-  response: Response,
-): Promise<{ response: Response; truncated: boolean }> {
-  if (!response.body) return { response, truncated: false };
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  let truncated = false;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-
-      if (total + value.byteLength > MAX_BODY_BYTES) {
-        const remaining = MAX_BODY_BYTES - total;
-        if (remaining > 0) chunks.push(value.subarray(0, remaining));
-        truncated = true;
-        break;
-      }
-
-      chunks.push(value);
-      total += value.byteLength;
-    }
-  } finally {
-    if (truncated) await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
-
-  return {
-    response: new Response(new Blob(chunks), {
-      status: response.status,
-      headers: response.headers,
-    }),
-    truncated,
-  };
 }
 
 async function extractHtml(response: Response): Promise<string> {
@@ -129,7 +76,7 @@ export function webFetchTool(
 ): ToolRegistration<typeof Fetch> {
   return {
     name: "web_fetch",
-    description: "Fetch a web page and return its readable text.",
+    description: "Fetch a web page over GET and return its readable text. Read-only: no custom method, headers or body. Use another tool for writes.",
     parameters: Fetch,
     replay: "safe",
     async execute({ url }, _api, context) {

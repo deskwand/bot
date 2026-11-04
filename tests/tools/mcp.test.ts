@@ -138,6 +138,12 @@ function fakeManager(listed: readonly McpToolInfo[] = []) {
   return { manager, registered, order };
 }
 
+it("marks discovered MCP tools deferred", async () => {
+  const { tools } = await loadMcpTools([server()], gate("approved"), async () => fakeClient([]), recorder().emit);
+  expect(tools.length).toBeGreaterThan(0);
+  for (const tool of tools) expect(tool.deferred, tool.name).toBe(true);
+});
+
 describe("resolveMcpUrl", () => {
   it("resolves {env:NAME} in the URL and names a missing variable without its value", () => {
     const s = server({ url: "https://mcp.amap.test/sse?key={env:MCP_AMAP_KEY}" });

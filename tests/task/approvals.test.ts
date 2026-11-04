@@ -226,11 +226,13 @@ describe("ApprovalGate", () => {
       const result = await pending;
       return {
         text: textOf(result),
+        isError: result.isError,
         calls: counter.calls,
         status: statusOf(sql, id),
       };
     });
 
+    expect(outcome.isError).toBe(true);
     expect(outcome.text).toContain("用户拒绝");
     expect(outcome.text).toContain("rejected");
     expect(outcome.calls).toBe(0);

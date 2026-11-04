@@ -231,9 +231,14 @@ export class ApprovalGate implements ApprovalGateLike {
   }
 }
 
+/** Shared refusal text for approval-gated tools. */
+export function rejectionText(decision: ApprovalDecision): string {
+  return `用户拒绝了此操作（${decision}），请换一种方式或直接向用户说明`;
+}
+
 /**
  * Run `tool` only after the user approves its arguments. A refusal (or a
- * timeout) is reported to the model as an ordinary tool result so it can
+ * timeout) is reported as an error result so scripts can catch it and the model can
  * choose another approach; an aborted run rethrows so pi sees an interruption.
  */
 export function withApproval<T extends TSchema>(
@@ -252,10 +257,11 @@ export function withApproval<T extends TSchema>(
       }
 
       return {
+        isError: true,
         output: [
           {
             type: "text",
-            text: `用户拒绝了此操作（${decision}），请换一种方式或直接向用户说明`,
+            text: rejectionText(decision),
           },
         ],
       };

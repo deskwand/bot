@@ -1,3 +1,9 @@
+import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
+import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
+import { createInlineCodemodeSandbox } from "@earendil-works/pi-codemode/cloudflare";
+import { httpRequestTool, safeRequestUrl } from "../tools/http-request";
+import { getArtifactTool, safeArtifactRef } from "../tools/get-artifact";
+import { nowTool } from "../tools/now";
 import { Agent, type Schedule } from "agents";
 import { PiHarness } from "agents/harness/pi";
 import { Type } from "@earendil-works/pi-ai";
@@ -142,6 +148,7 @@ export class TaskDO extends Agent<Env> {
       description:
         "Finish the task with a concise summary and its artifacts. Required to deliver results.",
       parameters: FinishTask,
+      callers: ["model"],
       // Has side effects (reports completion); must not replay after a restart.
       execute: async ({ summary, artifacts }) => {
         await this.finish(summary, artifacts ?? []);
@@ -171,6 +178,17 @@ export class TaskDO extends Agent<Env> {
           emitProgress,
           (args) => `搜索：${args.query}`,
         ),
+        withProgress(
+          getArtifactTool(this.env.ARTIFACTS, this.env.PUBLIC_BASE_URL),
+          emitProgress,
+          (args) => `读取产物：${safeArtifactRef(args.ref)}`,
+        ),
+        withProgress(
+          httpRequestTool(this.approvals),
+          emitProgress,
+          (args) => `${args.method ?? "GET"} ${safeRequestUrl(args.url)}`,
+        ),
+        withProgress(nowTool(), emitProgress, () => "查看时间"),
         withProgress(webFetchTool(), emitProgress, (args) => `读取：${args.url}`),
         withProgress(
           saveArtifactTool(
@@ -454,6 +472,10 @@ export class TaskDO extends Agent<Env> {
     if (!lastFailure?.retryable) {
       return { ok: false, message: `任务 ${taskId} 的失败不可重试` };
     }
+    // A retried run is a new turn on a possibly fresh instance: its tool
+    // declarations come from the registry, so install them first.
+    await this.ensureMcpTools();
+    await this.ensureBotTools();
     // Revives the tasks pi's crash-loop guard parked. False means nothing was
     // parked, followed by an ordinary run failure: re-attach to the run below.
     await this.harness.session().retry();
@@ -485,7 +507,10 @@ export class TaskDO extends Agent<Env> {
    * so a later install is visible to the next model request.
    */
   private ensureMcpTools(): Promise<void> {
-    this.mcpTools ??= this.installMcpTools();
+    this.mcpTools ??= (async () => {
+      await this.installMcpTools();
+      this.installCodemode();
+    })();
     return this.mcpTools;
   }
 
@@ -513,6 +538,28 @@ export class TaskDO extends Agent<Env> {
         notify: (text) => butler.notifyFromBot(botId, text),
       }),
     });
+  }
+
+  private installCodemode(): void {
+    let namespaces: NonNullable<Parameters<typeof createCodemodeExtension>[0]["namespaces"]> = [];
+    try {
+      namespaces = readRuntimeConfig(this.env).mcpServers.map((server) => ({
+        name: server.name,
+        prefix: `${server.name.replace(/[^A-Za-z0-9_-]/g, "_")}__`,
+        description: server.description,
+      }));
+    } catch (error) {
+      console.warn(`codemode namespaces skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.registry.install(createCodemodeExtension({
+      // Half the default interrupt budget bounds synchronous QuickJS work.
+      // Poll rate varies by script and host; this is not a wall-clock limit.
+      sandbox: createInlineCodemodeSandbox({ interruptBudget: 50_000 }),
+      namespaces,
+      models: false,
+      inlineBudget: 3000,
+    }));
+    this.registry.install(createToolSearchExtension());
   }
 
   private async installMcpTools(): Promise<void> {

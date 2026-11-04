@@ -19,3 +19,9 @@ describe("butlerSystemPrompt", () => {
     expect(butlerSystemPrompt([])).not.toContain("已接入的外部服务");
   });
 });
+
+it("tells the butler to spell out endpoint requirements in instructions", () => {
+  const prompt = butlerSystemPrompt([]);
+  expect(prompt).toContain("端点和 HTTP 方法");
+  expect(prompt).toContain("执行者看不到当前对话");
+});

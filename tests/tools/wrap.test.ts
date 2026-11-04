@@ -80,6 +80,7 @@ describe("withProgress", () => {
     );
 
     expect(events).toHaveLength(1);
+    expect(result.isError).toBe(true);
     expect(textOf(result)).toBe("工具出错：boom");
   });
 

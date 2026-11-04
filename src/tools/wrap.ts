@@ -44,6 +44,7 @@ export function withProgress<T extends TSchema>(
         if (context.abortSignal?.aborted || isAbortError(error)) throw error;
         return {
           output: [{ type: "text", text: `工具出错：${errorMessage(error)}` }],
+          isError: true,
         };
       }
 
