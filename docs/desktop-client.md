@@ -87,17 +87,23 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。若打开后
 
 ## 5. 模型与模型 key
 
-模型厂商的 key 都存成 secret，名字是 `MODEL_KEY_<ID>`：`<ID>` 是厂商 id 转大写，`-` 换成 `_`。例如：
+新装默认模型是 `workers-ai` / `@cf/google/gemma-4-26b-a4b-it`（Gemma 4 26B）。`workers-ai` 是内置的免 key 厂商：通过部署里的 `AI` binding 调用，不读取任何 `MODEL_KEY_*` secret。安装向导的模型步骤和模型页都默认选中它。
+
+选中 Workers AI 时不显示密钥输入框，改为显示免费额度说明：「使用你 Cloudflare 账号每天 10,000 neurons 的免费额度，用完后 UTC 0 点重置；超出后免费账号会暂停，付费账号按量计费。」因为没有密钥行，也不会出现「测试连接」按钮。模型下拉里 Workers AI 的纯文本模型会标注「不支持图片」，默认的 Gemma 4 26B 支持图片。
+
+已有部署的模型配置不迁移，也不会提示切换；要继续用原来的厂商就保留原配置，想用默认模型时在模型页手动切换。
+
+除免 key 的 `workers-ai` 外，模型厂商的 key 都存成 secret，名字是 `MODEL_KEY_<ID>`：`<ID>` 是厂商 id 转大写，`-` 换成 `_`。例如：
 
 - `opencode-go` → `MODEL_KEY_OPENCODE_GO`
 - `deepseek` → `MODEL_KEY_DEEPSEEK`
 - 自定义端点 `my-proxy` → `MODEL_KEY_MY_PROXY`
 
-内置厂商和自定义 OpenAI / Anthropic 兼容端点都遵循同一规则。旧的 `ANTHROPIC_API_KEY`、`OPENCODE_API_KEY` 不再读取；升级后需要在新版本客户端的模型页重新填写对应的 `MODEL_KEY_*`。
+内置厂商（`workers-ai` 除外）和自定义 OpenAI / Anthropic 兼容端点都遵循同一规则。旧的 `ANTHROPIC_API_KEY`、`OPENCODE_API_KEY` 不再读取；升级后需要在新版本客户端的模型页重新填写对应的 `MODEL_KEY_*`。
 
 升级旧部署前，更新页的确认框会列出升级后缺失、需要重新填写的 key（“升级后需要在模型页重新填写这些 key：…”）。提示不会拦住升级，但 key 没填好之前，管家和任务会直接回复“模型 … 没有配置 key（…），请在桌面端模型页填写”，不会进入模型调用。
 
-“保存并发布”前会检查管家和任务引用的模型厂商是否都已有对应的 `MODEL_KEY_*` secret，或者本次发布是否会写入它。缺失时发布会以 `MODEL_KEY_MISSING` 被拒绝，并列出缺的 secret 名。首次安装不做这项检查：key 在安装完成后到模型页填写。
+“保存并发布”前会检查管家和任务引用的模型厂商是否都已有对应的 `MODEL_KEY_*` secret，或者本次发布是否会写入它。缺失时发布会以 `MODEL_KEY_MISSING` 被拒绝，并列出缺的 secret 名。这项检查会跳过免 key 厂商，所以两个角色都用 Workers AI 时不需要任何 key。首次安装不做这项检查：需要 key 的厂商在安装完成后到模型页填写，Workers AI 不需要。
 
 ## 6. “保存并发布”到底做什么
 

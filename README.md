@@ -53,9 +53,19 @@
 - npm
 - Cloudflare 账号，并已执行 `npx wrangler login`
 - Telegram Bot Token（在 [@BotFather](https://t.me/BotFather) 创建 bot）
-- OpenCode Go API Key（模型调用）
+- 可选：模型厂商 API Key（默认用 Cloudflare Workers AI 免费额度，无需 key）
 - 联网搜索使用 Exa 免费 MCP，无需 API Key
 - 可选：外部服务（远程 MCP），在桌面端"服务"页添加
+
+## 默认模型：Cloudflare Workers AI
+
+新装默认用 Cloudflare Workers AI 的 `@cf/google/gemma-4-26b-a4b-it`（Gemma 4 26B），经 Worker 的 `AI` binding 调用，**不需要填任何 key**。它支持图片和工具调用，输入 $0.1/百万 token、输出 $0.3/百万 token。
+
+- Cloudflare 每个账号每天有 10,000 neurons 的免费额度，所有 Workers AI 模型共用；默认模型大约够几十轮管家对话。
+- 额度在 UTC 0 点（北京时间 8 点）重置。超出后免费账号的 Workers AI 会暂停，付费账号按 $0.011 / 1000 neurons 计费。
+- 额度用完时，管家会回复：「今天的 Cloudflare 免费模型额度已用完（UTC 0 点重置，即北京时间 8 点）。想继续用，可以在桌面端模型页换成自己的模型 key。」任务会以不可重试的失败结束；机器人遇到这种失败不计入连续失败次数，也不会因此被自动暂停。
+- 换模型：桌面客户端的「模型」页可以选择其他厂商并填写对应的 `MODEL_KEY_*`；换回 Workers AI 不需要 key。已有部署的模型配置不会自动迁移，也不会弹出提示。
+- Workers Free 计划不能用部分模型（`@cf/zai-org/glm-5.3-flash`、`deepseek-v4` 系列、`glm-5.2` / `glm-5.3`、`kimi-k2.6` / `kimi-k2.7`）。选中后会收到：「当前模型需要 Cloudflare Workers 付费计划，请在桌面端模型页换成免费计划可用的模型（例如默认的 Gemma 4 26B）。」免费计划可用的模型清单见 [`docs/workers-ai-spike.md`](docs/workers-ai-spike.md)。
 
 ## 1. 安装依赖
 
@@ -126,8 +136,8 @@ cp .dev.vars.example .dev.vars
   "schemaVersion": 1,
   "owner": { "telegramUserIds": [100000001] },
   "models": {
-    "butler": { "provider": "opencode-go", "id": "deepseek-v4.1-flash" },
-    "task": { "provider": "opencode-go", "id": "deepseek-v4.1-flash" }
+    "butler": { "provider": "workers-ai", "id": "@cf/google/gemma-4-26b-a4b-it" },
+    "task": { "provider": "workers-ai", "id": "@cf/google/gemma-4-26b-a4b-it" }
   },
   "mcpServers": []
 }
@@ -136,7 +146,7 @@ cp .dev.vars.example .dev.vars
 `100000001` 只是示例占位，请换成真实的 Telegram 用户 ID。
 
 - `owner.telegramUserIds`：允许使用该 bot 的 Telegram 用户 ID（正整数）。空数组是合法配置，表示不授权任何人；不存在仓库内置 owner，也不会回退到源码常量。
-- `models`：按角色（`butler` / `task`）配置模型，provider 只接受现有适配器支持的 `anthropic` 与 `opencode-go`。
+- `models`：按角色（`butler` / `task`）配置模型。`workers-ai` 是内置的免 key 厂商（默认）；其他内置厂商和 `models.customProviders` 里的自定义端点按 `MODEL_KEY_<ID>` 读取 key。
 - `mcpServers`：远程 MCP 服务器列表，推荐在桌面端"服务"页从目录添加（GitHub、Notion、Linear、Sentry、高德地图等），不必手写。只支持远程 MCP（Streamable HTTP / SSE），不支持 `npx` 启动的本地 stdio 服务。
   - 审批：桌面端添加的服务默认"读免审、写要审"（`approvalPolicy: "writes"`，依据工具的 `readOnlyHint`），可逐个工具改为免审、要审或停用（`autoApprove` / `requireApproval` / `disabledTools`）。要审的工具触发时先发 ✅/❌ 审批按钮。
   - 密钥：header 值写 `env:NAME`，URL 中写 `{env:NAME}` 占位，`NAME` 为 `MCP_` 开头的 Worker secret；引用原样保留，不会把值展开进普通 var。
