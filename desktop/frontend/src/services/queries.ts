@@ -59,10 +59,16 @@ export function useConfigQuery(): CachedQuery<ConfigDTO> {
     queryFn: () => client.getConfig(),
     placeholderData: cached.data?.data ?? undefined,
   });
+  const cachedData = cached.data?.data;
+  // A failed refresh drops the query's data; keep showing the disk snapshot
+  // instead so the page can report the failure without blanking.
+  const data = query.data ?? (cachedData === null ? undefined : cachedData);
+  const isPlaceholder =
+    query.isPlaceholderData || (query.data === undefined && cachedData != null);
   return {
-    data: query.data,
-    isPlaceholder: query.isPlaceholderData,
-    savedAt: query.isPlaceholderData ? (cached.data?.savedAt ?? null) : null,
+    data,
+    isPlaceholder,
+    savedAt: isPlaceholder ? (cached.data?.savedAt ?? null) : null,
     isFetching: query.isFetching,
     error: query.error,
     refetch: query.refetch,
@@ -81,10 +87,14 @@ export function useStatusQuery(): CachedQuery<StatusItemDTO[]> {
     queryFn: () => client.status(),
     placeholderData: cached.data?.data ?? undefined,
   });
+  const cachedData = cached.data?.data;
+  const data = query.data ?? (cachedData === null ? undefined : cachedData);
+  const isPlaceholder =
+    query.isPlaceholderData || (query.data === undefined && cachedData != null);
   return {
-    data: query.data,
-    isPlaceholder: query.isPlaceholderData,
-    savedAt: query.isPlaceholderData ? (cached.data?.savedAt ?? null) : null,
+    data,
+    isPlaceholder,
+    savedAt: isPlaceholder ? (cached.data?.savedAt ?? null) : null,
     isFetching: query.isFetching,
     error: query.error,
     refetch: query.refetch,

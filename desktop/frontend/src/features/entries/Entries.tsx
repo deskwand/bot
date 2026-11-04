@@ -25,14 +25,14 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StateBadge, StatusBadge, StatusRow, StepList } from "@/components/feedback";
+import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
 import { describeCode } from "@/services/errors";
+import { useConfigQuery, useInvalidate, useStatusQuery } from "@/services/queries";
 import type {
-  ConfigDTO,
   EntryResultDTO,
   LoginStatusDTO,
   ResultDTO,
-  StatusItemDTO,
   StepDTO,
 } from "@/services/types";
 
@@ -55,12 +55,22 @@ interface PublishFailure {
 
 export function Entries() {
   const { client } = useApp();
-  const [config, setConfig] = useState<ConfigDTO | null>(null);
-  const [status, setStatus] = useState<StatusItemDTO[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<unknown>(null);
+  const configQuery = useConfigQuery();
+  const statusQuery = useStatusQuery();
+  const invalidate = useInvalidate();
+  const config = configQuery.data;
+  const status = statusQuery.data ?? [];
+  const loading = !configQuery.data && configQuery.isFetching;
+  const loadError = configQuery.data
+    ? null
+    : (configQuery.error ?? statusQuery.error);
 
   const [channel, setChannel] = useState("");
+  const channelTouched = useRef(false);
+  const refresh = useCallback(() => {
+    void configQuery.refetch();
+    void statusQuery.refetch();
+  }, [configQuery, statusQuery]);
   const [channelRunning, setChannelRunning] = useState(false);
   const [channelError, setChannelError] = useState<unknown>(null);
   const [channelResult, setChannelResult] = useState<EntryResultDTO | null>(null);
@@ -88,24 +98,10 @@ export function Entries() {
   const dirty = channel !== (config?.activeChannel ?? "") || telegramToken.length > 0;
   useDirty(dirty);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const [nextConfig, nextStatus] = await Promise.all([client.getConfig(), client.status()]);
-      setConfig(nextConfig);
-      setStatus(nextStatus);
-      setChannel(nextConfig.activeChannel ?? "");
-    } catch (cause) {
-      setLoadError(cause);
-    } finally {
-      setLoading(false);
-    }
-  }, [client]);
-
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!configQuery.data || channelTouched.current) return;
+    setChannel(configQuery.data.activeChannel ?? "");
+  }, [configQuery.data]);
 
   useEffect(() => {
     const unsubscribe = client.subscribeLoginStatus((update: LoginStatusDTO) => {
@@ -142,7 +138,7 @@ export function Entries() {
           setWechatPublished(true);
           setLoginState("published");
           setLoginMessage("已发布，等待云端启动。");
-          void load();
+          invalidate.configAndStatus();
           break;
         case "publish_failed":
           confirmedRef.current = false;
@@ -178,7 +174,7 @@ export function Entries() {
       }
     });
     return unsubscribe;
-  }, [client, load]);
+  }, [client, invalidate]);
 
   useEffect(
     () => () => {
@@ -237,7 +233,7 @@ export function Entries() {
         setLoginState("published");
         setPublishFailure(null);
         setLoginMessage("已发布，等待云端启动。");
-        await load();
+        invalidate.configAndStatus();
       } else {
         setLoginState("publish_failed");
         setLoginMessage(`继续后状态：${result.state || "未知"}。`);
@@ -260,7 +256,7 @@ export function Entries() {
     try {
       const result = await client.selectEntry(channel);
       setChannelResult(result);
-      await load();
+      invalidate.configAndStatus();
     } catch (cause) {
       setChannelError(cause);
     } finally {
@@ -283,7 +279,7 @@ export function Entries() {
             }
           : current,
       );
-      await load();
+      invalidate.configAndStatus();
     } catch (cause) {
       setChannelResumeError(cause);
     } finally {
@@ -299,7 +295,7 @@ export function Entries() {
       const result = await client.connectTelegram(telegramToken);
       setTelegramResult(result);
       setTelegramToken("");
-      await load();
+      invalidate.configAndStatus();
     } catch (cause) {
       setTelegramToken("");
       setTelegramError(cause);
@@ -313,7 +309,7 @@ export function Entries() {
     setTelegramRunning(true);
     try {
       setTelegramResult(await client.resumeOperation(telegramResult.operationId));
-      await load();
+      invalidate.configAndStatus();
     } catch (cause) {
       setTelegramError(cause);
     } finally {
@@ -340,13 +336,16 @@ export function Entries() {
   return (
     <div>
       <PageHeader title="消息入口" actions={<>
-<Button type="button" variant="outline" size="sm" onClick={() => void load()}>
-          <RefreshCw aria-hidden />
-          重新检查
-        </Button>
+        <SyncStatus
+          isFetching={configQuery.isFetching || statusQuery.isFetching}
+          isPlaceholder={configQuery.isPlaceholder || statusQuery.isPlaceholder}
+          savedAt={configQuery.savedAt ?? statusQuery.savedAt}
+          error={configQuery.data ? (configQuery.error ?? statusQuery.error) : null}
+          onRetry={refresh}
+        />
 </>} />
 
-      <ErrorAlert error={loadError} onRetry={load} />
+      <ErrorAlert error={loadError} onRetry={refresh} />
 
       <Card className="mt-5">
         <CardHeader>
@@ -459,7 +458,10 @@ export function Entries() {
           <p className="mb-3 text-sm text-muted-foreground">当前：<span data-testid="current-entry">{config?.activeChannel === "wechat" ? "微信" : config?.activeChannel === "telegram" ? "Telegram" : "未设置"}</span></p>
           <RadioGroup
             value={channel}
-            onValueChange={setChannel}
+            onValueChange={(next) => {
+              channelTouched.current = true;
+              setChannel(next);
+            }}
             aria-label="当前消息入口"
             className="grid gap-3 sm:grid-cols-2"
           >
@@ -611,7 +613,7 @@ export function Entries() {
               </Button>
             ) : null}
             {loginState === "published" ? (
-              <Button type="button" variant="outline" onClick={() => void load()}>
+              <Button type="button" variant="outline" onClick={refresh}>
                 <RefreshCw aria-hidden />
                 检查状态
               </Button>

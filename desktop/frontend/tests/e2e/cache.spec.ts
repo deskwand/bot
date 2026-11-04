@@ -43,3 +43,63 @@ test("a failing boot state reports the reason", async ({ page }) => {
   await alert.locator("summary").click();
   await expect(alert.getByText("SERVICE_UNAVAILABLE")).toBeVisible();
 });
+
+async function mockCallCount(page: import("@playwright/test").Page, name: string) {
+  return page.evaluate(
+    (method) =>
+      (
+        window as unknown as { __mockCalls?: Record<string, unknown[][]> }
+      ).__mockCalls?.[method]?.length ?? 0,
+    name,
+  );
+}
+
+test("overview shows cached data then syncs", async ({ page }) => {
+  await page.goto("/test.html?fixture=cloud-slow");
+  await expect(
+    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
+  ).toBeVisible({ timeout: 500 });
+  await expect(page.getByText("5 分钟前的数据")).toBeVisible({ timeout: 500 });
+  await expect(page.getByText("5 分钟前的数据")).toHaveCount(0, { timeout: 10_000 });
+});
+
+test("offline keeps cached data with banner", async ({ page }) => {
+  await page.goto("/test.html?fixture=cloud-offline");
+  await expect(
+    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
+  ).toBeVisible();
+  const banner = page.getByRole("status").filter({ hasText: "无法同步最新数据" });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("显示的是 5 分钟前的数据");
+  await expect(page.getByTestId("error-alert")).toHaveCount(0);
+
+  await banner.getByRole("button", { name: "重试" }).click();
+  await expect(banner).toBeVisible({ timeout: 10_000 });
+});
+
+test("revisiting a page does not reload", async ({ page }) => {
+  await page.goto("/test.html?fixture=cloud-slow");
+  await expect(page.getByText("5 分钟前的数据")).toHaveCount(0, { timeout: 10_000 });
+
+  await page.getByRole("button", { name: "诊断", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "诊断", exact: true })).toBeVisible();
+  await expect(page.getByText("正在同步…")).toHaveCount(0, { timeout: 10_000 });
+
+  await page.getByRole("button", { name: "服务概览", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
+  ).toBeVisible({ timeout: 100 });
+  await expect(page.getByText("正在加载…")).toHaveCount(0);
+});
+
+test("entry switch refetches config", async ({ page }) => {
+  await page.goto("/test.html?fixture=cloud-slow");
+  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "消息入口", exact: true })).toBeVisible();
+  await expect(page.getByText("5 分钟前的数据")).toHaveCount(0, { timeout: 10_000 });
+
+  const before = await mockCallCount(page, "getConfig");
+  await page.getByRole("radio", { name: "Telegram" }).click();
+  await page.getByRole("button", { name: "保存并发布" }).click();
+  await expect.poll(() => mockCallCount(page, "getConfig")).toBe(before + 1);
+});

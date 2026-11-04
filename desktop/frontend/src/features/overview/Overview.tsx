@@ -1,6 +1,6 @@
 import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useState } from "react";
-import { ArrowRight, Loader2, RefreshCw } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,13 +18,18 @@ import {
 } from "@/components/ui/dialog";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StatusRow, StatusBadge, formatObserved } from "@/components/feedback";
+import { SyncStatus } from "@/components/sync-status";
 import { isCode } from "@/services/errors";
-import type { ConfigDTO, ConnectionDTO, PendingRestoreDTO, StatusItemDTO } from "@/services/types";
+import { useConfigQuery, useInvalidate, useStatusQuery } from "@/services/queries";
+import type { ConnectionDTO, PendingRestoreDTO } from "@/services/types";
 
 export function Overview() {
   const { client, navigate } = useApp();
-  const [config, setConfig] = useState<ConfigDTO | null>(null);
-  const [status, setStatus] = useState<StatusItemDTO[]>([]);
+  const configQuery = useConfigQuery();
+  const statusQuery = useStatusQuery();
+  const invalidate = useInvalidate();
+  const config = configQuery.data;
+  const status = statusQuery.data ?? [];
   const [connection, setConnection] = useState<ConnectionDTO | null>(null);
   const [pendingRestore, setPendingRestore] = useState<PendingRestoreDTO | null>(null);
   const [pendingError, setPendingError] = useState<unknown>(null);
@@ -34,35 +39,21 @@ export function Overview() {
   const [abandonOpen, setAbandonOpen] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
   const [abandonError, setAbandonError] = useState<unknown>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<unknown>(null);
+  const [localError, setLocalError] = useState<unknown>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadLocal = useCallback(async () => {
+    setLocalError(null);
     setPendingError(null);
     // Load independently: a corrupt restore journal must not blank the rest
     // of the overview, and its error must stay out of the page-level alert.
-    const [configResult, statusResult, connectionResult, pendingResult] = await Promise.allSettled([
-      client.getConfig(),
-      client.status(),
+    const [connectionResult, pendingResult] = await Promise.allSettled([
       client.cloudflareStatus(),
       client.pendingRestore(),
     ]);
-    if (configResult.status === "fulfilled") {
-      setConfig(configResult.value);
-    } else {
-      setError(configResult.reason);
-    }
-    if (statusResult.status === "fulfilled") {
-      setStatus(statusResult.value);
-    } else {
-      setError(statusResult.reason);
-    }
     if (connectionResult.status === "fulfilled") {
       setConnection(connectionResult.value);
     } else {
-      setError(connectionResult.reason);
+      setLocalError(connectionResult.reason);
     }
     if (pendingResult.status === "fulfilled") {
       setPendingRestore(pendingResult.value);
@@ -71,12 +62,24 @@ export function Overview() {
       setPendingRestore(null);
       setPendingError(pendingResult.reason);
     }
-    setLoading(false);
   }, [client]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadLocal();
+  }, [loadLocal]);
+
+  const refresh = useCallback(() => {
+    void configQuery.refetch();
+    void statusQuery.refetch();
+    void loadLocal();
+  }, [configQuery, loadLocal, statusQuery]);
+
+  const error = configQuery.data
+    ? localError
+    : (configQuery.error ?? statusQuery.error ?? localError);
+  const syncError = configQuery.data
+    ? (configQuery.error ?? statusQuery.error)
+    : null;
 
   const entryStatus = status.find((item) => item.kind === config?.activeChannel);
   const modelsConfigured = Boolean(config?.butlerModel && config?.taskModel);
@@ -90,7 +93,8 @@ export function Overview() {
     try {
       await client.retryRestore(useSnapshot);
       setRetryMessage("恢复已重新执行。");
-      await load();
+      invalidate.configAndStatus();
+      await loadLocal();
     } catch (cause) {
       setRetryError(cause);
     } finally {
@@ -106,7 +110,8 @@ export function Overview() {
       setAbandonOpen(false);
       setRetryError(null);
       setRetryMessage("已清除本机记录，云端未改动。");
-      await load();
+      invalidate.configAndStatus();
+      await loadLocal();
     } catch (cause) {
       setAbandonError(cause);
     } finally {
@@ -117,15 +122,16 @@ export function Overview() {
   return (
     <div>
       <PageHeader title="服务概览" actions={<>
-<div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
-            {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw aria-hidden />}
-            刷新
-          </Button>
-        </div>
+        <SyncStatus
+          isFetching={configQuery.isFetching || statusQuery.isFetching}
+          isPlaceholder={configQuery.isPlaceholder || statusQuery.isPlaceholder}
+          savedAt={configQuery.savedAt ?? statusQuery.savedAt}
+          error={syncError}
+          onRetry={refresh}
+        />
 </>} />
 
-      <ErrorAlert error={error} onRetry={load} />
+      <ErrorAlert error={error} onRetry={refresh} />
 
       {pendingRestore ? (
         <Card className="mt-4 border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
