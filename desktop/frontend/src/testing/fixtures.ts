@@ -201,8 +201,8 @@ const CATALOG: ModelCatalogDTO = {
       keyless: true,
       models: [
         {
-          id: "@cf/zai-org/glm-5.3-flash",
-          name: "GLM 5.3 Flash",
+          id: "@cf/google/gemma-4-26b-a4b-it",
+          name: "Gemma 4 26B A4B IT",
           input: ["text", "image"],
         },
         { id: "@cf/zai-org/glm-4.7-flash", name: "GLM 4.7 Flash", input: ["text"] },

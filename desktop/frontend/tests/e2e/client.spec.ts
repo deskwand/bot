@@ -191,8 +191,8 @@ test("models page defaults to Workers AI and asks for no key", async ({ page }) 
 
   await expect(page.getByLabel("管家模型供应商")).toHaveText(/Cloudflare Workers AI/);
   await expect(page.getByLabel("任务模型供应商")).toHaveText(/Cloudflare Workers AI/);
-  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/GLM 5\.3 Flash/);
-  await expect(page.getByLabel("任务模型", { exact: true })).toHaveText(/GLM 5\.3 Flash/);
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/Gemma 4 26B A4B IT/);
+  await expect(page.getByLabel("任务模型", { exact: true })).toHaveText(/Gemma 4 26B A4B IT/);
   await expect(keyRow(page, "workers-ai")).toHaveCount(0);
   await expect(page.getByText(WORKERS_AI_QUOTA_NOTICE)).toBeVisible();
 });
@@ -207,7 +207,7 @@ test("switching back to Workers AI drops the key row", async ({ page }) => {
     page,
     "任务模型",
     "Cloudflare Workers AI（免费额度）",
-    /GLM 5\.3 Flash/,
+    /Gemma 4 26B A4B IT/,
   );
   await expect(keyRow(page, "opencode-go")).toHaveCount(0);
   await expect(page.getByText(WORKERS_AI_QUOTA_NOTICE)).toBeVisible();
@@ -223,7 +223,7 @@ test("text-only Workers AI models are labelled", async ({ page }) => {
     page.getByRole("listbox").getByRole("option", { name: /GLM 4\.7 Flash/ }),
   ).toContainText("不支持图片");
   await expect(
-    page.getByRole("listbox").getByRole("option", { name: /GLM 5\.3 Flash/ }),
+    page.getByRole("listbox").getByRole("option", { name: /Gemma 4 26B A4B IT/ }),
   ).not.toContainText("不支持图片");
 });
 
@@ -234,8 +234,8 @@ test("install form defaults both models to Workers AI", async ({ page }) => {
 
   await expect(page.getByLabel("管家模型供应商")).toHaveText(/Cloudflare Workers AI/);
   await expect(page.getByLabel("任务模型供应商")).toHaveText(/Cloudflare Workers AI/);
-  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/GLM 5\.3 Flash/);
-  await expect(page.getByLabel("任务模型", { exact: true })).toHaveText(/GLM 5\.3 Flash/);
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/Gemma 4 26B A4B IT/);
+  await expect(page.getByLabel("任务模型", { exact: true })).toHaveText(/Gemma 4 26B A4B IT/);
 
   await page.locator("#install-channel-telegram").click();
   await page.getByRole("button", { name: "检查并部署" }).click();
@@ -245,11 +245,11 @@ test("install form defaults both models to Workers AI", async ({ page }) => {
   const calls = await recordedConfigCalls(page);
   expect(calls?.install.at(-1)?.butlerModel).toEqual({
     provider: "workers-ai",
-    id: "@cf/zai-org/glm-5.3-flash",
+    id: "@cf/google/gemma-4-26b-a4b-it",
   });
   expect(calls?.install.at(-1)?.taskModel).toEqual({
     provider: "workers-ai",
-    id: "@cf/zai-org/glm-5.3-flash",
+    id: "@cf/google/gemma-4-26b-a4b-it",
   });
 });
 
@@ -264,7 +264,7 @@ test("a stale key draft is not published after switching back", async ({ page })
     page,
     "任务模型",
     "Cloudflare Workers AI（免费额度）",
-    /GLM 5\.3 Flash/,
+    /Gemma 4 26B A4B IT/,
   );
   await expect(keyRow(page, "opencode-go")).toHaveCount(0);
 

@@ -10,7 +10,7 @@ export type ProviderOption = {
 
 export const DEFAULT_MODEL: ModelDTO = {
   provider: "workers-ai",
-  id: "@cf/zai-org/glm-5.3-flash",
+  id: "@cf/google/gemma-4-26b-a4b-it",
 };
 
 export function secretNameFor(id: string): string {
