@@ -866,27 +866,90 @@ type BackupCalls = {
   retry: boolean[];
   choose: number;
   abandon: number;
+  openFolder: number;
+  chooseDir: number;
+  chooseAt: string[];
+  saved: { dir: string; auto: boolean; intervalHours: number; keep: number }[];
+};
+
+const NO_BACKUP_CALLS: BackupCalls = {
+  restore: 0,
+  retry: [],
+  choose: 0,
+  abandon: 0,
+  openFolder: 0,
+  chooseDir: 0,
+  chooseAt: [],
+  saved: [],
 };
 
 async function backupCalls(page: Page): Promise<BackupCalls> {
-  return page.evaluate(() => {
-    const calls = (window as unknown as { __backupCalls?: BackupCalls }).__backupCalls;
-    return calls ?? { restore: 0, retry: [], choose: 0, abandon: 0 };
-  });
+  const calls = await page.evaluate(
+    () => (window as unknown as { __backupCalls?: BackupCalls }).__backupCalls ?? null,
+  );
+  return calls ?? NO_BACKUP_CALLS;
 }
 
 test("exports a backup and shows the sensitivity notice", async ({ page }) => {
   await page.goto("/test.html?fixture=backup");
   await page.getByRole("button", { name: "数据备份", exact: true }).click();
   await expect(page.getByRole("heading", { name: "数据备份", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "导出到本地", exact: true }).click();
+  await expect(page.getByTestId("backup-dir")).toContainText("DeskWand 备份");
+  await page.getByRole("button", { name: "立即备份", exact: true }).click();
   await expect(page.getByText(BACKUP_NOTICE)).toBeVisible();
+  // The configured folder is where the file lands; no file dialog is involved.
+  await expect(page.getByTestId("backup-file")).toHaveCount(1);
+});
+
+test("opens the backup folder in the file manager", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "打开目录", exact: true }).first().click();
+  await expect.poll(async () => (await backupCalls(page)).openFolder).toBe(1);
+});
+
+test("turning auto backup on saves the schedule", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await expect(page.getByRole("button", { name: "自动备份：关", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "自动备份：关", exact: true }).click();
+  await expect(page.getByRole("button", { name: "自动备份：开", exact: true })).toBeVisible();
+  await expect
+    .poll(async () => (await backupCalls(page)).saved.at(-1)?.auto)
+    .toBe(true);
+
+  await page.getByRole("combobox", { name: "备份间隔" }).click();
+  await page.getByRole("option", { name: "每 6 小时", exact: true }).click();
+  await expect
+    .poll(async () => (await backupCalls(page)).saved.at(-1)?.intervalHours)
+    .toBe(6);
+});
+
+test("changing the folder stores the new path", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "更改…", exact: true }).click();
+  await expect(page.getByTestId("backup-dir")).toContainText("备份（新）");
+  await expect.poll(async () => (await backupCalls(page)).chooseDir).toBe(1);
+});
+
+test("restores a listed backup without a file dialog", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "恢复这份", exact: true }).click();
+
+  await expect(page.getByText("恢复摘要")).toBeVisible();
+  const calls = await backupCalls(page);
+  expect(calls.choose).toBe(0);
+  expect(calls.chooseAt).toHaveLength(1);
+  expect(calls.chooseAt[0]).toContain("deskwand-backup-deskwand-bot-20261102-090000.zip");
 });
 
 test("shows progress while exporting", async ({ page }) => {
   await page.goto("/test.html?fixture=backup-progress");
   await page.getByRole("button", { name: "数据备份", exact: true }).click();
-  await page.getByRole("button", { name: "导出到本地", exact: true }).click();
+  await page.getByRole("button", { name: "立即备份", exact: true }).click();
   const progress = page.getByTestId("backup-progress");
   await expect(progress).toContainText("导出数据库");
   await expect(progress).toContainText("120");
@@ -898,7 +961,11 @@ test("restores only after confirming the overwrite", async ({ page }) => {
   await page.getByRole("button", { name: "数据备份", exact: true }).click();
   await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
   await expect(page.getByText("恢复摘要")).toBeVisible();
-  await expect(page.getByText("deskwand-backup-deskwand-bot-20261102-090000.zip")).toBeVisible();
+  // The same name now also appears in the local list, so scope this to the
+  // restore summary.
+  await expect(
+    page.locator("dl").getByText("deskwand-backup-deskwand-bot-20261102-090000.zip"),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "覆盖并恢复", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "确认覆盖恢复" });
