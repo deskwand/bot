@@ -163,9 +163,15 @@ export function Models() {
   };
 
   const applyFreshConfig = async (): Promise<ConfigDTO | undefined> => {
-    const fresh = (await configQuery.refetch()) as { data?: ConfigDTO } | undefined;
-    if (fresh?.data) applyConfig(fresh.data);
-    return fresh?.data;
+    const fresh = await configQuery.refetch();
+    // A failed refetch still carries the previous data in v5; adopting it would
+    // restore the pre-publish fingerprint, so keep the form locked instead.
+    if (fresh.status !== "success" || !fresh.data) {
+      setError(fresh.error ?? null);
+      return undefined;
+    }
+    applyConfig(fresh.data);
+    return fresh.data;
   };
 
   const refresh = async () => {
@@ -489,7 +495,7 @@ export function Models() {
           isPlaceholder={configQuery.isPlaceholder}
           savedAt={configQuery.savedAt}
           error={configQuery.data ? configQuery.error : null}
-          onRetry={() => void refresh()}
+          onRetry={() => void (awaitingFreshConfig ? reload() : refresh())}
         />
         <Badge variant="outline">
           <ShieldCheck aria-hidden />

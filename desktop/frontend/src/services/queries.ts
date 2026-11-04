@@ -4,6 +4,7 @@ import {
   QueryClient,
   useQuery,
   useQueryClient,
+  type QueryObserverResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { useApp } from "@/components/app-context";
@@ -49,7 +50,7 @@ export interface CachedQuery<T> {
   savedAt: string | null;
   isFetching: boolean;
   error: unknown;
-  refetch: () => Promise<unknown>;
+  refetch: () => Promise<QueryObserverResult<T>>;
 }
 
 export function useConfigQuery(): CachedQuery<ConfigDTO> {

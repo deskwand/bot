@@ -88,6 +88,7 @@ type Scenario =
   | "cloud-slow"
   | "cloud-offline"
   | "cloud-updated"
+  | "publish-refetch-fail"
   | "target-other-account"
   | "boot-failed";
 
@@ -339,6 +340,7 @@ function scenarioFromLocation(): Scenario {
     case "cloud-updated":
     case "target-other-account":
     case "boot-failed":
+    case "publish-refetch-fail":
       return value;
     default:
       return "default";
@@ -347,7 +349,7 @@ function scenarioFromLocation(): Scenario {
 
 function initialState(): MockState {
   const scenario = scenarioFromLocation();
-  const configured = scenario === "configured";
+  const configured = scenario === "configured" || scenario === "publish-refetch-fail";
   const shellScenario = [
     "unknown-long-error",
     "config-conflict",
@@ -386,6 +388,7 @@ function initialState(): MockState {
     "cloud-offline",
     "cloud-updated",
     "target-other-account",
+    "publish-refetch-fail",
   ].includes(scenario);
   return {
     scenario,
@@ -572,6 +575,7 @@ export function createMockClient(): ClientService {
   const statusItems = () => statusItemsFor(state);
   let sequence = 0;
   let configReads = 0;
+  let configBrokenAfterPublish = false;
   const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const emit = (status: LoginStatusDTO) => {
@@ -902,6 +906,7 @@ export function createMockClient(): ClientService {
 
     async getConfig() {
       record("getConfig");
+      if (configBrokenAfterPublish) fail("NETWORK_ERROR", "无法连接云端服务");
       if (state.scenario === "cloud-offline") {
         await pause(2000);
         fail("NETWORK_ERROR", "无法连接云端服务");
@@ -1117,6 +1122,7 @@ export function createMockClient(): ClientService {
     async publishConfig(input: ConfigEditDTO) {
       record("publishConfig", input);
       configCalls.publish.push(input);
+      if (state.scenario === "publish-refetch-fail") configBrokenAfterPublish = true;
       if (state.scenario === "upgrade-required") {
         fail("UPGRADE_REQUIRED", "请先在“更新”页升级云端服务。");
       }

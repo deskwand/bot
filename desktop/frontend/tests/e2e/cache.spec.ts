@@ -217,6 +217,28 @@ test("own publish does not show cloud updated banner", async ({ page }) => {
   await expect.poll(() => mockCallCount(page, "publishConfig")).toBe(2);
 });
 
+test("a failed refetch after publish keeps the form locked", async ({ page }) => {
+  await page.goto("/test.html?fixture=publish-refetch-fail");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  const keyInput = page
+    .getByTestId("model-key-row-opencode-go")
+    .getByLabel("API 密钥");
+  const publish = page.getByRole("button", { name: "保存并发布" });
+  await expect(keyInput).toBeEnabled();
+
+  await keyInput.fill("sk-refetch-fail");
+  await publish.click();
+  const preview = page.getByRole("dialog", { name: "确认保存并发布" });
+  await preview.getByRole("button", { name: "确认保存并发布" }).click();
+  await expect(page.getByText(/配置已发布/).first()).toBeVisible();
+
+  // The refetch fails, so the pre-publish fingerprint must not become the new
+  // baseline: the form stays locked and the error is shown.
+  await expect(page.getByText("无法连接云端服务").first()).toBeVisible();
+  await expect(keyInput).toBeDisabled();
+  await expect(publish).toBeDisabled();
+});
+
 test("a successful upgrade refetches config on return", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await expect(
