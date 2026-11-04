@@ -865,7 +865,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <details className="min-w-0 break-words"><summary className="cursor-pointer text-sm text-muted-foreground">检查详情</summary>
+            <details className="min-w-0 break-words"><summary className="cursor-pointer text-sm text-muted-foreground">详情</summary>
             <dl className="grid gap-2 text-sm sm:grid-cols-2">
               <Info label="当前发布版本" value={preview.releaseVersion || "未知"} />
               <Info label="DESKWAND_CONFIG" value={preview.configPresent ? "存在" : "不存在"} />
@@ -1034,7 +1034,7 @@ export function ResultPanel({
       </CardHeader>
       <CardContent>
         {result.state === "published" ? <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">执行详情</summary>
+          <summary className="cursor-pointer text-xs text-muted-foreground">详情</summary>
           <p className="mt-2 break-all text-xs text-muted-foreground">操作 ID：{result.operationId}</p>
           <StepList steps={result.steps ?? []} />
         </details> : <>

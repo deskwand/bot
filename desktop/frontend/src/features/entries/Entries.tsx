@@ -368,7 +368,7 @@ export function Entries() {
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">{wechatConfigured ? "凭据已配置" : "扫码登录你的微信"}</p>
-          {wechatStatus ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">连接详情</summary><StatusRow item={wechatStatus} /></details> : null}
+          {wechatStatus ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">详情</summary><StatusRow item={wechatStatus} /></details> : null}
           {wechatPublished ? (
             <Alert className="mt-3 border-emerald-300 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20">
               <AlertTitle>已连接，等待第一条消息</AlertTitle>
@@ -403,7 +403,7 @@ export function Entries() {
             <p className="text-sm text-muted-foreground">{telegramConfigured ? "令牌已配置" : "填写 BotFather 提供的令牌"}</p>
             {telegramConfigured ? <Button type="button" size="sm" variant="outline" onClick={() => setEditingTelegram((value) => !value)}>{editingTelegram ? "收起" : "更换令牌"}</Button> : null}
           </div>
-          {telegramStatus ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">连接详情</summary><StatusRow item={telegramStatus} /></details> : null}
+          {telegramStatus ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">详情</summary><StatusRow item={telegramStatus} /></details> : null}
           {!telegramConfigured || editingTelegram ? <div className="mt-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">

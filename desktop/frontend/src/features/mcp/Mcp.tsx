@@ -522,7 +522,7 @@ export function Mcp() {
                     </Button>
                   </div>
                   <details className="mt-3 min-w-0 text-xs text-muted-foreground">
-                    <summary className="cursor-pointer">连接详情</summary>
+                    <summary className="cursor-pointer">详情</summary>
                     <p className="mt-2 break-all">{server.url}</p>
                   </details>
                   {expanded.includes(server.name) ? (

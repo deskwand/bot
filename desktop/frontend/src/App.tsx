@@ -415,7 +415,7 @@ function PendingOperations({
               <span>操作 {result.id}</span>
               <StateBadge state={result.state} />
             </div>
-            {result.state === "published" || result.state === "completed" ? <details className="mt-2"><summary className="cursor-pointer text-xs text-muted-foreground">执行详情</summary><StepList steps={result.steps ?? []} /></details> : <StepList steps={result.steps ?? []} />}
+            {result.state === "published" || result.state === "completed" ? <details className="mt-2"><summary className="cursor-pointer text-xs text-muted-foreground">详情</summary><StepList steps={result.steps ?? []} /></details> : <StepList steps={result.steps ?? []} />}
           </div>
         ) : null}
         <ul className="mt-3 space-y-3">

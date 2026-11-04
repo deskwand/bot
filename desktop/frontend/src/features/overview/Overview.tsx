@@ -298,10 +298,10 @@ export function Overview() {
         </section>
       ) : null}
 
-      <details className="mt-6 min-w-0 border-t border-border pt-4">
-        <summary className="cursor-pointer text-sm text-muted-foreground">状态详情</summary>
+      <details className="mt-6 min-w-0 border-t border-border pt-4" data-testid="overview-status-details">
+        <summary className="cursor-pointer text-sm text-muted-foreground">详情</summary>
         {config ? <p className="mt-3 text-xs text-muted-foreground">接收流量：{config.activeVersionCount} 个版本</p> : null}
-        {status.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">暂无状态数据，服务运行情况未知。</p> : status.map((item) => <StatusRow key={item.kind} item={item} />)}
+        {status.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">暂无状态数据，不代表服务已停止。</p> : status.map((item) => <StatusRow key={item.kind} item={item} />)}
       </details>
 
     </div>

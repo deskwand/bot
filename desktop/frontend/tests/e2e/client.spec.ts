@@ -570,7 +570,7 @@ test("secret replace and clear are distinct operations", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "模型", exact: true }).click();
   await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
-  await keyRow(page, "opencode-go").getByText("密钥详情", { exact: true }).click();
+  await keyRow(page, "opencode-go").getByText("详情", { exact: true }).click();
   await expect(page.getByText("MODEL_KEY_OPENCODE_GO 已配置")).toBeVisible();
 
   const row = keyRow(page, "opencode-go");
@@ -587,7 +587,7 @@ test("secret replace and clear are distinct operations", async ({ page }) => {
   const clearPreview = page.getByRole("dialog", { name: "确认保存并发布" });
   await expect(clearPreview.getByText(/清除 secret MODEL_KEY_OPENCODE_GO/)).toBeVisible();
   await clearPreview.getByRole("button", { name: "确认保存并发布" }).click();
-  await keyRow(page, "opencode-go").getByText("密钥详情", { exact: true }).click();
+  await keyRow(page, "opencode-go").getByText("详情", { exact: true }).click();
   await expect(page.getByText("MODEL_KEY_OPENCODE_GO 未配置")).toBeVisible();
 });
 
@@ -620,7 +620,7 @@ test("model keys use MODEL_KEY_<ID> names", async ({ page }) => {
   await page.getByRole("button", { name: "模型", exact: true }).click();
   await chooseModel(page, "管家模型", "DeepSeek", /^DeepSeek Flash/);
   const row = keyRow(page, "deepseek");
-  await row.getByText("密钥详情", { exact: true }).click();
+  await row.getByText("详情", { exact: true }).click();
   await expect(row.getByText("MODEL_KEY_DEEPSEEK 未配置")).toBeVisible();
   await row.getByLabel("API 密钥").fill("sk-deepseek-SENTINEL");
   await page.getByRole("button", { name: "保存并发布" }).click();
@@ -628,7 +628,7 @@ test("model keys use MODEL_KEY_<ID> names", async ({ page }) => {
   await expect(preview.getByText(/替换 secret MODEL_KEY_DEEPSEEK/)).toBeVisible();
   await preview.getByRole("button", { name: "确认保存并发布" }).click();
   await expect(page.getByText(/配置已发布/).first()).toBeVisible();
-  await row.getByText("密钥详情", { exact: true }).click();
+  await row.getByText("详情", { exact: true }).click();
   await expect(row.getByText("MODEL_KEY_DEEPSEEK 已配置")).toBeVisible();
 });
 
@@ -638,9 +638,9 @@ test("each role provider gets its own key row", async ({ page }) => {
   await chooseModel(page, "管家模型", "Anthropic", /Claude Sonnet 5\.5/);
   const anthropicRow = keyRow(page, "anthropic");
   const opencodeRow = keyRow(page, "opencode-go");
-  await anthropicRow.getByText("密钥详情", { exact: true }).click();
+  await anthropicRow.getByText("详情", { exact: true }).click();
   await expect(anthropicRow.getByText("MODEL_KEY_ANTHROPIC 未配置")).toBeVisible();
-  await opencodeRow.getByText("密钥详情", { exact: true }).click();
+  await opencodeRow.getByText("详情", { exact: true }).click();
   await expect(opencodeRow.getByText("MODEL_KEY_OPENCODE_GO 已配置")).toBeVisible();
   await anthropicRow.getByLabel("API 密钥").fill("sk-anthropic-SENTINEL");
   await opencodeRow.getByLabel("API 密钥").fill("sk-opencode-SENTINEL");
@@ -650,8 +650,8 @@ test("each role provider gets its own key row", async ({ page }) => {
   await expect(preview.getByText(/替换 secret MODEL_KEY_OPENCODE_GO/)).toBeVisible();
   await preview.getByRole("button", { name: "确认保存并发布" }).click();
   await expect(page.getByText(/配置已发布/).first()).toBeVisible();
-  await anthropicRow.getByText("密钥详情", { exact: true }).click();
-  await opencodeRow.getByText("密钥详情", { exact: true }).click();
+  await anthropicRow.getByText("详情", { exact: true }).click();
+  await opencodeRow.getByText("详情", { exact: true }).click();
   await expect(anthropicRow.getByText("MODEL_KEY_ANTHROPIC 已配置")).toBeVisible();
   await expect(opencodeRow.getByText("MODEL_KEY_OPENCODE_GO 已配置")).toBeVisible();
 });
@@ -841,7 +841,7 @@ test("diagnostics show unknown evidence with source and time", async ({ page }) 
 test("user-confirmed evidence is labelled separately from cloud verification", async ({ page }) => {
   await page.goto("/test.html?fixture=user-evidence");
   await expect(page.getByTestId("status-badge-wechat")).toHaveText("用户确认收发");
-  await page.getByText("状态详情", { exact: true }).click();
+  await page.getByTestId("overview-status-details").locator("summary").click();
   await expect(page.getByText(/用户确认，非云端日志/)).toBeVisible();
   await expect(page.getByText(/来源：Cloudflare 配置/).first()).toBeVisible();
   await expect(page.getByText("运行中", { exact: true })).toHaveCount(0);
@@ -1077,7 +1077,7 @@ test("corrupt restore record can be abandoned without breaking the overview", as
   // The other overview calls still render their own data.
   await expect(page.getByRole("heading", { name: "服务概览" })).toBeVisible();
   await expect(page.getByText("云端服务", { exact: true })).toBeVisible();
-  await expect(page.getByText("状态详情", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("overview-status-details")).toBeVisible();
 
   // The corrupt record offers abandonment only, with the no-rollback wording.
   await expect(page.getByText("本机恢复记录无法读取", { exact: false })).toBeVisible();
@@ -1096,7 +1096,7 @@ test("corrupt restore record can be abandoned without breaking the overview", as
   await expect(page.getByText("本机恢复记录无法读取", { exact: false })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "服务概览" })).toBeVisible();
   await expect(page.getByText("云端服务", { exact: true })).toBeVisible();
-  await expect(page.getByText("状态详情", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("overview-status-details")).toBeVisible();
 
   // A generic pending-restore failure must not claim the journal is corrupt.
   await page.goto("/test.html?fixture=backup-pending-unavailable");

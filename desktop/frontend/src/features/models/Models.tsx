@@ -535,7 +535,7 @@ export function Models() {
                 <span className="text-xs text-muted-foreground">{result.operationId}</span>
               ) : null}
             </div>
-            {result.state === "published" || result.state === "completed" ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">执行详情</summary><StepList steps={result.steps ?? []} /></details> : <StepList steps={result.steps ?? []} />}
+            {result.state === "published" || result.state === "completed" ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">详情</summary><StepList steps={result.steps ?? []} /></details> : <StepList steps={result.steps ?? []} />}
             {result.warnings?.length ? (
               <Alert>
                 <AlertDescription>
@@ -676,7 +676,7 @@ export function Models() {
                         </div>
                       </div>
                       <details className="mt-3 min-w-0 break-all">
-                        <summary className="cursor-pointer text-xs text-muted-foreground">密钥详情</summary>
+                        <summary className="cursor-pointer text-xs text-muted-foreground">详情</summary>
                         <p className="mt-2 text-xs text-muted-foreground">{secret} {configured ? "已配置" : "未配置"}</p>
                       </details>
                       {rowProbeError ? (

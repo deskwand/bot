@@ -23,7 +23,7 @@ test("overview shows only unfinished configuration actions", async ({ page }) =>
   const todo = page.getByTestId("overview-todos");
   await expect(todo.getByRole("button", { name: "连接消息入口", exact: true })).toBeVisible();
   await expect(todo.getByRole("button", { name: "配置模型", exact: true })).toHaveCount(0);
-  const details = page.locator("main details").filter({ has: page.locator("summary", { hasText: "状态详情" }) });
+  const details = page.getByTestId("overview-status-details");
   await details.locator("summary").click();
   await expect(details.locator('[data-testid^="status-"]').first()).toBeVisible();
   await page.goto("/test.html?fixture=user-evidence");
