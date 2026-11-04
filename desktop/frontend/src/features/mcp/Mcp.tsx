@@ -2,6 +2,7 @@ import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -416,7 +417,7 @@ export function Mcp() {
         <Alert className="my-4" data-testid="mcp-tool-warning">
           <AlertTitle>工具较多</AlertTitle>
           <AlertDescription>
-            {`已启用 ${enabledToolCount} 个工具，过多会拖慢任务并增加费用，建议停用用不到的工具。`}
+            {`工具过多会拖慢任务、增加费用，建议停用用不到的。`}
           </AlertDescription>
         </Alert>
       ) : null}
@@ -424,7 +425,7 @@ export function Mcp() {
       {servers.length === 0 ? (
         <Card className="mt-5">
           <CardContent className="py-6 text-sm text-muted-foreground">
-            还没有接入服务。从目录添加一个，或填写自定义 URL。
+            还没有接入服务。从目录添加，或填自定义 URL。
           </CardContent>
         </Card>
       ) : (
@@ -442,16 +443,16 @@ export function Mcp() {
                 Boolean(probe.auth) &&
                 probe.auth !== "ok");
             const status = !enabled
-              ? "⏸ 已停用"
+              ? { label: "已停用", variant: "outline" as const }
               : auth[server.name] === "needs_reauth"
-                ? "🔑 需要重新授权"
+                ? { label: "需要重新授权", variant: "destructive" as const }
                 : auth[server.name] === "unauthorized"
-                  ? "🔑 需要授权"
+                  ? { label: "需要授权", variant: "outline" as const }
                   : probe && !probe.ok
-                    ? `⚠️ 连接失败：${probe.reason || "未知原因"}`
+                    ? { label: `连接失败：${probe.reason || "未知原因"}`, variant: "destructive" as const }
                     : probe?.ok
-                      ? "✅ 正常"
-                      : "正在测试连接…";
+                      ? { label: "正常", variant: "secondary" as const }
+                      : { label: "正在测试…", variant: "outline" as const };
             const enabledCount = probe?.ok
               ? probe.tools.filter((tool) => tool.mode !== "disabled").length
               : 0;
@@ -465,27 +466,22 @@ export function Mcp() {
                       <CardTitle className="break-words">{displayName}</CardTitle>
                       {server.description ? <CardDescription className="break-words">{server.description}</CardDescription> : null}
                     </div>
-                    <span
-                      data-testid={`mcp-status-${server.name}`}
-                      className="text-sm font-medium"
-                    >
-                      {status}
-                    </span>
+                    <Badge data-testid={`mcp-status-${server.name}`} variant={status.variant}>
+                      {status.label}
+                    </Badge>
                   </div>
                 </CardHeader>
                 <CardContent>
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="mr-auto text-xs text-muted-foreground">
-                      已启用工具 {enabledCount} 个
-                    </span>
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
+                      className="mr-auto"
                       aria-expanded={expanded.includes(server.name)}
                       onClick={() => toggleExpanded(server.name)}
                     >
-                      工具（{tools.length}）
+                      {tools.length > 0 ? `工具 ${enabledCount}/${tools.length}` : "工具"}
                     </Button>
                     {needsAuth ? (
                       <Button

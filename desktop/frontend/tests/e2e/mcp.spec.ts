@@ -38,7 +38,11 @@ test("a catalog service can be added and shows a healthy card", async ({ page })
 
   const card = page.getByTestId("mcp-card-deepwiki");
   await expect(card).toBeVisible();
-  await expect(page.getByTestId("mcp-status-deepwiki")).toHaveText("✅ 正常");
+  await expect(page.getByTestId("mcp-status-deepwiki")).toHaveText("正常");
+  // 状态用徽章表达，不再混进 emoji。
+  await expect(page.getByTestId("mcp-status-deepwiki")).not.toContainText(/[✅⚠🔑⏸]/);
+  // 一个数字对：已启用 / 总数。
+  await expect(card.getByRole("button", { name: /^工具/ })).toHaveText(/^工具( \d+\/\d+)?$/);
 });
 
 test("an empty required field keeps the save button disabled", async ({ page }) => {
@@ -59,9 +63,9 @@ test("an OAuth service starts authorization and becomes healthy when the status 
   await form.getByRole("button", { name: "保存", exact: true }).click();
 
   const status = page.getByTestId("mcp-status-notion");
-  await expect(status).toHaveText("🔑 需要授权");
+  await expect(status).toHaveText("需要授权");
   await expect.poll(async () => (await mcpCalls(page)).start).toContain("notion");
-  await expect(status).toHaveText("✅ 正常", { timeout: 15_000 });
+  await expect(status).toHaveText("正常", { timeout: 15_000 });
 });
 
 test("tool approval changes publish only after the explicit save", async ({ page }) => {
@@ -98,9 +102,7 @@ test("deleting a service removes its card", async ({ page }) => {
 test("more than 100 enabled tools shows the reminder", async ({ page }) => {
   await openServices(page, "mcp-many-tools");
   await expect(
-    page.getByText(
-      "已启用 101 个工具，过多会拖慢任务并增加费用，建议停用用不到的工具。",
-    ),
+    page.getByText("工具过多会拖慢任务、增加费用，建议停用用不到的。"),
   ).toBeVisible();
 });
 
