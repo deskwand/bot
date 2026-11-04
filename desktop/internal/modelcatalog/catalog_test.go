@@ -138,3 +138,39 @@ func TestRequiredSecretNamesIsSortedAndUnique(t *testing.T) {
 		t.Fatalf("RequiredSecretNames() = %#v, want %#v", got, want)
 	}
 }
+
+func TestWorkersAIIsKeyless(t *testing.T) {
+	if !IsKeyless("workers-ai") {
+		t.Fatal("IsKeyless(\"workers-ai\") = false, want true")
+	}
+	if IsKeyless("opencode-go") {
+		t.Fatal("IsKeyless(\"opencode-go\") = true, want false")
+	}
+	if IsKeyless("nope") {
+		t.Fatal("IsKeyless(\"nope\") = true, want false")
+	}
+
+	provider, ok := LookupBuiltin("workers-ai")
+	if !ok {
+		t.Fatal("LookupBuiltin(\"workers-ai\") = false, want true")
+	}
+	var model *Model
+	for index := range provider.Models {
+		if provider.Models[index].ID == "@cf/zai-org/glm-5.3-flash" {
+			model = &provider.Models[index]
+			break
+		}
+	}
+	if model == nil {
+		t.Fatal("workers-ai does not list @cf/zai-org/glm-5.3-flash")
+	}
+	hasImage := false
+	for _, input := range model.Input {
+		if input == "image" {
+			hasImage = true
+		}
+	}
+	if !hasImage {
+		t.Fatalf("glm-5.3-flash input = %#v, want it to include \"image\"", model.Input)
+	}
+}

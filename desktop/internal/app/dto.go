@@ -49,15 +49,17 @@ type ModelDTO struct {
 
 // ModelEntryDTO is one model listed by a built-in provider.
 type ModelEntryDTO struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Input []string `json:"input,omitempty"`
 }
 
 // ModelProviderDTO is one built-in provider from the shared catalog.
 type ModelProviderDTO struct {
-	ID     string          `json:"id"`
-	Name   string          `json:"name"`
-	Models []ModelEntryDTO `json:"models"`
+	ID      string          `json:"id"`
+	Name    string          `json:"name"`
+	Keyless bool            `json:"keyless,omitempty"`
+	Models  []ModelEntryDTO `json:"models"`
 }
 
 // ModelCatalogDTO is the built-in provider and model list shown in the UI.

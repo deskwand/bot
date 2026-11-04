@@ -19,17 +19,19 @@ var embeddedCatalog []byte
 
 // Model is one chat model listed by a built-in provider.
 type Model struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	API     string `json:"api"`
-	BaseURL string `json:"baseUrl"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	API     string   `json:"api"`
+	BaseURL string   `json:"baseUrl"`
+	Input   []string `json:"input,omitempty"`
 }
 
 // Provider is one built-in provider from the shared catalog.
 type Provider struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Models []Model `json:"models"`
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Keyless bool    `json:"keyless,omitempty"`
+	Models  []Model `json:"models"`
 }
 
 type catalog struct {
@@ -96,6 +98,13 @@ func LookupBuiltin(id string) (Provider, bool) {
 // SecretNameFor derives the MODEL_KEY_* secret name for a provider ID.
 func SecretNameFor(id string) string {
 	return "MODEL_KEY_" + strings.ToUpper(strings.ReplaceAll(id, "-", "_"))
+}
+
+// IsKeyless reports whether a built-in provider authenticates without a
+// MODEL_KEY_* secret.
+func IsKeyless(id string) bool {
+	provider, ok := LookupBuiltin(id)
+	return ok && provider.Keyless
 }
 
 // ParseModels reads models and customProviders from one configuration

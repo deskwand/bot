@@ -32,6 +32,23 @@ describe("generated model catalog", () => {
     expect(readFileSync(DESKTOP_CATALOG_PATH)).toEqual(readFileSync(CATALOG_PATH));
   });
 
+  it("lists Workers AI first as a keyless provider", async () => {
+    const catalog = await buildCatalog();
+    const first = catalog.providers[0]!;
+    expect(first.id).toBe("workers-ai");
+    expect(first.name).toBe("Cloudflare Workers AI（免费额度）");
+    expect(first.keyless).toBe(true);
+    const glm = first.models.find((m) => m.id === "@cf/zai-org/glm-5.3-flash");
+    expect(glm?.api).toBe("openai-completions");
+    expect(glm?.input).toEqual(["text", "image"]);
+    expect(first.models.every((m) => m.api === "openai-completions")).toBe(true);
+    expect(catalog.providers.slice(1).some((p) => p.keyless)).toBe(false);
+  });
+
+  it("does not import a factory for keyless providers", async () => {
+    expect(renderCatalogTs(await buildCatalog())).not.toContain("workers-ai");
+  });
+
   it("excludes non-api-key providers", async () => {
     const catalog = await buildCatalog();
     const ids = new Set(catalog.providers.map((provider) => provider.id));

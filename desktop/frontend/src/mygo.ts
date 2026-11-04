@@ -278,12 +278,14 @@ export interface ModelDTO {
 export interface ModelEntryDTO {
   id: string;
   name: string;
+  input?: string[];
 }
 
 /** ModelProviderDTO is one built-in provider from the shared catalog. */
 export interface ModelProviderDTO {
   id: string;
   name: string;
+  keyless?: boolean;
   models: ModelEntryDTO[];
 }
 

@@ -17,17 +17,20 @@
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { CLOUDFLARE_WORKERS_AI_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
 
 export type CatalogModel = {
   id: string;
   name: string;
   api: string;
   baseUrl: string;
+  input?: ("text" | "image")[];
 };
 
 export type CatalogProvider = {
   id: string;
   name: string;
+  keyless?: true;
   models: CatalogModel[];
 };
 
@@ -70,6 +73,25 @@ const GENERIC_APIS = new Set([
 export const CATALOG_PATH = resolve("contracts/model-catalog.json");
 export const DESKTOP_CATALOG_PATH = resolve("desktop/internal/modelcatalog/model-catalog.json");
 export const TS_OUTPUT_PATH = resolve("src/llm/catalog.generated.ts");
+
+function workersAiProvider(): CatalogProvider {
+  const models: CatalogModel[] = Object.values(CLOUDFLARE_WORKERS_AI_MODELS)
+    .filter((model) => model.api === "openai-completions")
+    .map((model) => ({
+      id: model.id,
+      name: model.name,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      input: model.input,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id, "en"));
+  return {
+    id: "workers-ai",
+    name: "Cloudflare Workers AI（免费额度）",
+    keyless: true,
+    models,
+  };
+}
 
 function listProviderModules(): string[] {
   return readdirSync(PROVIDERS_DIR)
@@ -145,6 +167,7 @@ export async function buildCatalog(): Promise<Catalog> {
   }
 
   providers.sort((left, right) => left.id.localeCompare(right.id, "en"));
+  providers.unshift(workersAiProvider());
   return { schemaVersion: 1, providers };
 }
 
@@ -159,6 +182,7 @@ export function renderCatalogTs(catalog: Catalog): string {
     'import type { Provider } from "@earendil-works/pi-ai/models";',
   ];
   for (const provider of catalog.providers) {
+    if (provider.keyless) continue;
     lines.push(
       `import { ${providerFactoryName(provider.id)} } from "@earendil-works/pi-ai/providers/${provider.id}";`,
     );
@@ -168,6 +192,7 @@ export function renderCatalogTs(catalog: Catalog): string {
     "export const BUILTIN_PROVIDERS: readonly { id: string; create: () => Provider }[] = [",
   );
   for (const provider of catalog.providers) {
+    if (provider.keyless) continue;
     lines.push(
       `  { id: ${JSON.stringify(provider.id)}, create: () => ${providerFactoryName(provider.id)}() },`,
     );

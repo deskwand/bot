@@ -1345,12 +1345,13 @@ func (s *Service) ModelCatalog() (ModelCatalogDTO, error) {
 	for _, provider := range builtin {
 		models := make([]ModelEntryDTO, 0, len(provider.Models))
 		for _, model := range provider.Models {
-			models = append(models, ModelEntryDTO{ID: model.ID, Name: model.Name})
+			models = append(models, ModelEntryDTO{ID: model.ID, Name: model.Name, Input: model.Input})
 		}
 		providers = append(providers, ModelProviderDTO{
-			ID:     provider.ID,
-			Name:   provider.Name,
-			Models: models,
+			ID:      provider.ID,
+			Name:    provider.Name,
+			Keyless: provider.Keyless,
+			Models:  models,
 		})
 	}
 	return ModelCatalogDTO{Providers: providers}, nil
