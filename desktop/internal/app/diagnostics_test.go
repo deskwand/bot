@@ -116,6 +116,21 @@ func TestConfiguredRequiresRequiredSecrets(t *testing.T) {
 	}
 }
 
+func TestConfiguredModelAcceptsKeylessProvider(t *testing.T) {
+	snapshot := diagnosticsSnapshot()
+	snapshot.SecretNames = []string{"WECHAT_CREDENTIALS", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"}
+	snapshot.ConfigJSON = []byte(`{"schemaVersion":1,"models":{"butler":{"provider":"workers-ai","id":"@cf/google/gemma-4-26b-a4b-it"},"task":{"provider":"workers-ai","id":"@cf/google/gemma-4-26b-a4b-it"}}}`)
+	service := newTestDiagnostics(snapshot, &fakeChannelEventReader{})
+
+	report, err := service.Status(context.Background(), snapshot.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item := findItem(t, report.Items, "model"); item.State != diagnostics.StateConfigured {
+		t.Fatalf("model with keyless providers = %+v", item)
+	}
+}
+
 func TestConfiguredModelIgnoresLegacySecretNames(t *testing.T) {
 	snapshot := diagnosticsSnapshot()
 	snapshot.SecretNames = []string{

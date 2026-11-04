@@ -196,6 +196,11 @@ func modelsConfigured(configJSON []byte, secrets map[string]bool) bool {
 	if err != nil {
 		return false
 	}
+	for _, ref := range []modelcatalog.RoleRef{doc.Butler, doc.Task} {
+		if modelcatalog.IsKeyless(ref.Provider) {
+			return true
+		}
+	}
 	for _, name := range modelcatalog.RequiredSecretNames(doc) {
 		if secrets[name] {
 			return true
