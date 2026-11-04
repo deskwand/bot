@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -238,8 +240,41 @@ func (s *Service) ChooseBackup() (*BackupPreviewDTO, error) {
 	if path == "" {
 		return nil, nil
 	}
-	// A new choice replaces the remembered path before Inspect, so a failed
-	// inspection cannot leave an older file selected for RestoreData.
+	return s.inspectBackup(ctx, target, path)
+}
+
+// ChooseBackupAt selects a file the page listed from the backup folder, so
+// restoring an earlier backup needs no file dialog. The path must stay inside
+// that folder: the binding is callable from the page, so it must not become an
+// arbitrary file reader.
+func (s *Service) ChooseBackupAt(path string) (*BackupPreviewDTO, error) {
+	if err := s.beginBackupOperation(); err != nil {
+		return nil, err
+	}
+	defer s.endBackupOperation()
+	if s.backup == nil || s.settings == nil || s.snapshots == nil {
+		return nil, serviceUnavailable()
+	}
+	settings, err := s.settings.Settings()
+	if err != nil {
+		return nil, safeAppError(err)
+	}
+	if !insideBackupDir(settings.Dir, path) {
+		return nil, domain.Error{Code: backup.CodeBackupInvalid, Message: "只能恢复备份目录里的备份文件"}
+	}
+	ctx, cancel := s.backupContext()
+	defer cancel()
+	target, err := s.managedTarget(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.inspectBackup(ctx, target, path)
+}
+
+// inspectBackup validates a file and returns the preview the page shows. It
+// forgets any previous selection first, so a failed inspection can never leave
+// an older file selected for RestoreData.
+func (s *Service) inspectBackup(ctx context.Context, target domain.Target, path string) (*BackupPreviewDTO, error) {
 	s.backupMu.Lock()
 	s.backupPath = ""
 	s.backupMu.Unlock()
@@ -266,6 +301,63 @@ func (s *Service) ChooseBackup() (*BackupPreviewDTO, error) {
 	s.backupPath = path
 	s.backupMu.Unlock()
 	return &preview, nil
+}
+
+// BackupFileDTO is one backup file the page lists from the configured folder.
+type BackupFileDTO struct {
+	Path       string `json:"path"`
+	Name       string `json:"name"`
+	ModifiedAt string `json:"modifiedAt"`
+	Bytes      int64  `json:"bytes"`
+}
+
+// maxListedBackups bounds the local list: the folder keeps at most keep files,
+// so a longer list means the user pointed us at an older folder.
+const maxListedBackups = 50
+
+// ListBackups lists the backups in the configured folder, newest first.
+func (s *Service) ListBackups() ([]BackupFileDTO, error) {
+	if s.settings == nil {
+		return nil, serviceUnavailable()
+	}
+	settings, err := s.settings.Settings()
+	if err != nil {
+		return nil, safeAppError(err)
+	}
+	names, err := backupFiles(settings.Dir)
+	if err != nil {
+		return nil, safeAppError(err)
+	}
+	files := make([]BackupFileDTO, 0, len(names))
+	for _, name := range names {
+		if len(files) >= maxListedBackups {
+			break
+		}
+		info, err := os.Stat(filepath.Join(settings.Dir, name))
+		if err != nil {
+			continue
+		}
+		files = append(files, BackupFileDTO{
+			Path:       filepath.Join(settings.Dir, name),
+			Name:       name,
+			ModifiedAt: formatTime(info.ModTime()),
+			Bytes:      info.Size(),
+		})
+	}
+	return files, nil
+}
+
+// insideBackupDir reports whether path is one of the client's own backup files
+// directly inside dir.
+func insideBackupDir(dir, path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	if filepath.Dir(filepath.Clean(path)) != filepath.Clean(dir) {
+		return false
+	}
+	ok, _ := filepath.Match(backupFilePattern, filepath.Base(path))
+	return ok
 }
 
 // RestoreData overwrites the deployment with the backup chosen by ChooseBackup.

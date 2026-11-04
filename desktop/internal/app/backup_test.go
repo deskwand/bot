@@ -570,3 +570,86 @@ func TestSaveBackupSettingsRejectsBadValues(t *testing.T) {
 		t.Fatalf("SaveBackupSettings = %v, want %s", err, backup.CodeBackupSettingsInvalid)
 	}
 }
+
+func TestListBackupsReportsFiles(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "deskwand-backup-b-20261102-100000.zip"), []byte("12345"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := f.service.ListBackups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files = %#v", files)
+	}
+	if files[0].Name != "deskwand-backup-b-20261102-100000.zip" || files[0].Bytes != 5 {
+		t.Fatalf("file = %#v", files[0])
+	}
+	if files[0].Path != filepath.Join(dir, files[0].Name) || files[0].ModifiedAt == "" {
+		t.Fatalf("file = %#v", files[0])
+	}
+}
+
+func TestChooseBackupAtUsesListedFile(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "deskwand-backup-b-20261102-100000.zip")
+	f.backup.inspectManifest = backup.Manifest{Release: "1.0.0"}
+
+	preview, err := f.service.ChooseBackupAt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Summary.Path != path || f.backup.inspectPath != path {
+		t.Fatalf("preview = %#v inspect = %q", preview, f.backup.inspectPath)
+	}
+	if f.dialogs.openCalls != 0 {
+		t.Fatalf("ChooseBackupAt opened a dialog")
+	}
+	if err := f.service.RestoreData(); err != nil {
+		t.Fatalf("RestoreData after ChooseBackupAt: %v", err)
+	}
+	if f.backup.restorePath != path {
+		t.Fatalf("restore path = %q, want %q", f.backup.restorePath, path)
+	}
+}
+
+func TestChooseBackupAtRejectsPathOutsideBackupDir(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, path := range map[string]string{
+		"outside dir": filepath.Join(t.TempDir(), "deskwand-backup-b-20261102-100000.zip"),
+		"other file":  filepath.Join(dir, "notes.txt"),
+		"empty":       "",
+		"parent":      filepath.Join(dir, "..", "deskwand-backup-b-20261102-100000.zip"),
+	} {
+		if _, err := f.service.ChooseBackupAt(path); !hasCode(err, backup.CodeBackupInvalid) {
+			t.Fatalf("%s: %v, want %s", name, err, backup.CodeBackupInvalid)
+		}
+	}
+	if f.backup.inspectCalls != 0 {
+		t.Fatalf("rejected path reached Inspect %d times", f.backup.inspectCalls)
+	}
+}
