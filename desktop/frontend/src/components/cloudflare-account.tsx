@@ -67,7 +67,6 @@ export function CloudflareAccountCard({
       <Badge variant="secondary" className="mb-2">
         Cloudflare 已连接
       </Badge>
-      <p>云端常驻，可关闭客户端</p>
       <Button
         type="button"
         variant="ghost"
