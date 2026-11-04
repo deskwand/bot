@@ -24,6 +24,15 @@ type ConnectionDTO struct {
 	AccountName string `json:"accountName,omitempty"`
 }
 
+// BootStateDTO is the local-only state the app needs to pick its first
+// screen. It is computed without any Cloudflare request.
+type BootStateDTO struct {
+	Connection     ConnectionDTO  `json:"connection"`
+	TargetSelected bool           `json:"targetSelected"`
+	TargetMismatch bool           `json:"targetMismatch"`
+	Pending        []OperationDTO `json:"pending"`
+}
+
 // CloudflareLoginDTO is the only OAuth login state sent to the frontend. It
 // carries no token, authorization code or PKCE verifier.
 type CloudflareLoginDTO struct {

@@ -511,6 +511,39 @@ func (s *Service) CloudflareStatus() ConnectionDTO {
 	}
 }
 
+// BootState reports what the app needs to choose its first screen. It reads
+// only local credentials, the target file and the journal; it never contacts
+// Cloudflare.
+func (s *Service) BootState() (BootStateDTO, error) {
+	connection := s.CloudflareStatus()
+	state := BootStateDTO{Connection: connection, Pending: []OperationDTO{}}
+	if connection.State != auth.StateConnected {
+		return state, nil
+	}
+	if s.store == nil {
+		return BootStateDTO{}, serviceUnavailable()
+	}
+	target, ok, err := s.store.Load()
+	if err != nil {
+		return BootStateDTO{}, safeAppError(err)
+	}
+	if ok {
+		if target.AccountID == connection.AccountID {
+			state.TargetSelected = true
+		} else {
+			state.TargetMismatch = true
+		}
+	}
+	if operations, err := s.PendingOperations(); err == nil {
+		for _, operation := range operations {
+			if operation.AccountID == "" || operation.AccountID == connection.AccountID {
+				state.Pending = append(state.Pending, operation)
+			}
+		}
+	}
+	return state, nil
+}
+
 // DisconnectCloudflare revokes the authorization and removes local credentials.
 func (s *Service) DisconnectCloudflare() error {
 	if s.auth == nil {
