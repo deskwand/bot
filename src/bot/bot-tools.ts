@@ -152,7 +152,8 @@ export function createBotTaskTools(
 
   const finishBot: ToolRegistration<typeof FinishBot> = {
     name: "finish_bot",
-    description: "Declare the bot's mission complete so it stops waking up.",
+    description:
+      "Permanently retire this bot: it never wakes again until the owner resumes it. Only call when the whole mission is done for good. Do NOT call it to end this run (use finish_task) and never for recurring missions.",
     parameters: FinishBot,
     // Changes the bot's lifecycle; must not replay after a restart.
     async execute({ reason }) {

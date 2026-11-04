@@ -721,4 +721,50 @@ describe("BotDO lifecycle", () => {
     expect(snapshot?.runs).toHaveLength(0);
     expect(await alarmAt(stub)).toBe(now + DEFER_MS);
   });
+  it("set_next_wake after finish_bot in the same run keeps the bot waking", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-finish-then-wake");
+    await initBot(stub);
+    await fireAlarm(stub);
+
+    // A model that mistakes finish_bot for finish_task, then schedules itself.
+    await stub.finish("本次检查完成");
+    const result = await stub.setNextWake({ afterMs: 7_200_000 });
+    await stub.onRunEnded("t1", "completed", "看完了");
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.status).toBe("active");
+    expect(snapshot?.meta.nextWakeAt).toBe(result.at);
+    expect(await alarmAt(stub)).toBe(result.at);
+    expect(fake.notices).toHaveLength(0);
+  });
+
+  it("a finished bot tells the owner when its last run ends", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-finish-notice");
+    await initBot(stub);
+    await fireAlarm(stub);
+
+    await stub.finish("价格已降到目标");
+    await stub.onRunEnded("t1", "completed", "看完了");
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.status).toBe("finished");
+    expect(await alarmAt(stub)).toBeNull();
+    expect(fake.notices).toHaveLength(1);
+    expect(fake.notices[0]!.text).toContain("价格已降到目标");
+  });
+
+  it("setNextWake does not wake a paused bot", async () => {
+    fakeButler();
+    const stub = botStub("b-paused-set-wake");
+    await initBot(stub);
+    await stub.pause();
+
+    await stub.setNextWake({ afterMs: 7_200_000 });
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.status).toBe("paused");
+    expect(await alarmAt(stub)).toBeNull();
+  });
 });

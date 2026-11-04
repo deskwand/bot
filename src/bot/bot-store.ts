@@ -12,6 +12,8 @@ export type BotMeta = {
   wakesDay: string | null;
   wakesCount: number;
   pendingSteer: string[];
+  /** Why the bot called finish_bot; absent on older rows. */
+  finishReason?: string | null;
 };
 
 export type RunOutcome = "completed" | "failed" | "cancelled";

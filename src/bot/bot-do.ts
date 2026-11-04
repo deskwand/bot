@@ -199,6 +199,12 @@ export class BotDO extends DurableObject<Env> {
     const requested = req.at ?? now + (req.afterMs ?? 0);
     const { at, clamped } = clampWakeAt(now, requested);
     meta.nextWakeAt = at;
+    if (meta.status === "finished") {
+      // Only the bot itself finishes. Scheduling again afterwards means it
+      // took finish_bot for "end this run": the later call wins.
+      meta.status = "active";
+      meta.finishReason = null;
+    }
     this.store.writeMeta(meta);
     if (meta.currentTaskId === null && meta.status === "active") {
       await this.ctx.storage.setAlarm(at);
@@ -266,6 +272,7 @@ export class BotDO extends DurableObject<Env> {
     if (meta === null) return;
     meta.status = "finished";
     meta.nextWakeAt = null;
+    meta.finishReason = reason;
     this.store.writeMeta(meta);
     await this.ctx.storage.deleteAlarm();
   }
@@ -307,6 +314,14 @@ export class BotDO extends DurableObject<Env> {
     }
 
     this.store.writeMeta(meta);
+    if (meta.status === "finished") {
+      // Told only now, so a run that rescheduled after finish_bot stays quiet.
+      await this.notice(
+        meta,
+        `🏁 ${meta.name} 已结束，不会再唤醒（原因：${meta.finishReason ?? "未说明"}）`,
+      );
+      return;
+    }
     if (meta.status !== "active") return;
 
     meta.nextWakeAt = clampWakeAt(now, nextBase(meta, now)).at;
