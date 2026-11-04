@@ -75,10 +75,10 @@ func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 	expected := map[string]bool{
 		"AbandonOperation": true, "AbandonPendingRestore": true, "AddMcpServer": true,
 		"CancelCloudflareLogin": true, "CancelWeChatLogin": true,
-		"CheckClientUpdate": true, "ChooseBackup": true, "CloudflareStatus": true, "ConfirmCloudflareAccount": true,
+		"CheckClientUpdates": true, "ChooseBackup": true, "CloudflareStatus": true, "ConfirmCloudflareAccount": true,
 		"ConfirmImport": true, "ConnectTelegram": true,
 		"DisconnectCloudflare": true, "ExportData": true, "ExportDiagnostics": true, "GetConfig": true,
-		"InspectImport": true, "Install": true, "InstallClientUpdate": true,
+		"InspectImport": true, "Install": true,
 		"ListWorkers": true, "McpCatalog": true, "McpStatus": true, "ModelCatalog": true, "Name": true,
 		"PendingRestore": true, "StartCloudflareLogin": true,
 		"PendingOperations": true, "PreviewConfig": true, "ProbeMcp": true, "ProbeModel": true,
