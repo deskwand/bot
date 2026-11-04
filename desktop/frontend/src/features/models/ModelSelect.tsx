@@ -55,9 +55,17 @@ export function ModelSelect({
     );
   }, [models, query]);
 
+  const modelLabel = (model: ProviderOption["models"][number]): string =>
+    provider?.keyless && !model.imageInput
+      ? `${model.label}（不支持图片）`
+      : model.label;
+
+  const selected = models.find((model) => model.id === current?.id);
   const selectedModel =
     current && current.provider === providerID
-      ? (models.find((model) => model.id === current.id)?.label ?? current.id)
+      ? selected
+        ? modelLabel(selected)
+        : current.id
       : null;
 
   const openModels = (next: boolean) => {
@@ -208,7 +216,7 @@ export function ModelSelect({
                           index === active && "bg-accent text-accent-foreground",
                         )}
                       >
-                        <span className="truncate">{model.label}</span>
+                        <span className="truncate">{modelLabel(model)}</span>
                         {model.label !== model.id ? (
                           <span className="truncate text-xs text-muted-foreground">{model.id}</span>
                         ) : null}

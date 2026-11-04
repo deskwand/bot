@@ -45,6 +45,7 @@ import {
   DEFAULT_MODEL,
   modelKey,
   parseModelKey,
+  providerNeedsKey,
   providerOptions,
   secretNameFor,
 } from "./catalog";
@@ -167,7 +168,16 @@ export function Models() {
     [catalog, customProviders],
   );
 
+  const keylessSelected = useMemo(() => {
+    const catalogProviders = catalog ?? { providers: [] };
+    return [butler, task].some((value) => {
+      const provider = parseModelKey(value)?.provider;
+      return Boolean(provider && !providerNeedsKey(catalogProviders, provider));
+    });
+  }, [butler, catalog, task]);
+
   const keyProviders = useMemo(() => {
+    const catalogProviders = catalog ?? { providers: [] };
     const ids: string[] = [];
     const roles: Record<string, string[]> = {};
     for (const [role, value] of [
@@ -176,6 +186,7 @@ export function Models() {
     ] as const) {
       const provider = parseModelKey(value)?.provider;
       if (!provider) continue;
+      if (!providerNeedsKey(catalogProviders, provider)) continue;
       if (!ids.includes(provider)) ids.push(provider);
       (roles[provider] ??= []).push(role);
     }
@@ -185,7 +196,7 @@ export function Models() {
       option: options.find((provider) => provider.id === id),
       custom: customProviders.find((provider) => provider.id === id),
     }));
-  }, [butler, customProviders, options, task]);
+  }, [butler, catalog, customProviders, options, task]);
 
   const updateKeyDraft = (
     id: string,
@@ -479,8 +490,15 @@ export function Models() {
             <p className="mt-1 mb-3 text-xs text-muted-foreground">
               每个供应商一个密钥，只写入 Cloudflare。
             </p>
+            {keylessSelected ? (
+              <p className="mb-3 text-sm text-muted-foreground" data-testid="workers-ai-quota-notice">
+                使用你 Cloudflare 账号每天 10,000 neurons 的免费额度，用完后 UTC 0 点重置；超出后免费账号会暂停，付费账号按量计费。
+              </p>
+            ) : null}
             {keyProviders.length === 0 ? (
-              <p className="text-sm text-muted-foreground">请先选择管家模型或任务模型。</p>
+              keylessSelected ? null : (
+                <p className="text-sm text-muted-foreground">请先选择管家模型或任务模型。</p>
+              )
             ) : (
               <div className="space-y-3">
                 {keyProviders.map((provider) => {

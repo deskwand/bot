@@ -196,6 +196,19 @@ const MODELS: Record<string, string[]> = {
 const CATALOG: ModelCatalogDTO = {
   providers: [
     {
+      id: "workers-ai",
+      name: "Cloudflare Workers AI（免费额度）",
+      keyless: true,
+      models: [
+        {
+          id: "@cf/zai-org/glm-5.3-flash",
+          name: "GLM 5.3 Flash",
+          input: ["text", "image"],
+        },
+        { id: "@cf/zai-org/glm-4.7-flash", name: "GLM 4.7 Flash", input: ["text"] },
+      ],
+    },
+    {
       id: "opencode-go",
       name: "OpenCode Go",
       models: [
@@ -437,6 +450,15 @@ export function createMockClient(): ClientService {
       };
     }
   ).__backupCalls = backupCalls;
+  const configCalls = {
+    install: [] as InstallInputDTO[],
+    publish: [] as ConfigEditDTO[],
+  };
+  (
+    window as unknown as {
+      __configCalls?: typeof configCalls;
+    }
+  ).__configCalls = configCalls;
   const mcpCalls = {
     update: [] as { name: string; server: MockMcpServer; secrets: unknown[] }[],
     remove: [] as string[],
@@ -710,7 +732,8 @@ export function createMockClient(): ClientService {
       return published("op-import-1");
     },
 
-    async install(_input: InstallInputDTO) {
+    async install(input: InstallInputDTO) {
+      configCalls.install.push(input);
       if (state.scenario === "install-conflict") {
         fail(
           "OPERATION_IN_PROGRESS",
@@ -944,6 +967,7 @@ export function createMockClient(): ClientService {
     },
 
     async publishConfig(input: ConfigEditDTO) {
+      configCalls.publish.push(input);
       if (state.scenario === "upgrade-required") {
         fail("UPGRADE_REQUIRED", "请先在“更新”页升级云端服务。");
       }

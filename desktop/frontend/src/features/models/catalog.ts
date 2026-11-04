@@ -4,16 +4,22 @@ export type ProviderOption = {
   id: string;
   label: string;
   custom: boolean;
-  models: { id: string; label: string }[];
+  keyless: boolean;
+  models: { id: string; label: string; imageInput: boolean }[];
 };
 
 export const DEFAULT_MODEL: ModelDTO = {
-  provider: "opencode-go",
-  id: "deepseek-v4.1-flash",
+  provider: "workers-ai",
+  id: "@cf/zai-org/glm-5.3-flash",
 };
 
 export function secretNameFor(id: string): string {
   return `MODEL_KEY_${id.toUpperCase().replaceAll("-", "_")}`;
+}
+
+export function providerNeedsKey(catalog: ModelCatalogDTO, providerId: string): boolean {
+  const provider = catalog.providers.find((entry) => entry.id === providerId);
+  return !(provider?.keyless === true);
 }
 
 export function providerOptions(
@@ -24,13 +30,23 @@ export function providerOptions(
     id: provider.id,
     label: provider.name,
     custom: false,
-    models: provider.models.map((model) => ({ id: model.id, label: model.name })),
+    keyless: provider.keyless === true,
+    models: provider.models.map((model) => ({
+      id: model.id,
+      label: model.name,
+      imageInput: model.input?.includes("image") ?? false,
+    })),
   }));
   const customOptions = custom.map((provider) => ({
     id: provider.id,
     label: provider.name?.trim() || provider.id,
     custom: true,
-    models: provider.models.map((model) => ({ id: model.id, label: model.id })),
+    keyless: false,
+    models: provider.models.map((model) => ({
+      id: model.id,
+      label: model.id,
+      imageInput: false,
+    })),
   }));
   return [...builtin, ...customOptions];
 }

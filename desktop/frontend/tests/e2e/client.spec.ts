@@ -35,6 +35,20 @@ function keyRow(page: Page, provider: string) {
   return page.getByTestId(`model-key-row-${provider}`);
 }
 
+type ConfigCalls = {
+  install: {
+    butlerModel?: { provider: string; id: string };
+    taskModel?: { provider: string; id: string };
+  }[];
+  publish: { secrets?: { name: string; operation: string }[] }[];
+};
+
+async function recordedConfigCalls(page: Page): Promise<ConfigCalls | undefined> {
+  return page.evaluate(
+    () => (window as unknown as { __configCalls?: ConfigCalls }).__configCalls,
+  );
+}
+
 async function chooseModel(page: Page, label: string, provider: string, model: RegExp) {
   const providerTrigger = page.getByLabel(`${label}供应商`);
   const switching = (await providerTrigger.textContent())?.trim() !== provider;
@@ -43,6 +57,23 @@ async function chooseModel(page: Page, label: string, provider: string, model: R
   // A newly picked provider opens its model list by itself.
   if (!switching) await page.getByLabel(label, { exact: true }).click();
   await page.getByRole("listbox").getByRole("option", { name: model }).click();
+}
+
+const WORKERS_AI_QUOTA_NOTICE =
+  "使用你 Cloudflare 账号每天 10,000 neurons 的免费额度，用完后 UTC 0 点重置；超出后免费账号会暂停，付费账号按量计费。";
+
+// New installs leave the stored role models empty, so the models page falls
+// back to DEFAULT_MODEL for both roles.
+async function installAndOpenModels(page: Page) {
+  await page.goto("/test.html");
+  await connectCloudflare(page);
+  await page.getByRole("button", { name: "部署新服务" }).click();
+  await page.locator("#install-channel-telegram").click();
+  await page.getByRole("button", { name: "检查并部署" }).click();
+  await expect(page.getByText("部署未完成")).toBeVisible();
+  await page.getByTestId("result-resume").click();
+  await page.getByRole("button", { name: /设置模型/ }).click();
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
 }
 
 test("production bundle contains no fixture router", () => {
@@ -124,6 +155,9 @@ test("welcome → token connect → preflight → interrupted deployment → res
   await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
   await screenshot(page, "02-models.png");
 
+  // New installs default to Workers AI; this flow still exercises explicit keys.
+  await chooseModel(page, "管家模型", "OpenCode Go", /DeepSeek V4\.1 Flash/);
+  await chooseModel(page, "任务模型", "OpenCode Go", /DeepSeek V4\.1 Flash/);
   await keyRow(page, "opencode-go").getByLabel("API 密钥").fill("sk-model-SENTINEL-value");
   await page.getByRole("button", { name: "保存并发布" }).click();
   const preview = page.getByRole("dialog", { name: "确认保存并发布" });
@@ -151,6 +185,98 @@ test("welcome → token connect → preflight → interrupted deployment → res
 });
 
 
+
+test("models page defaults to Workers AI and asks for no key", async ({ page }) => {
+  await installAndOpenModels(page);
+
+  await expect(page.getByLabel("管家模型供应商")).toHaveText(/Cloudflare Workers AI/);
+  await expect(page.getByLabel("任务模型供应商")).toHaveText(/Cloudflare Workers AI/);
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/GLM 5\.3 Flash/);
+  await expect(page.getByLabel("任务模型", { exact: true })).toHaveText(/GLM 5\.3 Flash/);
+  await expect(keyRow(page, "workers-ai")).toHaveCount(0);
+  await expect(page.getByText(WORKERS_AI_QUOTA_NOTICE)).toBeVisible();
+});
+
+test("switching back to Workers AI drops the key row", async ({ page }) => {
+  await installAndOpenModels(page);
+
+  await chooseModel(page, "任务模型", "OpenCode Go", /DeepSeek V4\.1 Flash/);
+  await expect(keyRow(page, "opencode-go")).toBeVisible();
+
+  await chooseModel(
+    page,
+    "任务模型",
+    "Cloudflare Workers AI（免费额度）",
+    /GLM 5\.3 Flash/,
+  );
+  await expect(keyRow(page, "opencode-go")).toHaveCount(0);
+  await expect(page.getByText(WORKERS_AI_QUOTA_NOTICE)).toBeVisible();
+});
+
+test("text-only Workers AI models are labelled", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByLabel("管家模型供应商").click();
+  await page.getByRole("option", { name: "Cloudflare Workers AI（免费额度）", exact: true }).click();
+
+  await expect(
+    page.getByRole("listbox").getByRole("option", { name: /GLM 4\.7 Flash/ }),
+  ).toContainText("不支持图片");
+  await expect(
+    page.getByRole("listbox").getByRole("option", { name: /GLM 5\.3 Flash/ }),
+  ).not.toContainText("不支持图片");
+});
+
+test("install form defaults both models to Workers AI", async ({ page }) => {
+  await page.goto("/test.html");
+  await connectCloudflare(page);
+  await page.getByRole("button", { name: "部署新服务" }).click();
+
+  await expect(page.getByLabel("管家模型供应商")).toHaveText(/Cloudflare Workers AI/);
+  await expect(page.getByLabel("任务模型供应商")).toHaveText(/Cloudflare Workers AI/);
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/GLM 5\.3 Flash/);
+  await expect(page.getByLabel("任务模型", { exact: true })).toHaveText(/GLM 5\.3 Flash/);
+
+  await page.locator("#install-channel-telegram").click();
+  await page.getByRole("button", { name: "检查并部署" }).click();
+  await expect(page.getByText("部署未完成")).toBeVisible();
+  await expect(page.getByTestId("error-alert")).toHaveCount(0);
+
+  const calls = await recordedConfigCalls(page);
+  expect(calls?.install.at(-1)?.butlerModel).toEqual({
+    provider: "workers-ai",
+    id: "@cf/zai-org/glm-5.3-flash",
+  });
+  expect(calls?.install.at(-1)?.taskModel).toEqual({
+    provider: "workers-ai",
+    id: "@cf/zai-org/glm-5.3-flash",
+  });
+});
+
+test("a stale key draft is not published after switching back", async ({ page }) => {
+  await installAndOpenModels(page);
+
+  await chooseModel(page, "任务模型", "OpenCode Go", /DeepSeek V4\.1 Flash/);
+  await keyRow(page, "opencode-go")
+    .getByLabel("API 密钥")
+    .fill("sk-stale-SENTINEL");
+  await chooseModel(
+    page,
+    "任务模型",
+    "Cloudflare Workers AI（免费额度）",
+    /GLM 5\.3 Flash/,
+  );
+  await expect(keyRow(page, "opencode-go")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "保存并发布" }).click();
+  const preview = page.getByRole("dialog", { name: "确认保存并发布" });
+  await expect(preview).toBeVisible();
+  await preview.getByRole("button", { name: "确认保存并发布" }).click();
+  await expect(page.getByText(/配置已发布/).first()).toBeVisible();
+
+  const calls = await recordedConfigCalls(page);
+  expect(calls?.publish.at(-1)?.secrets ?? []).toEqual([]);
+});
 
 test("login published follow-up with a publish operation id is accepted", async ({ page }) => {
   await page.goto("/test.html?fixture=login-sync");
