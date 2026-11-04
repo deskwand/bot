@@ -3,7 +3,7 @@
   "slug": "deskwand-bot",
   "identifier": "com.deskwand.bot",
   "icon": "icon/icon.png",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "devUrl": "http://localhost:5173",
   "devCommand": "npm --prefix frontend run dev",
   "buildCommand": "npm --prefix frontend run build",
