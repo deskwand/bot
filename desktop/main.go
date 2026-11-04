@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"path/filepath"
@@ -128,6 +129,15 @@ func main() {
 		FileDialogs:    mygoFileDialogs{},
 		BackupSettings: backupSettings,
 	})
+
+	// Auto backup runs on the interval the page configures. It only exists
+	// while this process does; the cloud data is untouched when the client is
+	// closed, so nothing else can drive it.
+	backupScheduler := app.NewBackupScheduler(backupSettings, func(context.Context) error {
+		_, err := service.ExportData()
+		return err
+	})
+	go backupScheduler.Run(context.Background())
 
 	mygo.Use(updater.New(updater.Options{Interval: 6 * time.Hour}))
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
