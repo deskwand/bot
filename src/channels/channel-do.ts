@@ -24,6 +24,7 @@ import {
   getChannelOverride,
   getILinkFetchOverride,
   getPollTimingOverride,
+  getTelegramFetchOverride,
   getWeChatCredentialsOverride,
 } from "./override";
 import {
@@ -37,6 +38,10 @@ import { emitChannelEvent } from "./events";
 import { OutboundQueue } from "./outbound-queue";
 import { prepareInboundImage } from "./media";
 import { createTelegramAdapter } from "./telegram";
+import {
+  createTelegramPollClient,
+  type TelegramUpdateBatch,
+} from "./telegram-poll";
 import { parseTextAction, type TextAction } from "./text-action";
 import { ChannelError, type ChannelAdapter } from "./types";
 import { toWeChatText } from "./wechat/markdown";
@@ -56,6 +61,11 @@ const WECHAT_POLL_BACKOFF_MS = 1_000;
 const WECHAT_POLL_MAX_BACKOFF_MS = 10_000;
 const WECHAT_GET_UPDATES_TIMEOUT_MS = 40_000;
 const WECHAT_HEARTBEAT_MAX_AGE_MS = 120_000;
+const TELEGRAM_POLL_RUN_MS = 600_000;
+const TELEGRAM_POLL_BACKOFF_MS = 1_000;
+const TELEGRAM_POLL_MAX_BACKOFF_MS = 10_000;
+const TELEGRAM_GET_UPDATES_TIMEOUT_MS = 35_000;
+const TELEGRAM_HEARTBEAT_MAX_AGE_MS = 120_000;
 /** How many drains a rejected message survives before it is given up on. */
 const OUTBOUND_MAX_ATTEMPTS = 5;
 type WeChatState = {
@@ -64,6 +74,17 @@ type WeChatState = {
   status: string | null;
   last_poll_at: number | null;
   expiry_notified: number;
+};
+type TelegramState = {
+  token_hash: string | null;
+  offset: number;
+  status: string | null;
+  last_poll_at: number | null;
+};
+type TelegramPollClient = ReturnType<typeof createTelegramPollClient>;
+type TelegramWebhookRetry = {
+  attempted: boolean;
+  removalFailed: boolean;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -85,15 +106,19 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Maps an iLink/network failure to a fixed diagnostic code. The raw error text
- * is never logged as an event field.
+ * Maps an iLink/Telegram/network failure to a fixed diagnostic code. The raw
+ * error text is never logged as an event field.
  */
-function wechatErrorCode(error: unknown): string {
-  if (error instanceof ILinkError) {
-    if (error.status === 0) return "untrusted_origin";
+function channelErrorCode(error: unknown): string {
+  // Only iLink uses status 0 to mean an untrusted origin. A status-0
+  // `ChannelError` maps to `network_error` below, as it did before.
+  if (error instanceof ILinkError && error.status === 0) {
+    return "untrusted_origin";
+  }
+  if (error instanceof ILinkError || error instanceof ChannelError) {
     if (error.status === 429) return "rate_limited";
     if (error.status >= 500) return "upstream_error";
-    return "api_error";
+    if (error.status !== 0) return "api_error";
   }
   if (
     error instanceof Error &&
@@ -139,6 +164,12 @@ export class ChannelDO extends Agent<Env> {
     raw: string;
     routeKey: string;
   } | null = null;
+
+  private activeTelegramRun: {
+    token: string;
+    hash: string;
+    routeKey: string;
+  } | null = null;
   /** Cached for the lifetime of this instance: its environment is immutable. */
   private routePromise: Promise<RouteSnapshot> | undefined;
 
@@ -175,6 +206,14 @@ export class ChannelDO extends Agent<Env> {
         status TEXT,
         last_poll_at INTEGER,
         expiry_notified INTEGER
+      )`,
+    );
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS telegram_state (
+        token_hash TEXT,
+        offset INTEGER,
+        status TEXT,
+        last_poll_at INTEGER
       )`,
     );
     this.db.exec(
@@ -526,7 +565,7 @@ export class ChannelDO extends Agent<Env> {
 
   /** Records a rejected send as a sanitized event and keeps the row. */
   private reportSendFailure(id: number, error: unknown): void {
-    const code = wechatErrorCode(error);
+    const code = channelErrorCode(error);
     this.outbound.markError(id, code);
     emitChannelEvent(this.env, {
       channel: "wechat",
@@ -559,12 +598,20 @@ export class ChannelDO extends Agent<Env> {
 
     const route = await this.currentRoute();
 
-    if (route.channel !== "wechat") {
+    if (route.channel === "telegram") {
       await this.stopWeChatPolling();
+      await this.startTelegramPolling();
       return;
     }
 
-    await this.startWeChatPolling();
+    if (route.channel === "wechat") {
+      await this.stopTelegramPolling();
+      await this.startWeChatPolling();
+      return;
+    }
+
+    await this.stopWeChatPolling();
+    await this.stopTelegramPolling();
   }
 
   /** Stops the WeChat chain without discarding the selected credential. */
@@ -653,6 +700,226 @@ export class ChannelDO extends Agent<Env> {
     await this.schedule(0, "pollWeChat", undefined, { idempotent: true });
   }
 
+  /** Stops the Telegram chain without discarding the offset. */
+  private async stopTelegramPolling(): Promise<void> {
+    this.activeTelegramRun = null;
+
+    for (const schedule of await this.listSchedules()) {
+      if (schedule.callback === "pollTelegram") {
+        await this.cancelSchedule(schedule.id);
+      }
+    }
+
+    // A deliberate deactivation is not an expiry: keep the offset so selecting
+    // Telegram again resumes where it left off.
+    if (this.readTelegramState().status === "running") {
+      this.updateTelegramState({ status: "stopped" });
+    }
+  }
+
+  private async startTelegramPolling(): Promise<void> {
+    const token = this.env.TELEGRAM_BOT_TOKEN;
+    if (!token) return;
+
+    const hash = await sha256Hex(token);
+    let state = this.readTelegramState();
+    if (state.token_hash !== hash) {
+      // New or replaced token: a former expiry no longer applies.
+      this.activeTelegramRun = null;
+      this.resetTelegramState(hash);
+      state = this.readTelegramState();
+    }
+
+    // Same token after a redeploy: resume a deliberate stop, but never
+    // resurrect an expired token without new credentials.
+    if (state.status === "stopped") {
+      this.updateTelegramState({ status: "running" });
+      state = this.readTelegramState();
+    }
+
+    if (state.status !== "running") return;
+
+    // Tests drive pollTelegram explicitly. Scheduling here would start a live
+    // chain that can fire before the test installs its scripted fetch.
+    if (getPollTimingOverride()?.manualStart) return;
+
+    const now = Date.now();
+    if (
+      state.last_poll_at !== null &&
+      now - state.last_poll_at < TELEGRAM_HEARTBEAT_MAX_AGE_MS
+    ) {
+      return;
+    }
+
+    const pending = await this.listSchedules();
+    if (
+      pending.some(
+        (schedule) =>
+          schedule.callback === "pollTelegram" && schedule.time * 1000 > now,
+      )
+    ) {
+      return;
+    }
+
+    // Idempotent so a schedule(0) that is already due still counts as pending.
+    await this.schedule(0, "pollTelegram", undefined, { idempotent: true });
+  }
+
+  /**
+   * One long-poll step. A 409 means an older deployment still has a webhook
+   * registered: remove it without `drop_pending_updates` (the backlog is kept)
+   * and retry once.
+   */
+  private async fetchTelegramBatch(
+    client: TelegramPollClient,
+    offset: number,
+    ownsRun: () => Promise<boolean>,
+    retry: TelegramWebhookRetry,
+  ): Promise<TelegramUpdateBatch | "stopped"> {
+    try {
+      return await client.getUpdates(
+        offset,
+        AbortSignal.timeout(TELEGRAM_GET_UPDATES_TIMEOUT_MS),
+      );
+    } catch (error) {
+      if (
+        !(error instanceof ChannelError) ||
+        error.status !== 409 ||
+        retry.attempted
+      ) {
+        throw error;
+      }
+
+      retry.attempted = true;
+      try {
+        await client.deleteWebhook();
+      } catch (deleteError) {
+        retry.removalFailed = true;
+        throw deleteError;
+      }
+
+      if (!(await ownsRun())) return "stopped";
+      this.updateTelegramState({ last_poll_at: Date.now() });
+      return await client.getUpdates(
+        offset,
+        AbortSignal.timeout(TELEGRAM_GET_UPDATES_TIMEOUT_MS),
+      );
+    }
+  }
+
+  async pollTelegram(
+    _payload?: unknown,
+    _schedule?: Schedule<unknown>,
+  ): Promise<void> {
+    if (this.lease.current() !== null) return;
+
+    const route = await this.currentRoute();
+    if (route.channel !== "telegram") return;
+
+    const token = this.env.TELEGRAM_BOT_TOKEN;
+    const state = this.readTelegramState();
+    if (!token || state.status !== "running" || !state.token_hash) return;
+    if (this.activeTelegramRun) return;
+    const run = { token, hash: state.token_hash, routeKey: route.routeKey };
+    this.activeTelegramRun = run;
+    const ownsRun = async () => {
+      const current = this.readTelegramState();
+      return this.activeTelegramRun === run &&
+        this.lease.current() === null &&
+        this.env.TELEGRAM_BOT_TOKEN === run.token &&
+        current.token_hash === run.hash && current.status === "running" &&
+        (await this.currentRoute()).routeKey === run.routeKey;
+    };
+
+    try {
+      const timing = getPollTimingOverride() ?? {
+        runMs: TELEGRAM_POLL_RUN_MS,
+        baseBackoffMs: TELEGRAM_POLL_BACKOFF_MS,
+      };
+      const client = createTelegramPollClient({
+        token,
+        fetch: getTelegramFetchOverride() ?? undefined,
+      });
+      const startedAt = Date.now();
+      const retry: TelegramWebhookRetry = {
+        attempted: false,
+        removalFailed: false,
+      };
+      let backoffMs = timing.baseBackoffMs;
+
+      do {
+        if (!(await ownsRun())) return;
+        // Refresh the heartbeat before the long poll so ensurePolling does not
+        // start a second chain while getUpdates is still waiting.
+        this.updateTelegramState({ last_poll_at: Date.now() });
+
+        let batch: TelegramUpdateBatch;
+        try {
+          const fetched = await this.fetchTelegramBatch(
+            client,
+            this.readTelegramState().offset,
+            ownsRun,
+            retry,
+          );
+          if (fetched === "stopped") return;
+          batch = fetched;
+        } catch (error) {
+          if (!(await ownsRun())) return;
+          if (
+            error instanceof ChannelError &&
+            (error.status === 401 || error.status === 404)
+          ) {
+            emitChannelEvent(this.env, {
+              channel: "telegram",
+              event: "poll_expired",
+              errorCode: "credential_invalid",
+            });
+            this.updateTelegramState({ status: "expired" });
+            console.warn("channel: telegram token invalid, polling stopped");
+            return;
+          }
+          emitChannelEvent(this.env, {
+            channel: "telegram",
+            event: "poll_error",
+            errorCode: retry.removalFailed
+              ? "api_error"
+              : channelErrorCode(error),
+          });
+          console.error(
+            `channel: telegram poll failed: ${errorMessage(error)}`,
+          );
+          await sleep(backoffMs);
+          backoffMs = Math.min(backoffMs * 2, TELEGRAM_POLL_MAX_BACKOFF_MS);
+          continue;
+        }
+
+        retry.attempted = false;
+        retry.removalFailed = false;
+        if (!(await ownsRun())) return;
+        emitChannelEvent(this.env, {
+          channel: "telegram",
+          event: "poll_ok",
+        });
+        this.updateTelegramState({ last_poll_at: Date.now() });
+
+        for (const update of batch.updates) {
+          if (!(await ownsRun())) return;
+          const outcome = await this.handleTelegramUpdate(update);
+          // The lease landed mid-batch: keep this update's offset so the Cron
+          // replays it after the restore releases the lease.
+          if (outcome === "maintenance") return;
+          this.updateTelegramState({ offset: update.update_id + 1 });
+        }
+        backoffMs = timing.baseBackoffMs;
+      } while (Date.now() - startedAt < timing.runMs);
+
+      if (!(await ownsRun())) return;
+      await this.schedule(0, "pollTelegram");
+    } finally {
+      if (this.activeTelegramRun === run) this.activeTelegramRun = null;
+    }
+  }
+
   async pollWeChat(
     _payload?: unknown,
     _schedule?: Schedule<unknown>,
@@ -732,7 +999,7 @@ export class ChannelDO extends Agent<Env> {
           emitChannelEvent(this.env, {
             channel: "wechat",
             event: "poll_error",
-            errorCode: wechatErrorCode(error),
+            errorCode: channelErrorCode(error),
           });
           console.error(
             `channel: wechat poll failed: ${errorMessage(error)}`,
@@ -953,6 +1220,79 @@ export class ChannelDO extends Agent<Env> {
       next.status,
       next.last_poll_at,
       next.expiry_notified,
+    );
+  }
+
+  private readTelegramState(): TelegramState {
+    return (
+      this.db
+        .exec<TelegramState>(
+          `SELECT token_hash, offset, status, last_poll_at
+           FROM telegram_state LIMIT 1`,
+        )
+        .toArray()[0] ?? {
+        token_hash: null,
+        offset: 0,
+        status: null,
+        last_poll_at: null,
+      }
+    );
+  }
+
+  private updateTelegramState(patch: Partial<TelegramState>): void {
+    const next = { ...this.readTelegramState(), ...patch };
+    this.db.exec(
+      `INSERT INTO telegram_state
+         (token_hash, offset, status, last_poll_at)
+       SELECT ?, ?, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM telegram_state)`,
+      next.token_hash,
+      next.offset,
+      next.status,
+      next.last_poll_at,
+    );
+
+    // Write only the patched columns: a heartbeat must not revert an offset a
+    // concurrent batch already advanced.
+    const columns: string[] = [];
+    const values: Array<string | number | null> = [];
+    for (const key of [
+      "token_hash",
+      "offset",
+      "status",
+      "last_poll_at",
+    ] as const) {
+      if (patch[key] === undefined) continue;
+      columns.push(`${key} = ?`);
+      values.push(patch[key]);
+    }
+    if (columns.length === 0) return;
+    this.db.exec(
+      `UPDATE telegram_state SET ${columns.join(", ")}`,
+      ...values,
+    );
+  }
+
+  /**
+   * Resets the offset for a new token. The write is conditional on the stored
+   * hash: a row that already carries this token's hash is left alone.
+   */
+  private resetTelegramState(tokenHash: string): void {
+    this.db.exec(
+      `INSERT INTO telegram_state (token_hash, offset, status, last_poll_at)
+       SELECT ?, 0, 'running', NULL
+       WHERE NOT EXISTS (SELECT 1 FROM telegram_state)`,
+      tokenHash,
+    );
+    this.db.exec(
+      `UPDATE telegram_state SET
+         token_hash = ?,
+         offset = 0,
+         status = 'running',
+         last_poll_at = NULL
+       WHERE token_hash IS NULL OR token_hash <> ?`,
+      tokenHash,
+      tokenHash,
     );
   }
 

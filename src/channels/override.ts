@@ -35,6 +35,17 @@ export function getILinkFetchOverride(): typeof fetch | null {
   return ilinkFetchOverride;
 }
 
+/** Test-only Telegram Bot API fetch replacement. */
+let telegramFetchOverride: typeof fetch | null = null;
+
+export function setTelegramFetchOverride(fetchImpl: typeof fetch | null): void {
+  telegramFetchOverride = fetchImpl;
+}
+
+export function getTelegramFetchOverride(): typeof fetch | null {
+  return telegramFetchOverride;
+}
+
 /**
  * Test-only shortened polling durations.
  *
