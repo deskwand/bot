@@ -2,7 +2,10 @@
 // production entry never imports this module; a Playwright test asserts the
 // built bundle contains no fixture router.
 import type {
+  BackupFileDTO,
   BackupPreviewDTO,
+  BackupSettingsDTO,
+  BackupSettingsEditDTO,
   BackupSummaryDTO,
   CloudflareLoginDTO,
   ConfigDTO,
@@ -166,6 +169,28 @@ function mcpToolMode(server: MockMcpServer, tool: McpToolDTO): string {
   if (server.autoApprove?.includes(tool.name)) return "auto";
   return tool.mode;
 }
+
+const BACKUP_SETTINGS: BackupSettingsDTO = {
+  dir: "/Users/me/Documents/DeskWand 备份",
+  auto: false,
+  intervalHours: 24,
+  keep: 5,
+  lastSuccessAt: "2026-11-02T09:00:00Z",
+  lastSuccessPath:
+    "/Users/me/Documents/DeskWand 备份/deskwand-backup-deskwand-bot-20261102-090000.zip",
+  lastAttemptAt: "2026-11-02T09:00:00Z",
+  lastErrorCode: "",
+  lastErrorMessage: "",
+};
+
+const BACKUP_FILES: BackupFileDTO[] = [
+  {
+    path: "/Users/me/Documents/DeskWand 备份/deskwand-backup-deskwand-bot-20261102-090000.zip",
+    name: "deskwand-backup-deskwand-bot-20261102-090000.zip",
+    modifiedAt: "2026-11-02T09:00:00Z",
+    bytes: 1234567,
+  },
+];
 
 const BACKUP_SUMMARY: BackupSummaryDTO = {
   path: "deskwand-backup-deskwand-bot-20261102-090000.zip",
@@ -435,7 +460,27 @@ export function createMockClient(): ClientService {
   const listeners = new Set<(status: LoginStatusDTO) => void>();
   const cfListeners = new Set<(status: CloudflareLoginDTO) => void>();
   const backupListeners = new Set<(progress: Progress) => void>();
-  const backupCalls = { restore: 0, retry: [] as boolean[], choose: 0, abandon: 0 };
+  // Lets a test push a progress event the page did not trigger itself, the way
+  // a background auto backup does.
+  (
+    window as unknown as {
+      __emitBackupProgress?: (progress: Progress) => void;
+    }
+  ).__emitBackupProgress = (progress) => {
+    for (const listener of backupListeners) listener(progress);
+  };
+  const backupCalls = {
+    restore: 0,
+    retry: [] as boolean[],
+    choose: 0,
+    abandon: 0,
+    openFolder: 0,
+    chooseDir: 0,
+    list: 0,
+    chooseAt: [] as string[],
+    saved: [] as BackupSettingsEditDTO[],
+  };
+  let currentBackupSettings: BackupSettingsDTO = { ...BACKUP_SETTINGS };
   (
     window as unknown as {
       __backupCalls?: {
@@ -443,6 +488,11 @@ export function createMockClient(): ClientService {
         retry: boolean[];
         choose: number;
         abandon: number;
+        openFolder: number;
+        chooseDir: number;
+        list: number;
+        chooseAt: string[];
+        saved: BackupSettingsEditDTO[];
       };
     }
   ).__backupCalls = backupCalls;
@@ -1155,6 +1205,48 @@ export function createMockClient(): ClientService {
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
       return BACKUP_SUMMARY;
+    },
+
+    async backupSettings(): Promise<BackupSettingsDTO> {
+      return currentBackupSettings;
+    },
+
+    async saveBackupSettings(
+      input: BackupSettingsEditDTO,
+    ): Promise<BackupSettingsDTO> {
+      backupCalls.saved.push(input);
+      currentBackupSettings = { ...currentBackupSettings, ...input };
+      return currentBackupSettings;
+    },
+
+    async chooseBackupDir(): Promise<BackupSettingsDTO> {
+      backupCalls.chooseDir += 1;
+      currentBackupSettings = {
+        ...currentBackupSettings,
+        dir: "/Users/me/Documents/备份（新）",
+      };
+      return currentBackupSettings;
+    },
+
+    async openBackupFolder(): Promise<void> {
+      backupCalls.openFolder += 1;
+    },
+
+    async listBackups(): Promise<BackupFileDTO[]> {
+      backupCalls.list += 1;
+      return BACKUP_FILES;
+    },
+
+    async chooseBackupAt(path: string): Promise<BackupPreviewDTO | null> {
+      backupCalls.chooseAt.push(path);
+      if (state.scenario === "backup-version-mismatch") {
+        return {
+          summary: { ...BACKUP_SUMMARY, release: "1.2.0" },
+          currentRelease: "1.3.0",
+          problem: "BACKUP_VERSION_MISMATCH",
+        };
+      }
+      return { summary: { ...BACKUP_SUMMARY, path }, currentRelease: "1.1.0" };
     },
 
     async chooseBackup(): Promise<BackupPreviewDTO | null> {

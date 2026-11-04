@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"path/filepath"
@@ -66,6 +67,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	backupSettings, err := app.NewFileBackupSettings(dataDir, filepath.Join(dataDir, "backups"))
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	credentials := platform.NewSystemCredentialStore(credentialServiceName(dev))
 	tokens := auth.NewTokenService(credentials)
@@ -121,8 +126,18 @@ func main() {
 				_ = app.BackupProgressEvent.Broadcast(progress)
 			},
 		}, restoreJournal, filepath.Join(dataDir, "backups")),
-		FileDialogs: mygoFileDialogs{},
+		FileDialogs:    mygoFileDialogs{},
+		BackupSettings: backupSettings,
 	})
+
+	// Auto backup runs on the interval the page configures. It only exists
+	// while this process does; the cloud data is untouched when the client is
+	// closed, so nothing else can drive it.
+	backupScheduler := app.NewBackupScheduler(backupSettings, func(context.Context) error {
+		_, err := service.ExportData()
+		return err
+	})
+	go backupScheduler.Run(context.Background())
 
 	mygo.Use(updater.New(updater.Options{Interval: 6 * time.Hour}))
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
@@ -202,13 +217,19 @@ var backupFilters = []mygo.FileFilter{{Name: "DeskWand 备份", Extensions: []st
 // mygoFileDialogs implements app.FileDialogs with the native dialogs.
 type mygoFileDialogs struct{}
 
-func (mygoFileDialogs) SaveBackup(defaultName string) (string, error) {
-	return mygo.Dialog.Save(mygo.SaveDialogOptions{
-		Title:             "保存数据备份",
-		DefaultPath:       defaultName,
-		Filters:           backupFilters,
+func (mygoFileDialogs) ChooseBackupDir() (string, error) {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Title:             "选择备份目录",
+		Directory:         true,
 		CreateDirectories: true,
 	})
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", nil
+	}
+	return paths[0], nil
 }
 
 func (mygoFileDialogs) OpenBackup() (string, error) {

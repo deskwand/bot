@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -101,20 +104,18 @@ func (f *fakeBackup) Abandon() error {
 }
 
 type fakeFileDialogs struct {
-	savePath    string
-	saveErr     error
-	saveDefault string
-	saveCalls   int
-
 	openPath  string
 	openErr   error
 	openCalls int
+
+	dirPath  string
+	dirErr   error
+	dirCalls int
 }
 
-func (f *fakeFileDialogs) SaveBackup(defaultName string) (string, error) {
-	f.saveCalls++
-	f.saveDefault = defaultName
-	return f.savePath, f.saveErr
+func (f *fakeFileDialogs) ChooseBackupDir() (string, error) {
+	f.dirCalls++
+	return f.dirPath, f.dirErr
 }
 
 func (f *fakeFileDialogs) OpenBackup() (string, error) {
@@ -124,25 +125,40 @@ func (f *fakeFileDialogs) OpenBackup() (string, error) {
 
 type backupFixture struct {
 	*serviceFixture
-	backup  *fakeBackup
-	dialogs *fakeFileDialogs
+	backup   *fakeBackup
+	dialogs  *fakeFileDialogs
+	settings *FileBackupSettings
+	appDir   string
+	opened   []string
 }
 
 func newBackupFixture(t *testing.T) *backupFixture {
 	t.Helper()
 	base := newServiceFixture(t)
+	appDir := t.TempDir()
+	settings, err := NewFileBackupSettings(appDir, filepath.Join(appDir, "backups"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := &backupFixture{
 		serviceFixture: base,
 		backup:         &fakeBackup{},
 		dialogs:        &fakeFileDialogs{},
+		settings:       settings,
+		appDir:         appDir,
 	}
 	base.service = NewService(ServiceOptions{
 		Auth: base.auth, Publish: base.publish, Lifecycle: base.lifecycle,
 		Entries: base.entries, Diagnostics: base.diagnostics, Snapshots: base.snapshots,
 		Scripts: base.scripts, Journal: base.journal, Store: base.store, Browser: base.browser,
-		Release:     base.release,
-		Backup:      f.backup,
-		FileDialogs: f.dialogs,
+		Release:        base.release,
+		Backup:         f.backup,
+		FileDialogs:    f.dialogs,
+		BackupSettings: settings,
+		OpenPath: func(path string) error {
+			f.opened = append(f.opened, path)
+			return nil
+		},
 		EmitLoginStatus: func(LoginStatusDTO) {
 		},
 		NewOperationID: func() (string, error) { return "login-op", nil },
@@ -151,22 +167,14 @@ func newBackupFixture(t *testing.T) *backupFixture {
 	return f
 }
 
-func TestExportDataCancelledDialogReturnsNil(t *testing.T) {
+func TestExportDataWritesToConfiguredDirWithoutDialog(t *testing.T) {
 	f := newBackupFixture(t)
-	f.dialogs.savePath = ""
-
-	summary, err := f.service.ExportData()
-	if err != nil || summary != nil {
-		t.Fatalf("ExportData = %#v, %v; want nil, nil", summary, err)
+	dir := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if f.backup.exportCalls != 0 {
-		t.Fatalf("cancelled export called backup %d times", f.backup.exportCalls)
-	}
-}
-
-func TestExportDataUsesDefaultFileName(t *testing.T) {
-	f := newBackupFixture(t)
-	f.dialogs.savePath = "/tmp/backup.zip"
 	f.backup.exportManifest = backup.Manifest{
 		ExportedAt: time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC),
 		Release:    "1.0.0",
@@ -184,17 +192,25 @@ func TestExportDataUsesDefaultFileName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "deskwand-backup-deskwand-bot-20261102-100000.zip"; f.dialogs.saveDefault != want {
-		t.Fatalf("default name = %q, want %q", f.dialogs.saveDefault, want)
-	}
-	if summary.Path != "/tmp/backup.zip" || summary.Release != "1.0.0" {
+	want := filepath.Join(dir, "deskwand-backup-deskwand-bot-20261102-100000.zip")
+	if summary.Path != want || summary.Release != "1.0.0" {
 		t.Fatalf("summary = %#v", summary)
 	}
 	if summary.Rows != 4 || summary.Tasks != 1 || summary.Objects != 1 || summary.Bytes != 42 {
 		t.Fatalf("summary counts = %#v", summary)
 	}
-	if f.backup.exportTarget != f.store.target || f.backup.exportPath != "/tmp/backup.zip" {
+	if f.backup.exportTarget != f.store.target || f.backup.exportPath != want {
 		t.Fatalf("export target/path = %#v %q", f.backup.exportTarget, f.backup.exportPath)
+	}
+	if f.dialogs.openCalls != 0 || f.dialogs.dirCalls != 0 {
+		t.Fatalf("export opened a dialog: open=%d dir=%d", f.dialogs.openCalls, f.dialogs.dirCalls)
+	}
+	settings, err := f.settings.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.LastSuccessAt != "2026-11-02T10:00:00Z" || settings.LastSuccessPath != want {
+		t.Fatalf("last run = %#v", settings)
 	}
 }
 
@@ -333,8 +349,8 @@ func TestBackupRunsOneOperationAtATime(t *testing.T) {
 	go func() { done <- f.service.RestoreData() }()
 	<-started
 
-	saveCalls := f.dialogs.saveCalls
 	openCalls := f.dialogs.openCalls
+	dirCalls := f.dialogs.dirCalls
 
 	if _, err := f.service.ExportData(); !hasCode(err, backup.CodeMaintenanceBusy) {
 		t.Fatalf("ExportData while busy = %v, want %s", err, backup.CodeMaintenanceBusy)
@@ -351,8 +367,8 @@ func TestBackupRunsOneOperationAtATime(t *testing.T) {
 	if _, err := f.service.ChooseBackup(); !hasCode(err, backup.CodeMaintenanceBusy) {
 		t.Fatalf("ChooseBackup while busy = %v, want %s", err, backup.CodeMaintenanceBusy)
 	}
-	if f.dialogs.saveCalls != saveCalls || f.dialogs.openCalls != openCalls {
-		t.Fatalf("busy guard opened a dialog: save=%d open=%d", f.dialogs.saveCalls, f.dialogs.openCalls)
+	if f.dialogs.openCalls != openCalls || f.dialogs.dirCalls != dirCalls {
+		t.Fatalf("busy guard opened a dialog: open=%d dir=%d", f.dialogs.openCalls, f.dialogs.dirCalls)
 	}
 
 	close(unblock)
@@ -406,7 +422,6 @@ func TestBackupBusyGuardReleasesAfterOperationTimeout(t *testing.T) {
 	defer func() { backupOperationTimeout = previous }()
 
 	f := newBackupFixture(t)
-	f.dialogs.savePath = "/tmp/backup.zip"
 	f.backup.exportWaitContext = true
 
 	if _, err := f.service.ExportData(); err == nil {
@@ -414,7 +429,6 @@ func TestBackupBusyGuardReleasesAfterOperationTimeout(t *testing.T) {
 	}
 
 	f.backup.exportWaitContext = false
-	f.dialogs.savePath = "/tmp/second.zip"
 	if _, err := f.service.ExportData(); err != nil {
 		t.Fatalf("busy guard stayed set after the timeout: %v", err)
 	}
@@ -443,5 +457,299 @@ func TestImportPreviewHidesAdminTokenName(t *testing.T) {
 		if name == backup.AdminTokenSecret {
 			t.Fatalf("import preview exposed %s", backup.AdminTokenSecret)
 		}
+	}
+}
+
+func TestExportDataPrunesOldBackups(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := t.TempDir()
+	for _, name := range []string{
+		"deskwand-backup-deskwand-bot-20260101-000000.zip",
+		"deskwand-backup-deskwand-bot-20260201-000000.zip",
+		"deskwand-backup-deskwand-bot-20260301-000000.zip",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: true, IntervalHours: 6, Keep: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.service.ExportData(); err != nil {
+		t.Fatal(err)
+	}
+
+	names, err := backupFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fake writer does not touch the filesystem, so the three files above
+	// are what pruning sees: keep=1 leaves the newest of them.
+	if len(names) != 1 || names[0] != "deskwand-backup-deskwand-bot-20260301-000000.zip" {
+		t.Fatalf("after prune = %v", names)
+	}
+}
+
+func TestExportDataReportsUnwritableDir(t *testing.T) {
+	f := newBackupFixture(t)
+	// Write the settings file directly: Save would reject this folder, which is
+	// exactly the state a folder that later became read-only leaves behind.
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	broken := filepath.Join(blocker, "child")
+	data, err := json.Marshal(backupSettingsFile{Dir: broken, IntervalHours: 24, Keep: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.appDir, "backup.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.service.ExportData(); !hasCode(err, backup.CodeBackupSettingsInvalid) {
+		t.Fatalf("ExportData = %v, want %s", err, backup.CodeBackupSettingsInvalid)
+	}
+	if f.backup.exportCalls != 0 {
+		t.Fatalf("export ran %d times against an unusable folder", f.backup.exportCalls)
+	}
+}
+
+func TestOpenBackupFolderCreatesAndOpens(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := filepath.Join(t.TempDir(), "DeskWand 备份")
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.service.OpenBackupFolder(); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.opened) != 1 || f.opened[0] != dir {
+		t.Fatalf("opened = %v, want %q", f.opened, dir)
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("folder not created: %v", err)
+	}
+}
+
+func TestChooseBackupDirStoresSelection(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := t.TempDir()
+	f.dialogs.dirPath = dir
+
+	settings, err := f.service.ChooseBackupDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Dir != dir {
+		t.Fatalf("dir = %q, want %q", settings.Dir, dir)
+	}
+
+	// A cancelled dialog keeps the previous value and reports no error.
+	f.dialogs.dirPath = ""
+	settings, err = f.service.ChooseBackupDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Dir != dir {
+		t.Fatalf("cancelled dialog changed the dir to %q", settings.Dir)
+	}
+}
+
+func TestSaveBackupSettingsRejectsBadValues(t *testing.T) {
+	f := newBackupFixture(t)
+	if _, err := f.service.SaveBackupSettings(BackupSettingsEditDTO{
+		Dir: "relative", Auto: true, IntervalHours: 24, Keep: 5,
+	}); !hasCode(err, backup.CodeBackupSettingsInvalid) {
+		t.Fatalf("SaveBackupSettings = %v, want %s", err, backup.CodeBackupSettingsInvalid)
+	}
+}
+
+func TestListBackupsReportsFiles(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "deskwand-backup-b-20261102-100000.zip"), []byte("12345"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := f.service.ListBackups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files = %#v", files)
+	}
+	if files[0].Name != "deskwand-backup-b-20261102-100000.zip" || files[0].Bytes != 5 {
+		t.Fatalf("file = %#v", files[0])
+	}
+	if files[0].Path != filepath.Join(dir, files[0].Name) || files[0].ModifiedAt == "" {
+		t.Fatalf("file = %#v", files[0])
+	}
+}
+
+func TestChooseBackupAtUsesListedFile(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "deskwand-backup-b-20261102-100000.zip")
+	if err := os.WriteFile(path, []byte("zip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.backup.inspectManifest = backup.Manifest{Release: "1.0.0"}
+
+	preview, err := f.service.ChooseBackupAt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Summary.Path != path || f.backup.inspectPath != path {
+		t.Fatalf("preview = %#v inspect = %q", preview, f.backup.inspectPath)
+	}
+	if f.dialogs.openCalls != 0 {
+		t.Fatalf("ChooseBackupAt opened a dialog")
+	}
+	if err := f.service.RestoreData(); err != nil {
+		t.Fatalf("RestoreData after ChooseBackupAt: %v", err)
+	}
+	if f.backup.restorePath != path {
+		t.Fatalf("restore path = %q, want %q", f.backup.restorePath, path)
+	}
+}
+
+func TestChooseBackupAtRejectsPathOutsideBackupDir(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, path := range map[string]string{
+		"outside dir": filepath.Join(t.TempDir(), "deskwand-backup-b-20261102-100000.zip"),
+		"other file":  filepath.Join(dir, "notes.txt"),
+		"empty":       "",
+		"parent":      filepath.Join(dir, "..", "deskwand-backup-b-20261102-100000.zip"),
+	} {
+		if _, err := f.service.ChooseBackupAt(path); !hasCode(err, backup.CodeBackupInvalid) {
+			t.Fatalf("%s: %v, want %s", name, err, backup.CodeBackupInvalid)
+		}
+	}
+	if f.backup.inspectCalls != 0 {
+		t.Fatalf("rejected path reached Inspect %d times", f.backup.inspectCalls)
+	}
+}
+
+func TestExportDataRecordsFailure(t *testing.T) {
+	f := newBackupFixture(t)
+	f.backup.exportErr = domain.Error{Code: backup.CodeAdminUnavailable, Message: "云端服务尚不支持数据备份"}
+
+	if _, err := f.service.ExportData(); err == nil {
+		t.Fatal("expected the export to fail")
+	}
+	settings, err := f.settings.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.LastErrorCode != backup.CodeAdminUnavailable {
+		t.Fatalf("last error code = %q, want %s", settings.LastErrorCode, backup.CodeAdminUnavailable)
+	}
+	if settings.LastErrorMessage != "云端服务尚不支持数据备份" {
+		t.Fatalf("last error message = %q", settings.LastErrorMessage)
+	}
+	if settings.LastSuccessAt != "" {
+		t.Fatalf("failed export set a success time: %#v", settings)
+	}
+}
+
+func TestExportDataDoesNotRecordSkippedFailures(t *testing.T) {
+	for _, code := range []string{CodeAuthRequired, CodeTargetNotSelected} {
+		f := newBackupFixture(t)
+		f.backup.exportErr = domain.Error{Code: code, Message: "skip"}
+
+		if _, err := f.service.ExportData(); err == nil {
+			t.Fatalf("%s: expected the export to fail", code)
+		}
+		settings, err := f.settings.Settings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settings.LastErrorCode != "" || settings.LastAttemptAt != "" {
+			t.Fatalf("%s was recorded as a failure: %#v", code, settings)
+		}
+	}
+}
+
+func TestChangingFolderForgetsTheChosenBackup(t *testing.T) {
+	f := newBackupFixture(t)
+	first := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: first, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(first, "deskwand-backup-b-20261102-100000.zip")
+	if err := os.WriteFile(path, []byte("zip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.backup.inspectManifest = backup.Manifest{Release: "1.0.0"}
+	if _, err := f.service.ChooseBackupAt(path); err != nil {
+		t.Fatal(err)
+	}
+
+	second := t.TempDir()
+	if _, err := f.service.SaveBackupSettings(BackupSettingsEditDTO{
+		Dir: second, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.service.RestoreData(); !hasCode(err, backup.CodeBackupInvalid) {
+		t.Fatalf("RestoreData after moving the folder = %v, want %s", err, backup.CodeBackupInvalid)
+	}
+	if f.backup.restoreCalls != 0 {
+		t.Fatalf("restored %q from the old folder", f.backup.restorePath)
+	}
+}
+
+func TestChooseBackupAtRejectsSymlink(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "real.zip")
+	if err := os.WriteFile(target, []byte("zip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "deskwand-backup-b-20261102-100000.zip")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := f.service.ChooseBackupAt(link); !hasCode(err, backup.CodeBackupInvalid) {
+		t.Fatalf("ChooseBackupAt(symlink) = %v, want %s", err, backup.CodeBackupInvalid)
+	}
+	if f.backup.inspectCalls != 0 {
+		t.Fatal("symlink reached Inspect")
 	}
 }

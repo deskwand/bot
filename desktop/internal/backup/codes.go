@@ -18,3 +18,11 @@ const (
 // MaxR2ObjectBytes is the largest artifact the Worker accepts in one request
 // body. Larger objects are recorded as oversized and cannot be restored.
 const MaxR2ObjectBytes int64 = 100 << 20
+
+// CodeBackupSettingsInvalid reports a backup folder or schedule that cannot
+// be stored: empty, relative, unwritable, or outside the offered choices.
+const CodeBackupSettingsInvalid = "BACKUP_SETTINGS_INVALID"
+
+// CodeBackupFailed is the recorded code for an export that failed for a
+// reason this package did not classify.
+const CodeBackupFailed = "BACKUP_FAILED"

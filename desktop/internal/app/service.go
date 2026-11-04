@@ -161,6 +161,12 @@ type ServiceOptions struct {
 	Release     ReleaseSource
 	Backup      BackupService
 	FileDialogs FileDialogs
+	// BackupSettings is the persisted backup folder and schedule. Nil makes
+	// every backup-folder operation report SERVICE_UNAVAILABLE.
+	BackupSettings BackupSettingsStore
+	// OpenPath reveals a local folder in the file manager. It defaults to
+	// mygo.Shell.OpenPath.
+	OpenPath func(path string) error
 	// CheckClientUpdates opens the MyGo updater window. It defaults to
 	// updater.CheckForUpdates.
 	CheckClientUpdates func()
@@ -197,6 +203,8 @@ type Service struct {
 	release            ReleaseSource
 	backup             BackupService
 	dialogs            FileDialogs
+	settings           BackupSettingsStore
+	openPath           func(string) error
 	checkClientUpdates func()
 	theme              ThemeStore
 	applyTheme         func(string)
@@ -246,6 +254,10 @@ func NewService(options ServiceOptions) *Service {
 	if checkClientUpdates == nil {
 		checkClientUpdates = updater.CheckForUpdates
 	}
+	openPath := options.OpenPath
+	if openPath == nil {
+		openPath = func(path string) error { return mygo.Shell.OpenPath(path) }
+	}
 	applyTheme := options.ApplyTheme
 	if applyTheme == nil {
 		applyTheme = func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) }
@@ -266,6 +278,8 @@ func NewService(options ServiceOptions) *Service {
 		release:            options.Release,
 		backup:             options.Backup,
 		dialogs:            options.FileDialogs,
+		settings:           options.BackupSettings,
+		openPath:           openPath,
 		checkClientUpdates: checkClientUpdates,
 		theme:              options.Theme,
 		applyTheme:         applyTheme,

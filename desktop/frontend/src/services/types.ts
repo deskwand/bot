@@ -2,7 +2,10 @@
 // loads the MyGo runtime; the production adapter is the only place that does.
 import type {
   AccountDTO,
+  BackupFileDTO,
   BackupPreviewDTO,
+  BackupSettingsDTO,
+  BackupSettingsEditDTO,
   BackupSummaryDTO,
   CloudflareLoginDTO,
   ConfigDTO,
@@ -41,7 +44,10 @@ import type {
 
 export type {
   AccountDTO,
+  BackupFileDTO,
   BackupPreviewDTO,
+  BackupSettingsDTO,
+  BackupSettingsEditDTO,
   BackupSummaryDTO,
   CloudflareLoginDTO,
   ConfigDTO,
@@ -159,6 +165,12 @@ export interface ClientService {
   ): Promise<StatusItemDTO>;
   subscribeLoginStatus(listener: (status: LoginStatusDTO) => void): () => void;
   exportData(): Promise<BackupSummaryDTO | null>;
+  backupSettings(): Promise<BackupSettingsDTO>;
+  saveBackupSettings(input: BackupSettingsEditDTO): Promise<BackupSettingsDTO>;
+  chooseBackupDir(): Promise<BackupSettingsDTO>;
+  openBackupFolder(): Promise<void>;
+  listBackups(): Promise<BackupFileDTO[]>;
+  chooseBackupAt(path: string): Promise<BackupPreviewDTO | null>;
   chooseBackup(): Promise<BackupPreviewDTO | null>;
   restoreData(): Promise<void>;
   pendingRestore(): Promise<PendingRestoreDTO | null>;

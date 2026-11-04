@@ -10,6 +10,14 @@ export interface AccountDTO {
   name: string;
 }
 
+/** BackupFileDTO is one backup file the page lists from the configured folder. */
+export interface BackupFileDTO {
+  path: string;
+  name: string;
+  modifiedAt: string;
+  bytes: number;
+}
+
 /**
  * BackupPreviewDTO is the manifest summary shown before a restore. Problem is
  * the error code that blocks the restore, empty when the backup is usable.
@@ -18,6 +26,33 @@ export interface BackupPreviewDTO {
   summary: BackupSummaryDTO;
   currentRelease: string;
   problem?: string;
+}
+
+/**
+ * BackupSettingsDTO is the backup configuration the page reads and writes.
+ * LastSuccessAt is the last attempt that produced a file. LastAttemptAt is the
+ * last attempt of any kind and drives the schedule, so a failure waits a full
+ * interval instead of hammering every tick. LastErrorCode and LastErrorMessage
+ * describe that attempt and stay empty after a success.
+ */
+export interface BackupSettingsDTO {
+  dir: string;
+  auto: boolean;
+  intervalHours: number;
+  keep: number;
+  lastSuccessAt: string;
+  lastSuccessPath: string;
+  lastAttemptAt: string;
+  lastErrorCode: string;
+  lastErrorMessage: string;
+}
+
+/** BackupSettingsEditDTO replaces the editable half of BackupSettingsDTO. */
+export interface BackupSettingsEditDTO {
+  dir: string;
+  auto: boolean;
+  intervalHours: number;
+  keep: number;
 }
 
 /** BackupSummaryDTO describes one backup file without exposing its contents. */
@@ -394,6 +429,14 @@ export const Service = {
   addMcpServer(input: McpAddInput): Promise<ResultDTO> {
     return call("Service.AddMcpServer", input);
   },
+  /**
+   * BackupSettings returns the stored folder and schedule. It returns the DTO by
+   * value: the bridge maps a pointer result to null, and these calls always have
+   * an answer.
+   */
+  backupSettings(): Promise<BackupSettingsDTO> {
+    return call("Service.BackupSettings");
+  },
   /** CancelCloudflareLogin stops an unfinished OAuth login. */
   cancelCloudflareLogin(opID: string): Promise<void> {
     return call("Service.CancelCloudflareLogin", opID);
@@ -418,6 +461,22 @@ export const Service = {
    */
   chooseBackup(): Promise<BackupPreviewDTO | null> {
     return call("Service.ChooseBackup");
+  },
+  /**
+   * ChooseBackupAt selects a file the page listed from the backup folder, so
+   * restoring an earlier backup needs no file dialog. The path must stay inside
+   * that folder: the binding is callable from the page, so it must not become an
+   * arbitrary file reader.
+   */
+  chooseBackupAt(path: string): Promise<BackupPreviewDTO | null> {
+    return call("Service.ChooseBackupAt", path);
+  },
+  /**
+   * ChooseBackupDir asks for a folder with the native dialog and stores it. A
+   * cancelled dialog returns the unchanged settings and no error.
+   */
+  chooseBackupDir(): Promise<BackupSettingsDTO> {
+    return call("Service.ChooseBackupDir");
   },
   /** CloudflareStatus reports local connection state without an error channel. */
   cloudflareStatus(): Promise<ConnectionDTO> {
@@ -445,7 +504,12 @@ export const Service = {
   disconnectCloudflare(): Promise<void> {
     return call("Service.DisconnectCloudflare");
   },
-  /** ExportData exports the managed deployment to a file the user picks. */
+  /**
+   * ExportData writes a backup into the configured folder. It opens no dialog:
+   * the folder is a setting, so one click is enough. The attempt is recorded so
+   * the page can show when the last backup succeeded, and old files beyond the
+   * configured keep count are removed afterwards.
+   */
   exportData(): Promise<BackupSummaryDTO | null> {
     return call("Service.ExportData");
   },
@@ -464,6 +528,10 @@ export const Service = {
   /** Install creates a new deployment. */
   install(input: InstallInputDTO): Promise<ResultDTO> {
     return call("Service.Install", input);
+  },
+  /** ListBackups lists the backups in the configured folder, newest first. */
+  listBackups(): Promise<BackupFileDTO[]> {
+    return call("Service.ListBackups");
   },
   /** ListWorkers lists Worker scripts in the connected account. */
   listWorkers(): Promise<WorkerDTO[]> {
@@ -487,6 +555,13 @@ export const Service = {
   /** Name returns the product name for the shell header. */
   name(): Promise<string> {
     return call("Service.Name");
+  },
+  /**
+   * OpenBackupFolder reveals the configured folder, creating it first so the
+   * click always lands somewhere.
+   */
+  openBackupFolder(): Promise<void> {
+    return call("Service.OpenBackupFolder");
   },
   /** PendingOperations lists unfinished journaled operations, newest first. */
   pendingOperations(): Promise<OperationDTO[]> {
@@ -543,6 +618,10 @@ export const Service = {
    */
   retryRestore(useSnapshot: boolean): Promise<void> {
     return call("Service.RetryRestore", useSnapshot);
+  },
+  /** SaveBackupSettings stores the folder and schedule the page edited. */
+  saveBackupSettings(input: BackupSettingsEditDTO): Promise<BackupSettingsDTO> {
+    return call("Service.SaveBackupSettings", input);
   },
   /**
    * SelectDeployment persists the managed Worker target in app data. The target

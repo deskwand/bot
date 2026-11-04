@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Download, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, Download, FolderOpen, Loader2, Upload } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,9 +20,19 @@ import {
 } from "@/components/ui/dialog";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { describeCode } from "@/services/errors";
 import type {
+  BackupFileDTO,
   BackupPreviewDTO,
+  BackupSettingsDTO,
+  BackupSettingsEditDTO,
   BackupSummaryDTO,
   PendingRestoreDTO,
   Progress,
@@ -90,7 +100,50 @@ export function Backup() {
   const [restoreDone, setRestoreDone] = useState(false);
   const [pending, setPending] = useState<PendingRestoreDTO | null>(null);
 
-  useEffect(() => client.subscribeBackupProgress(setProgress), [client]);
+  const [settings, setSettings] = useState<BackupSettingsDTO | null>(null);
+  const [settingsError, setSettingsError] = useState<unknown>(null);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [files, setFiles] = useState<BackupFileDTO[]>([]);
+  const [filesError, setFilesError] = useState<unknown>(null);
+
+  const refreshSettings = useCallback(async () => {
+    try {
+      setSettings(await client.backupSettings());
+      setSettingsError(null);
+    } catch (cause) {
+      setSettingsError(cause);
+    }
+  }, [client]);
+
+  const refreshFiles = useCallback(async () => {
+    try {
+      setFiles(await client.listBackups());
+      setFilesError(null);
+    } catch (cause) {
+      setFilesError(cause);
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void refreshSettings();
+    void refreshFiles();
+  }, [refreshFiles, refreshSettings]);
+
+  // "finishing" is the last phase the exporter reports, and by then the archive
+  // is renamed into place. A background auto backup produces no other signal,
+  // so without this an open page would keep saying "还没有" after one ran.
+  useEffect(
+    () =>
+      client.subscribeBackupProgress((next) => {
+        setProgress(next);
+        if (next.op === "export" && next.phase === "finishing") {
+          void refreshFiles();
+          void refreshSettings();
+        }
+      }),
+    [client, refreshFiles, refreshSettings],
+  );
 
   const refreshPending = useCallback(async () => {
     try {
@@ -112,12 +165,77 @@ export function Backup() {
     try {
       const summary = await client.exportData();
       if (summary) setExportSummary(summary);
+      await Promise.all([refreshSettings(), refreshFiles()]);
     } catch (cause) {
       setExportError(cause);
     } finally {
       setExportRunning(false);
     }
+  }, [client, refreshFiles, refreshSettings]);
+
+  const openFolder = useCallback(async () => {
+    setFolderBusy(true);
+    setSettingsError(null);
+    try {
+      await client.openBackupFolder();
+    } catch (cause) {
+      setSettingsError(cause);
+    } finally {
+      setFolderBusy(false);
+    }
   }, [client]);
+
+  const changeFolder = useCallback(async () => {
+    setFolderBusy(true);
+    setSettingsError(null);
+    try {
+      setSettings(await client.chooseBackupDir());
+      await refreshFiles();
+    } catch (cause) {
+      setSettingsError(cause);
+    } finally {
+      setFolderBusy(false);
+    }
+  }, [client, refreshFiles]);
+
+  const patchSettings = useCallback(
+    async (patch: Partial<BackupSettingsEditDTO>) => {
+      if (!settings) return;
+      const next: BackupSettingsEditDTO = {
+        dir: settings.dir,
+        auto: settings.auto,
+        intervalHours: settings.intervalHours,
+        keep: settings.keep,
+        ...patch,
+      };
+      setSavingSettings(true);
+      setSettingsError(null);
+      try {
+        setSettings(await client.saveBackupSettings(next));
+      } catch (cause) {
+        setSettingsError(cause);
+        await refreshSettings();
+      } finally {
+        setSavingSettings(false);
+      }
+    },
+    [client, refreshSettings, settings],
+  );
+
+  const restoreFile = useCallback(
+    async (path: string) => {
+      setChooseError(null);
+      setRestoreError(null);
+      setRestoreDone(false);
+      try {
+        const next = await client.chooseBackupAt(path);
+        if (next) setPreview(next);
+      } catch (cause) {
+        setChooseError(cause);
+      }
+    },
+    [client],
+  );
 
   const chooseBackup = useCallback(async () => {
     setChoosing(true);
@@ -198,7 +316,16 @@ export function Backup() {
             ) : (
               <Download aria-hidden />
             )}
-            导出到本地
+            立即备份
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void openFolder()}
+            disabled={folderBusy}
+          >
+            <FolderOpen aria-hidden />
+            打开目录
           </Button>
           <Button
             type="button"
@@ -218,6 +345,92 @@ export function Backup() {
 
       <ErrorAlert error={exportError} onRetry={exportData} retryLabel="重新导出" />
       <ErrorAlert error={chooseError} onRetry={chooseBackup} retryLabel="重新选择备份" />
+      <ErrorAlert error={settingsError} onRetry={refreshSettings} retryLabel="重新读取备份设置" />
+
+      <Card className="mt-5">
+        <CardHeader>
+          <CardTitle>备份位置</CardTitle>
+          <CardDescription>
+            每次备份都写到这里；开着客户端时按间隔自动备份。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="min-w-0 break-all font-mono text-xs" data-testid="backup-dir">
+              {settings ? settings.dir : "读取中…"}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void openFolder()}
+              disabled={folderBusy}
+            >
+              打开目录
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void changeFolder()}
+              disabled={folderBusy}
+            >
+              更改…
+            </Button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={settings?.auto ? "secondary" : "outline"}
+              aria-pressed={settings?.auto ?? false}
+              disabled={!settings || savingSettings}
+              onClick={() => void patchSettings({ auto: !settings?.auto })}
+            >
+              自动备份：{settings?.auto ? "开" : "关"}
+            </Button>
+            <Select
+              value={String(settings?.intervalHours ?? 24)}
+              onValueChange={(value) => void patchSettings({ intervalHours: Number(value) })}
+              disabled={!settings || savingSettings}
+            >
+              <SelectTrigger size="sm" className="w-32" aria-label="备份间隔">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">每 1 小时</SelectItem>
+                <SelectItem value="6">每 6 小时</SelectItem>
+                <SelectItem value="24">每 24 小时</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={String(settings?.keep ?? 5)}
+              onValueChange={(value) => void patchSettings({ keep: Number(value) })}
+              disabled={!settings || savingSettings}
+            >
+              <SelectTrigger size="sm" className="w-28" aria-label="保留份数">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">保留 1 份</SelectItem>
+                <SelectItem value="5">保留 5 份</SelectItem>
+                <SelectItem value="10">保留 10 份</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            上次成功：
+            {settings?.lastSuccessAt ? formatExportedAt(settings.lastSuccessAt) : "还没有"}
+            {settings?.lastErrorCode
+              ? ` · 最近失败：${describeCode(settings.lastErrorCode)}${
+                  settings.lastErrorMessage ? `（${settings.lastErrorMessage}）` : ""
+                }`
+              : ""}
+          </p>
+        </CardContent>
+      </Card>
 
       <Card className="mt-5">
         <CardHeader>
@@ -273,6 +486,47 @@ export function Backup() {
               <AlertDescription>{SENSITIVE_NOTICE}</AlertDescription>
             </Alert>
           ) : null}
+        </CardContent>
+      </Card>
+
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>本地备份</CardTitle>
+          <CardDescription>
+            按时间从新到旧；选一份即可恢复，不用再开文件对话框。
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ErrorAlert error={filesError} onRetry={refreshFiles} retryLabel="重新读取备份列表" />
+          {files.length === 0 ? (
+            <p className="text-sm text-muted-foreground">这个目录里还没有备份。</p>
+          ) : (
+            <ul className="space-y-2" data-testid="backup-file-list">
+              {files.map((file) => (
+                <li
+                  key={file.path}
+                  data-testid="backup-file"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-2"
+                >
+                  <div className="min-w-0">
+                    <p className="break-all font-mono text-xs">{file.name}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {formatExportedAt(file.modifiedAt)} · {formatBytes(file.bytes)}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={choosing || restoreRunning}
+                    onClick={() => void restoreFile(file.path)}
+                  >
+                    恢复这份
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
         </CardContent>
       </Card>
 
