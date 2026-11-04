@@ -1,5 +1,5 @@
 import { PageHeader } from "@/components/page-header";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -12,15 +12,11 @@ import {
 } from "@/components/ui/card";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
+import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
 import { toClientError } from "@/services/errors";
-import type {
-  ConfigDTO,
-  McpAddInput,
-  McpCatalogEntryDTO,
-  McpProbeDTO,
-  McpToolDTO,
-} from "@/services/types";
+import { useConfigQuery, useInvalidate, useMcpCatalogQuery } from "@/services/queries";
+import type { ConfigDTO, McpAddInput, McpProbeDTO, McpToolDTO } from "@/services/types";
 import { McpAddDialog } from "./McpAddDialog";
 import { McpToolList } from "./McpToolList";
 
@@ -62,15 +58,17 @@ function isAdminUnavailable(error: unknown): boolean {
 
 export function Mcp() {
   const { client } = useApp();
-  const [catalog, setCatalog] = useState<McpCatalogEntryDTO[]>([]);
+  const configQuery = useConfigQuery();
+  const catalogQuery = useMcpCatalogQuery();
+  const invalidate = useInvalidate();
+  const catalog = catalogQuery.data ?? [];
+  const ready = Boolean(configQuery.data) && !configQuery.isPlaceholder;
   const [servers, setServers] = useState<McpServerConfig[]>([]);
   const [auth, setAuth] = useState<Record<string, string>>({});
   const [probes, setProbes] = useState<Record<string, McpProbeDTO>>({});
   const [drafts, setDrafts] = useState<Record<string, McpToolDTO[]>>({});
   const [expanded, setExpanded] = useState<string[]>([]);
   const [pendingAuth, setPendingAuth] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<unknown>(null);
   const [adminError, setAdminError] = useState<unknown>(null);
   const [error, setError] = useState<unknown>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -117,34 +115,31 @@ export function Mcp() {
     [applyProbe, client],
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
+  const initialized = useRef(false);
+  const configData = configQuery.data;
+  const loading = !configData && configQuery.isFetching;
+  const loadError = configData ? null : configQuery.error;
+  const catalogError =
+    catalogQuery.error && !catalogQuery.data ? catalogQuery.error : null;
+
+  const reload = async () => {
     setAdminError(null);
     setError(null);
-    try {
-      const [config, nextCatalog] = await Promise.all([
-        client.getConfig(),
-        client.mcpCatalog(),
-      ]);
-      const list = parseServers((config as ConfigDTO).mcpServers);
-      setServers(list);
-      setCatalog(nextCatalog);
-      await refresh(list);
-    } catch (cause) {
-      if (isAdminUnavailable(cause)) {
-        setAdminError(cause);
-      } else {
-        setLoadError(cause);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [client, refresh]);
+    const result = (await configQuery.refetch()) as { data?: ConfigDTO } | undefined;
+    await catalogQuery.refetch();
+    if (result?.data) await refresh(parseServers(result.data.mcpServers));
+  };
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!configData) return;
+    setServers(parseServers(configData.mcpServers));
+  }, [configData]);
+
+  useEffect(() => {
+    if (!configData || configQuery.isPlaceholder || initialized.current) return;
+    initialized.current = true;
+    void refresh(parseServers(configData.mcpServers));
+  }, [configData, configQuery.isPlaceholder, refresh]);
 
   useEffect(() => {
     if (pendingAuth.length === 0) return;
@@ -219,8 +214,11 @@ export function Mcp() {
     setAddError(null);
     try {
       await client.addMcpServer(input);
-      const config = await client.getConfig();
-      const list = parseServers(config.mcpServers);
+      invalidate.mcp();
+      const result = (await configQuery.refetch()) as { data?: ConfigDTO } | undefined;
+      const list = result?.data
+        ? parseServers(result.data.mcpServers)
+        : servers;
       setServers(list);
       const entry = catalog.find((item) => item.id === input.catalogId);
       if (entry?.oauth || input.custom?.oauth) {
@@ -253,6 +251,7 @@ export function Mcp() {
       setServers((current) =>
         current.map((entry) => (entry.name === server.name ? next : entry)),
       );
+      invalidate.mcp();
       if (next.enabled !== false) {
         applyProbe(server.name, await client.probeMcp(server.name));
       }
@@ -285,6 +284,7 @@ export function Mcp() {
         return next;
       });
       setPendingAuth((current) => current.filter((name) => name !== server.name));
+      invalidate.mcp();
     } catch (cause) {
       setError(cause);
     } finally {
@@ -337,6 +337,7 @@ export function Mcp() {
         ...current,
         [server.name]: { ok: true, tools: tools.map((tool) => ({ ...tool })) },
       }));
+      invalidate.mcp();
     } catch (cause) {
       setError(cause);
     } finally {
@@ -354,7 +355,18 @@ export function Mcp() {
 
   const header = (
     <PageHeader title="服务" actions={<>
-<Button type="button" onClick={() => setAddOpen(true)} disabled={loading || !catalog.length}>
+      <SyncStatus
+        isFetching={configQuery.isFetching}
+        isPlaceholder={configQuery.isPlaceholder}
+        savedAt={configQuery.savedAt}
+        error={configData ? configQuery.error : null}
+        onRetry={() => void reload()}
+      />
+      <Button
+        type="button"
+        onClick={() => setAddOpen(true)}
+        disabled={loading || !catalog.length || !ready}
+      >
         <Plus aria-hidden />
         添加服务
       </Button>
@@ -382,12 +394,13 @@ export function Mcp() {
           <AlertDescription>
             <span className="block">{toClientError(adminError).message}</span>
             <span className="mt-3 flex">
-              <Button type="button" size="sm" onClick={() => void load()}>
+              <Button type="button" size="sm" onClick={() => void reload()}>
                 重试
               </Button>
             </span>
           </AlertDescription>
         </Alert>
+        <ErrorAlert error={catalogError} onRetry={() => void reload()} />
       </div>
     );
   }
@@ -396,7 +409,8 @@ export function Mcp() {
     <div>
       {header}
 
-      <ErrorAlert error={loadError} onRetry={() => void load()} />
+      <ErrorAlert error={loadError} onRetry={() => void reload()} />
+      <ErrorAlert error={catalogError} onRetry={() => void reload()} />
       <ErrorAlert error={error} />
       {enabledToolCount > TOOL_WARNING_THRESHOLD ? (
         <Alert className="my-4" data-testid="mcp-tool-warning">
@@ -478,7 +492,7 @@ export function Mcp() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        disabled={busy === server.name}
+                        disabled={!ready || busy === server.name}
                         onClick={() => void relogin(server.name)}
                       >
                         重新登录
@@ -491,7 +505,7 @@ export function Mcp() {
                       role="switch"
                       aria-checked={enabled}
                       aria-label={`${enabled ? "停用" : "启用"} ${server.name}`}
-                      disabled={busy === server.name}
+                      disabled={!ready || busy === server.name}
                       onClick={() => void toggleServer(server)}
                     >
                       {enabled ? "停用" : "启用"}
@@ -500,7 +514,7 @@ export function Mcp() {
                       type="button"
                       variant="ghost"
                       size="sm"
-                      disabled={busy === server.name}
+                      disabled={!ready || busy === server.name}
                       onClick={() => void removeServer(server)}
                     >
                       <Trash2 aria-hidden />
@@ -517,6 +531,7 @@ export function Mcp() {
                         tools={tools}
                         dirty={dirtyServers.some((entry) => entry.name === server.name)}
                         saving={savingTools === server.name}
+                        disabled={!ready}
                         onChange={(toolName, mode) =>
                           changeTool(server.name, toolName, mode)
                         }
@@ -532,7 +547,7 @@ export function Mcp() {
       )}
 
       <div className="mt-5 flex justify-end">
-        <Button type="button" variant="outline" onClick={() => void load()}>
+        <Button type="button" variant="outline" onClick={() => void reload()}>
           <RefreshCw aria-hidden />
           重新加载
         </Button>

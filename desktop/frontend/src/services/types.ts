@@ -7,6 +7,9 @@ import type {
   BackupSettingsDTO,
   BackupSettingsEditDTO,
   BackupSummaryDTO,
+  BootStateDTO,
+  CachedConfigDTO,
+  CachedStatusDTO,
   CloudflareLoginDTO,
   ConfigDTO,
   ConfigEditDTO as GeneratedConfigEditDTO,
@@ -49,6 +52,9 @@ export type {
   BackupSettingsDTO,
   BackupSettingsEditDTO,
   BackupSummaryDTO,
+  BootStateDTO,
+  CachedConfigDTO,
+  CachedStatusDTO,
   CloudflareLoginDTO,
   ConfigDTO,
   ConnectionDTO,
@@ -118,6 +124,7 @@ export interface ClientService {
   name(): Promise<string>;
   theme(): Promise<ThemeSource>;
   setTheme(source: ThemeSource): Promise<void>;
+  bootState(): Promise<BootStateDTO>;
   cloudflareStatus(): Promise<ConnectionDTO>;
   startCloudflareLogin(): Promise<string>;
   cancelCloudflareLogin(opId: string): Promise<void>;
@@ -133,6 +140,7 @@ export interface ClientService {
   upgrade(): Promise<ResultDTO>;
   checkClientUpdates(): Promise<void>;
   getConfig(): Promise<ConfigDTO>;
+  cachedConfig(): Promise<CachedConfigDTO>;
   modelCatalog(): Promise<ModelCatalogDTO>;
   mcpCatalog(): Promise<McpCatalogEntryDTO[]>;
   addMcpServer(input: McpAddInput): Promise<ResultDTO>;
@@ -155,6 +163,7 @@ export interface ClientService {
   connectTelegram(token: string): Promise<ResultDTO>;
   selectEntry(channel: string): Promise<EntryResultDTO>;
   status(): Promise<StatusItemDTO[]>;
+  cachedStatus(): Promise<CachedStatusDTO>;
   exportDiagnostics(): Promise<string>;
   probeModel(
     provider: string,

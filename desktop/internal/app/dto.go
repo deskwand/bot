@@ -24,6 +24,16 @@ type ConnectionDTO struct {
 	AccountName string `json:"accountName,omitempty"`
 }
 
+// BootStateDTO is the local-only state the app needs to pick its first
+// screen. It is computed without any Cloudflare request.
+type BootStateDTO struct {
+	Connection     ConnectionDTO  `json:"connection"`
+	TargetSelected bool           `json:"targetSelected"`
+	TargetMismatch bool           `json:"targetMismatch"`
+	TargetName     string         `json:"targetName"`
+	Pending        []OperationDTO `json:"pending"`
+}
+
 // CloudflareLoginDTO is the only OAuth login state sent to the frontend. It
 // carries no token, authorization code or PKCE verifier.
 type CloudflareLoginDTO struct {
@@ -146,6 +156,20 @@ func (s SecretEditDTO) LogValue() slog.Value {
 		attrs = append(attrs, slog.String("value", "<redacted>"))
 	}
 	return slog.GroupValue(attrs...)
+}
+
+// CachedConfigDTO is the last config written to the local snapshot cache. An
+// absent cache is a nil Data and an empty SavedAt.
+type CachedConfigDTO struct {
+	Data    *ConfigDTO `json:"data"`
+	SavedAt string     `json:"savedAt"`
+}
+
+// CachedStatusDTO is the last status written to the local snapshot cache. An
+// absent cache is a nil Data and an empty SavedAt.
+type CachedStatusDTO struct {
+	Data    []StatusItemDTO `json:"data"`
+	SavedAt string          `json:"savedAt"`
 }
 
 // ConfigEditDTO is the 保存并发布 input. A nil owner or model means unchanged;

@@ -57,6 +57,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	cache, err := app.NewFileSnapshotCache(dataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
 	// Before Run, so the first paint is already in the saved appearance.
 	savedTheme, themeErr := themes.Theme()
 	if themeErr != nil {
@@ -110,6 +114,7 @@ func main() {
 		Journal:     journal,
 		Store:       targets,
 		Theme:       themes,
+		Cache:       cache,
 		ApplyTheme:  func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) },
 		Browser:     platform.NewSystemBrowserOpener(),
 		McpBrowser:  platform.NewMcpOAuthBrowserOpener(),

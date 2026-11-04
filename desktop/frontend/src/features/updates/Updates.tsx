@@ -22,6 +22,7 @@ import {
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StateBadge, StepList } from "@/components/feedback";
 import { describeCode } from "@/services/errors";
+import { useInvalidate } from "@/services/queries";
 import type {
   ResultDTO,
   UpgradeDTO,
@@ -31,6 +32,7 @@ declare const __APP_VERSION__: string;
 
 export function Updates() {
   const { client, navigateImport } = useApp();
+  const invalidate = useInvalidate();
   const [upgrade, setUpgrade] = useState<UpgradeDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
@@ -80,6 +82,7 @@ export function Updates() {
     try {
       const upgraded = await client.upgrade();
       setResult(upgraded);
+      invalidate.configAndStatus();
       await load();
     } catch (cause) {
       setRunError(cause);
@@ -177,7 +180,10 @@ export function Updates() {
                     setRunning(true);
                     void client
                       .resumeOperation(result.operationId)
-                      .then(setResult)
+                      .then((resumed) => {
+                        setResult(resumed);
+                        invalidate.configAndStatus();
+                      })
                       .catch(setRunError)
                       .finally(() => setRunning(false));
                   }}

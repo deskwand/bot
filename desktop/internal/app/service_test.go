@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -253,6 +255,7 @@ func (f *fakeEntries) SelectEntry(_ context.Context, _ domain.Target, channel st
 }
 
 type fakeStatus struct {
+	calls     int
 	report    DiagnosticsReport
 	reportErr error
 	export    []byte
@@ -260,6 +263,7 @@ type fakeStatus struct {
 }
 
 func (f *fakeStatus) Status(context.Context, domain.Target) (DiagnosticsReport, error) {
+	f.calls++
 	return f.report, f.reportErr
 }
 
@@ -268,20 +272,24 @@ func (f *fakeStatus) ExportDiagnostics(context.Context, domain.Target) ([]byte, 
 }
 
 type fakeSnapshots struct {
+	calls    int
 	snapshot domain.Snapshot
 	err      error
 }
 
 func (f *fakeSnapshots) ReadSnapshot(context.Context, domain.Target) (domain.Snapshot, error) {
+	f.calls++
 	return f.snapshot, f.err
 }
 
 type fakeScripts struct {
+	calls   int
 	scripts []cloudflare.ScriptSummary
 	err     error
 }
 
 func (f *fakeScripts) ListScripts(context.Context, string) ([]cloudflare.ScriptSummary, error) {
+	f.calls++
 	return f.scripts, f.err
 }
 
@@ -377,6 +385,8 @@ type serviceFixture struct {
 	store       *fakeStore
 	browser     *fakeBrowser
 	release     *fakeRelease
+	dataDir     string
+	cache       *FileSnapshotCache
 	service     *Service
 	emitted     chan LoginStatusDTO
 }
@@ -411,6 +421,12 @@ func newServiceFixture(t *testing.T) *serviceFixture {
 		},
 		emitted: make(chan LoginStatusDTO, 8),
 	}
+	f.dataDir = t.TempDir()
+	cache, err := NewFileSnapshotCache(f.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.cache = cache
 	f.service = NewService(ServiceOptions{
 		Auth:        f.auth,
 		Publish:     f.publish,
@@ -423,6 +439,7 @@ func newServiceFixture(t *testing.T) *serviceFixture {
 		Store:       f.store,
 		Browser:     f.browser,
 		Release:     f.release,
+		Cache:       f.cache,
 		EmitLoginStatus: func(status LoginStatusDTO) {
 			f.emitted <- status
 		},
@@ -658,6 +675,275 @@ func TestServiceGetConfigSummarizesAndOmitsRawConfig(t *testing.T) {
 		}
 	}
 	assertNoSentinel(t, serviceConfigValue, config)
+}
+
+type failingSnapshotCache struct {
+	saveErr error
+}
+
+func (f failingSnapshotCache) LoadConfig(domain.Target) (ConfigDTO, time.Time, bool) {
+	return ConfigDTO{}, time.Time{}, false
+}
+
+func (f failingSnapshotCache) SaveConfig(domain.Target, ConfigDTO, time.Time) error {
+	return f.saveErr
+}
+
+func (f failingSnapshotCache) LoadStatus(domain.Target) ([]StatusItemDTO, time.Time, bool) {
+	return nil, time.Time{}, false
+}
+
+func (f failingSnapshotCache) SaveStatus(domain.Target, []StatusItemDTO, time.Time) error {
+	return f.saveErr
+}
+
+func (f failingSnapshotCache) Clear() error { return f.saveErr }
+
+func TestGetConfigWritesCache(t *testing.T) {
+	f := newServiceFixture(t)
+	config, err := f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := f.service.CachedConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.Data == nil {
+		t.Fatal("config was not cached")
+	}
+	if !reflect.DeepEqual(*cached.Data, config) {
+		t.Fatalf("cached = %#v, want %#v", *cached.Data, config)
+	}
+	want := formatTime(f.service.now())
+	if cached.SavedAt != want {
+		t.Fatalf("savedAt = %q, want %q", cached.SavedAt, want)
+	}
+}
+
+func TestGetConfigFailureKeepsCache(t *testing.T) {
+	f := newServiceFixture(t)
+	if _, err := f.service.GetConfig(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := f.service.CachedConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.snapshots.err = errors.New("cloud unavailable")
+	if _, err := f.service.GetConfig(); err == nil {
+		t.Fatal("expected GetConfig to fail")
+	}
+	cached, err := f.service.CachedConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.Data == nil || !reflect.DeepEqual(*cached.Data, *first.Data) {
+		t.Fatalf("cached = %#v", cached)
+	}
+}
+
+func TestGetConfigSchemaErrorDoesNotWrite(t *testing.T) {
+	f := newServiceFixture(t)
+	f.snapshots.snapshot.ConfigJSON = []byte("{not json")
+	if _, err := f.service.GetConfig(); !hasCode(err, domain.UNSUPPORTED_SCHEMA) {
+		t.Fatalf("error = %v, want %s", err, domain.UNSUPPORTED_SCHEMA)
+	}
+	cached, err := f.service.CachedConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.Data != nil {
+		t.Fatalf("schema error wrote cache: %#v", cached)
+	}
+}
+
+func TestStatusWritesCache(t *testing.T) {
+	f := newServiceFixture(t)
+	f.diagnostics.report = DiagnosticsReport{Items: []diagnostics.StatusItem{{
+		Kind: "worker", State: "ok", Source: "cloudflare", ObservedAt: "2026-11-04T00:00:00Z", Detail: "部署正常",
+	}}}
+	items, err := f.service.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := f.service.CachedStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cached.Data, items) {
+		t.Fatalf("cached = %#v, want %#v", cached.Data, items)
+	}
+	if want := formatTime(f.service.now()); cached.SavedAt != want {
+		t.Fatalf("savedAt = %q, want %q", cached.SavedAt, want)
+	}
+}
+
+func TestCachedConfigEmpty(t *testing.T) {
+	f := newServiceFixture(t)
+	cached, err := f.service.CachedConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.Data != nil || cached.SavedAt != "" {
+		t.Fatalf("cached = %#v", cached)
+	}
+}
+
+func TestCachedConfigOtherAccount(t *testing.T) {
+	f := newServiceFixture(t)
+	if _, err := f.service.GetConfig(); err != nil {
+		t.Fatal(err)
+	}
+	f.auth.connection = auth.Connection{State: auth.StateConnected, AccountID: strings.Repeat("b", 32)}
+	cached, err := f.service.CachedConfig()
+	if !hasCode(err, CodeAccountMismatch) {
+		t.Fatalf("error = %v, want %s", err, CodeAccountMismatch)
+	}
+	if cached.Data != nil {
+		t.Fatalf("cached data leaked across accounts: %#v", cached)
+	}
+}
+
+func TestDisconnectClearsCache(t *testing.T) {
+	f := newServiceFixture(t)
+	if _, err := f.service.GetConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.DisconnectCloudflare(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.dataDir, "cache")); !os.IsNotExist(err) {
+		t.Fatalf("cache directory still exists: %v", err)
+	}
+}
+
+func TestCacheWriteFailureDoesNotFailGetConfig(t *testing.T) {
+	f := newServiceFixture(t)
+	f.service.cache = failingSnapshotCache{saveErr: errors.New("disk full")}
+	config, err := f.service.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig failed on cache write: %v", err)
+	}
+	if config.Fingerprint != "fingerprint-1" {
+		t.Fatalf("config = %#v", config)
+	}
+}
+
+func assertNoLocalCalls(t *testing.T, f *serviceFixture) {
+	t.Helper()
+	if f.snapshots.calls != 0 || f.diagnostics.calls != 0 || f.scripts.calls != 0 {
+		t.Fatalf("BootState used the network: snapshots=%d status=%d scripts=%d",
+			f.snapshots.calls, f.diagnostics.calls, f.scripts.calls)
+	}
+}
+
+func TestBootStateConnectedWithTarget(t *testing.T) {
+	f := newServiceFixture(t)
+	state, err := f.service.BootState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Connection.State != auth.StateConnected || state.Connection.AccountID != serviceAccountID {
+		t.Fatalf("connection = %#v", state.Connection)
+	}
+	if !state.TargetSelected || state.TargetMismatch {
+		t.Fatalf("target flags = selected:%v mismatch:%v", state.TargetSelected, state.TargetMismatch)
+	}
+	if state.TargetName != serviceWorkerName {
+		t.Fatalf("target name = %q, want %q", state.TargetName, serviceWorkerName)
+	}
+	if state.Pending == nil || len(state.Pending) != 0 {
+		t.Fatalf("pending = %#v", state.Pending)
+	}
+	assertNoLocalCalls(t, f)
+}
+
+func TestBootStateNoTarget(t *testing.T) {
+	f := newServiceFixture(t)
+	f.store.ok = false
+	state, err := f.service.BootState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.TargetSelected || state.TargetMismatch {
+		t.Fatalf("target flags = selected:%v mismatch:%v", state.TargetSelected, state.TargetMismatch)
+	}
+	assertNoLocalCalls(t, f)
+}
+
+func TestBootStateTargetOtherAccount(t *testing.T) {
+	f := newServiceFixture(t)
+	f.store.target = domain.Target{AccountID: strings.Repeat("b", 32), ScriptName: serviceWorkerName}
+	state, err := f.service.BootState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.TargetMismatch || state.TargetSelected {
+		t.Fatalf("target flags = selected:%v mismatch:%v", state.TargetSelected, state.TargetMismatch)
+	}
+	assertNoLocalCalls(t, f)
+}
+
+func TestBootStateDisconnected(t *testing.T) {
+	f := newServiceFixture(t)
+	f.auth.connection = auth.Connection{State: auth.StateDisconnected}
+	state, err := f.service.BootState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Connection.State != auth.StateDisconnected {
+		t.Fatalf("connection = %#v", state.Connection)
+	}
+	if state.TargetSelected || state.TargetMismatch {
+		t.Fatalf("target flags = selected:%v mismatch:%v", state.TargetSelected, state.TargetMismatch)
+	}
+	if state.Pending == nil || len(state.Pending) != 0 {
+		t.Fatalf("pending = %#v", state.Pending)
+	}
+	assertNoLocalCalls(t, f)
+}
+
+func TestBootStateReauthRequired(t *testing.T) {
+	f := newServiceFixture(t)
+	f.auth.connection = auth.Connection{State: auth.StateReauthRequired}
+	state, err := f.service.BootState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Connection.State != auth.StateReauthRequired {
+		t.Fatalf("connection = %#v", state.Connection)
+	}
+	if state.TargetSelected || state.TargetMismatch {
+		t.Fatalf("target flags = selected:%v mismatch:%v", state.TargetSelected, state.TargetMismatch)
+	}
+	if state.Pending == nil || len(state.Pending) != 0 {
+		t.Fatalf("pending = %#v", state.Pending)
+	}
+	assertNoLocalCalls(t, f)
+}
+
+func TestBootStateFiltersPending(t *testing.T) {
+	f := newServiceFixture(t)
+	now := time.Unix(1700000000, 0).UTC()
+	for _, record := range []deployment.OperationRecord{
+		{OperationID: "op-mine", Target: domain.Target{AccountID: serviceAccountID, ScriptName: serviceWorkerName}, State: deployment.StateUnknown, UpdatedAt: now.Add(2 * time.Minute)},
+		{OperationID: "op-other", Target: domain.Target{AccountID: strings.Repeat("b", 32), ScriptName: "other"}, State: deployment.StateUnknown, UpdatedAt: now.Add(time.Minute)},
+		{OperationID: "op-anon", Target: domain.Target{ScriptName: "anon"}, State: deployment.StateUnknown, UpdatedAt: now},
+	} {
+		f.journal.records[record.OperationID] = record
+	}
+	state, err := f.service.BootState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Pending) != 2 {
+		t.Fatalf("pending = %#v", state.Pending)
+	}
+	if state.Pending[0].OperationID != "op-mine" || state.Pending[1].OperationID != "op-anon" {
+		t.Fatalf("pending order = %#v", state.Pending)
+	}
+	assertNoLocalCalls(t, f)
 }
 
 func TestServicePreviewAndPublishConfigRedactSecrets(t *testing.T) {

@@ -1,4 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import {
   Activity,
   Archive,
@@ -25,8 +26,8 @@ import { AppContext, PAGE_LABELS, type Page } from "@/components/app-context";
 import { CloudflareAccountCard } from "@/components/cloudflare-account";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { ErrorAlert, StepList, StateBadge } from "@/components/feedback";
-import { toClientError } from "@/services/errors";
-import type { ClientService, ConnectionDTO, OperationDTO } from "@/services/types";
+import { createAppQueryClient } from "@/services/queries";
+import type { ClientService, OperationDTO } from "@/services/types";
 import { useUiStore } from "@/store/ui";
 import { Diagnostics } from "@/features/diagnostics/Diagnostics";
 import { Backup } from "@/features/backup/Backup";
@@ -44,7 +45,7 @@ type Session =
   | { kind: "loading" }
   | { kind: "disconnected"; connectionError?: unknown }
   | { kind: "choose" }
-  | { kind: "ready"; bootError?: unknown };
+  | { kind: "ready" };
 
 const NAV: { page: Page; icon: typeof LayoutDashboard }[] = [
   { page: "overview", icon: LayoutDashboard },
@@ -57,6 +58,9 @@ const NAV: { page: Page; icon: typeof LayoutDashboard }[] = [
 ];
 
 export function App({ client }: { client: ClientService }) {
+  const refreshRef = useRef<(showLoading?: boolean) => Promise<void>>(async () => {});
+  const [queryClient] = useState(() => createAppQueryClient(() => void refreshRef.current(false)));
+  const scopeRef = useRef<string | null>(null);
   const [session, setSession] = useState<Session>({ kind: "loading" });
   const [productName, setProductName] = useState("DeskWand Bot");
   const [pending, setPending] = useState<OperationDTO[]>([]);
@@ -71,14 +75,22 @@ export function App({ client }: { client: ClientService }) {
       if (showLoading) setSession({ kind: "loading" });
       try {
         client.name().then(setProductName).catch(() => undefined);
-        let connection: ConnectionDTO;
-        try {
-          connection = await client.cloudflareStatus();
-        } catch (error) {
-          setSession({ kind: "disconnected", connectionError: error });
-          setPending([]);
-          return;
+        const boot = await client.bootState();
+        const connection = boot.connection;
+        const scope =
+          connection.state === "connected"
+            ? `${connection.accountId ?? ""}:${boot.targetName}`
+            : "disconnected";
+        if (scopeRef.current !== null && scopeRef.current !== scope) {
+          // Cached queries are keyed only by resource, so a different account
+          // or deployment must not inherit the previous one's data. Unmount the
+          // old shell before dropping what its pages are showing.
+          await queryClient.cancelQueries();
+          setSession({ kind: "loading" });
+          queryClient.clear();
         }
+        scopeRef.current = scope;
+        setPending(boot.pending);
         if (connection.state !== "connected") {
           // An expired authorization is not the same as never having
           // connected: say so, and keep the account name so the welcome page
@@ -96,34 +108,22 @@ export function App({ client }: { client: ClientService }) {
                   )
                 : undefined;
           setSession({ kind: "disconnected", connectionError });
-          setPending([]);
           return;
         }
-        const operations = await client.pendingOperations().catch(() => []);
-        // The journal outlives a sign-out, so it can still hold operations for
-        // a previously connected account. Those cannot be resumed here.
-        setPending(
-          operations.filter((item) => !item.accountId || item.accountId === connection.accountId),
+        setSession(
+          boot.targetSelected && !boot.targetMismatch
+            ? { kind: "ready" }
+            : { kind: "choose" },
         );
-        try {
-          await client.getConfig();
-          setSession({ kind: "ready" });
-        } catch (error) {
-          const code = toClientError(error).code;
-          if (code === "TARGET_NOT_SELECTED") {
-            setSession({ kind: "choose" });
-          } else {
-            setSession({ kind: "ready", bootError: error });
-          }
-        }
       } catch (error) {
-        setSession({ kind: "disconnected" });
+        setSession({ kind: "disconnected", connectionError: error });
+        setPending([]);
         setDirtyState(false);
-        void error;
       }
     },
-    [client],
+    [client, queryClient],
   );
+  refreshRef.current = refresh;
 
   useEffect(() => {
     void refresh(true);
@@ -161,6 +161,7 @@ export function App({ client }: { client: ClientService }) {
 
   const resume = async (operation: OperationDTO) => {
     const result = await client.resumeOperation(operation.operationId);
+    void queryClient.invalidateQueries();
     if (result.state === "published") {
       setPending((current) => current.filter((item) => item.operationId !== operation.operationId));
       await refresh();
@@ -170,6 +171,7 @@ export function App({ client }: { client: ClientService }) {
 
   const abandon = async (operation: OperationDTO) => {
     const result = await client.abandonOperation(operation.operationId);
+    void queryClient.invalidateQueries();
     if (result.state === "cancelled") {
       setPending((current) => current.filter((item) => item.operationId !== operation.operationId));
     }
@@ -188,7 +190,8 @@ export function App({ client }: { client: ClientService }) {
   const shell = session.kind === "ready";
 
   return (
-    <AppContext.Provider value={appValue}>
+    <QueryClientProvider client={queryClient}>
+      <AppContext.Provider value={appValue}>
       <div className="min-h-svh bg-muted/40 text-foreground">
         <div className="mx-auto flex min-h-svh max-w-7xl flex-col md:flex-row">
           {shell ? (
@@ -260,6 +263,7 @@ export function App({ client }: { client: ClientService }) {
                 onSessionChange={() => refresh(false)}
                 onReady={() => {
                   setSetupImport(false);
+                  void queryClient.invalidateQueries();
                   void refresh(false);
                 }}
               />
@@ -277,7 +281,7 @@ export function App({ client }: { client: ClientService }) {
                   key={page}
                   className="animate-in fade-in-0 slide-in-from-bottom-1 duration-150 motion-reduce:animate-none"
                 >
-                  {page === "overview" ? <Overview initialError={session.bootError} /> : null}
+                  {page === "overview" ? <Overview /> : null}
                   {page === "models" ? <Models /> : null}
                   {page === "mcp" ? <Mcp /> : null}
                   {page === "entries" ? (
@@ -322,7 +326,8 @@ export function App({ client }: { client: ClientService }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </AppContext.Provider>
+      </AppContext.Provider>
+    </QueryClientProvider>
   );
 }
 

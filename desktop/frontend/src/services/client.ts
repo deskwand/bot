@@ -10,6 +10,7 @@ export function createProductionClient(): ClientService {
     // anything but the three sources before it can be stored.
     theme: async () => (await Service.theme()) as ThemeSource,
     setTheme: (source) => Service.setTheme(source),
+    bootState: () => Service.bootState(),
     cloudflareStatus: () => Service.cloudflareStatus(),
     startCloudflareLogin: () => Service.startCloudflareLogin(),
     cancelCloudflareLogin: (opId) => Service.cancelCloudflareLogin(opId),
@@ -25,6 +26,7 @@ export function createProductionClient(): ClientService {
     upgrade: () => Service.upgrade(),
     checkClientUpdates: () => Service.checkClientUpdates(),
     getConfig: () => Service.getConfig(),
+    cachedConfig: () => Service.cachedConfig(),
     modelCatalog: () => Service.modelCatalog(),
     mcpCatalog: () => Service.mcpCatalog(),
     addMcpServer: (input) => Service.addMcpServer(input),
@@ -44,6 +46,7 @@ export function createProductionClient(): ClientService {
     connectTelegram: (token) => Service.connectTelegram(token),
     selectEntry: (channel) => Service.selectEntry(channel),
     status: () => Service.status(),
+    cachedStatus: () => Service.cachedStatus(),
     exportDiagnostics: () => Service.exportDiagnostics(),
     probeModel: (provider, model, key, api, baseUrl) =>
       Service.probeModel(provider, model, key, api, baseUrl),

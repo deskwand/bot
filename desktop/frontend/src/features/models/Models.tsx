@@ -30,8 +30,10 @@ import {
 } from "@/components/ui/select";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StateBadge, StatusRow, StepList } from "@/components/feedback";
+import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
 import { toClientError } from "@/services/errors";
+import { useConfigQuery, useInvalidate, useModelCatalogQuery } from "@/services/queries";
 import type {
   ConfigDTO,
   ConfigEditDTO,
@@ -113,16 +115,18 @@ function customDraftError(
 
 export function Models() {
   const { client } = useApp();
-  const [config, setConfig] = useState<ConfigDTO | null>(null);
-  const [catalog, setCatalog] = useState<ModelCatalogDTO | null>(null);
+  const configQuery = useConfigQuery();
+  const catalogQuery = useModelCatalogQuery();
+  const invalidate = useInvalidate();
+  const catalog = catalogQuery.data ?? null;
+  const [baseline, setBaseline] = useState<ConfigDTO | null>(null);
+  const config = baseline ?? configQuery.data ?? null;
   const [customProviders, setCustomProviders] = useState<CustomProviderDTO[]>([]);
   const [butler, setButler] = useState(modelKey(DEFAULT_MODEL));
   const [task, setTask] = useState(modelKey(DEFAULT_MODEL));
   const [keyDrafts, setKeyDrafts] = useState<
     Record<string, { value: string; clear: boolean }>
   >({});
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<unknown>(null);
   const [error, setError] = useState<unknown>(null);
   const [conflict, setConflict] = useState(false);
   const [running, setRunning] = useState<"preview" | "publish" | "probe" | null>(null);
@@ -136,33 +140,53 @@ export function Models() {
   const [probeError, setProbeError] = useState<{ provider: string; error: unknown } | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [customDraft, setCustomDraft] = useState<CustomDraft | null>(null);
+  // Remounts the form rows after a publish so transient UI (open details) does
+  // not outlive the config it was showing.
+  const [formVersion, setFormVersion] = useState(0);
+  // The publish result has no fingerprint, so the form stays locked until the
+  // invalidated config fetch confirms the new baseline.
+  const [awaitingFreshConfig, setAwaitingFreshConfig] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
+  const fillFromConfig = useCallback((next: ConfigDTO) => {
+    setCustomProviders(next.customProviders ?? []);
+    setButler(modelKey(next.butlerModel) || modelKey(DEFAULT_MODEL));
+    setTask(modelKey(next.taskModel) || modelKey(DEFAULT_MODEL));
+    setKeyDrafts({});
+  }, []);
+
+  const applyConfig = (next: ConfigDTO) => {
+    setBaseline(next);
+    fillFromConfig(next);
+    setAwaitingFreshConfig(false);
     setError(null);
     setConflict(false);
-    try {
-      const [next, nextCatalog] = await Promise.all([
-        client.getConfig(),
-        client.modelCatalog(),
-      ]);
-      setConfig(next);
-      setCatalog(nextCatalog);
-      setCustomProviders(next.customProviders ?? []);
-      setButler(modelKey(next.butlerModel) || modelKey(DEFAULT_MODEL));
-      setTask(modelKey(next.taskModel) || modelKey(DEFAULT_MODEL));
-      setKeyDrafts({});
-    } catch (cause) {
-      setLoadError(cause);
-    } finally {
-      setLoading(false);
-    }
-  }, [client]);
+  };
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const applyFreshConfig = async (): Promise<ConfigDTO | undefined> => {
+    const fresh = await configQuery.refetch();
+    // A failed refetch still carries the previous data in v5; adopting it would
+    // restore the pre-publish fingerprint, so keep the form locked instead.
+    if (fresh.status !== "success" || !fresh.data) {
+      setError(fresh.error ?? null);
+      return undefined;
+    }
+    applyConfig(fresh.data);
+    return fresh.data;
+  };
+
+  const refresh = async () => {
+    setError(null);
+    setConflict(false);
+    await configQuery.refetch();
+    await catalogQuery.refetch();
+  };
+
+  const reload = async () => {
+    setError(null);
+    setConflict(false);
+    await applyFreshConfig();
+    await catalogQuery.refetch();
+  };
 
   const options = useMemo(
     () => providerOptions(catalog ?? { providers: [] }, customProviders),
@@ -218,19 +242,64 @@ export function Models() {
   };
 
   const dirty = useMemo(() => {
-    if (!config) return false;
+    if (!baseline) return false;
     const keysDirty = keyProviders.some(({ id }) => {
       const draft = keyDrafts[id];
       return Boolean(draft && (draft.value.length > 0 || draft.clear));
     });
     return (
       keysDirty ||
-      modelKey(config.butlerModel) !== butler ||
-      modelKey(config.taskModel) !== task ||
-      JSON.stringify(config.customProviders ?? []) !== JSON.stringify(customProviders)
+      modelKey(baseline.butlerModel) !== butler ||
+      modelKey(baseline.taskModel) !== task ||
+      JSON.stringify(baseline.customProviders ?? []) !== JSON.stringify(customProviders)
     );
-  }, [butler, config, customProviders, keyDrafts, keyProviders, task]);
+  }, [baseline, butler, customProviders, keyDrafts, keyProviders, task]);
   useDirty(dirty);
+
+  useEffect(() => {
+    if (awaitingFreshConfig) return;
+    const next = configQuery.data;
+    if (!next) return;
+    if (configQuery.isPlaceholder) {
+      // Read-only preview from the disk cache; it must never seed the form's
+      // baseline or the fingerprint sent with a publish.
+      if (!baseline) fillFromConfig(next);
+      return;
+    }
+    if (!baseline || (!dirty && next.fingerprint !== baseline.fingerprint)) {
+      setBaseline(next);
+      fillFromConfig(next);
+    }
+  }, [
+    awaitingFreshConfig,
+    baseline,
+    configQuery.data,
+    configQuery.isPlaceholder,
+    dirty,
+    fillFromConfig,
+  ]);
+
+  const cloudUpdated = Boolean(
+    baseline &&
+      dirty &&
+      configQuery.data &&
+      !configQuery.isPlaceholder &&
+      configQuery.data.fingerprint !== baseline.fingerprint,
+  );
+
+  const loadLatest = () => {
+    const next = configQuery.data;
+    if (!next || configQuery.isPlaceholder) return;
+    applyConfig(next);
+  };
+
+  const loadError =
+    !configQuery.data && configQuery.error
+      ? configQuery.error
+      : !catalogQuery.data && catalogQuery.error
+        ? catalogQuery.error
+        : null;
+  const loading = !configQuery.data && configQuery.isFetching;
 
   const edit = (): ConfigEditDTO => {
     const secrets: SecretEditDTO[] = [];
@@ -244,9 +313,9 @@ export function Models() {
       }
     }
     const customChanged =
-      JSON.stringify(config?.customProviders ?? []) !== JSON.stringify(customProviders);
+      JSON.stringify(baseline?.customProviders ?? []) !== JSON.stringify(customProviders);
     return {
-      baseFingerprint: config?.fingerprint,
+      baseFingerprint: baseline?.fingerprint,
       butlerModel: parseModelKey(butler) ?? undefined,
       taskModel: parseModelKey(task) ?? undefined,
       customProviders: customChanged ? customProviders : undefined,
@@ -338,7 +407,12 @@ export function Models() {
           ? "配置已发布。"
           : "发布未完成，可继续。",
       );
-      await load();
+      setKeyDrafts({});
+      setAwaitingFreshConfig(true);
+      setBaseline(null);
+      setFormVersion((current) => current + 1);
+      invalidate.config();
+      await applyFreshConfig();
     } catch (cause) {
       setPreviewOpen(false);
       if (toClientError(cause).code === "CONFIG_CONFLICT") setConflict(true);
@@ -356,7 +430,12 @@ export function Models() {
     setError(null);
     try {
       setResult(await client.resumeOperation(result.operationId));
-      await load();
+      setKeyDrafts({});
+      setAwaitingFreshConfig(true);
+      setBaseline(null);
+      setFormVersion((current) => current + 1);
+      invalidate.config();
+      await applyFreshConfig();
     } catch (cause) {
       setError(cause);
     } finally {
@@ -411,14 +490,34 @@ export function Models() {
   return (
     <div>
       <PageHeader title="模型" actions={<>
-<Badge variant="outline">
+        <SyncStatus
+          isFetching={configQuery.isFetching}
+          isPlaceholder={configQuery.isPlaceholder}
+          savedAt={configQuery.savedAt}
+          error={configQuery.data ? configQuery.error : null}
+          onRetry={() => void (awaitingFreshConfig ? reload() : refresh())}
+        />
+        <Badge variant="outline">
           <ShieldCheck aria-hidden />
           密钥不回显
         </Badge>
 </>} />
 
-      <ErrorAlert error={loadError} onRetry={load} />
-      <ErrorAlert error={error} onReload={conflict ? load : undefined} reloadLabel="重新加载配置" onRetry={!conflict ? openPreview : undefined} />
+      <ErrorAlert error={loadError} onRetry={() => void reload()} />
+      <ErrorAlert error={error} onReload={conflict ? () => void reload() : undefined} reloadLabel="重新加载配置" onRetry={!conflict ? openPreview : undefined} />
+      {cloudUpdated ? (
+        <Alert className="my-4" role="status">
+          <AlertTitle className="flex flex-wrap items-center justify-between gap-2">
+            <span>云端配置已更新</span>
+            <Button type="button" size="sm" variant="outline" onClick={loadLatest}>
+              载入最新
+            </Button>
+          </AlertTitle>
+          <AlertDescription>
+            后台刷新发现了新版本，你的修改没有被覆盖。
+          </AlertDescription>
+        </Alert>
+      ) : null}
       {success ? (
         <Alert className="my-4 border-emerald-300 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20">
           <AlertTitle>已提交</AlertTitle>
@@ -457,6 +556,13 @@ export function Models() {
         </Card>
       ) : null}
 
+      <fieldset
+        disabled={
+          baseline === null ||
+          (result !== null && (result.state === "unknown" || result.state === "needs_input"))
+        }
+        className="m-0 min-w-0 border-0 p-0"
+      >
       <section className="mt-5" aria-labelledby="role-models-title">
         <h2 id="role-models-title" className="mb-4 text-base font-medium">角色模型</h2>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -500,7 +606,7 @@ export function Models() {
                     probeError?.provider === provider.id ? probeError.error : null;
                   return (
                     <div
-                      key={provider.id}
+                      key={`${provider.id}-${formVersion}`}
                       data-testid={`model-key-row-${provider.id}`}
                       className="rounded-md border border-border p-3"
                     >
@@ -669,12 +775,23 @@ export function Models() {
         </CardContent>
       </Card>
 
+      </fieldset>
+
       <div className="mt-5 flex flex-wrap justify-end gap-2">
-        <Button type="button" variant="outline" onClick={() => void load()} disabled={running !== null}>
+        <Button type="button" variant="outline" onClick={() => void reload()} disabled={running !== null}>
           <RefreshCw aria-hidden />
           重新加载
         </Button>
-        <Button type="button" onClick={() => void openPreview()} disabled={running !== null || dirty === false}>
+        <Button
+          type="button"
+          onClick={() => void openPreview()}
+          disabled={
+            running !== null ||
+            !dirty ||
+            baseline === null ||
+            (result !== null && (result.state === "unknown" || result.state === "needs_input"))
+          }
+        >
           {running === "preview" ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <Save aria-hidden />}
           {running === "preview" ? "正在生成预览…" : "保存并发布"}
         </Button>

@@ -1,6 +1,6 @@
 import { PageHeader } from "@/components/page-header";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, Loader2, RefreshCw, Stethoscope, Zap } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Download, Loader2, Stethoscope, Zap } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,8 +16,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StatusRow } from "@/components/feedback";
+import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
-import type { ModelCatalogDTO, StatusItemDTO } from "@/services/types";
+import { useModelCatalogQuery, useStatusQuery } from "@/services/queries";
+import type { StatusItemDTO } from "@/services/types";
 import {
   DEFAULT_MODEL,
   modelKey,
@@ -28,10 +30,17 @@ import { ModelSelect } from "@/features/models/ModelSelect";
 
 export function Diagnostics() {
   const { client } = useApp();
-  const [items, setItems] = useState<StatusItemDTO[]>([]);
-  const [catalog, setCatalog] = useState<ModelCatalogDTO | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<unknown>(null);
+  const statusQuery = useStatusQuery();
+  const catalogQuery = useModelCatalogQuery();
+  const items = statusQuery.data ?? [];
+  const catalog = catalogQuery.data ?? null;
+  const loading = !statusQuery.data && statusQuery.isFetching;
+  const error =
+    statusQuery.error && !statusQuery.data
+      ? statusQuery.error
+      : catalogQuery.error && !catalogQuery.data
+        ? catalogQuery.error
+        : null;
   const [exportRunning, setExportRunning] = useState(false);
   const [exportMessage, setExportMessage] = useState("");
   const [exportError, setExportError] = useState<unknown>(null);
@@ -44,22 +53,10 @@ export function Diagnostics() {
   const [probeError, setProbeError] = useState<unknown>(null);
   useDirty(probeKey.length > 0);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setItems(await client.status());
-      setCatalog(await client.modelCatalog());
-    } catch (cause) {
-      setError(cause);
-    } finally {
-      setLoading(false);
-    }
-  }, [client]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const refresh = () => {
+    void statusQuery.refetch();
+    void catalogQuery.refetch();
+  };
 
   const options = useMemo(
     () => providerOptions(catalog ?? { providers: [] }, []),
@@ -110,10 +107,13 @@ export function Diagnostics() {
     <div>
       <PageHeader title="诊断" actions={<>
 <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>
-            {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw aria-hidden />}
-            重新检查
-          </Button>
+          <SyncStatus
+            isFetching={statusQuery.isFetching}
+            isPlaceholder={statusQuery.isPlaceholder}
+            savedAt={statusQuery.savedAt}
+            error={statusQuery.data ? statusQuery.error : null}
+            onRetry={refresh}
+          />
           <Button type="button" onClick={() => void exportDiagnostics()} disabled={exportRunning}>
             {exportRunning ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <Download aria-hidden />}
             导出诊断
@@ -121,7 +121,7 @@ export function Diagnostics() {
         </div>
 </>} />
 
-      <ErrorAlert error={error} onRetry={load} />
+      <ErrorAlert error={error} onRetry={refresh} />
       <ErrorAlert error={exportError} onRetry={exportDiagnostics} retryLabel="重新导出" />
       {exportMessage ? (
         <Alert className="my-4">
@@ -142,7 +142,14 @@ export function Diagnostics() {
         </div>
         <div>
           {items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">暂无状态数据。这不代表服务停止。</p>
+            loading ? (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+                正在加载…
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">暂无状态数据。这不代表服务停止。</p>
+            )
           ) : (
             items.map((item) => <StatusRow key={item.kind} item={item} />)
           )}
