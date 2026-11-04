@@ -103,3 +103,76 @@ test("entry switch refetches config", async ({ page }) => {
   await page.getByRole("button", { name: "保存并发布" }).click();
   await expect.poll(() => mockCallCount(page, "getConfig")).toBe(before + 1);
 });
+
+test("edit controls wait for cloud data", async ({ page }) => {
+  await page.goto("/test.html?fixture=cloud-slow");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  const publish = page.getByRole("button", { name: "保存并发布" });
+  await expect(publish).toBeDisabled({ timeout: 500 });
+  await expect(publish).toBeEnabled({ timeout: 5_000 });
+});
+
+test("background refresh does not clobber edits", async ({ page }) => {
+  await page.goto("/test.html?fixture=cloud-updated");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await expect(page.getByRole("button", { name: "保存并发布" })).toBeEnabled();
+
+  await page.getByLabel("管家模型供应商").click();
+  await page.getByRole("option", { name: "Anthropic", exact: true }).click();
+  await page.getByPlaceholder("搜索模型").fill("haiku");
+  await page.getByRole("option", { name: /Claude Haiku 5\.5/ }).click();
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/Claude Haiku 5\.5/);
+
+  await page.getByRole("button", { name: "刷新" }).click();
+  await expect(page.getByText("云端配置已更新")).toBeVisible();
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/Claude Haiku 5\.5/);
+
+  await page.getByRole("button", { name: "载入最新" }).click();
+  await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/DeepSeek V4 Pro/);
+  await expect(page.getByText("云端配置已更新")).toHaveCount(0);
+});
+
+test("publish uses cloud fingerprint", async ({ page }) => {
+  await page.goto("/test.html?fixture=cloud-slow");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  const publish = page.getByRole("button", { name: "保存并发布" });
+  await expect(publish).toBeEnabled({ timeout: 5_000 });
+
+  await page
+    .getByTestId("model-key-row-opencode-go")
+    .getByLabel("API 密钥")
+    .fill("sk-fingerprint-SENTINEL");
+  await publish.click();
+  const preview = page.getByRole("dialog", { name: "确认保存并发布" });
+  await preview.getByRole("button", { name: "确认保存并发布" }).click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __mockCalls?: Record<string, unknown[][]>;
+            }
+          ).__mockCalls?.publishConfig?.[0]?.[0] as { baseFingerprint?: string },
+      ).then((input) => input?.baseFingerprint),
+    )
+    .toBe("fp-current");
+});
+
+test("mcp add refetches status", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "服务", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "服务", exact: true })).toBeVisible();
+  const before = await mockCallCount(page, "mcpStatus");
+
+  await page.getByRole("button", { name: "添加服务" }).click();
+  const catalog = page.getByRole("dialog", { name: "添加服务" });
+  await catalog.getByRole("button", { name: "添加 DeepWiki" }).click();
+  const form = page.getByRole("dialog", { name: "添加 DeepWiki" });
+  await form.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByTestId("mcp-card-deepwiki")).toBeVisible();
+
+  await expect.poll(() => mockCallCount(page, "mcpStatus")).toBe(before + 1);
+});

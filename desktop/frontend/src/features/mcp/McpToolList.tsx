@@ -19,12 +19,14 @@ export function McpToolList({
   tools,
   dirty,
   saving,
+  disabled = false,
   onChange,
   onSave,
 }: {
   tools: McpToolDTO[];
   dirty: boolean;
   saving: boolean;
+  disabled?: boolean;
   onChange: (name: string, mode: string) => void;
   onSave: () => void;
 }) {
@@ -45,7 +47,11 @@ export function McpToolList({
                 <p className="mt-1 text-xs text-muted-foreground">{tool.description}</p>
               ) : null}
             </div>
-            <Select value={tool.mode} onValueChange={(mode) => onChange(tool.name, mode)}>
+            <Select
+              value={tool.mode}
+              onValueChange={(mode) => onChange(tool.name, mode)}
+              disabled={disabled}
+            >
               <SelectTrigger
                 size="sm"
                 className="w-24"
@@ -65,7 +71,7 @@ export function McpToolList({
         ))}
       </ul>
       <div className="flex justify-end">
-        <Button type="button" size="sm" onClick={onSave} disabled={!dirty || saving}>
+        <Button type="button" size="sm" onClick={onSave} disabled={disabled || !dirty || saving}>
           {saving ? (
             <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
           ) : (
