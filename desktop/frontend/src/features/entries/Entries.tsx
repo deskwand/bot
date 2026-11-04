@@ -380,7 +380,7 @@ export function Entries() {
           <div className="mt-3 flex flex-wrap gap-2">
             <Button type="button" onClick={() => void startLogin()} disabled={qrOpen}>
               <QrCode aria-hidden />
-              {wechatConfigured ? "重新扫码" : "连接微信"}
+              {wechatConfigured ? "重新扫码" : "扫码连接"}
             </Button>
           </div>
         </CardContent>

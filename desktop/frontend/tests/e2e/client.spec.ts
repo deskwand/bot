@@ -182,7 +182,7 @@ test("welcome → token connect → preflight → interrupted deployment → res
   await page.getByRole("button", { name: "保存并发布" }).click();
   await expect(page.getByText("发布结果")).toBeVisible();
 
-  await page.getByRole("button", { name: "连接微信" }).click();
+  await page.getByRole("button", { name: "扫码连接", exact: true }).click();
   const qr = page.getByTestId("wechat-qr");
   await expect(qr).toBeVisible();
   await expect(qr.getByLabel("微信登录二维码")).toBeVisible();
@@ -290,7 +290,7 @@ test("a stale key draft is not published after switching back", async ({ page })
 test("login published follow-up with a publish operation id is accepted", async ({ page }) => {
   await page.goto("/test.html?fixture=login-sync");
   await page.getByRole("button", { name: "消息入口", exact: true }).click();
-  await page.getByRole("button", { name: "连接微信" }).click();
+  await page.getByRole("button", { name: "扫码连接", exact: true }).click();
   await expect(page.getByTestId("wechat-qr")).toBeVisible();
   await expect(page.getByRole("heading", { name: "已连接", exact: true })).toBeVisible({
     timeout: 10_000,
@@ -302,7 +302,7 @@ test("login published follow-up with a publish operation id is accepted", async 
 test("login publish_failed shows the code and resumes the publish operation", async ({ page }) => {
   await page.goto("/test.html?fixture=qr-publish-failed");
   await page.getByRole("button", { name: "消息入口", exact: true }).click();
-  await page.getByRole("button", { name: "连接微信" }).click();
+  await page.getByRole("button", { name: "扫码连接", exact: true }).click();
   await expect(page.getByRole("heading", { name: "发布失败", exact: true })).toBeVisible({
     timeout: 10_000,
   });
@@ -456,7 +456,7 @@ test("a pending operation can be abandoned after confirmation", async ({ page })
 test("unknown cloud release points to the import flow", async ({ page }) => {
   await page.goto("/test.html?fixture=version-unknown");
   await page.getByRole("button", { name: "更新", exact: true }).click();
-  await page.getByText("版本详情", { exact: true }).click();
+  await page.getByTestId("upgrade-reason").click();
   await expect(page.getByText(/VERSION_UNKNOWN_REIMPORT/)).toBeVisible();
   await expect(page.getByText(/版本未知，请重新导入/)).toBeVisible();
   await page.getByRole("button", { name: "重新导入" }).click();
@@ -719,7 +719,7 @@ test("upgrade warns which model keys must be re-entered", async ({ page }) => {
   await expect(
     page.getByText(/升级后需在模型页重填：MODEL_KEY_OPENCODE_GO/),
   ).toBeVisible();
-  await page.getByRole("button", { name: "升级云端服务" }).click();
+  await page.getByTestId("upgrade-cloud").click();
   const dialog = page.getByRole("dialog", { name: "升级前确认" });
   await expect(dialog.getByText(/升级后需在模型页重填：/)).toBeVisible();
   await expect(dialog.getByText(/MODEL_KEY_OPENCODE_GO/)).toBeVisible();
@@ -817,7 +817,7 @@ test("an operation from a previously connected account is not offered", async ({
 test("QR expiration offers a new code and never claims success", async ({ page }) => {
   await page.goto("/test.html?fixture=qr-expired");
   await page.getByRole("button", { name: "消息入口", exact: true }).click();
-  await page.getByRole("button", { name: "连接微信" }).click();
+  await page.getByRole("button", { name: "扫码连接", exact: true }).click();
   await expect(page.getByRole("heading", { name: "二维码已过期", exact: true })).toBeVisible({
     timeout: 10_000,
   });
@@ -854,7 +854,7 @@ test("client update button opens the updater window", async ({ page }) => {
   await page.getByRole("button", { name: "更新", exact: true }).click();
   await expect(page.getByText(`v${APP_VERSION}`)).toBeVisible();  // __APP_VERSION__
   await expect(page.getByRole("button", { name: "安装客户端更新" })).toHaveCount(0);
-  await page.getByRole("button", { name: "检查客户端更新" }).click();
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await expect(page.getByText("已打开更新窗口")).toBeVisible();
   await screenshot(page, "05-client-update.png");
 });
@@ -862,7 +862,7 @@ test("client update button opens the updater window", async ({ page }) => {
 test("client update failure shows an error", async ({ page }) => {
   await page.goto("/test.html?fixture=client-update-failed");
   await page.getByRole("button", { name: "更新", exact: true }).click();
-  await page.getByRole("button", { name: "检查客户端更新" }).click();
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await expect(page.getByText("无法打开更新窗口")).toBeVisible();
 });
 
@@ -875,7 +875,7 @@ test("cloud upgrade requires confirmation and reports the control-plane result",
     .locator('[data-slot="card"]')
     .filter({ hasText: "云端服务" });
   await expect(cloudCard.getByText("当前 1.0.0 → 可用 1.1.0")).toBeVisible();
-  await page.getByRole("button", { name: "升级云端服务" }).click();
+  await page.getByTestId("upgrade-cloud").click();
   const dialog = page.getByRole("dialog", { name: "升级前确认" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "确认升级" }).click();
@@ -1238,4 +1238,31 @@ test("free neuron notice reads identically on install and models pages", async (
   await page.getByRole("button", { name: /设置模型/ }).click();
   await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
   await expect(page.getByTestId("workers-ai-quota-notice")).toHaveText(WORKERS_AI_QUOTA_NOTICE);
+});
+
+test("update page labels actions without repeating the card subject", async ({ page }) => {
+  await page.goto("/test.html?fixture=upgrade-required");
+  await page.getByRole("button", { name: "更新", exact: true }).click();
+
+  // 卡片标题已经写了「云端服务」，按钮只说动作。
+  await expect(page.getByTestId("upgrade-cloud")).toHaveText("升级");
+  await expect(page.getByRole("button", { name: "检查更新", exact: true })).toBeVisible();
+
+  // 「上传」是用户视角里不存在的动作。
+  await expect(page.getByText("升级前会校验包签名。", { exact: true })).toBeVisible();
+  // 自动检查的节奏是控件行为，不是承诺；一次性说明白。
+  await expect(
+    page.getByText("每 6 小时自动检查，确认后才安装。", { exact: true }),
+  ).toBeVisible();
+  // 页头只剩一个图标，不能有文字。
+  await expect(page.getByRole("button", { name: "刷新", exact: true })).toBeVisible();
+  await expect(page.getByText("检查云端版本", { exact: true })).toHaveCount(0);
+});
+
+test("wechat card does not make the button repeat the description", async ({ page }) => {
+  await page.goto("/test.html?fixture=qr-expired");
+  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  // 卡片描述已经说「扫码登录你的微信」，按钮只说动作。
+  await expect(page.getByRole("button", { name: "扫码连接", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "连接微信", exact: true })).toHaveCount(0);
 });

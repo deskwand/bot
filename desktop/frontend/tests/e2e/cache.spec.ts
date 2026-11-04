@@ -247,7 +247,7 @@ test("a successful upgrade refetches config on return", async ({ page }) => {
   const before = await mockCallCount(page, "getConfig");
 
   await page.getByRole("button", { name: "更新", exact: true }).click();
-  await page.getByRole("button", { name: "升级云端服务" }).click();
+  await page.getByTestId("upgrade-cloud").click();
   const dialog = page.getByRole("dialog", { name: "升级前确认" });
   await dialog.getByRole("button", { name: "确认升级" }).click();
   await expect(page.getByText("升级结果")).toBeVisible();

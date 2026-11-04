@@ -94,9 +94,8 @@ export function Updates() {
   return (
     <div>
       <PageHeader title="更新" actions={<>
-<Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>
+        <Button type="button" variant="outline" size="icon" aria-label="刷新" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw aria-hidden />}
-          检查云端版本
         </Button>
 </>} />
 
@@ -110,7 +109,7 @@ export function Updates() {
                 <ArrowUpCircle className="size-4" aria-hidden />
                 云端服务
               </CardTitle>
-              <CardDescription>上传前会验证发布包签名。</CardDescription>
+              <CardDescription>升级前会校验包签名。</CardDescription>
             </div>
             {upgrade?.available ? (
               <Badge>有新版本</Badge>
@@ -128,7 +127,7 @@ export function Updates() {
               {upgrade.reason ? (
                 <div className="text-muted-foreground">
                   <p>{describeCode(upgrade.reason)}</p>
-                  <details className="mt-2"><summary className="cursor-pointer text-xs">版本详情</summary><p className="mt-1 break-all text-xs">{upgrade.reason}</p></details>
+                  <details className="mt-2"><summary className="cursor-pointer text-xs" data-testid="upgrade-reason">详情</summary><p className="mt-1 break-all text-xs">{upgrade.reason}</p></details>
                 </div>
               ) : null}
               {upgrade.modelKeysMissing?.length ? (
@@ -152,11 +151,12 @@ export function Updates() {
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button
               type="button"
+              data-testid="upgrade-cloud"
               onClick={() => setConfirmOpen(true)}
               disabled={!upgrade?.available || running}
             >
               {running ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-              {running ? "正在升级…" : "升级云端服务"}
+              {running ? "正在升级…" : "升级"}
             </Button>
           </div>
           {result ? (
@@ -167,7 +167,7 @@ export function Updates() {
               </div>
               {result.state === "published" ? <>
                 <p className="mt-2 text-xs text-muted-foreground">已发布，接着验证收发。</p>
-                <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">执行详情</summary><StepList steps={result.steps ?? []} /></details>
+                <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">详情</summary><StepList steps={result.steps ?? []} /></details>
               </> : <StepList steps={result.steps ?? []} />}
               {result.state === "unknown" || result.state === "needs_input" ? (
                 <Button
@@ -206,7 +206,7 @@ export function Updates() {
                 桌面客户端
               </CardTitle>
               <CardDescription>
-                后台每 6 小时检查一次，有新版本会弹窗询问，你确认后才安装。
+                每 6 小时自动检查，确认后才安装。
               </CardDescription>
             </div>
             <Badge variant="outline">v{__APP_VERSION__}</Badge>
@@ -225,7 +225,7 @@ export function Updates() {
               ) : (
                 <RefreshCw aria-hidden />
               )}
-              检查客户端更新
+              检查更新
             </Button>
           </div>
           {clientChecked ? (
@@ -246,7 +246,7 @@ export function Updates() {
           <Alert>
             <AlertTitle>兼容性</AlertTitle>
             <AlertDescription>
-              签名、schema 和迁移历史已验证；失败不会改云端。
+              签名与迁移历史已校验；失败不会改云端。
             </AlertDescription>
           </Alert>
           {upgrade?.modelKeysMissing?.length ? (
