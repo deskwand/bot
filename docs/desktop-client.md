@@ -213,7 +213,7 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。若打开后
 桌面客户端更新与云端 Worker 升级是两条独立链路：
 
 - **云端服务**：在“更新”页比较客户端内置的 Worker 发布包与当前部署，由你确认后升级；
-- **桌面客户端**：由独立的 `deskwand-client-1` 密钥签名，使用单独的更新源。
+- **桌面客户端**：由独立的客户端更新密钥签名，使用单独的更新源。
 
 客户端更新永远不会自动执行，也永远不会修改云端部署。默认构建没有配置更新源，界面显示 **“未配置更新源”**。配置了发布源的正式构建可以：
 
@@ -248,16 +248,19 @@ npm run generate:release-key
 - 公钥：`desktop/internal/release/keys/deskwand-release-1.pub.pem`，可以提交；
 - 也可用 `DESKWAND_RELEASE_SIGNING_KEY_FILE` 指向已有私钥。
 
-**桌面客户端更新密钥**（key id `deskwand-client-1`）：
+**桌面客户端更新密钥**：
+
+在 `desktop/frontend` 目录执行：
 
 ```bash
-npm run generate:release-key -- --client
+npx mygo keygen
 ```
 
-- 私钥：`$HOME/.deskwand-bot/client-update-key.pem`，权限 0600；
-- 公钥：命令会打印 PEM，粘贴到 `mygo.json` 的 `updates.publicKey`；不写入仓库文件，也不嵌入客户端源码。公钥本身可以提交到发布配置中。
+- 私钥：`$HOME/.deskwand-bot/client-update.key`，权限 0600；可用 `DESKWAND_CLIENT_UPDATE_KEY_FILE` 指向其他路径；
+- 公钥：命令输出（`mygo-update.pub`）的内容写入 `desktop/mygo.json` 的 `updates.publicKey`，可以提交；
+- 私钥必须额外备份到密码管理器：丢失后，已安装的客户端无法再接收更新。
 
-脚本拒绝覆盖已有密钥。私钥绝不进入仓库、日志、构建产物或客户端包。两套密钥不能混用。轮换密钥时，先发布同时信任旧、新 key id 的客户端，再切换签名密钥。
+私钥绝不进入仓库、日志、构建产物或客户端包。两套密钥不能混用。
 
 ### 12.2 构建 Worker 发布包和桌面安装包
 
@@ -307,16 +310,44 @@ Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配�
 
 ### 12.4 客户端更新源
 
-客户端更新使用 MyGo 的签名更新机制，但密钥与 Worker 发布包分离：
+`desktop/mygo.json` 的 `updates` 是唯一的更新配置来源：
 
-1. 用 `npm run generate:release-key -- --client` 生成/保管 `deskwand-client-1` 私钥；
-2. 将命令打印的公钥 PEM 填入 `desktop/mygo.json` 的 `updates.publicKey`（MyGo 用它验证桌面更新）；
-3. 在 `updates.url` 填 HTTPS 目录，或使用 GitHub Releases；
-4. 用 `MYGO_UPDATER_PRIVATE_KEY`（内容）或 `updates.privateKey`（路径）提供私钥；
-5. 把 MyGo 生成的 `update-<target>.json`、归档、delta、`SHA256SUMS` 和安装脚本上传到该目录，**最后上传 manifest**；
-6. 在打包构建中设置 `ClientUpdateFeedURL`（`desktop/internal/app/updater.go`，可用 `-ldflags -X` 覆盖）为非空值。
+- `updates.publicKey`：12.1 生成的客户端更新公钥；
+- `updates.url`：`https://updates.example.com/bot`；
+- `updates.s3`：桶 `my-update-assets`、前缀 `bot` 和 R2 endpoint（只含账号 ID，不是凭据）。
 
-`ClientUpdateFeedURL` 默认为空，因此普通源码构建和本仓库的 CI 不检查更新；UI 显示“未配置更新源”。只有同时存在可信公钥、有效更新源和可写安装位置时，MyGo 才会启用更新。客户端源码不嵌入公钥文件；`mygo.json` 的 `updates.publicKey` 是唯一验签来源。
+客户端后台每 6 小时检查一次，发现新版本后弹窗询问；确认后才下载、安装并重启。开发构建或安装目录不可写时不做后台检查，手动检查会说明原因。
+
+**CHANGELOG 约定**：每次发布前在 `desktop/CHANGELOG.md` 加一节 `## <version>`（也可以写成 `## [<version>] - YYYY-MM-DD`）。`desktop/mygo.json`、`desktop/main.go` 的 `appVersion`、`desktop/frontend/package.json` 三处版本号必须与它一致，发布预检会拒绝缺失或不一致的版本。
+
+**发布**：
+
+```bash
+npm run release:desktop -- --dry-run   # 只打印步骤与将上传的文件
+npm run release:desktop                # 写入 R2；发布前需维护者明确同意
+```
+
+脚本只支持 macOS arm64，按顺序执行：
+
+1. 检查 git 工作区干净、两套私钥存在、三处版本一致、CHANGELOG 含当前版本；
+2. 读取线上 manifest：只有 404 视为首次发布，网络错误、其它状态码、坏 JSON 都拒绝；本地版本必须严格高于线上版本；
+3. 生成并签名 Worker 发布包，嵌入桌面客户端；
+4. 从 `~/.mc/config.json` 的 `r2` alias 读取凭据，只在发布子进程中导出为 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`，清除代理后执行 `mygo build -upload`；
+5. 带缓存绕过参数读取公网 manifest，核对 `version`、归档大小与 SHA-256。
+
+**R2 布局**（`my-update-assets/bot/`）：
+
+```
+deskwand-bot-<version>-darwin-arm64.tar.gz          自动更新归档
+deskwand-bot-<from>-to-<version>-darwin-arm64.delta 增量包（有上一版本时）
+deskwand-bot-<version>-arm64.dmg                    首次安装 / 手动下载
+SHA256SUMS
+update-darwin-arm64.json                            manifest，最后上传
+```
+
+旧版本文件全部保留：MyGo 生成 delta 需要前 3 个版本的归档，脚本从不删除 R2 上的对象。manifest 最后上传，中途失败不会让已安装的客户端看到缺文件的版本；发布后核验不一致时脚本报错并提示人工处理，不回滚、不删除。
+
+**首次上线**：0.1.5 及更早的版本没有更新器，第一个带自动更新的版本需要用户手动下载 dmg 安装，之后才会自动更新。ad-hoc 签名下，自动更新不受 Gatekeeper 拦截，但首次手动安装 dmg 仍会提示「无法验证开发者」。
 
 ### 12.5 CI
 
