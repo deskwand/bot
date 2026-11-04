@@ -8,7 +8,12 @@ import {
 } from "../../src/channels/override";
 import type { ChannelAdapter } from "../../src/channels/types";
 import { readRuntimeConfig } from "../../src/runtime-config";
-import type { InboundEvent, MessageEvent } from "../../src/protocol";
+import {
+  decodeAction,
+  encodeAction,
+  type InboundEvent,
+  type MessageEvent,
+} from "../../src/protocol";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -23,6 +28,7 @@ type TelegramStateRow = {
   offset: number;
   status: string | null;
   last_poll_at: number | null;
+  expired_version: string | null;
 };
 
 type RecordedCall = {
@@ -135,8 +141,8 @@ function readState(): Promise<TelegramStateRow | null> {
     return (
       state.storage.sql
         .exec<TelegramStateRow>(
-          `SELECT token_hash, offset, status, last_poll_at
-           FROM telegram_state LIMIT 1`,
+          `SELECT token_hash, offset, status, last_poll_at, expired_version
+           FROM telegram_state WHERE id = 1`,
         )
         .toArray()[0] ?? null
     );
@@ -323,6 +329,32 @@ describe("ensurePolling", () => {
 
     await channels().ensurePolling();
 
+    expect(await pollSchedules()).toHaveLength(1);
+    await cancelSchedules();
+  });
+
+  it("restarts a dead chain once the heartbeat is stale", async () => {
+    // Warm the row without scheduling, then drive ensurePolling for real.
+    await channels().ensurePolling();
+    await cancelSchedules();
+    setPollTimingOverride({ runMs: 0, baseBackoffMs: 1 });
+    await runInDurableObject(channels(), (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE telegram_state SET status = 'running', last_poll_at = ?`,
+        Date.now(),
+      );
+    });
+
+    await channels().ensurePolling();
+    expect(await pollSchedules()).toEqual([]);
+
+    await runInDurableObject(channels(), (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE telegram_state SET last_poll_at = ?`,
+        Date.now() - 121_000,
+      );
+    });
+    await channels().ensurePolling();
     expect(await pollSchedules()).toHaveLength(1);
     await cancelSchedules();
   });
@@ -516,6 +548,88 @@ describe("pollTelegram", () => {
     expect(events.map((event) => event.eventId)).toEqual(["tg:7"]);
   });
 
+  it("routes a button through the poll loop", async () => {
+    const answered: Array<{ actionId: string; text?: string }> = [];
+    setChannelOverride("telegram", {
+      parseInbound: async (update) => {
+        const parsed = update as {
+          update_id: number;
+          callback_query: {
+            id: string;
+            from: { id: number };
+            data: string;
+            message: { message_id: number; chat: { id: number } };
+          };
+        };
+        const query = parsed.callback_query;
+        const decoded = decodeAction(query.data);
+        if (!decoded) return null;
+        return {
+          type: "action",
+          channel: "telegram",
+          chatId: String(query.message.chat.id),
+          userId: String(query.from.id),
+          actionId: query.id,
+          messageId: String(query.message.message_id),
+          action: decoded.action,
+          taskId: decoded.taskId,
+          eventId: `tg:${parsed.update_id}`,
+        };
+      },
+      send: async () => ({ messageId: "" }),
+      edit: async () => {},
+      answerAction: async (actionId, text) => {
+        answered.push({ actionId, ...(text === undefined ? {} : { text }) });
+      },
+    });
+    await channels().ensurePolling();
+    await cancelSchedules();
+    setTelegramFetchOverride(
+      scriptedTelegram([
+        jsonResponse({
+          ok: true,
+          result: [
+            {
+              update_id: 9,
+              callback_query: {
+                id: "cb-1",
+                from: { id: OWNER_ID },
+                data: encodeAction({ action: "cancel", taskId: "task-cb" }),
+                message: { message_id: 5, chat: { id: 42 } },
+              },
+            },
+          ],
+        }),
+      ]).fetchImpl,
+    );
+
+    await pollThroughDO();
+
+    expect(answered[0]?.actionId).toBe("cb-1");
+    expect((await readState())?.offset).toBe(10);
+  });
+
+  it("accepts an update when dispatch fails without a lease", async () => {
+    setChannelOverride("telegram", fakeAdapter(async () => inboundMessage(3)));
+    await channels().ensurePolling();
+
+    const result = await runInDurableObject(channels(), async (instance) => {
+      const target = instance as unknown as {
+        dispatchMessage(): boolean;
+        handleTelegramUpdate(update: unknown): Promise<string>;
+      };
+      const original = target.dispatchMessage;
+      target.dispatchMessage = () => false;
+      try {
+        return await target.handleTelegramUpdate({ update_id: 3 });
+      } finally {
+        target.dispatchMessage = original;
+      }
+    });
+
+    expect(result).toBe("accepted");
+  });
+
   it("keeps the offset while maintenance holds", async () => {
     await channels().ensurePolling();
     await cancelSchedules();
@@ -642,6 +756,8 @@ describe("pollTelegram", () => {
     await channels().ensurePolling();
     await channels().ensurePolling();
     expect(await pollSchedules()).toEqual([]);
+    // Same deployable version: the rejection stands.
+    expect(await readState()).toMatchObject({ status: "expired" });
   });
 
   it("stops on a 404 token response", async () => {
@@ -669,6 +785,26 @@ describe("pollTelegram", () => {
     setPollTimingOverride({ runMs: 0, baseBackoffMs: 1 });
     await channels().ensurePolling();
     expect(await pollSchedules()).toEqual([]);
+  });
+
+  it("retries an expired token after a redeploy", async () => {
+    await channels().ensurePolling();
+    await cancelSchedules();
+    await runInDurableObject(channels(), (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE telegram_state
+           SET status = 'expired', offset = 9, expired_version = 'old'`,
+      );
+    });
+
+    setEnv({ CF_VERSION_METADATA: { id: "new" } });
+    await channels().ensurePolling();
+
+    expect(await readState()).toMatchObject({
+      status: "running",
+      offset: 9,
+      expired_version: null,
+    });
   });
 
   it("restarts with a new token", async () => {

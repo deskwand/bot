@@ -80,11 +80,11 @@ type TelegramState = {
   offset: number;
   status: string | null;
   last_poll_at: number | null;
+  expired_version: string | null;
 };
 type TelegramPollClient = ReturnType<typeof createTelegramPollClient>;
 type TelegramWebhookRetry = {
   attempted: boolean;
-  removalFailed: boolean;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -210,10 +210,12 @@ export class ChannelDO extends Agent<Env> {
     );
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS telegram_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
         token_hash TEXT,
         offset INTEGER,
         status TEXT,
-        last_poll_at INTEGER
+        last_poll_at INTEGER,
+        expired_version TEXT
       )`,
     );
     this.db.exec(
@@ -282,9 +284,10 @@ export class ChannelDO extends Agent<Env> {
       }
 
       if (event.type === "message") {
-        return this.dispatchMessage(event, route.routeKey)
-          ? "accepted"
-          : "maintenance";
+        if (this.dispatchMessage(event, route.routeKey)) return "accepted";
+        // A false result without a lease is a dispatch exception (already
+        // logged); only a live lease asks the poller to replay the update.
+        return this.lease.current() === null ? "accepted" : "maintenance";
       }
 
       let text = "出错了，稍后再试";
@@ -726,7 +729,13 @@ export class ChannelDO extends Agent<Env> {
     if (state.token_hash !== hash) {
       // New or replaced token: a former expiry no longer applies.
       this.activeTelegramRun = null;
-      this.resetTelegramState(hash);
+      this.updateTelegramState({
+        token_hash: hash,
+        offset: 0,
+        status: "running",
+        last_poll_at: null,
+        expired_version: null,
+      });
       state = this.readTelegramState();
     }
 
@@ -734,6 +743,17 @@ export class ChannelDO extends Agent<Env> {
     // resurrect an expired token without new credentials.
     if (state.status === "stopped") {
       this.updateTelegramState({ status: "running" });
+      state = this.readTelegramState();
+    }
+
+    // A rejected token is retried once after a redeploy. The same version
+    // stays expired so a bad token does not poll in a loop.
+    const versionId = this.env.CF_VERSION_METADATA?.id ?? "";
+    if (state.status === "expired" && state.expired_version !== versionId) {
+      this.updateTelegramState({
+        status: "running",
+        expired_version: null,
+      });
       state = this.readTelegramState();
     }
 
@@ -791,12 +811,9 @@ export class ChannelDO extends Agent<Env> {
       }
 
       retry.attempted = true;
-      try {
-        await client.deleteWebhook();
-      } catch (deleteError) {
-        retry.removalFailed = true;
-        throw deleteError;
-      }
+      await client.deleteWebhook(
+        AbortSignal.timeout(TELEGRAM_GET_UPDATES_TIMEOUT_MS),
+      );
 
       if (!(await ownsRun())) return "stopped";
       this.updateTelegramState({ last_poll_at: Date.now() });
@@ -841,10 +858,7 @@ export class ChannelDO extends Agent<Env> {
         fetch: getTelegramFetchOverride() ?? undefined,
       });
       const startedAt = Date.now();
-      const retry: TelegramWebhookRetry = {
-        attempted: false,
-        removalFailed: false,
-      };
+      const retry: TelegramWebhookRetry = { attempted: false };
       let backoffMs = timing.baseBackoffMs;
 
       do {
@@ -874,16 +888,17 @@ export class ChannelDO extends Agent<Env> {
               event: "poll_expired",
               errorCode: "credential_invalid",
             });
-            this.updateTelegramState({ status: "expired" });
+            this.updateTelegramState({
+              status: "expired",
+              expired_version: this.env.CF_VERSION_METADATA?.id ?? "",
+            });
             console.warn("channel: telegram token invalid, polling stopped");
             return;
           }
           emitChannelEvent(this.env, {
             channel: "telegram",
             event: "poll_error",
-            errorCode: retry.removalFailed
-              ? "api_error"
-              : channelErrorCode(error),
+            errorCode: channelErrorCode(error),
           });
           console.error(
             `channel: telegram poll failed: ${errorMessage(error)}`,
@@ -894,7 +909,6 @@ export class ChannelDO extends Agent<Env> {
         }
 
         retry.attempted = false;
-        retry.removalFailed = false;
         if (!(await ownsRun())) return;
         emitChannelEvent(this.env, {
           channel: "telegram",
@@ -1227,72 +1241,46 @@ export class ChannelDO extends Agent<Env> {
     return (
       this.db
         .exec<TelegramState>(
-          `SELECT token_hash, offset, status, last_poll_at
-           FROM telegram_state LIMIT 1`,
+          `SELECT token_hash, offset, status, last_poll_at, expired_version
+           FROM telegram_state WHERE id = 1`,
         )
         .toArray()[0] ?? {
         token_hash: null,
         offset: 0,
         status: null,
         last_poll_at: null,
+        expired_version: null,
       }
     );
   }
 
+  /** Upserts the single row, writing only the columns the patch names. */
   private updateTelegramState(patch: Partial<TelegramState>): void {
-    const next = { ...this.readTelegramState(), ...patch };
-    this.db.exec(
-      `INSERT INTO telegram_state
-         (token_hash, offset, status, last_poll_at)
-       SELECT ?, ?, ?, ?
-       WHERE NOT EXISTS (SELECT 1 FROM telegram_state)`,
-      next.token_hash,
-      next.offset,
-      next.status,
-      next.last_poll_at,
-    );
-
-    // Write only the patched columns: a heartbeat must not revert an offset a
-    // concurrent batch already advanced.
-    const columns: string[] = [];
-    const values: Array<string | number | null> = [];
-    for (const key of [
+    const columns = [
       "token_hash",
       "offset",
       "status",
       "last_poll_at",
-    ] as const) {
-      if (patch[key] === undefined) continue;
-      columns.push(`${key} = ?`);
-      values.push(patch[key]);
-    }
-    if (columns.length === 0) return;
-    this.db.exec(
-      `UPDATE telegram_state SET ${columns.join(", ")}`,
-      ...values,
-    );
-  }
+      "expired_version",
+    ] as const;
+    const changed = columns.filter((key) => patch[key] !== undefined);
+    if (changed.length === 0) return;
 
-  /**
-   * Resets the offset for a new token. The write is conditional on the stored
-   * hash: a row that already carries this token's hash is left alone.
-   */
-  private resetTelegramState(tokenHash: string): void {
+    const next: TelegramState = {
+      token_hash: null,
+      offset: 0,
+      status: null,
+      last_poll_at: null,
+      expired_version: null,
+      ...patch,
+    };
     this.db.exec(
-      `INSERT INTO telegram_state (token_hash, offset, status, last_poll_at)
-       SELECT ?, 0, 'running', NULL
-       WHERE NOT EXISTS (SELECT 1 FROM telegram_state)`,
-      tokenHash,
-    );
-    this.db.exec(
-      `UPDATE telegram_state SET
-         token_hash = ?,
-         offset = 0,
-         status = 'running',
-         last_poll_at = NULL
-       WHERE token_hash IS NULL OR token_hash <> ?`,
-      tokenHash,
-      tokenHash,
+      `INSERT INTO telegram_state (id, ${columns.join(", ")})
+       VALUES (1, ${columns.map(() => "?").join(", ")})
+       ON CONFLICT(id) DO UPDATE SET ${changed
+         .map((key) => `${key} = excluded.${key}`)
+         .join(", ")}`,
+      ...columns.map((key) => next[key]),
     );
   }
 

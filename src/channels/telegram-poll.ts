@@ -82,8 +82,8 @@ export function createTelegramPollClient(opts: {
       };
     },
 
-    async deleteWebhook(): Promise<void> {
-      await call("deleteWebhook", {});
+    async deleteWebhook(signal: AbortSignal): Promise<void> {
+      await call("deleteWebhook", {}, signal);
     },
   };
 }
