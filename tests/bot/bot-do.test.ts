@@ -25,6 +25,7 @@ import {
   utcDay,
 } from "../../src/bot/wake";
 import { setClockOverride } from "../../src/butler/notifier";
+import { QUOTA_EXHAUSTED_TEXT } from "../../src/llm/model-errors";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -254,6 +255,39 @@ describe("BotDO lifecycle", () => {
     const snapshot = await stub.snapshot();
     expect(snapshot?.meta.consecutiveFailures).toBe(1);
     expect(snapshot?.runs).toHaveLength(1);
+  });
+
+  it("an exhausted model allowance does not pause the bot", async () => {
+    fakeButler();
+    const stub = botStub("b-lifecycle-quota");
+    await initBot(stub);
+    await stub.onRunEnded("t-fail", "failed", "boom");
+    expect((await stub.snapshot())?.meta.consecutiveFailures).toBe(1);
+
+    await stub.onRunEnded("t-quota-1", "failed", QUOTA_EXHAUSTED_TEXT);
+    await stub.onRunEnded("t-quota-2", "failed", QUOTA_EXHAUSTED_TEXT);
+    await stub.onRunEnded("t-quota-3", "failed", QUOTA_EXHAUSTED_TEXT);
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.status).toBe("active");
+    expect(snapshot?.meta.consecutiveFailures).toBe(1);
+    expect(snapshot?.meta.nextWakeAt).not.toBeNull();
+    expect(await alarmAt(stub)).toBe(snapshot?.meta.nextWakeAt);
+  });
+
+  it("ordinary failures still pause the bot", async () => {
+    fakeButler();
+    const stub = botStub("b-lifecycle-pause-control");
+    await initBot(stub);
+
+    await stub.onRunEnded("t-1", "failed", "boom");
+    await stub.onRunEnded("t-2", "failed", "boom");
+    await stub.onRunEnded("t-3", "failed", "boom");
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.status).toBe("paused");
+    expect(snapshot?.meta.consecutiveFailures).toBe(3);
+    expect(await alarmAt(stub)).toBeNull();
   });
 
   it("does not spawn when a fast run already scheduled a later wake", async () => {

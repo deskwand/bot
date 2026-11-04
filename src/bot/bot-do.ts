@@ -9,6 +9,7 @@ import type {
 } from "../admin/sql-dump";
 import { MemoryStore, type MemoryItem } from "../butler/memory";
 import { getClock } from "../butler/notifier";
+import { QUOTA_EXHAUSTED_TEXT } from "../llm/model-errors";
 import {
   BotStore,
   type BotMeta,
@@ -295,7 +296,11 @@ export class BotDO extends DurableObject<Env> {
     if (outcome === "completed") meta.consecutiveFailures = 0;
     if (meta.currentTaskId === taskId) meta.currentTaskId = null;
 
-    if (outcome === "failed" && meta.status === "active") {
+    if (
+      outcome === "failed" &&
+      meta.status === "active" &&
+      summary !== QUOTA_EXHAUSTED_TEXT
+    ) {
       this.store.writeMeta(meta);
       await this.armAfterFailure(meta, now, summary);
       return;

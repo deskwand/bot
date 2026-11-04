@@ -17,6 +17,7 @@ import type {
 } from "../admin/sql-dump";
 import { createBotTaskTools } from "../bot/bot-tools";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
+import { lastModelError, userTextForModelError } from "../llm/model-errors";
 import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
 import type {
   ActionEvent,
@@ -597,7 +598,13 @@ export class TaskDO extends Agent<Env> {
       if (result.status === "unanswered") {
         // Pi resolves `wait` for failed/aborted/withdrawn runs; they are not
         // completions, even when they carry no text.
-        await this.fail(result.reason ?? "任务未完成");
+        const modelError =
+          result.reason === "model_error"
+            ? lastModelError(await this.harness.session().messages())
+            : undefined;
+        await this.fail(
+          userTextForModelError(modelError) ?? result.reason ?? "任务未完成",
+        );
         return;
       }
       summary = result.text ?? "";

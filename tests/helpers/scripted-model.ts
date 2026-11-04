@@ -14,6 +14,8 @@ import { registerTestProvider } from "../../src/llm/models";
 export type ScriptedTurn = {
   text?: string;
   toolCalls?: { name: string; args: unknown }[];
+  /** Ends the turn with a model error carrying this message. */
+  error?: string;
   /** Called with the request context when the model is asked for this turn. */
   observe?: (context: TranscriptContext) => void;
 };
@@ -37,8 +39,15 @@ export function scriptedModel(turns: ScriptedTurn[]): PiModel {
         fauxToolCall(call.name, call.args as ToolCall["arguments"]),
       ),
     ];
+    const stopReason =
+      turn.error !== undefined
+        ? "error"
+        : turn.toolCalls?.length
+          ? "toolUse"
+          : "stop";
     const message = fauxAssistantMessage(content, {
-      stopReason: turn.toolCalls?.length ? "toolUse" : "stop",
+      stopReason,
+      ...(turn.error === undefined ? {} : { errorMessage: turn.error }),
     });
     return turn.observe
       ? (context: TranscriptContext) => {

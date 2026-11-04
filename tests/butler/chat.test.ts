@@ -14,6 +14,12 @@ import { PiHarness, type PiModel } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
+import {
+  PAID_PLAN_REQUIRED_TEXT,
+  QUOTA_EXHAUSTED_TEXT,
+  WORKERS_AI_PAID_PLAN_MARKER,
+  WORKERS_AI_QUOTA_MARKER,
+} from "../../src/llm/model-errors";
 import { registerTestProvider, setModelOverride } from "../../src/llm/models";
 import type { AdmittedMessage, OutboundMessage, RouteSnapshot } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
@@ -203,6 +209,46 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([{ chatId: "42", text: "你好！" }]);
+  });
+
+  it("explains an exhausted Workers AI allowance", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ error: WORKERS_AI_QUOTA_MARKER }]));
+
+    await butler("chat-quota").handleMessage(
+      message({ text: "你好", eventId: "tg:quota" }),
+    );
+
+    expect(channel.sent).toEqual([
+      { chatId: "42", text: QUOTA_EXHAUSTED_TEXT },
+    ]);
+  });
+
+  it("explains a paid-plan-only model", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ error: WORKERS_AI_PAID_PLAN_MARKER }]));
+
+    await butler("chat-paid-plan").handleMessage(
+      message({ text: "你好", eventId: "tg:paid-plan" }),
+    );
+
+    expect(channel.sent).toEqual([
+      { chatId: "42", text: PAID_PLAN_REQUIRED_TEXT },
+    ]);
+  });
+
+  it("keeps the generic error for other model failures", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ error: "upstream exploded" }]));
+
+    await butler("chat-model-error").handleMessage(
+      message({ text: "你好", eventId: "tg:model-error" }),
+    );
+
+    expect(channel.sent).toEqual([{ chatId: "42", text: "出错了，稍后再试" }]);
   });
 
   it("tells the owner which model key is missing before submitting", async () => {

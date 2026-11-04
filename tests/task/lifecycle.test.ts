@@ -2,6 +2,12 @@ import { PiHarness } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
+import {
+  PAID_PLAN_REQUIRED_TEXT,
+  QUOTA_EXHAUSTED_TEXT,
+  WORKERS_AI_PAID_PLAN_MARKER,
+  WORKERS_AI_QUOTA_MARKER,
+} from "../../src/llm/model-errors";
 import { setModelOverride } from "../../src/llm/models";
 import type { TaskSpec } from "../../src/protocol";
 import { scriptedModel } from "../helpers/scripted-model";
@@ -237,6 +243,72 @@ describe("TaskDO lifecycle", () => {
           retryable: false,
         });
         expect(events.some((event) => event.type === "completed")).toBe(false);
+      },
+      { timeout: 10_000 },
+    );
+
+    expect((await stub.status()).state).toBe("failed");
+  });
+
+  it("explains an exhausted Workers AI allowance", async () => {
+    const taskId = "t-quota";
+    setModelOverride(scriptedModel([{ error: WORKERS_AI_QUOTA_MARKER }]));
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events[1]?.payload).toMatchObject({
+          type: "failed",
+          reason: QUOTA_EXHAUSTED_TEXT,
+          retryable: false,
+        });
+      },
+      { timeout: 10_000 },
+    );
+
+    expect((await stub.status()).state).toBe("failed");
+  });
+
+  it("explains a paid-plan-only model", async () => {
+    const taskId = "t-paid-plan";
+    setModelOverride(scriptedModel([{ error: WORKERS_AI_PAID_PLAN_MARKER }]));
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events[1]?.payload).toMatchObject({
+          type: "failed",
+          reason: PAID_PLAN_REQUIRED_TEXT,
+          retryable: false,
+        });
+      },
+      { timeout: 10_000 },
+    );
+
+    expect((await stub.status()).state).toBe("failed");
+  });
+
+  it("keeps the model error reason for other failures", async () => {
+    const taskId = "t-model-error";
+    setModelOverride(scriptedModel([{ error: "upstream exploded" }]));
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events[1]?.payload).toMatchObject({
+          type: "failed",
+          reason: "model_error",
+          retryable: false,
+        });
       },
       { timeout: 10_000 },
     );

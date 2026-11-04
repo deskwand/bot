@@ -13,6 +13,10 @@ import type {
 } from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import {
+  lastModelError,
+  userTextForModelError,
+} from "../llm/model-errors";
+import {
   createModelsForEnv,
   modelAcceptsImages,
   modelReadiness,
@@ -1148,7 +1152,13 @@ export class ButlerDO extends Agent<Env> {
 
     const result = await this.harness.wait(operationId);
     if (result.status === "unanswered") {
-      await this.sendBestEffort({ text: "出错了，稍后再试" });
+      const modelError =
+        result.reason === "model_error"
+          ? lastModelError(await this.harness.session().messages())
+          : undefined;
+      await this.sendBestEffort({
+        text: userTextForModelError(modelError) ?? "出错了，稍后再试",
+      });
       this.kickReconcile();
       return;
     }

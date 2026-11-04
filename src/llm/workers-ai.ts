@@ -1,7 +1,13 @@
-import type {
-  FetchFunction,
-  ProviderStreams,
-  StreamOptions,
+import {
+  lazyStream,
+  type Api,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  type AssistantMessageEventStream,
+  type FetchFunction,
+  type Model,
+  type ProviderStreams,
+  type StreamOptions,
 } from "@earendil-works/pi-ai";
 import {
   createAiBindingFetch,
@@ -14,6 +20,13 @@ import {
   type Provider,
 } from "@earendil-works/pi-ai/models";
 import { CLOUDFLARE_WORKERS_AI_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
+
+import {
+  isWorkersAiPaidPlanRequired,
+  isWorkersAiQuotaExhausted,
+  WORKERS_AI_PAID_PLAN_MARKER,
+  WORKERS_AI_QUOTA_MARKER,
+} from "./model-errors";
 
 export const WORKERS_AI_PROVIDER_ID = "workers-ai";
 
@@ -54,9 +67,15 @@ export function workersAiProvider(env: Env): Provider {
 
   const api: ProviderStreams = {
     stream: (model, context, options) =>
-      inner.stream(model, context, withBinding(bindingFetch, options)),
+      rewriteErrorMessages(
+        model,
+        inner.stream(model, context, withBinding(bindingFetch, options)),
+      ),
     streamSimple: (model, context, options) =>
-      inner.streamSimple(model, context, withBinding(bindingFetch, options)),
+      rewriteErrorMessages(
+        model,
+        inner.streamSimple(model, context, withBinding(bindingFetch, options)),
+      ),
   };
 
   return createProvider({
@@ -95,4 +114,41 @@ function withBinding(
     fetch,
     headers: { ...options?.headers, ...BINDING_AUTH_HEADERS },
   };
+}
+
+/**
+ * Pass partial updates through untouched and rewrite only the final message.
+ * The quota marker must not look retryable, or pi would back off and retry a
+ * failure that cannot recover before the free allowance resets.
+ */
+function rewriteErrorMessages(
+  model: Model<Api>,
+  inner: AssistantMessageEventStream,
+): AssistantMessageEventStream {
+  return lazyStream(model, async () => rewriteEvents(inner));
+}
+
+async function* rewriteEvents(
+  inner: AssistantMessageEventStream,
+): AsyncGenerator<AssistantMessageEvent> {
+  for await (const event of inner) {
+    if (event.type === "error") {
+      yield { ...event, error: rewriteErrorMessage(event.error) };
+    } else if (event.type === "done") {
+      yield { ...event, message: rewriteErrorMessage(event.message) };
+    } else {
+      yield event;
+    }
+  }
+}
+
+function rewriteErrorMessage(message: AssistantMessage): AssistantMessage {
+  if (message.stopReason !== "error" || !message.errorMessage) return message;
+  if (isWorkersAiQuotaExhausted(message.errorMessage)) {
+    return { ...message, errorMessage: WORKERS_AI_QUOTA_MARKER };
+  }
+  if (isWorkersAiPaidPlanRequired(message.errorMessage)) {
+    return { ...message, errorMessage: WORKERS_AI_PAID_PLAN_MARKER };
+  }
+  return message;
 }

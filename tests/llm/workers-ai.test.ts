@@ -1,5 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
+import {
+  WORKERS_AI_PAID_PLAN_MARKER,
+  WORKERS_AI_QUOTA_MARKER,
+} from "../../src/llm/model-errors";
 import { createModelsForEnv } from "../../src/llm/models";
 import {
   WORKERS_AI_BASE_URL,
@@ -15,6 +19,12 @@ const getTimeTool = {
 };
 
 const baseEnv = {};
+
+const quotaExhaustedSample =
+  '{"name":"AiError","internalCode":4006,"httpCode":429,"message":"AiError: you have used up your daily free allocation of 10,000 neurons, please upgrade to Cloudflare\'s Workers Paid plan if you would like to continue usage.","requestId":"req-1"}';
+
+const paidPlanSample =
+  '{"name":"AiError","internalCode":5035,"httpCode":403,"message":"AiError: Model @cf/zai-org/glm-5.3-flash is not available on the Workers Free plan. Upgrade to access this model: https://dash.cloudflare.com/?to=/:account/workers/plans","requestId":"req-2"}';
 
 function sse(chunks: unknown[]): string {
   return (
@@ -51,7 +61,10 @@ const sseBody = sse([
   chunk({}, "tool_calls"),
 ]);
 
-function fakeBinding(body: string): {
+function fakeBinding(
+  body: string,
+  init: { status?: number; contentType?: string } = {},
+): {
   aiGatewayLogId: null;
   fetch: ReturnType<typeof vi.fn>;
 } {
@@ -60,7 +73,10 @@ function fakeBinding(body: string): {
     fetch: vi.fn(
       async () =>
         new Response(body, {
-          headers: { "content-type": "text/event-stream" },
+          status: init.status ?? 200,
+          headers: {
+            "content-type": init.contentType ?? "text/event-stream",
+          },
         }),
     ),
   };
@@ -102,5 +118,59 @@ describe("workersAiProvider", () => {
 
     expect(models.getModel(WORKERS_AI_PROVIDER_ID, MODEL_ID)).toBeUndefined();
     expect(models.getModel("opencode-go", "deepseek-v4.1-flash")).toBeDefined();
+  });
+
+  it("replaces an exhausted free allowance with a stable marker", async () => {
+    const fakeAi = fakeBinding(quotaExhaustedSample, {
+      status: 429,
+      contentType: "application/json",
+    });
+    const env = { ...baseEnv, AI: fakeAi } as unknown as Env;
+    const models = createModelsForEnv(env);
+    const model = models.getModel(WORKERS_AI_PROVIDER_ID, MODEL_ID)!;
+
+    const result = await models.complete(model, {
+      messages: [{ role: "user", content: "你好", timestamp: 0 }],
+    });
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(WORKERS_AI_QUOTA_MARKER);
+    expect(fakeAi.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces a paid-plan-only model error with a stable marker", async () => {
+    const fakeAi = fakeBinding(paidPlanSample, {
+      status: 403,
+      contentType: "application/json",
+    });
+    const env = { ...baseEnv, AI: fakeAi } as unknown as Env;
+    const models = createModelsForEnv(env);
+    const model = models.getModel(WORKERS_AI_PROVIDER_ID, MODEL_ID)!;
+
+    const result = await models.complete(model, {
+      messages: [{ role: "user", content: "你好", timestamp: 0 }],
+    });
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(WORKERS_AI_PAID_PLAN_MARKER);
+    expect(fakeAi.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves an ordinary upstream error unchanged", async () => {
+    const fakeAi = fakeBinding("upstream exploded", {
+      status: 500,
+      contentType: "text/plain",
+    });
+    const env = { ...baseEnv, AI: fakeAi } as unknown as Env;
+    const models = createModelsForEnv(env);
+    const model = models.getModel(WORKERS_AI_PROVIDER_ID, MODEL_ID)!;
+
+    const result = await models.complete(model, {
+      messages: [{ role: "user", content: "你好", timestamp: 0 }],
+    });
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).not.toBe(WORKERS_AI_QUOTA_MARKER);
+    expect(result.errorMessage).not.toBe(WORKERS_AI_PAID_PLAN_MARKER);
   });
 });
