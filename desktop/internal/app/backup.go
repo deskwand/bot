@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/telemetry"
 )
 
 // hiddenSecretName is the Worker secret the client manages on its own. It is
@@ -163,6 +164,7 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 	_, _ = s.settings.RecordRun(s.now(), path, nil)
 	_ = pruneBackups(settings.Dir, settings.Keep)
 	summary := backupSummary(path, manifest)
+	s.reportAction(telemetry.FeatureBackup, nil)
 	return &summary, nil
 }
 
@@ -431,7 +433,9 @@ func (s *Service) RestoreData() error {
 	if path == "" {
 		return domain.Error{Code: backup.CodeBackupInvalid, Message: "请先选择一个备份文件"}
 	}
-	return safeAppError(s.backup.Restore(ctx, target, path))
+	restoreErr := safeAppError(s.backup.Restore(ctx, target, path))
+	s.reportAction(telemetry.FeatureRestore, restoreErr)
+	return restoreErr
 }
 
 // PendingRestore reports an unfinished restore, or nil when there is none.

@@ -139,6 +139,19 @@ test("describeCode covers every fixed Go error code", () => {
   expect(describeCode("WECHAT_ILINK_HTTP_500")).not.toBe(FALLBACK_CODE_MESSAGE);
 });
 
+test("匿名统计开关默认打开，可以关掉再打开", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+
+  const toggle = page.getByRole("button", { name: "匿名统计" });
+  await expect(toggle).toHaveText("开");
+
+  await toggle.click();
+  await expect(page.getByRole("button", { name: "匿名统计" })).toHaveText("关");
+
+  await page.getByRole("button", { name: "匿名统计" }).click();
+  await expect(page.getByRole("button", { name: "匿名统计" })).toHaveText("开");
+});
+
 test("welcome → token connect → preflight → interrupted deployment → resume → models → WeChat QR → publish", async ({ page }) => {
   await page.goto("/test.html");
   await expect(page.getByRole("heading", { name: "部署一次，随时管理。" })).toBeVisible();

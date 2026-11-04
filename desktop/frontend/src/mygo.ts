@@ -690,6 +690,13 @@ export const Service = {
     return call("Service.SelectEntry", channel);
   },
   /**
+   * SetTelemetryEnabled stores the switch. Turning it on reports a ping right
+   * away, so the dashboard sees the client without waiting for the heartbeat.
+   */
+  setTelemetryEnabled(enabled: boolean): Promise<void> {
+    return call("Service.SetTelemetryEnabled", enabled);
+  },
+  /**
    * SetTheme stores the appearance and applies it to the native chrome and to
    * the pages, which follow prefers-color-scheme. The order is deliberate: a
    * store that refuses the write leaves the appearance as it was, so the
@@ -724,6 +731,13 @@ export const Service = {
   /** Status returns one evidence-based status item per kind. */
   status(): Promise<StatusItemDTO[]> {
     return call("Service.Status");
+  },
+  /**
+   * TelemetryEnabled reports the anonymous usage switch. Telemetry is on unless
+   * the user turned it off.
+   */
+  telemetryEnabled(): Promise<boolean> {
+    return call("Service.TelemetryEnabled");
   },
   /**
    * Theme returns the appearance the client shows: "system", "light" or "dark".

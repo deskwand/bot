@@ -21,6 +21,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/modelcatalog"
+	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/release"
 	"github.com/deskwand/bot/desktop/internal/wechat"
 )
@@ -389,6 +390,12 @@ type serviceFixture struct {
 	cache       *FileSnapshotCache
 	service     *Service
 	emitted     chan LoginStatusDTO
+	// These are nil unless a test sets them: telemetry, and the mcp fixtures'
+	// credential store and consent-page opener.
+	telemetry         *fakeReporter
+	telemetrySettings *fakeTelemetryStore
+	credentials       platform.CredentialStore
+	mcpBrowser        platform.BrowserOpener
 }
 
 func newServiceFixture(t *testing.T) *serviceFixture {
@@ -427,7 +434,15 @@ func newServiceFixture(t *testing.T) *serviceFixture {
 		t.Fatal(err)
 	}
 	f.cache = cache
-	f.service = NewService(ServiceOptions{
+	f.service = f.buildService()
+	return f
+}
+
+// buildService constructs the service from whatever the fixture currently
+// holds. A test that changes a dependency calls it again and reassigns
+// f.service.
+func (f *serviceFixture) buildService() *Service {
+	options := ServiceOptions{
 		Auth:        f.auth,
 		Publish:     f.publish,
 		Lifecycle:   f.lifecycle,
@@ -445,8 +460,22 @@ func newServiceFixture(t *testing.T) *serviceFixture {
 		},
 		NewOperationID: func() (string, error) { return "login-op", nil },
 		Now:            func() time.Time { return time.Unix(1700000000, 0).UTC() },
-	})
-	return f
+	}
+	// A typed nil reporter would satisfy the interface and panic on the first
+	// report, so a fixture without one leaves the option empty.
+	if f.telemetry != nil {
+		options.Telemetry = f.telemetry
+	}
+	if f.telemetrySettings != nil {
+		options.TelemetrySettings = f.telemetrySettings
+	}
+	if f.credentials != nil {
+		options.Credentials = f.credentials
+	}
+	if f.mcpBrowser != nil {
+		options.McpBrowser = f.mcpBrowser
+	}
+	return NewService(options)
 }
 
 func serviceSnapshot() domain.Snapshot {

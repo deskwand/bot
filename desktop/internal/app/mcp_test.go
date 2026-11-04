@@ -43,18 +43,9 @@ func newMcpFixture(t *testing.T, serversJSON string, secretNames []string, handl
 	credentials := platform.NewMemoryCredentialStore()
 	snapshot := mcpSnapshot(server.URL, serversJSON, secretNames)
 	base.snapshots = &fakeSnapshots{snapshot: snapshot}
-	base.service = NewService(ServiceOptions{
-		Auth: base.auth, Publish: base.publish, Lifecycle: base.lifecycle,
-		Entries: base.entries, Diagnostics: base.diagnostics, Snapshots: base.snapshots,
-		Scripts: base.scripts, Journal: base.journal, Store: base.store, Browser: base.browser,
-		McpBrowser:  base.browser,
-		Credentials: credentials,
-		Release:     base.release,
-		EmitLoginStatus: func(LoginStatusDTO) {
-		},
-		NewOperationID: func() (string, error) { return "login-op", nil },
-		Now:            func() time.Time { return time.Unix(1700000000, 0).UTC() },
-	})
+	base.credentials = credentials
+	base.mcpBrowser = base.browser
+	base.service = base.buildService()
 	if err := credentials.Set(context.Background(), backup.AdminTokenKey(snapshot.Target), testMcpAdminToken); err != nil {
 		t.Fatal(err)
 	}

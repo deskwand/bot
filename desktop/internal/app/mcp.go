@@ -15,6 +15,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/mcpadmin"
 	"github.com/deskwand/bot/desktop/internal/mcpcatalog"
+	"github.com/deskwand/bot/desktop/internal/telemetry"
 )
 
 // A server published moments ago is unknown to the Worker until the new
@@ -188,7 +189,11 @@ func (s *Service) AddMcpServer(input McpAddInput) (ResultDTO, error) {
 		return ResultDTO{}, safeAppError(fmt.Errorf("app: encode mcp server: %w", err), values...)
 	}
 	updated := append(append([]json.RawMessage{}, servers...), encoded)
-	return s.publishMcpServers(cfg, updated, secrets, values...)
+	result, err := s.publishMcpServers(cfg, updated, secrets, values...)
+	// Adding a server is its own action, so both `mcp` and the `publish` the
+	// helper reports are counted on purpose. Updates and removals are not.
+	s.reportFeature(telemetry.FeatureMcp, result.State, err)
+	return result, err
 }
 
 // UpdateMcpServer replaces one entry. The embedded name must stay the same so

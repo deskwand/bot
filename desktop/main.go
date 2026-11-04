@@ -18,6 +18,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/netproxy"
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/release"
+	"github.com/deskwand/bot/desktop/internal/telemetry"
 )
 
 // appVersion is the client version reported in the Cloudflare User-Agent. Keep
@@ -76,6 +77,22 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Anonymous usage reporting. A development build reports nothing: its runs
+	// would otherwise look like installs, and its version is not a release.
+	var reporter *telemetry.Reporter
+	telemetrySettings, telemetryErr := app.NewFileTelemetryStore(dataDir)
+	if telemetryErr != nil {
+		// Reporting is optional; the client must start without it.
+		log.Printf("telemetry state: %v", telemetryErr)
+	}
+	if telemetrySettings != nil && !dev {
+		reporter = telemetry.New(telemetry.Options{
+			BaseURL: "https://api.example.com",
+			Version: appVersion,
+			Store:   telemetrySettings,
+		})
+	}
+
 	credentials := platform.NewSystemCredentialStore(credentialServiceName(dev))
 	tokens := auth.NewTokenService(credentials)
 
@@ -103,7 +120,7 @@ func main() {
 		Credentials: credentials,
 	})
 
-	service := app.NewService(app.ServiceOptions{
+	options := app.ServiceOptions{
 		Auth:        tokens,
 		Publish:     publish,
 		Lifecycle:   lifecycle,
@@ -133,7 +150,16 @@ func main() {
 		}, restoreJournal, filepath.Join(dataDir, "backups")),
 		FileDialogs:    mygoFileDialogs{},
 		BackupSettings: backupSettings,
-	})
+	}
+	// A typed nil reporter would satisfy the interface and panic on the first
+	// report, so a build without one leaves the option itself empty.
+	if telemetrySettings != nil {
+		options.TelemetrySettings = telemetrySettings
+	}
+	if reporter != nil {
+		options.Telemetry = reporter
+	}
+	service := app.NewService(options)
 
 	// Auto backup runs on the interval the page configures. It only exists
 	// while this process does; the cloud data is untouched when the client is
@@ -164,6 +190,20 @@ func main() {
 	}))
 
 	mygo.Bind(service)
+
+	// One reporter goroutine for the process lifetime: it pings at startup and
+	// every hour after that.
+	if reporter != nil {
+		go reporter.Start(context.Background())
+		if state, err := telemetrySettings.Telemetry(); err == nil {
+			if state.LastVersion != "" && state.LastVersion != appVersion {
+				reporter.UpdateInstalled()
+			}
+			if err := telemetrySettings.RecordVersion(appVersion); err != nil {
+				log.Printf("telemetry state: %v", err)
+			}
+		}
+	}
 
 	var window *mygo.Window
 	mygo.App.OnSecondInstance(func(args []string, workingDir string) {

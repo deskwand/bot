@@ -10,6 +10,8 @@ export function createProductionClient(): ClientService {
     // anything but the three sources before it can be stored.
     theme: async () => (await Service.theme()) as ThemeSource,
     setTheme: (source) => Service.setTheme(source),
+    telemetryEnabled: () => Service.telemetryEnabled(),
+    setTelemetryEnabled: (enabled) => Service.setTelemetryEnabled(enabled),
     bootState: () => Service.bootState(),
     cloudflareStatus: () => Service.cloudflareStatus(),
     startCloudflareLogin: () => Service.startCloudflareLogin(),

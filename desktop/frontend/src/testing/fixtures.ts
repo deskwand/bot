@@ -96,6 +96,7 @@ type Scenario =
 interface MockState {
   scenario: Scenario;
   theme: ThemeSource;
+  telemetry: boolean;
   connected: boolean;
   accountId: string;
   target: string | null;
@@ -396,6 +397,7 @@ function initialState(): MockState {
   return {
     scenario,
     theme: "system",
+    telemetry: true,
     connected: shellScenario,
     accountId: "a".repeat(32),
     target: scenario === "layout-long-content" ? "long-name-".repeat(18) : shellScenario ? "deskwand-bot" : null,
@@ -685,6 +687,14 @@ export function createMockClient(): ClientService {
         fail("INVALID_REQUEST", "外观设置无效");
       }
       state.theme = next;
+    },
+
+    async telemetryEnabled(): Promise<boolean> {
+      return state.telemetry;
+    },
+
+    async setTelemetryEnabled(enabled: boolean) {
+      state.telemetry = enabled;
     },
 
     async cloudflareStatus() {

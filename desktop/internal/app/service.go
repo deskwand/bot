@@ -27,6 +27,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/release"
+	"github.com/deskwand/bot/desktop/internal/telemetry"
 	"github.com/deskwand/bot/desktop/internal/wechat"
 )
 
@@ -50,6 +51,8 @@ const (
 	// CodeThemeSaveFailed reports a preference write the disk refused. The
 	// message stays generic: the store's error names a home directory path.
 	CodeThemeSaveFailed = "THEME_SAVE_FAILED"
+	// CodeTelemetrySaveFailed reports a telemetry preference the disk refused.
+	CodeTelemetrySaveFailed = "TELEMETRY_SAVE_FAILED"
 )
 
 // legacyModelSecretNames are the pre-MODEL_KEY_* names. A publish clears any
@@ -173,6 +176,11 @@ type ServiceOptions struct {
 	// Theme is the persisted appearance choice; nil makes SetTheme
 	// appearance-only for this run.
 	Theme ThemeStore
+	// Telemetry reports anonymous feature use. Nil disables reporting.
+	Telemetry TelemetryReporter
+	// TelemetrySettings is the persisted switch and the one-shot facts. Nil
+	// makes TelemetryEnabled report false and SetTelemetryEnabled unavailable.
+	TelemetrySettings TelemetryStore
 	// Cache keeps the last successful config and status for local reads. Nil
 	// disables persistence.
 	Cache SnapshotCache
@@ -210,6 +218,8 @@ type Service struct {
 	openPath           func(string) error
 	checkClientUpdates func()
 	theme              ThemeStore
+	telemetry          TelemetryReporter
+	telemetrySettings  TelemetryStore
 	cache              SnapshotCache
 	applyTheme         func(string)
 	emitLogin          func(LoginStatusDTO)
@@ -286,6 +296,8 @@ func NewService(options ServiceOptions) *Service {
 		openPath:           openPath,
 		checkClientUpdates: checkClientUpdates,
 		theme:              options.Theme,
+		telemetry:          options.Telemetry,
+		telemetrySettings:  options.TelemetrySettings,
 		cache:              options.Cache,
 		applyTheme:         applyTheme,
 		emitLogin:          emit,
@@ -677,7 +689,9 @@ func (s *Service) ConfirmImport(input ImportInputDTO) (ResultDTO, error) {
 		TaskModel:       task,
 		SecretValues:    secretValues,
 	})
-	return s.summaryFromResult(result, target.ScriptName), safeAppError(err, importSecretValues(input.Secrets)...)
+	failure := safeAppError(err, importSecretValues(input.Secrets)...)
+	s.reportFeature(telemetry.FeatureImport, result.State, failure)
+	return s.summaryFromResult(result, target.ScriptName), failure
 }
 
 // Install creates a new deployment.
@@ -721,14 +735,18 @@ func (s *Service) Install(input InstallInputDTO) (ResultDTO, error) {
 		ActiveChannel: channel,
 	}
 	result, err := s.lifecycle.Install(ctx, request)
+	failure := safeAppError(err)
 	summary := s.summaryFromResult(result, request.WorkerName)
-	if err == nil && summary.State == deployment.StatePublished && s.store != nil {
+	if failure == nil && summary.State == deployment.StatePublished && s.store != nil {
 		_ = s.store.Save(domain.Target{AccountID: accountID, ScriptName: request.WorkerName})
 	}
 	if len(input.TelegramUserIDs) == 0 {
 		summary.Warnings = append(summary.Warnings, "owner 列表为空：Worker 会忽略所有消息，直到在设置中发布 owner。")
 	}
-	return summary, safeAppError(err)
+	// After the save: setup can only be evaluated against the deployment this
+	// install just selected.
+	s.reportFeature(telemetry.FeatureInstall, result.State, failure)
+	return summary, failure
 }
 
 // UpgradeAvailable compares the embedded release with the active deployment.
@@ -815,7 +833,9 @@ func (s *Service) Upgrade() (ResultDTO, error) {
 		return ResultDTO{}, serviceUnavailable()
 	}
 	result, err := s.lifecycle.Upgrade(ctx, target, pkg)
-	return s.summaryFromResult(result, target.ScriptName), safeAppError(err)
+	failure := safeAppError(err)
+	s.reportFeature(telemetry.FeatureUpgrade, result.State, failure)
+	return s.summaryFromResult(result, target.ScriptName), failure
 }
 
 // GetConfig reads the editable configuration summary.
@@ -956,7 +976,9 @@ func (s *Service) PublishConfig(input ConfigEditDTO) (ResultDTO, error) {
 		return ResultDTO{}, safeAppError(err, secretInputValues(input.Secrets)...)
 	}
 	result, err := s.publish.Apply(ctx, target, change)
-	return s.summaryFromResult(result, target.ScriptName), safeAppError(err, secretInputValues(input.Secrets)...)
+	failure := safeAppError(err, secretInputValues(input.Secrets)...)
+	s.reportFeature(telemetry.FeaturePublish, result.State, failure)
+	return s.summaryFromResult(result, target.ScriptName), failure
 }
 
 // ResumeOperation reconciles one journaled operation by kind. Installs are
@@ -1352,7 +1374,14 @@ func (s *Service) ConnectTelegram(token string) (ResultDTO, error) {
 		return ResultDTO{}, serviceUnavailable()
 	}
 	result, err := s.entries.ConnectTelegram(ctx, target, strings.TrimSpace(token))
-	return s.summaryFromResult(result, target.ScriptName), safeAppError(err, token)
+	summary := s.summaryFromResult(result, target.ScriptName)
+	failure := safeAppError(err, token)
+	if failure == nil && summary.State == deployment.StatePublished {
+		// Connecting the channel is one of the ways setup completes, and this
+		// path never reaches PublishConfig.
+		s.reportConfigDone()
+	}
+	return summary, failure
 }
 
 // SelectEntry publishes ACTIVE_CHANNEL. An unconfigured entry is allowed with
@@ -1379,7 +1408,11 @@ func (s *Service) SelectEntry(channel string) (EntryResultDTO, error) {
 		Configured:   selection.Configured,
 		Warning:      selection.Warning,
 	}
-	return dto, safeAppError(err)
+	failure := safeAppError(err)
+	if failure == nil && dto.State == deployment.StatePublished {
+		s.reportConfigDone()
+	}
+	return dto, failure
 }
 
 // Status returns one evidence-based status item per kind.
@@ -1422,6 +1455,7 @@ func (s *Service) ExportDiagnostics() (string, error) {
 	if err != nil {
 		return "", safeAppError(err)
 	}
+	s.reportAction(telemetry.FeatureDiagnostics, nil)
 	return string(data), nil
 }
 

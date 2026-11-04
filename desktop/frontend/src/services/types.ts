@@ -124,6 +124,8 @@ export interface ClientService {
   name(): Promise<string>;
   theme(): Promise<ThemeSource>;
   setTheme(source: ThemeSource): Promise<void>;
+  telemetryEnabled(): Promise<boolean>;
+  setTelemetryEnabled(enabled: boolean): Promise<void>;
   bootState(): Promise<BootStateDTO>;
   cloudflareStatus(): Promise<ConnectionDTO>;
   startCloudflareLogin(): Promise<string>;
