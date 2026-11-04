@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -40,8 +41,8 @@ var BackupProgressEvent = mygo.NewEvent[backup.Progress]("backup-progress")
 // FileDialogs opens the native file dialogs the backup flow needs. A cancelled
 // dialog returns an empty path and a nil error.
 type FileDialogs interface {
-	SaveBackup(defaultName string) (path string, err error)
 	OpenBackup() (path string, err error)
+	ChooseBackupDir() (path string, err error)
 }
 
 // BackupService runs the backup flows. *BackupRunner implements it in
@@ -103,35 +104,114 @@ func (s *Service) endBackupOperation() {
 	s.backupMu.Unlock()
 }
 
-// ExportData exports the managed deployment to a file the user picks.
+// ExportData writes a backup into the configured folder. It opens no dialog:
+// the folder is a setting, so one click is enough. The attempt is recorded so
+// the page can show when the last backup succeeded, and old files beyond the
+// configured keep count are removed afterwards.
 func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 	if err := s.beginBackupOperation(); err != nil {
 		return nil, err
 	}
 	defer s.endBackupOperation()
+	if s.backup == nil || s.settings == nil {
+		return nil, serviceUnavailable()
+	}
+	settings, err := s.settings.Settings()
+	if err != nil {
+		return nil, safeAppError(err)
+	}
 	ctx, cancel := s.backupContext()
 	defer cancel()
 	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if s.backup == nil || s.dialogs == nil {
-		return nil, serviceUnavailable()
+	if err := ensureWritableDir(settings.Dir); err != nil {
+		return nil, err
 	}
-	defaultName := "deskwand-backup-" + target.ScriptName + "-" + s.now().UTC().Format("20060102-150405") + ".zip"
-	path, err := s.dialogs.SaveBackup(defaultName)
-	if err != nil {
-		return nil, safeAppError(err)
-	}
-	if path == "" {
-		return nil, nil
-	}
+	path := filepath.Join(settings.Dir, backupFileName(target.ScriptName, s.now()))
 	manifest, err := s.backup.Export(ctx, target, path)
 	if err != nil {
 		return nil, safeAppError(err)
 	}
+	_, _ = s.settings.RecordRun(s.now(), path, nil)
+	_ = pruneBackups(settings.Dir, settings.Keep)
 	summary := backupSummary(path, manifest)
 	return &summary, nil
+}
+
+// BackupSettings returns the stored folder and schedule. It returns the DTO by
+// value: the bridge maps a pointer result to null, and these calls always have
+// an answer.
+func (s *Service) BackupSettings() (BackupSettingsDTO, error) {
+	if s.settings == nil {
+		return BackupSettingsDTO{}, serviceUnavailable()
+	}
+	settings, err := s.settings.Settings()
+	if err != nil {
+		return BackupSettingsDTO{}, safeAppError(err)
+	}
+	return settings, nil
+}
+
+// SaveBackupSettings stores the folder and schedule the page edited.
+func (s *Service) SaveBackupSettings(input BackupSettingsEditDTO) (BackupSettingsDTO, error) {
+	if s.settings == nil {
+		return BackupSettingsDTO{}, serviceUnavailable()
+	}
+	next, err := s.settings.Save(input)
+	if err != nil {
+		return BackupSettingsDTO{}, safeAppError(err)
+	}
+	return next, nil
+}
+
+// ChooseBackupDir asks for a folder with the native dialog and stores it. A
+// cancelled dialog returns the unchanged settings and no error.
+func (s *Service) ChooseBackupDir() (BackupSettingsDTO, error) {
+	if s.settings == nil || s.dialogs == nil {
+		return BackupSettingsDTO{}, serviceUnavailable()
+	}
+	path, err := s.dialogs.ChooseBackupDir()
+	if err != nil {
+		return BackupSettingsDTO{}, safeAppError(err)
+	}
+	settings, err := s.settings.Settings()
+	if err != nil {
+		return BackupSettingsDTO{}, safeAppError(err)
+	}
+	if path == "" {
+		return settings, nil
+	}
+	next, err := s.settings.Save(BackupSettingsEditDTO{
+		Dir:           path,
+		Auto:          settings.Auto,
+		IntervalHours: settings.IntervalHours,
+		Keep:          settings.Keep,
+	})
+	if err != nil {
+		return BackupSettingsDTO{}, safeAppError(err)
+	}
+	return next, nil
+}
+
+// OpenBackupFolder reveals the configured folder, creating it first so the
+// click always lands somewhere.
+func (s *Service) OpenBackupFolder() error {
+	if s.settings == nil || s.openPath == nil {
+		return serviceUnavailable()
+	}
+	settings, err := s.settings.Settings()
+	if err != nil {
+		return safeAppError(err)
+	}
+	if err := ensureWritableDir(settings.Dir); err != nil {
+		return err
+	}
+	if err := s.openPath(settings.Dir); err != nil {
+		return domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: "无法打开备份目录，请手动打开"}
+	}
+	return nil
 }
 
 // ChooseBackup asks the user for a backup file and returns its summary. The

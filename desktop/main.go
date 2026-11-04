@@ -66,6 +66,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	backupSettings, err := app.NewFileBackupSettings(dataDir, filepath.Join(dataDir, "backups"))
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	credentials := platform.NewSystemCredentialStore(credentialServiceName(dev))
 	tokens := auth.NewTokenService(credentials)
@@ -121,7 +125,8 @@ func main() {
 				_ = app.BackupProgressEvent.Broadcast(progress)
 			},
 		}, restoreJournal, filepath.Join(dataDir, "backups")),
-		FileDialogs: mygoFileDialogs{},
+		FileDialogs:    mygoFileDialogs{},
+		BackupSettings: backupSettings,
 	})
 
 	mygo.Use(updater.New(updater.Options{Interval: 6 * time.Hour}))
@@ -202,13 +207,19 @@ var backupFilters = []mygo.FileFilter{{Name: "DeskWand 备份", Extensions: []st
 // mygoFileDialogs implements app.FileDialogs with the native dialogs.
 type mygoFileDialogs struct{}
 
-func (mygoFileDialogs) SaveBackup(defaultName string) (string, error) {
-	return mygo.Dialog.Save(mygo.SaveDialogOptions{
-		Title:             "保存数据备份",
-		DefaultPath:       defaultName,
-		Filters:           backupFilters,
+func (mygoFileDialogs) ChooseBackupDir() (string, error) {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Title:             "选择备份目录",
+		Directory:         true,
 		CreateDirectories: true,
 	})
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", nil
+	}
+	return paths[0], nil
 }
 
 func (mygoFileDialogs) OpenBackup() (string, error) {
