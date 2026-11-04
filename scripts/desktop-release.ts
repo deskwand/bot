@@ -105,10 +105,11 @@ export async function checkPublishedVersion(
   manifestUrl: string,
   local: string,
   fetchFn: typeof fetch = fetch,
+  now: () => number = Date.now,
 ): Promise<{ firstRelease: true } | { firstRelease: false; published: string }> {
   let response: Response;
   try {
-    response = await fetchFn(manifestUrl);
+    response = await fetchFn(cacheBusted(manifestUrl, now()));
   } catch (error) {
     throw new Error(`无法读取公网 manifest：${errorMessage(error)}`);
   }

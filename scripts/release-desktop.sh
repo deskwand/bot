@@ -29,7 +29,7 @@ case "${1:-}" in
     ;;
 esac
 
-for cmd in git node npm; do
+for cmd in git go node npm; do
   command -v "$cmd" >/dev/null || { echo "缺少 ${cmd}，请先安装" >&2; exit 1; }
 done
 
@@ -62,6 +62,7 @@ if [ "$dry_run" = true ]; then
    ${dmg}
    deskwand-bot-${version}-darwin-arm64.tar.gz
    deskwand-bot-<from>-to-${version}-darwin-arm64.delta（仅当存在上一版本）
+   install.sh
    SHA256SUMS
    update-darwin-arm64.json（最后上传）
 5. 公网核验：manifest 的 version、归档大小与 SHA-256
@@ -87,6 +88,12 @@ echo "==> 2/6 发布预检与线上版本检查"
 node --experimental-strip-types "$root/scripts/desktop-release.ts" preflight "$version"
 node --experimental-strip-types "$root/scripts/desktop-release.ts" check-remote "$manifest" "$version"
 
+# 依赖缺失或 lock 文件比已安装依赖新时，按 lock 文件重新安装。
+if [ ! -d "$frontend/node_modules" ] || [ "$frontend/package-lock.json" -nt "$frontend/node_modules/.package-lock.json" ]; then
+  echo "==> 安装前端依赖"
+  npm --prefix "$frontend" ci
+fi
+
 echo "==> 3/6 构建 Worker 发布包"
 # shellcheck source=scripts/lib/worker-bundle.sh
 source "$root/scripts/lib/worker-bundle.sh"
@@ -94,6 +101,8 @@ prepare_worker_bundle "$root" "$version" "$release_key_file" "$min_from_version"
 rm -rf "$root/desktop/build"
 
 echo "==> 4/6 构建并上传到 R2"
+# 前端构建先于导出凭据执行，tsc/vite 不会看到 R2 凭据或更新私钥。
+npm --prefix "$frontend" run build
 # R2 凭据只存在于这个子 shell 的环境里，不打印、不写文件。
 (
   r2_credentials="$(node -e '
@@ -125,7 +134,7 @@ process.stdout.write(r2.accessKey + "\n" + r2.secretKey + "\n");
   export NO_PROXY='*'
 
   cd "$frontend"
-  npx mygo build -upload ..
+  npx mygo build -skip-build-command -upload ..
 )
 
 echo "==> 5/6 公网核验"

@@ -139,9 +139,16 @@ func main() {
 			{Role: mygo.RoleAbout},
 			updater.MenuItem(),
 			mygo.Separator(),
+			{Role: mygo.RoleServices},
+			mygo.Separator(),
+			{Role: mygo.RoleHide},
+			{Role: mygo.RoleHideOthers},
+			{Role: mygo.RoleUnhide},
+			mygo.Separator(),
 			{Role: mygo.RoleQuit},
 		}},
 		{Role: mygo.RoleEditMenu},
+		{Role: mygo.RoleViewMenu},
 		{Role: mygo.RoleWindowMenu},
 	}))
 

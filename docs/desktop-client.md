@@ -215,11 +215,15 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。若打开后
 - **云端服务**：在“更新”页比较客户端内置的 Worker 发布包与当前部署，由你确认后升级；
 - **桌面客户端**：由独立的客户端更新密钥签名，使用单独的更新源。
 
-客户端更新永远不会自动执行，也永远不会修改云端部署。默认构建没有配置更新源，界面显示 **“未配置更新源”**。配置了发布源的正式构建可以：
+客户端更新永远不会修改云端部署。带更新器的客户端会在启动 10 秒后检查一次，之后每 6 小时在后台检查。发现新版本时弹出更新窗口，显示发布说明，并提供：
 
-1. 点击 **检查客户端更新**；
-2. 看到新版本后点击 **安装客户端更新**；
-3. 重启客户端使新版本生效。
+- **安装更新**：下载更新包并显示进度，完成后提示重启客户端；
+- **稍后提醒**：本次不安装，下次检查时再提示；
+- **跳过此版本**：不再提示这个版本。
+
+菜单里的「检查更新…」和“更新”页的「检查客户端更新」会打开同一个更新窗口，可以随时手动检查。
+
+首个带更新器的版本（0.1.6）需要从 dmg 手动安装，此后才会收到自动更新。目前只发布 macOS arm64 版本；在 Windows 上手动检查会因为更新源没有 Windows manifest 而报告失败。
 
 客户端更新与 Worker 发布包不能互相替代：Worker 发布包不能安装成桌面更新，桌面更新也不会携带或替换云端代码。
 
@@ -253,12 +257,14 @@ npm run generate:release-key
 在 `desktop/frontend` 目录执行：
 
 ```bash
-npx mygo keygen
+tmpdir="$(mktemp -d)"
+npx mygo keygen -o "$tmpdir"
+install -m 600 "$tmpdir/mygo-update.key" "$HOME/.deskwand-bot/client-update.key"
 ```
 
 - 私钥：`$HOME/.deskwand-bot/client-update.key`，权限 0600；可用 `DESKWAND_CLIENT_UPDATE_KEY_FILE` 指向其他路径；
-- 公钥：命令输出（`mygo-update.pub`）的内容写入 `desktop/mygo.json` 的 `updates.publicKey`，可以提交；
-- 私钥必须额外备份到密码管理器：丢失后，已安装的客户端无法再接收更新。
+- 公钥：把 `$tmpdir/mygo-update.pub` 的内容粘贴到 `desktop/mygo.json` 的 `updates.publicKey`，可以提交；
+- 完成后删除临时目录，并把私钥额外备份到密码管理器：丢失后，已安装的客户端无法再接收更新。
 
 私钥绝不进入仓库、日志、构建产物或客户端包。两套密钥不能混用。
 

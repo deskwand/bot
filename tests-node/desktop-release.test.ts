@@ -92,6 +92,19 @@ describe("findArchive", () => {
 });
 
 describe("checkPublishedVersion", () => {
+  it("uses a cache-busting query", async () => {
+    const requested: string[] = [];
+    const fetchFn = fakeFetch((url) => {
+      requested.push(url);
+      return new Response("", { status: 404 });
+    });
+
+    await expect(
+      checkPublishedVersion(MANIFEST_URL, "0.1.6", fetchFn, () => 7),
+    ).resolves.toEqual({ firstRelease: true });
+    expect(requested[0]?.endsWith("?t=7")).toBe(true);
+  });
+
   it("treats 404 as a first release", async () => {
     const fetchFn = fakeFetch(() => new Response("", { status: 404 }));
     await expect(checkPublishedVersion(MANIFEST_URL, "0.1.6", fetchFn)).resolves.toEqual({

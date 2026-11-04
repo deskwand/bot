@@ -6,6 +6,9 @@ import { FALLBACK_CODE_MESSAGE, describeCode } from "../../src/services/errors";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const SCREENS = fileURLToPath(new URL("../../test-results/screens", import.meta.url));
+const APP_VERSION = (
+  JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { version: string }
+).version;
 
 // The UI must never claim verified delivery without cloud evidence. One helper so
 // a copy change cannot silently drop this guard.
@@ -822,7 +825,7 @@ test("user-confirmed evidence is labelled separately from cloud verification", a
 test("client update button opens the updater window", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "更新", exact: true }).click();
-  await expect(page.getByText("v0.1.5")).toBeVisible();          // __APP_VERSION__
+  await expect(page.getByText(`v${APP_VERSION}`)).toBeVisible();  // __APP_VERSION__
   await expect(page.getByRole("button", { name: "安装客户端更新" })).toHaveCount(0);
   await page.getByRole("button", { name: "检查客户端更新" }).click();
   await expect(page.getByText("已打开更新窗口")).toBeVisible();
@@ -841,7 +844,10 @@ test("cloud upgrade requires confirmation and reports the control-plane result",
   await page.getByRole("button", { name: "更新", exact: true }).click();
   await expect(page.getByRole("heading", { name: "更新", exact: true })).toBeVisible();
   await expect(page.getByText("有新版本", { exact: true })).toBeVisible();
-  await expect(page.getByText("v0.1.5")).toBeVisible();
+  const cloudCard = page
+    .locator('[data-slot="card"]')
+    .filter({ hasText: "云端服务" });
+  await expect(cloudCard.getByText("当前 1.0.0 → 可用 1.1.0")).toBeVisible();
   await page.getByRole("button", { name: "升级云端服务" }).click();
   const dialog = page.getByRole("dialog", { name: "升级前确认" });
   await expect(dialog).toBeVisible();
