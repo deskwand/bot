@@ -173,6 +173,9 @@ type ServiceOptions struct {
 	// Theme is the persisted appearance choice; nil makes SetTheme
 	// appearance-only for this run.
 	Theme ThemeStore
+	// Cache keeps the last successful config and status for local reads. Nil
+	// disables persistence.
+	Cache SnapshotCache
 	// ApplyTheme defaults to mygo.Theme.SetSource. Tests inject a recorder so
 	// they do not need a running app.
 	ApplyTheme func(source string)
@@ -207,6 +210,7 @@ type Service struct {
 	openPath           func(string) error
 	checkClientUpdates func()
 	theme              ThemeStore
+	cache              SnapshotCache
 	applyTheme         func(string)
 	emitLogin          func(LoginStatusDTO)
 	emitCloudflare     func(CloudflareLoginDTO)
@@ -282,6 +286,7 @@ func NewService(options ServiceOptions) *Service {
 		openPath:           openPath,
 		checkClientUpdates: checkClientUpdates,
 		theme:              options.Theme,
+		cache:              options.Cache,
 		applyTheme:         applyTheme,
 		emitLogin:          emit,
 		emitCloudflare:     emitCloudflare,
@@ -511,7 +516,15 @@ func (s *Service) DisconnectCloudflare() error {
 	if s.auth == nil {
 		return serviceUnavailable()
 	}
-	return s.auth.Disconnect(context.Background())
+	if err := s.auth.Disconnect(context.Background()); err != nil {
+		return err
+	}
+	if s.cache != nil {
+		if err := s.cache.Clear(); err != nil {
+			slog.Error("app: clear snapshot cache", "error", err)
+		}
+	}
+	return nil
 }
 
 // ListWorkers lists Worker scripts in the connected account.
@@ -825,7 +838,46 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 			dto.McpServers = raw
 		}
 	}
+	if s.cache != nil {
+		if err := s.cache.SaveConfig(target, dto, s.now()); err != nil {
+			slog.Error("app: save config snapshot", "error", err)
+		}
+	}
 	return dto, nil
+}
+
+// CachedConfig returns the last config this app wrote for the managed target.
+// It reads only local files and never contacts Cloudflare.
+func (s *Service) CachedConfig() (CachedConfigDTO, error) {
+	target, err := s.managedTarget(context.Background())
+	if err != nil {
+		return CachedConfigDTO{}, err
+	}
+	if s.cache == nil {
+		return CachedConfigDTO{}, nil
+	}
+	data, at, ok := s.cache.LoadConfig(target)
+	if !ok {
+		return CachedConfigDTO{}, nil
+	}
+	return CachedConfigDTO{Data: &data, SavedAt: formatTime(at)}, nil
+}
+
+// CachedStatus returns the last status this app wrote for the managed target.
+// It reads only local files and never contacts Cloudflare.
+func (s *Service) CachedStatus() (CachedStatusDTO, error) {
+	target, err := s.managedTarget(context.Background())
+	if err != nil {
+		return CachedStatusDTO{}, err
+	}
+	if s.cache == nil {
+		return CachedStatusDTO{}, nil
+	}
+	data, at, ok := s.cache.LoadStatus(target)
+	if !ok {
+		return CachedStatusDTO{}, nil
+	}
+	return CachedStatusDTO{Data: data, SavedAt: formatTime(at)}, nil
 }
 
 // PreviewConfig validates and describes a publish without writing.
@@ -1313,6 +1365,11 @@ func (s *Service) Status() ([]StatusItemDTO, error) {
 	items := make([]StatusItemDTO, 0, len(report.Items))
 	for _, item := range report.Items {
 		items = append(items, statusItemDTO(item))
+	}
+	if s.cache != nil {
+		if err := s.cache.SaveStatus(target, items, s.now()); err != nil {
+			slog.Error("app: save status snapshot", "error", err)
+		}
 	}
 	return items, nil
 }

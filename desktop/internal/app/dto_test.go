@@ -76,6 +76,7 @@ func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 		"AbandonOperation": true, "AbandonPendingRestore": true, "AddMcpServer": true,
 		"BackupSettings":        true,
 		"CancelCloudflareLogin": true, "CancelWeChatLogin": true,
+		"CachedConfig": true, "CachedStatus": true,
 		"ChooseBackupDir": true, "CheckClientUpdates": true,
 		"ChooseBackupAt": true, "ChooseBackup": true, "CloudflareStatus": true, "ConfirmCloudflareAccount": true,
 		"ConfirmImport": true, "ConnectTelegram": true,

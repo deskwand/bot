@@ -148,6 +148,20 @@ func (s SecretEditDTO) LogValue() slog.Value {
 	return slog.GroupValue(attrs...)
 }
 
+// CachedConfigDTO is the last config written to the local snapshot cache. An
+// absent cache is a nil Data and an empty SavedAt.
+type CachedConfigDTO struct {
+	Data    *ConfigDTO `json:"data"`
+	SavedAt string     `json:"savedAt"`
+}
+
+// CachedStatusDTO is the last status written to the local snapshot cache. An
+// absent cache is a nil Data and an empty SavedAt.
+type CachedStatusDTO struct {
+	Data    []StatusItemDTO `json:"data"`
+	SavedAt string          `json:"savedAt"`
+}
+
 // ConfigEditDTO is the 保存并发布 input. A nil owner or model means unchanged;
 // an empty owner slice clears the allowlist. Secrets are write-only.
 type ConfigEditDTO struct {
