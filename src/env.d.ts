@@ -4,7 +4,6 @@ declare namespace Cloudflare {
   interface Env {
     [key: `MODEL_KEY_${string}`]: string | undefined;
     TELEGRAM_BOT_TOKEN?: string;
-    TELEGRAM_WEBHOOK_SECRET?: string;
     WECHAT_CREDENTIALS?: string;
     /** Bearer token guarding `/admin/*`; unset disables the routes. */
     ADMIN_TOKEN?: string;

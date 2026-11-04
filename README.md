@@ -2,12 +2,12 @@
 
 一个部署在 Cloudflare Workers 上的单人助手：管家负责对话、记忆、任务派发与通知，每个任务由独立的 Durable Object 执行，结果（含产物链接）统一由管家经当前选中渠道回传。同一时刻只启用一个业务渠道，由 Worker 环境变量 `ACTIVE_CHANNEL` 选择（`telegram` 或 `wechat`）。
 
-- 渠道层：`ChannelDO`（Telegram webhook 与微信 iLink 轮询，单实例）
+- 渠道层：`ChannelDO`（Telegram 长轮询与微信 iLink 轮询，单实例）
 - 控制链路：`ButlerDO`（全局单实例，Pi agent + SQLite 业务表）
 - 执行链路：`TaskDO`（每任务一个实例，工具调用、审批、崩溃恢复）
 - 自主机器人：`BotDO`（每个机器人一个实例，独立记忆，自己决定下次唤醒，执行仍交给 TaskDO）
 - 外部服务：`McpAuthDO`（全局单实例，远程 MCP 的 OAuth 注册、token 保管与续期，以及桌面端"测试连接"）
-- 定时任务：通过 Agents SDK `Agent.schedule` 注册 cron（微信轮询保活另用每 5 分钟一次的 Cron Trigger），cron 按 **UTC** 解释
+- 定时任务：通过 Agents SDK `Agent.schedule` 注册 cron（渠道轮询保活另用每 5 分钟一次的 Cron Trigger），cron 按 **UTC** 解释
 - 产物：写入 R2，通过 `${PUBLIC_BASE_URL}/a/<key>` 访问
 
 ## 消息格式
@@ -49,7 +49,7 @@
 
 ## 前置条件
 
-- Node.js 22.6+（推荐 Node 26；`npm run set-webhook` 使用 Node 原生 TypeScript 类型擦除）
+- Node.js 22.6+（推荐 Node 26；本地脚本使用 Node 原生 TypeScript 类型擦除）
 - npm
 - Cloudflare 账号，并已执行 `npx wrangler login`
 - Telegram Bot Token（在 [@BotFather](https://t.me/BotFather) 创建 bot）
@@ -89,16 +89,9 @@ npx wrangler r2 bucket create my-artifacts
 ```bash
 npx wrangler secret put MODEL_KEY_OPENCODE_GO
 npx wrangler secret put TELEGRAM_BOT_TOKEN
-npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 ```
 
 模型 key 的 secret 名统一按厂商 id 推导：`MODEL_KEY_` + id 转大写、`-` 换成 `_`。例如 `opencode-go` → `MODEL_KEY_OPENCODE_GO`、`deepseek` → `MODEL_KEY_DEEPSEEK`、`anthropic` → `MODEL_KEY_ANTHROPIC`。自定义端点同样按 id 推导，例如 `my-proxy` → `MODEL_KEY_MY_PROXY`。
-
-`TELEGRAM_WEBHOOK_SECRET` 是自定义的随机字符串，用于校验 Telegram 回调头 `X-Telegram-Bot-Api-Secret-Token`，可用下面命令生成：
-
-```bash
-openssl rand -hex 32
-```
 
 本地开发时，把 `.dev.vars.example` 复制为 `.dev.vars` 并填入同样的值（`.dev.vars` 已被 git 忽略）。其中 `DESKWAND_CONFIG` 必填，否则本地业务处理同样以 `CONFIG_MISSING` 拒绝：
 
@@ -110,7 +103,6 @@ cp .dev.vars.example .dev.vars
 | --- | --- | --- |
 | `MODEL_KEY_<ID>` | secret | 模型调用；`<ID>` 是厂商 id 转大写、`-` 换 `_`（如 `MODEL_KEY_OPENCODE_GO`、`MODEL_KEY_DEEPSEEK`）；缺失时只影响该厂商的模型 |
 | `TELEGRAM_BOT_TOKEN` | secret | BotFather 提供的 token |
-| `TELEGRAM_WEBHOOK_SECRET` | secret | webhook 校验密钥（自定义随机串）；缺失时所有 Telegram webhook 都会被拒绝 |
 | `WECHAT_CREDENTIALS` | secret | 可选；微信 iLink 登录凭据，由 `npm run wechat-login` 写入 |
 | `PUBLIC_BASE_URL` | var | 产物链接前缀，填部署后的公开地址 |
 | `DESKWAND_CONFIG` | var | 非敏感业务配置（owner、模型、MCP），结构见 `contracts/deployment-config.schema.json` |
@@ -154,7 +146,7 @@ cp .dev.vars.example .dev.vars
   - 登录授权（OAuth）：由 Worker 完成，回调地址为 `${PUBLIC_BASE_URL}/mcp/oauth/callback`，token 存在 `McpAuthDO` 并自动续期，不进入本地备份；恢复到新部署后需在"服务"页重新授权。
 - `schemaVersion` 必须为 `1`；未知版本、非整数/越界用户 ID、未知 provider 或非法 JSON 都会以固定错误拒绝，不会猜测或回退。
 
-`MODEL_KEY_<ID>`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_WEBHOOK_SECRET` 都是可选 secret：缺失时只影响对应业务路径（例如缺少 webhook secret 时所有 Telegram webhook 都会被拒绝）。
+`MODEL_KEY_<ID>`、`TELEGRAM_BOT_TOKEN` 都是可选 secret：缺失时只影响对应业务路径（例如缺少 Bot token 时无法接收或发送 Telegram 消息）。
 
 自定义 OpenAI/Anthropic 兼容端点在 `models.customProviders` 里声明，并用同一个 id 推导 secret 名：
 
@@ -190,25 +182,7 @@ Telegram 用户 ID 可通过 [@userinfobot](https://t.me/userinfobot) 获取。
 npm run deploy
 ```
 
-部署完成后，用 Worker 的公开地址设置 Telegram webhook（webhook 始终设置；只有选中 Telegram 时才会向管家分发）：
-
-```bash
-npm run set-webhook -- https://bot.<your-subdomain>.workers.dev
-```
-
-脚本会调用 Telegram `setWebhook`：
-
-- `url = <publicUrl>/telegram/webhook`
-- `secret_token = TELEGRAM_WEBHOOK_SECRET`
-- `allowed_updates = ["message", "callback_query"]`
-
-token 与 secret 从环境变量读取，缺失时回退到 `.dev.vars`；脚本不会打印它们。
-
-检查 webhook 状态可访问：
-
-```bash
-curl "https://api.telegram.org/bot<token>/getWebhookInfo"
-```
+Telegram 由 Worker 主动长轮询收消息，不需要设置 webhook；旧部署升级后会自动删除已注册的 webhook。
 
 ## 渠道选择与切换
 
@@ -249,10 +223,11 @@ npm run wechat-login
 
 ```bash
 npm run dev                 # wrangler dev，默认 http://localhost:8787
+# 可选：需要在本地访问产物链接时
 cloudflared tunnel --url http://localhost:8787
 ```
 
-Telegram 需要公网 HTTPS 地址，所以本地调试需用隧道地址执行 `npm run set-webhook -- https://<tunnel-host>`，并把 `.dev.vars` 中的 `PUBLIC_BASE_URL` 也填成隧道地址（否则产物链接不可用）。调试结束后记得切回生产地址。
+Telegram 由 Worker 主动长轮询收消息，本地调试不需要公网地址。注意：同一个 bot token 同一时间只能有一个轮询方，本地调试请使用单独的测试 bot，否则会和线上部署抢消息。若需要在本机验证产物链接，可把 `.dev.vars` 中的 `PUBLIC_BASE_URL` 填成隧道地址。
 
 ## 从源码常量迁移到 DESKWAND_CONFIG
 
@@ -326,8 +301,8 @@ npm run typecheck    # tsc --noEmit
 
 ```
 src/
-  index.ts              # Worker 入口 + Gateway 路由（/telegram/webhook、/a/<key>）
-  gateway.ts            # webhook 转发、产物路由
+  index.ts              # Worker 入口 + Gateway 路由（/a/<key>）
+  gateway.ts            # 产物路由
   channels/             # ChannelDO、Telegram 与微信 iLink 适配器
   butler/               # Butler DO：对话、记忆、任务索引、定时任务、通知节流
   task/                 # Task DO：执行、事件 outbox、审批、控制指令
@@ -336,7 +311,6 @@ src/
   config.ts             # 配置类型与 isOwner/needsApproval 纯函数
   runtime-config.ts     # 从 DESKWAND_CONFIG 校验并读取运行时配置
 contracts/              # Go/TS 共用的部署配置 schema 与 fixtures
-scripts/set-webhook.ts  # 设置 Telegram webhook
 scripts/wechat-login.ts # 微信扫码登录并写入 Cloudflare secret
 tests/                  # 测试与测试专用 Worker 入口
 ```

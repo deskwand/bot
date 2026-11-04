@@ -77,7 +77,7 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。若打开后
 
 ### Telegram
 
-需要 BotFather 提供的 Bot Token。客户端会验证 `getMe`，发布 `TELEGRAM_BOT_TOKEN`，并在需要时生成、发布 `TELEGRAM_WEBHOOK_SECRET` 后设置 webhook。已有不可读的 webhook secret 默认保留；只有明确选择轮换时才重新生成。
+需要 BotFather 提供的 Bot Token。客户端会验证 `getMe`，发布 `TELEGRAM_BOT_TOKEN`，然后删除已注册的 webhook。
 
 ### 微信
 
@@ -178,11 +178,10 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。若打开后
 
 导出或恢复开始后，客户端会向云端申请一个维护租约，最长 10 分钟：
 
-- 暂停期间 Telegram webhook 返回 503，Telegram 会在稍后重投；
-- 微信轮询暂停；
+- Telegram 与微信轮询暂停，期间的消息留在渠道服务器上，恢复后继续接收；
 - 每 5 分钟的 cron 与 Durable Object alarm 被推迟，任务和定时任务不会在数据不一致时执行。
 
-操作正常结束时会主动释放租约。客户端崩溃、网络中断或进程被关闭时，租约最多 10 分钟后自然过期，消息收发和定时任务自动恢复，不需要手动重启云端。Telegram webhook 和 Durable Object alarm 在租约到期后立即恢复；微信轮询要等下一次 5 分钟 cron 重新启动，因此微信最坏约 15 分钟后恢复。租约到期后，进行中的恢复会以 `MAINTENANCE_REQUIRED` 失败，并保留“数据恢复未完成”记录。
+操作正常结束时会主动释放租约。客户端崩溃、网络中断或进程被关闭时，租约最多 10 分钟后自然过期，消息收发和定时任务自动恢复，不需要手动重启云端。Durable Object alarm 在租约到期后立即恢复；Telegram 与微信轮询要等下一次 5 分钟 cron 重新启动，因此最坏约 15 分钟后恢复收消息。租约到期后，进行中的恢复会以 `MAINTENANCE_REQUIRED` 失败，并保留“数据恢复未完成”记录。
 
 ### 8.5 正在运行的任务可能重复外部动作
 

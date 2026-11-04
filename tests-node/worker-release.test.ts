@@ -458,7 +458,14 @@ describe("release template consistency", () => {
       .filter((name) => name !== "ACTIVE_CHANNEL")
       .sort();
 
-    expect(secrets).toEqual([...readTemplate().secretNames].sort());
+    // The release template keeps TELEGRAM_WEBHOOK_SECRET for old deployments;
+    // the Worker itself no longer declares or reads it.
+    const legacySecrets = ["TELEGRAM_WEBHOOK_SECRET"];
+    const declared = [...readTemplate().secretNames]
+      .filter((name) => !legacySecrets.includes(name))
+      .sort();
+
+    expect(secrets).toEqual(declared);
   });
 
   it("includes every plain var declared by wrangler.jsonc", () => {
