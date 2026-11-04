@@ -79,7 +79,7 @@ export function App({ client }: { client: ClientService }) {
         const connection = boot.connection;
         const scope =
           connection.state === "connected"
-            ? `${connection.accountId ?? ""}:${boot.targetSelected ? 1 : 0}`
+            ? `${connection.accountId ?? ""}:${boot.targetName}`
             : "disconnected";
         if (scopeRef.current !== null && scopeRef.current !== scope) {
           // Cached queries are keyed only by resource, so a different account
@@ -113,10 +113,9 @@ export function App({ client }: { client: ClientService }) {
             : { kind: "choose" },
         );
       } catch (error) {
-        setSession({ kind: "disconnected" });
+        setSession({ kind: "disconnected", connectionError: error });
         setPending([]);
         setDirtyState(false);
-        void error;
       }
     },
     [client, queryClient],

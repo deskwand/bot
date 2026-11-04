@@ -530,6 +530,7 @@ func (s *Service) BootState() (BootStateDTO, error) {
 	if ok {
 		if target.AccountID == connection.AccountID {
 			state.TargetSelected = true
+			state.TargetName = target.ScriptName
 		} else {
 			state.TargetMismatch = true
 		}

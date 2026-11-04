@@ -75,6 +75,7 @@ export interface BootStateDTO {
   connection: ConnectionDTO;
   targetSelected: boolean;
   targetMismatch: boolean;
+  targetName: string;
   pending: OperationDTO[];
 }
 

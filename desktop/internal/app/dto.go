@@ -30,6 +30,7 @@ type BootStateDTO struct {
 	Connection     ConnectionDTO  `json:"connection"`
 	TargetSelected bool           `json:"targetSelected"`
 	TargetMismatch bool           `json:"targetMismatch"`
+	TargetName     string         `json:"targetName"`
 	Pending        []OperationDTO `json:"pending"`
 }
 

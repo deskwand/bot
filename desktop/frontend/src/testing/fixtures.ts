@@ -88,7 +88,8 @@ type Scenario =
   | "cloud-slow"
   | "cloud-offline"
   | "cloud-updated"
-  | "target-other-account";
+  | "target-other-account"
+  | "boot-failed";
 
 interface MockState {
   scenario: Scenario;
@@ -337,6 +338,7 @@ function scenarioFromLocation(): Scenario {
     case "cloud-offline":
     case "cloud-updated":
     case "target-other-account":
+    case "boot-failed":
       return value;
     default:
       return "default";
@@ -929,6 +931,9 @@ export function createMockClient(): ClientService {
 
     async bootState(): Promise<BootStateDTO> {
       record("bootState");
+      if (state.scenario === "boot-failed") {
+        fail("SERVICE_UNAVAILABLE", "无法读取本机状态");
+      }
       // The real BootState is local-only, but these login scenarios need the
       // card to stay on "connected" while the cloud status settles.
       if (
@@ -952,6 +957,7 @@ export function createMockClient(): ClientService {
         connection,
         targetSelected,
         targetMismatch,
+        targetName: targetSelected ? (state.target ?? "") : "",
         pending: connected
           ? state.pending.filter(
               (operation) => !operation.accountId || operation.accountId === state.accountId,

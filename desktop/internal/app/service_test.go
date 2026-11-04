@@ -850,6 +850,9 @@ func TestBootStateConnectedWithTarget(t *testing.T) {
 	if !state.TargetSelected || state.TargetMismatch {
 		t.Fatalf("target flags = selected:%v mismatch:%v", state.TargetSelected, state.TargetMismatch)
 	}
+	if state.TargetName != serviceWorkerName {
+		t.Fatalf("target name = %q, want %q", state.TargetName, serviceWorkerName)
+	}
 	if state.Pending == nil || len(state.Pending) != 0 {
 		t.Fatalf("pending = %#v", state.Pending)
 	}

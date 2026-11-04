@@ -35,3 +35,11 @@ test("sign out clears cached data", async ({ page }) => {
     page.getByRole("heading", { name: "deskwand-bot", exact: true }),
   ).toHaveCount(0);
 });
+
+test("a failing boot state reports the reason", async ({ page }) => {
+  await page.goto("/test.html?fixture=boot-failed");
+  const alert = page.getByTestId("error-alert");
+  await expect(alert).toBeVisible();
+  await alert.locator("summary").click();
+  await expect(alert.getByText("SERVICE_UNAVAILABLE")).toBeVisible();
+});
