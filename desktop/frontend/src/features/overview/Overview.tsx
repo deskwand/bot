@@ -29,6 +29,7 @@ export function Overview() {
   const statusQuery = useStatusQuery();
   const invalidate = useInvalidate();
   const config = configQuery.data;
+  const mcpCount = Array.isArray(config?.mcpServers) ? config.mcpServers.length : 0;
   const status = statusQuery.data ?? [];
   const [connection, setConnection] = useState<ConnectionDTO | null>(null);
   const [pendingRestore, setPendingRestore] = useState<PendingRestoreDTO | null>(null);
@@ -280,12 +281,14 @@ export function Overview() {
         <h2 id="overview-config-title" className="text-base font-medium">配置</h2>
         {([
           ["models", "模型", config?.butlerModel ? `管家 ${config.butlerModel.id} · 任务 ${config.taskModel?.id || "未设置"}` : "未配置"],
-          ["mcp", "服务", "管理已接入的服务"],
+          ["mcp", "服务", mcpCount > 0 ? `已接入 ${mcpCount} 个` : "未接入"],
           ["entries", "消息入口", config?.activeChannel === "wechat" ? "当前使用微信" : config?.activeChannel === "telegram" ? "当前使用 Telegram" : "未选择"],
         ] as const).map(([page, title, description]) => (
           <div key={page} className="flex items-center justify-between gap-4 border-b border-border py-4 last:border-0">
             <div className="min-w-0"><h3 className="text-sm font-medium">{title}</h3><p className="mt-1 break-words text-xs text-muted-foreground">{description}</p></div>
-            <Button type="button" size="sm" variant="ghost" onClick={() => navigate(page)}>管理 <ArrowRight aria-hidden /></Button>
+            <Button type="button" size="icon-sm" variant="ghost" aria-label={`管理${title}`} onClick={() => navigate(page)}>
+              <ArrowRight aria-hidden />
+            </Button>
           </div>
         ))}
       </section>

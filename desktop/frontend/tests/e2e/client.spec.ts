@@ -1266,3 +1266,16 @@ test("wechat card does not make the button repeat the description", async ({ pag
   await expect(page.getByRole("button", { name: "扫码连接", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "连接微信", exact: true })).toHaveCount(0);
 });
+
+test("overview config rows show data instead of repeating the row title", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+
+  // 「服务」行原来写的是「管理已接入的服务」，和行标题、按钮三处同义。
+  await expect(page.getByText(/^已接入 \d+ 个$|^未接入$/)).toBeVisible();
+
+  // 三个「管理」文字按钮没了，只剩带可访问名的图标按钮。
+  await expect(page.getByText("管理", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "管理模型", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "管理服务", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "管理消息入口", exact: true })).toBeVisible();
+});
