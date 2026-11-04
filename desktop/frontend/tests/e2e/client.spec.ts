@@ -1,3 +1,4 @@
+import { verificationBadge } from "../../src/lib/copy";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,8 +151,8 @@ test("welcome → token connect → preflight → interrupted deployment → res
   await expect(page.getByLabel("API Token")).toHaveCount(0);
 
   await page.getByRole("button", { name: "部署新服务" }).click();
-  await page.getByLabel("允许使用的 Telegram 用户 ID").fill("100000001");
   await page.locator("#install-channel-telegram").click();
+  await page.getByLabel("允许使用的 Telegram 用户 ID").fill("100000001");
   await page.getByRole("button", { name: "检查并部署" }).click();
 
   await expect(page.getByText("部署未完成")).toBeVisible();
@@ -306,6 +307,7 @@ test("login publish_failed shows the code and resumes the publish operation", as
     timeout: 10_000,
   });
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("CONFIG_CONFLICT")).toBeVisible();
   await expectNoVerifiedClaim(page);
   await alert.getByRole("button", { name: "继续" }).click();
@@ -317,10 +319,13 @@ test("login publish_failed shows the code and resumes the publish operation", as
 test("unchanged entry result explains that no version was published", async ({ page }) => {
   await page.goto("/test.html?fixture=entry-unchanged");
   await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await expect(page.getByTestId("current-entry")).toHaveText("Telegram");
   await page.locator("#current-wechat").click();
   await page.getByRole("button", { name: "保存并发布" }).click();
   await expect(page.getByText("入口未变化。")).toBeVisible();
   await expect(page.getByText("无变化")).toBeVisible();
+  await expect(page.getByTestId("current-entry")).toHaveText("微信");
+  await expect(page.getByTestId("current-entry-wechat")).toBeVisible();
 });
 
 test("unknown entry selection offers a resume action", async ({ page }) => {
@@ -337,7 +342,7 @@ test("import preview explains legacy schema, preserved secrets and plaintext mig
   await page.goto("/test.html");
   await connectCloudflare(page);
   await page.getByRole("button", { name: "连接已有服务" }).click();
-  await expect(page.getByText("候选 Worker")).toBeVisible();
+  await expect(page.getByText("可连接的服务")).toBeVisible();
   const legacy = page.locator("li", { hasText: "my-bot" }).first();
   await legacy.getByRole("button", { name: "检查并接管" }).click();
   await expect(page.getByText("需要兼容升级")).toBeVisible();
@@ -391,6 +396,7 @@ test("import retry requires re-entering cleared secrets", async ({ page }) => {
   await legacy.getByRole("button", { name: "检查并接管" }).click();
   await page.getByRole("button", { name: "确认配置并接管" }).click();
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("PLAINTEXT_SECRET_DETECTED")).toBeVisible();
   await expect(page.getByRole("button", { name: "重新确认" })).toHaveCount(0);
   await expect(page.getByText(/请重填上方密钥后再试/)).toBeVisible();
@@ -406,6 +412,7 @@ test("UPGRADE_REQUIRED points to the updates page", async ({ page }) => {
   await keyRow(page, "opencode-go").getByLabel("API 密钥").fill("sk-upgrade-SENTINEL");
   await page.getByRole("button", { name: "保存并发布" }).click();
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("UPGRADE_REQUIRED")).toBeVisible();
   await alert.getByRole("button", { name: "前往更新页" }).click();
   await expect(page.getByRole("heading", { name: "更新", exact: true })).toBeVisible();
@@ -416,6 +423,7 @@ test("model catalog failure is surfaced during setup", async ({ page }) => {
   await connectCloudflare(page);
   await page.getByRole("button", { name: "部署新服务" }).click();
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("CATALOG_UNAVAILABLE")).toBeVisible();
   await expect(alert.getByText(/无法读取模型目录/)).toBeVisible();
 });
@@ -427,6 +435,7 @@ test("OPERATION_IN_PROGRESS does not re-run install and points to pending resume
   await page.locator("#install-channel-telegram").click();
   await page.getByRole("button", { name: "检查并部署" }).click();
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("OPERATION_IN_PROGRESS")).toBeVisible();
   await expect(alert.getByRole("button", { name: "先用顶部的「继续」处理" })).toBeVisible();
   await expect(page.getByRole("button", { name: "重新检查并部署" })).toHaveCount(0);
@@ -447,6 +456,7 @@ test("a pending operation can be abandoned after confirmation", async ({ page })
 test("unknown cloud release points to the import flow", async ({ page }) => {
   await page.goto("/test.html?fixture=version-unknown");
   await page.getByRole("button", { name: "更新", exact: true }).click();
+  await page.getByText("版本详情", { exact: true }).click();
   await expect(page.getByText(/VERSION_UNKNOWN_REIMPORT/)).toBeVisible();
   await expect(page.getByText(/版本未知，请重新导入/)).toBeVisible();
   await page.getByRole("button", { name: "重新导入" }).click();
@@ -457,6 +467,7 @@ test("credential store unavailability is shown on the welcome page", async ({ pa
   await page.goto("/test.html?fixture=store-unavailable");
   await expect(page.getByRole("heading", { name: "部署一次，随时管理。" })).toBeVisible();
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("CREDENTIAL_STORE_UNAVAILABLE")).toBeVisible();
   await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
 });
@@ -465,6 +476,7 @@ test("a denied authorization explains itself and offers a retry", async ({ page 
   await page.goto("/test.html?fixture=cf-denied");
   await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("AUTH_OAUTH_DENIED")).toBeVisible();
   await expect(alert.getByTestId("error-short")).toHaveText("授权已取消。");
   await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
@@ -486,6 +498,7 @@ test("a login the client cannot confirm returns to a usable login card", async (
   // The status read failed: the card must stop claiming success and give the
   // login button back instead of leaving a spinner and an error side by side.
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("CREDENTIAL_STORE_UNAVAILABLE")).toBeVisible();
   await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
   await expect(page.getByText("已连接，正在读取云端服务。")).toHaveCount(0);
@@ -495,6 +508,7 @@ test("a timed-out authorization is reported as such", async ({ page }) => {
   await page.goto("/test.html?fixture=cf-timeout");
   await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("AUTH_OAUTH_TIMEOUT")).toBeVisible();
   await expect(alert.getByTestId("error-short")).toHaveText("授权超时，请重新登录。");
 });
@@ -512,6 +526,7 @@ test("credential-store denial is explicit and never falls back to plaintext", as
   await page.goto("/test.html?fixture=credential-denied");
   await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("CREDENTIAL_STORE_UNAVAILABLE")).toBeVisible();
   await expect(alert.getByTestId("error-short")).toHaveText("钥匙串不可用，未改用明文保存。");
 });
@@ -523,6 +538,7 @@ test("config conflict asks for a reload instead of overwriting", async ({ page }
   await keyRow(page, "opencode-go").getByLabel("API 密钥").fill("sk-conflict-SENTINEL");
   await page.getByRole("button", { name: "保存并发布" }).click();
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("CONFIG_CONFLICT")).toBeVisible();
   await expect(page.getByRole("button", { name: "重新加载配置" })).toBeVisible();
   await page.getByRole("button", { name: "重新加载配置" }).click();
@@ -531,6 +547,7 @@ test("config conflict asks for a reload instead of overwriting", async ({ page }
 
 test("unsupported multi-version deployment blocks editing", async ({ page }) => {
   await page.goto("/test.html?fixture=multi-version");
+  await page.getByTestId("error-alert").first().locator("summary").click();
   await expect(page.getByText("MULTI_VERSION_DEPLOYMENT").first()).toBeVisible();
   await expect(page.getByTestId("error-short")).toHaveText("多版本在接收流量，已停止覆盖。");
 });
@@ -553,6 +570,7 @@ test("secret replace and clear are distinct operations", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "模型", exact: true }).click();
   await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await keyRow(page, "opencode-go").getByText("密钥详情", { exact: true }).click();
   await expect(page.getByText("MODEL_KEY_OPENCODE_GO 已配置")).toBeVisible();
 
   const row = keyRow(page, "opencode-go");
@@ -569,6 +587,7 @@ test("secret replace and clear are distinct operations", async ({ page }) => {
   const clearPreview = page.getByRole("dialog", { name: "确认保存并发布" });
   await expect(clearPreview.getByText(/清除 secret MODEL_KEY_OPENCODE_GO/)).toBeVisible();
   await clearPreview.getByRole("button", { name: "确认保存并发布" }).click();
+  await keyRow(page, "opencode-go").getByText("密钥详情", { exact: true }).click();
   await expect(page.getByText("MODEL_KEY_OPENCODE_GO 未配置")).toBeVisible();
 });
 
@@ -601,6 +620,7 @@ test("model keys use MODEL_KEY_<ID> names", async ({ page }) => {
   await page.getByRole("button", { name: "模型", exact: true }).click();
   await chooseModel(page, "管家模型", "DeepSeek", /^DeepSeek Flash/);
   const row = keyRow(page, "deepseek");
+  await row.getByText("密钥详情", { exact: true }).click();
   await expect(row.getByText("MODEL_KEY_DEEPSEEK 未配置")).toBeVisible();
   await row.getByLabel("API 密钥").fill("sk-deepseek-SENTINEL");
   await page.getByRole("button", { name: "保存并发布" }).click();
@@ -608,6 +628,7 @@ test("model keys use MODEL_KEY_<ID> names", async ({ page }) => {
   await expect(preview.getByText(/替换 secret MODEL_KEY_DEEPSEEK/)).toBeVisible();
   await preview.getByRole("button", { name: "确认保存并发布" }).click();
   await expect(page.getByText(/配置已发布/).first()).toBeVisible();
+  await row.getByText("密钥详情", { exact: true }).click();
   await expect(row.getByText("MODEL_KEY_DEEPSEEK 已配置")).toBeVisible();
 });
 
@@ -617,7 +638,9 @@ test("each role provider gets its own key row", async ({ page }) => {
   await chooseModel(page, "管家模型", "Anthropic", /Claude Sonnet 5\.5/);
   const anthropicRow = keyRow(page, "anthropic");
   const opencodeRow = keyRow(page, "opencode-go");
+  await anthropicRow.getByText("密钥详情", { exact: true }).click();
   await expect(anthropicRow.getByText("MODEL_KEY_ANTHROPIC 未配置")).toBeVisible();
+  await opencodeRow.getByText("密钥详情", { exact: true }).click();
   await expect(opencodeRow.getByText("MODEL_KEY_OPENCODE_GO 已配置")).toBeVisible();
   await anthropicRow.getByLabel("API 密钥").fill("sk-anthropic-SENTINEL");
   await opencodeRow.getByLabel("API 密钥").fill("sk-opencode-SENTINEL");
@@ -627,6 +650,8 @@ test("each role provider gets its own key row", async ({ page }) => {
   await expect(preview.getByText(/替换 secret MODEL_KEY_OPENCODE_GO/)).toBeVisible();
   await preview.getByRole("button", { name: "确认保存并发布" }).click();
   await expect(page.getByText(/配置已发布/).first()).toBeVisible();
+  await anthropicRow.getByText("密钥详情", { exact: true }).click();
+  await opencodeRow.getByText("密钥详情", { exact: true }).click();
   await expect(anthropicRow.getByText("MODEL_KEY_ANTHROPIC 已配置")).toBeVisible();
   await expect(opencodeRow.getByText("MODEL_KEY_OPENCODE_GO 已配置")).toBeVisible();
 });
@@ -708,9 +733,9 @@ test("MODEL_KEY_MISSING lists the missing secrets", async ({ page }) => {
   const preview = page.getByRole("dialog", { name: "确认保存并发布" });
   await preview.getByRole("button", { name: "确认保存并发布" }).click();
   const alert = page.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("MODEL_KEY_MISSING")).toBeVisible();
   await expect(alert.getByTestId("error-short")).toHaveText("缺少模型密钥，请在模型页填写。");
-  await alert.getByText("详情").click();
   await expect(alert.getByText(/MODEL_KEY_DEEPSEEK/)).toBeVisible();
 });
 
@@ -772,6 +797,7 @@ test("a failed sign-out reports the error and stays connected", async ({ page })
   await page.keyboard.press("Escape");
   await expect(dialog).toBeVisible();
   const alert = dialog.getByTestId("error-alert");
+  await alert.locator("summary").click();
   await expect(alert.getByText("CREDENTIAL_STORE_UNAVAILABLE")).toBeVisible();
   await expect(alert.getByTestId("error-short")).toHaveText("钥匙串不可用，未改用明文保存。");
   await expect(dialog).toBeVisible();
@@ -814,7 +840,8 @@ test("diagnostics show unknown evidence with source and time", async ({ page }) 
 
 test("user-confirmed evidence is labelled separately from cloud verification", async ({ page }) => {
   await page.goto("/test.html?fixture=user-evidence");
-  await expect(page.getByText("用户确认收发")).toBeVisible();
+  await expect(page.getByTestId("status-badge-wechat")).toHaveText("用户确认收发");
+  await page.getByText("状态详情", { exact: true }).click();
   await expect(page.getByText(/用户确认，非云端日志/)).toBeVisible();
   await expect(page.getByText(/来源：Cloudflare 配置/).first()).toBeVisible();
   await expect(page.getByText("运行中", { exact: true })).toHaveCount(0);
@@ -1003,7 +1030,7 @@ test("restores only after confirming the overwrite", async ({ page }) => {
   await page.getByRole("button", { name: "覆盖并恢复", exact: true }).click();
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "确认覆盖恢复", exact: true }).click();
-  await expect(page.getByText("数据已恢复。")).toBeVisible();
+  await expect(page.getByText("恢复完成", { exact: true })).toBeVisible();
   await expect.poll(async () => (await backupCalls(page)).restore).toBe(1);
 });
 
@@ -1050,7 +1077,7 @@ test("corrupt restore record can be abandoned without breaking the overview", as
   // The other overview calls still render their own data.
   await expect(page.getByRole("heading", { name: "服务概览" })).toBeVisible();
   await expect(page.getByText("云端服务", { exact: true })).toBeVisible();
-  await expect(page.getByText("状态证据", { exact: true })).toBeVisible();
+  await expect(page.getByText("状态详情", { exact: true })).toBeVisible();
 
   // The corrupt record offers abandonment only, with the no-rollback wording.
   await expect(page.getByText("本机恢复记录无法读取", { exact: false })).toBeVisible();
@@ -1069,7 +1096,7 @@ test("corrupt restore record can be abandoned without breaking the overview", as
   await expect(page.getByText("本机恢复记录无法读取", { exact: false })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "服务概览" })).toBeVisible();
   await expect(page.getByText("云端服务", { exact: true })).toBeVisible();
-  await expect(page.getByText("状态证据", { exact: true })).toBeVisible();
+  await expect(page.getByText("状态详情", { exact: true })).toBeVisible();
 
   // A generic pending-restore failure must not claim the journal is corrupt.
   await page.goto("/test.html?fixture=backup-pending-unavailable");
@@ -1083,6 +1110,7 @@ test("snapshot failure retries by choosing the backup again", async ({ page }) =
   await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
   await page.getByRole("button", { name: "覆盖并恢复", exact: true }).click();
   await page.getByRole("dialog", { name: "确认覆盖恢复" }).getByRole("button", { name: "确认覆盖恢复", exact: true }).click();
+  await page.getByTestId("error-alert").first().locator("summary").click();
   await expect(page.getByText("RESTORE_SNAPSHOT_FAILED")).toBeVisible();
 
   await page.getByRole("button", { name: "重新选择备份", exact: true }).click();
@@ -1096,6 +1124,7 @@ test("midway failure retries from the journal and shows the running state", asyn
   await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
   await page.getByRole("button", { name: "覆盖并恢复", exact: true }).click();
   await page.getByRole("dialog", { name: "确认覆盖恢复" }).getByRole("button", { name: "确认覆盖恢复", exact: true }).click();
+  await page.getByTestId("error-alert").first().locator("summary").click();
   await expect(page.getByText("BACKUP_INVALID")).toBeVisible();
 
   await page.getByRole("button", { name: "重试未完成恢复", exact: true }).click();
@@ -1109,8 +1138,7 @@ test("midway failure retries from the journal and shows the running state", asyn
 test("status badges: configured entry is labelled pending verification", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "消息入口", exact: true }).click();
-  // No fixture ships a configured channel secret, so make one the way a user
-  // would: save a Telegram token.
+  // Save a token through the actual UI before checking its verification state.
   await page.getByLabel("Bot Token").fill("123:token");
   await page.getByRole("button", { name: "保存并连接" }).click();
   await expect(page.getByTestId("verification-telegram-unverified")).toHaveText("待验证收发");
@@ -1120,7 +1148,8 @@ test("status badges: configured entry is labelled pending verification", async (
 test("status badges: user confirmation is labelled as user confirmation", async ({ page }) => {
   await page.goto("/test.html?fixture=user-evidence");
   await page.getByRole("button", { name: "消息入口", exact: true }).click();
-  await expect(page.getByTestId("verification-wechat-verified-user")).toHaveText("用户确认收发");
+  await expect(page.getByTestId("summary-verification-wechat-verified-user")).toBeVisible();
+  await expect(page.getByTestId("summary-verification-wechat-verified-user")).toHaveText("用户确认收发");
   await expect(page.getByTestId("verification-wechat-verified-cloud")).toHaveCount(0);
 });
 
@@ -1184,4 +1213,14 @@ test("appearance switch stores the choice and leaves the painting to the media q
   await page.setViewportSize({ width: 420, height: 800 });
   await expect(dark).toBeVisible();
   await expect(group.getByRole("button", { name: "浅色" })).toBeEnabled();
+});
+
+ test("delivery badge requires its stated evidence", () => {
+  for (const kind of ["wechat", "telegram"]) {
+    const item = { kind, state: "verified", observedAt: "2026-11-04T00:00:00Z", detail: "" };
+    for (const source of ["local", "", undefined]) expect(verificationBadge({ ...item, source })?.label).toBe("待验证收发");
+    expect(verificationBadge({ ...item, source: "user" })?.label).toBe("用户确认收发");
+    expect(verificationBadge({ ...item, source: "cloudflare-logs" })?.label).toBe("收发已验证");
+    expect(verificationBadge({ ...item, state: "unknown" })).toBeNull();
+  }
 });

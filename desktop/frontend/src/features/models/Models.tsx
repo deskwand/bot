@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Pencil, Plus, RefreshCw, Save, ShieldCheck, Trash2, Zap } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -409,19 +410,12 @@ export function Models() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">服务配置</p>
-          <h1 className="text-2xl font-semibold tracking-tight">模型</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            管家对话分派，任务执行。所有入口共用。
-          </p>
-        </div>
-        <Badge variant="outline">
+      <PageHeader title="模型" actions={<>
+<Badge variant="outline">
           <ShieldCheck aria-hidden />
           密钥不回显
         </Badge>
-      </div>
+</>} />
 
       <ErrorAlert error={loadError} onRetry={load} />
       <ErrorAlert error={error} onReload={conflict ? load : undefined} reloadLabel="重新加载配置" onRetry={!conflict ? openPreview : undefined} />
@@ -441,7 +435,7 @@ export function Models() {
                 <span className="text-xs text-muted-foreground">{result.operationId}</span>
               ) : null}
             </div>
-            <StepList steps={result.steps ?? []} />
+            {result.state === "published" || result.state === "completed" ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">执行详情</summary><StepList steps={result.steps ?? []} /></details> : <StepList steps={result.steps ?? []} />}
             {result.warnings?.length ? (
               <Alert>
                 <AlertDescription>
@@ -463,14 +457,8 @@ export function Models() {
         </Card>
       ) : null}
 
-      <Card className="mt-5">
-        <CardHeader>
-          <CardTitle>角色模型</CardTitle>
-          <CardDescription>
-            所有入口共用这两个角色模型。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <section className="mt-5" aria-labelledby="role-models-title">
+        <h2 id="role-models-title" className="mb-4 text-base font-medium">角色模型</h2>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="butler-model">管家模型</Label>
@@ -524,7 +512,7 @@ export function Models() {
                           </span>
                         </p>
                         <Badge variant={configured ? "secondary" : "outline"}>
-                          {secret} {configured ? "已配置" : "未配置"}
+                          {configured ? "已配置" : "未配置"}
                         </Badge>
                       </div>
                       <div className="mt-3 grid gap-4 sm:grid-cols-2">
@@ -580,6 +568,10 @@ export function Models() {
                           ) : null}
                         </div>
                       </div>
+                      <details className="mt-3 min-w-0 break-all">
+                        <summary className="cursor-pointer text-xs text-muted-foreground">密钥详情</summary>
+                        <p className="mt-2 text-xs text-muted-foreground">{secret} {configured ? "已配置" : "未配置"}</p>
+                      </details>
                       {rowProbeError ? (
                         <ErrorAlert
                           error={rowProbeError}
@@ -607,8 +599,7 @@ export function Models() {
           <p className="mt-4 text-xs text-muted-foreground">
             未编辑的配置会保留。
           </p>
-        </CardContent>
-      </Card>
+      </section>
 
       <Card className="mt-4">
         <CardHeader>

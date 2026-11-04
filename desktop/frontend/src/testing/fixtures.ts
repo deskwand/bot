@@ -54,9 +54,15 @@ type Scenario =
   | "pending-operations"
   | "pending-other-account"
   | "version-unknown"
+  | "install-name-taken"
+  | "install-bucket-taken"
+  | "unknown-long-error"
   | "install-conflict"
   | "import-resume"
   | "import-secret-retry"
+  | "telegram-configured"
+  | "entry-failed"
+  | "layout-long-content"
   | "configured"
   | "qr-expired"
   | "qr-publish-failed"
@@ -291,9 +297,15 @@ function scenarioFromLocation(): Scenario {
     case "pending-operations":
     case "pending-other-account":
     case "version-unknown":
+    case "install-name-taken":
+    case "install-bucket-taken":
+    case "unknown-long-error":
     case "install-conflict":
     case "import-resume":
     case "import-secret-retry":
+    case "telegram-configured":
+    case "entry-failed":
+    case "layout-long-content":
     case "configured":
     case "qr-expired":
     case "qr-publish-failed":
@@ -323,6 +335,7 @@ function initialState(): MockState {
   const scenario = scenarioFromLocation();
   const configured = scenario === "configured";
   const shellScenario = [
+    "unknown-long-error",
     "config-conflict",
     "multi-version",
     "upgrade-required",
@@ -332,6 +345,9 @@ function initialState(): MockState {
     "pending-operations",
     "pending-other-account",
     "version-unknown",
+    "telegram-configured",
+    "entry-failed",
+    "layout-long-content",
     "configured",
     "qr-expired",
     "qr-publish-failed",
@@ -358,10 +374,10 @@ function initialState(): MockState {
     theme: "system",
     connected: shellScenario,
     accountId: "a".repeat(32),
-    target: shellScenario ? "deskwand-bot" : null,
+    target: scenario === "layout-long-content" ? "long-name-".repeat(18) : shellScenario ? "deskwand-bot" : null,
     fingerprint: "fp-current",
     configPresent: shellScenario,
-    activeChannel: scenario === "user-evidence" ? "wechat" : "",
+    activeChannel: scenario === "user-evidence" ? "wechat" : ["entry-unknown", "entry-unchanged", "entry-failed"].includes(scenario) ? "telegram" : "",
     ownerUserIds: configured ? [100000001] : [],
     butlerModel: shellScenario
       ? { provider: "opencode-go", id: "deepseek-v4.1-flash" }
@@ -373,11 +389,13 @@ function initialState(): MockState {
     secrets: {
       MODEL_KEY_OPENCODE_GO: shellScenario,
       MODEL_KEY_ANTHROPIC: false,
-      TELEGRAM_BOT_TOKEN: false,
+      TELEGRAM_BOT_TOKEN: scenario === "telegram-configured",
       WECHAT_CREDENTIALS: scenario === "user-evidence",
     },
     mcpServers:
-      scenario === "mcp-many-tools"
+      scenario === "layout-long-content"
+        ? [{ name: "long-service-".repeat(14), url: `https://example.com/${"long-path-".repeat(30)}`, approvalPolicy: "writes" }]
+        : scenario === "mcp-many-tools"
         ? [
             {
               name: "deepwiki",
@@ -530,6 +548,7 @@ export function createMockClient(): ClientService {
   };
 
   const config = (): ConfigDTO => {
+    if (state.scenario === "unknown-long-error") throw new Error(`网络请求失败 https://example.com/${"x".repeat(220)}`);
     if (!state.target) fail("TARGET_NOT_SELECTED", "请先选择一个 Worker 部署");
     if (state.scenario === "multi-version") {
       fail(
@@ -782,6 +801,8 @@ export function createMockClient(): ClientService {
 
     async install(input: InstallInputDTO) {
       configCalls.install.push(input);
+      if (state.scenario === "install-name-taken") fail("NAME_TAKEN", "名称已被其他部署占用。");
+      if (state.scenario === "install-bucket-taken") fail("BUCKET_TAKEN", "存储桶已存在。");
       if (state.scenario === "install-conflict") {
         fail(
           "OPERATION_IN_PROGRESS",
@@ -1117,12 +1138,14 @@ export function createMockClient(): ClientService {
       if (channel !== "telegram" && channel !== "wechat") {
         fail("INVALID_ENTRY_CHANNEL", "入口必须是 telegram 或 wechat");
       }
-      state.activeChannel = channel;
+      if (state.scenario === "entry-failed") fail("CONFIG_CONFLICT", "入口发布失败，请重新加载。");
       const configured =
         channel === "wechat"
           ? state.secrets.WECHAT_CREDENTIALS === true
           : state.secrets.TELEGRAM_BOT_TOKEN === true;
       if (state.scenario === "entry-unchanged") {
+        // A concurrent publisher already selected the requested channel.
+        state.activeChannel = channel;
         return {
           state: "unchanged",
           channel,
@@ -1138,6 +1161,7 @@ export function createMockClient(): ClientService {
           warning: "激活响应丢失，请继续核实远端状态。",
         };
       }
+      state.activeChannel = channel;
       return {
         operationId: `op-entry-${++sequence}`,
         deploymentId: "deploy-1",

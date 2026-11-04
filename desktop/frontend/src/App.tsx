@@ -199,7 +199,6 @@ export function App({ client }: { client: ClientService }) {
                     <span aria-hidden className="text-primary">◈</span>
                     {productName}
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">Cloudflare 管理</p>
                 </div>
                 <Button
                   type="button"
@@ -248,7 +247,7 @@ export function App({ client }: { client: ClientService }) {
             </aside>
           ) : null}
 
-          <main className="min-w-0 flex-1 px-5 py-6 md:px-10 md:py-9">
+          <main className="min-w-0 flex-1 px-5 py-6 md:px-8 md:py-8">
             {session.kind === "loading" ? (
               <div className="flex min-h-[60svh] items-center justify-center gap-3 text-muted-foreground">
                 <Loader2 className="size-5 animate-spin motion-reduce:animate-none" aria-hidden />
@@ -411,7 +410,7 @@ function PendingOperations({
               <span>操作 {result.id}</span>
               <StateBadge state={result.state} />
             </div>
-            <StepList steps={result.steps ?? []} />
+            {result.state === "published" || result.state === "completed" ? <details className="mt-2"><summary className="cursor-pointer text-xs text-muted-foreground">执行详情</summary><StepList steps={result.steps ?? []} /></details> : <StepList steps={result.steps ?? []} />}
           </div>
         ) : null}
         <ul className="mt-3 space-y-3">

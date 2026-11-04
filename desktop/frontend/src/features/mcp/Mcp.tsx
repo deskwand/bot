@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -352,19 +353,12 @@ export function Mcp() {
   };
 
   const header = (
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">服务配置</p>
-        <h1 className="text-2xl font-semibold tracking-tight">服务</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          接入远程 MCP 服务，任务执行时按工具审批设置调用。
-        </p>
-      </div>
-      <Button type="button" onClick={() => setAddOpen(true)} disabled={loading || !catalog.length}>
+    <PageHeader title="服务" actions={<>
+<Button type="button" onClick={() => setAddOpen(true)} disabled={loading || !catalog.length}>
         <Plus aria-hidden />
         添加服务
       </Button>
-    </div>
+</>} />
   );
 
   if (loading) {
@@ -454,10 +448,8 @@ export function Mcp() {
                 <CardHeader>
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <CardTitle>{displayName}</CardTitle>
-                      <CardDescription className="break-all">
-                        {server.description || server.url}
-                      </CardDescription>
+                      <CardTitle className="break-words">{displayName}</CardTitle>
+                      {server.description ? <CardDescription className="break-words">{server.description}</CardDescription> : null}
                     </div>
                     <span
                       data-testid={`mcp-status-${server.name}`}
@@ -515,6 +507,10 @@ export function Mcp() {
                       删除
                     </Button>
                   </div>
+                  <details className="mt-3 min-w-0 text-xs text-muted-foreground">
+                    <summary className="cursor-pointer">连接详情</summary>
+                    <p className="mt-2 break-all">{server.url}</p>
+                  </details>
                   {expanded.includes(server.name) ? (
                     <div className="mt-3 border-t border-border pt-3">
                       <McpToolList

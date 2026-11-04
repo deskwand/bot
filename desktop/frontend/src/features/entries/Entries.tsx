@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, QrCode, RefreshCw, Send, Smartphone } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
@@ -23,7 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useApp } from "@/components/app-context";
-import { ErrorAlert, StateBadge, StatusRow, StepList } from "@/components/feedback";
+import { ErrorAlert, StateBadge, StatusBadge, StatusRow, StepList } from "@/components/feedback";
 import { useDirty } from "@/components/use-dirty";
 import { describeCode } from "@/services/errors";
 import type {
@@ -66,6 +67,7 @@ export function Entries() {
   const [channelResumeRunning, setChannelResumeRunning] = useState(false);
   const [channelResumeError, setChannelResumeError] = useState<unknown>(null);
 
+  const [editingTelegram, setEditingTelegram] = useState(false);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramRunning, setTelegramRunning] = useState(false);
   const [telegramError, setTelegramError] = useState<unknown>(null);
@@ -337,19 +339,12 @@ export function Entries() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">服务配置</p>
-          <h1 className="text-2xl font-semibold tracking-tight">消息入口</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            微信或 Telegram，任选一个。故障时不会自动切换。
-          </p>
-        </div>
-        <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
+      <PageHeader title="消息入口" actions={<>
+<Button type="button" variant="outline" size="sm" onClick={() => void load()}>
           <RefreshCw aria-hidden />
           重新检查
         </Button>
-      </div>
+</>} />
 
       <ErrorAlert error={loadError} onRetry={load} />
 
@@ -361,16 +356,16 @@ export function Entries() {
                 <Smartphone className="size-4" aria-hidden />
                 微信
               </CardTitle>
-              <CardDescription>扫码登录你的微信</CardDescription>
+              {config?.activeChannel === "wechat" ? <Badge variant="outline" data-testid="current-entry-wechat">当前入口</Badge> : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {wechatStatus ? <StateBadge state={wechatStatus.state} /> : <Badge variant="outline">状态未知</Badge>}
-              {wechatConfigured ? <Badge variant="secondary">凭据已配置</Badge> : <Badge variant="outline">未连接</Badge>}
+              {wechatStatus ? <StatusBadge item={wechatStatus} /> : <Badge variant="outline">状态未知</Badge>}
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {wechatStatus ? <StatusRow item={wechatStatus} /> : null}
+          <p className="text-sm text-muted-foreground">{wechatConfigured ? "凭据已配置" : "扫码登录你的微信"}</p>
+          {wechatStatus ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">连接详情</summary><StatusRow item={wechatStatus} /></details> : null}
           {wechatPublished ? (
             <Alert className="mt-3 border-emerald-300 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20">
               <AlertTitle>已连接，等待第一条消息</AlertTitle>
@@ -393,16 +388,20 @@ export function Entries() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle>Telegram</CardTitle>
-              <CardDescription>验证令牌，发布密钥并删除已注册的 webhook。</CardDescription>
+              {config?.activeChannel === "telegram" ? <Badge variant="outline">当前入口</Badge> : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {telegramStatus ? <StateBadge state={telegramStatus.state} /> : <Badge variant="outline">状态未知</Badge>}
-              {telegramConfigured ? <Badge variant="secondary">已配置</Badge> : <Badge variant="outline">未配置</Badge>}
+              {telegramStatus ? <StatusBadge item={telegramStatus} /> : <Badge variant="outline">状态未知</Badge>}
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {telegramStatus ? <StatusRow item={telegramStatus} /> : null}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">{telegramConfigured ? "令牌已配置" : "填写 BotFather 提供的令牌"}</p>
+            {telegramConfigured ? <Button type="button" size="sm" variant="outline" onClick={() => setEditingTelegram((value) => !value)}>{editingTelegram ? "收起" : "更换令牌"}</Button> : null}
+          </div>
+          {telegramStatus ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">连接详情</summary><StatusRow item={telegramStatus} /></details> : null}
+          {!telegramConfigured || editingTelegram ? <div className="mt-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="telegram-token">Bot Token</Label>
@@ -430,6 +429,7 @@ export function Entries() {
               {telegramRunning ? "正在连接…" : "保存并连接"}
             </Button>
           </div>
+          </div> : null}
           {telegramResult ? (
             <div className="mt-3 rounded-md border border-border p-3">
               <div className="flex flex-wrap items-center gap-2">
@@ -452,10 +452,11 @@ export function Entries() {
         <CardHeader>
           <CardTitle>当前消息入口</CardTitle>
           <CardDescription>
-            没有默认入口，必须手动选。也可以先选尚未配置的入口。
+            每次使用一个入口；故障时需手动切换。
           </CardDescription>
         </CardHeader>
         <CardContent>
+          <p className="mb-3 text-sm text-muted-foreground">当前：<span data-testid="current-entry">{config?.activeChannel === "wechat" ? "微信" : config?.activeChannel === "telegram" ? "Telegram" : "未设置"}</span></p>
           <RadioGroup
             value={channel}
             onValueChange={setChannel}
@@ -467,7 +468,6 @@ export function Entries() {
                 <RadioGroupItem value="telegram" id="current-telegram" />
                 <span>
                   <span className="block font-medium">Telegram</span>
-                  <span className="text-xs text-muted-foreground">通过 BotFather 创建的机器人收发</span>
                 </span>
               </span>
               {telegramConfigured ? <Badge variant="secondary">已配置</Badge> : <Badge variant="outline">未配置</Badge>}
@@ -477,17 +477,11 @@ export function Entries() {
                 <RadioGroupItem value="wechat" id="current-wechat" />
                 <span>
                   <span className="block font-medium">微信</span>
-                  <span className="text-xs text-muted-foreground">扫码登录主人微信</span>
                 </span>
               </span>
               {wechatConfigured ? <Badge variant="secondary">已配置</Badge> : <Badge variant="outline">未配置</Badge>}
             </label>
           </RadioGroup>
-          {!config?.activeChannel ? (
-            <p className="mt-2 text-xs text-muted-foreground">
-              还没设置入口。
-            </p>
-          ) : null}
           {channel === "wechat" && !wechatConfigured ? (
             <Alert className="mt-3">
               <AlertTitle>入口未就绪</AlertTitle>

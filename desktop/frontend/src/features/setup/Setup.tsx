@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -182,11 +183,6 @@ function Welcome({
                   </CardTitle>
                   <CardDescription>创建一套新的云端服务。</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <span className="inline-flex items-center gap-1 text-sm font-medium text-primary">
-                    开始部署 <ArrowRight className="size-4" aria-hidden />
-                  </span>
-                </CardContent>
               </Card>
             </button>
             <button
@@ -203,11 +199,6 @@ function Welcome({
                   </CardTitle>
                   <CardDescription>接管已有部署，保留数据。</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <span className="inline-flex items-center gap-1 text-sm font-medium text-primary">
-                    连接 <ArrowRight className="size-4" aria-hidden />
-                  </span>
-                </CardContent>
               </Card>
             </button>
           </div>
@@ -459,7 +450,16 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   const [channel, setChannel] = useState("");
   const [butler, setButler] = useState(modelKey(DEFAULT_MODEL));
   const [task, setTask] = useState(modelKey(DEFAULT_MODEL));
-  const [workers, setWorkers] = useState<WorkerDTO[]>([]);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
+  const [resourceError, setResourceError] = useState("");
+  const [invalidResource, setInvalidResource] = useState<"worker-name" | "bucket-name" | null>(null);
+  const workerRef = useRef<HTMLInputElement>(null);
+  const bucketRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (resourcesOpen && invalidResource) {
+      (invalidResource === "worker-name" ? workerRef : bucketRef).current?.focus();
+    }
+  }, [resourcesOpen, invalidResource]);
   const [checking, setChecking] = useState(false);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -475,15 +475,22 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
 
   const checkAndInstall = async () => {
     setError(null);
+    setResourceError("");
+    setInvalidResource(null);
+    if (!workerName.trim() || !bucketName.trim()) {
+      setResourceError("请填写服务名称和存储桶名称。");
+      setInvalidResource(!workerName.trim() ? "worker-name" : "bucket-name");
+      setResourcesOpen(true);
+      return;
+    }
     setChecking(true);
     setProgress(8);
     try {
       const scripts = await client.listWorkers();
-      setWorkers(scripts);
       if (scripts.some((script) => script.name === workerName.trim())) {
-        setError(
-          new Error("NAME_TAKEN: 名称已被占用，请换一个。"),
-        );
+        setResourceError("名称已被占用，请换一个。");
+        setInvalidResource("worker-name");
+        setResourcesOpen(true);
         return;
       }
       const butlerModel = parseModelKey(butler);
@@ -498,7 +505,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
         accountId: "",
         workerName: workerName.trim(),
         bucketName: bucketName.trim(),
-        telegramUserIds: parseUserIDs(ownerIDs),
+        telegramUserIds: channel === "telegram" ? parseUserIDs(ownerIDs) : [],
         butlerModel,
         taskModel,
         activeChannel: channel,
@@ -507,6 +514,11 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
       setResult(installed);
     } catch (cause) {
       setError(cause);
+      const code = toClientError(cause).code;
+      if (code === "NAME_TAKEN" || code === "BUCKET_TAKEN") {
+        setInvalidResource(code === "NAME_TAKEN" ? "worker-name" : "bucket-name");
+        setResourcesOpen(true);
+      }
     } finally {
       setChecking(false);
       setRunning(false);
@@ -535,75 +547,35 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   return (
     <div className="mx-auto max-w-3xl">
       <GuardedBack dirty={dirty} onBack={onBack} />
-      <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">新建服务</p>
-      <h1 className="text-2xl font-semibold tracking-tight">
-        {published ? "服务已部署，接下来设置消息入口" : "部署前，确认这些信息"}
-      </h1>
+      <PageHeader title={published ? "服务已部署，接下来设置消息入口" : "部署新服务"} />
 
       {!result ? (
-        <Card className="mt-5">
-          <CardHeader>
-            <CardTitle>部署检查</CardTitle>
-            <CardDescription>
-              会创建 Worker 和 R2 桶；费用按用量计。
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <section>
             <ErrorAlert
               error={catalogError}
               onRetry={reloadCatalog}
               retryLabel="重新读取模型目录"
             />
             <form
-              className="space-y-4"
+              noValidate
+              className="space-y-6"
               onSubmit={(event) => {
                 event.preventDefault();
                 void checkAndInstall();
               }}
             >
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="worker-name">服务名称</Label>
-                  <Input
-                    id="worker-name"
-                    value={workerName}
-                    onChange={(event) => setWorkerName(event.target.value)}
-                    required
-                  />
+              <section aria-label="模型">
+                <h2 className="mb-3 text-base font-medium">模型</h2>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2"><Label htmlFor="install-butler">管家模型</Label><ModelSelect id="install-butler" label="管家模型" value={butler} onChange={setButler} options={modelOptions} /></div>
+                  <div className="space-y-2"><Label htmlFor="install-task">任务模型</Label><ModelSelect id="install-task" label="任务模型" value={task} onChange={setTask} options={modelOptions} /></div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="bucket-name">R2 存储桶名称</Label>
-                  <Input
-                    id="bucket-name"
-                    value={bucketName}
-                    onChange={(event) => setBucketName(event.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="install-owners">允许使用的 Telegram 用户 ID</Label>
-                  <Input
-                    id="install-owners"
-                    value={ownerIDs}
-                    onChange={(event) => setOwnerIDs(event.target.value)}
-                    placeholder="可留空（留空则不响应任何消息）"
-                    inputMode="numeric"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="install-butler">管家模型</Label>
-                  <ModelSelect id="install-butler" label="管家模型" value={butler} onChange={setButler} options={modelOptions} />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="install-task">任务模型</Label>
-                  <ModelSelect id="install-task" label="任务模型" value={task} onChange={setTask} options={modelOptions} />
-                </div>
-              </div>
+              </section>
 
               <fieldset className="space-y-2">
                 <legend className="text-sm font-medium">初始消息入口</legend>
                 <p className="text-xs text-muted-foreground">
-                  必须选一个；故障时不会自动切换。
+                  选择一个入口，部署后完成连接；故障时需手动切换。
                 </p>
                 <RadioGroup
                   value={channel}
@@ -622,17 +594,39 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                 </RadioGroup>
               </fieldset>
 
-              <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-                <div className="flex items-center gap-2 font-medium text-foreground">
-                  <Check className="size-4 text-emerald-600" aria-hidden />
-                  Cloudflare 账户已连接
-                </div>
-                <p className="mt-1">
-                  中断后可稍后继续。
-                </p>
-                {workers.length > 0 ? <p className="mt-1">已检查 {workers.length} 个 Worker 名称。</p> : null}
-              </div>
+              {channel === "telegram" ? <div className="space-y-2">
+                <Label htmlFor="install-owners">允许使用的 Telegram 用户 ID</Label>
+                <Input id="install-owners" value={ownerIDs} onChange={(event) => setOwnerIDs(event.target.value)} placeholder="例如 123456789" inputMode="numeric" aria-describedby="install-owner-hint" />
+                <p id="install-owner-hint" className="text-xs text-muted-foreground">留空时不响应 Telegram 消息；部署后还需配置 Bot 令牌。</p>
+              </div> : channel === "wechat" ? <p className="text-sm text-muted-foreground">部署后扫码连接微信。</p> : null}
 
+              {parseModelKey(butler)?.provider === "workers-ai" || parseModelKey(task)?.provider === "workers-ai" ? (
+                <details className="text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">模型额度与费用</summary>
+                  <p className="mt-2">Cloudflare 模型每天有 10,000 neurons 免费额度，UTC 0 点重置。用完后，免费账号暂停，付费账号按量计费。</p>
+                </details>
+              ) : null}
+
+              <details open={resourcesOpen} onToggle={(event) => setResourcesOpen(event.currentTarget.open)} className="border-t border-border pt-4">
+                <summary className="cursor-pointer text-sm font-medium">资源设置</summary>
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="worker-name">服务名称</Label>
+                    <Input ref={workerRef} id="worker-name" value={workerName} onChange={(event) => setWorkerName(event.target.value)} required aria-invalid={invalidResource === "worker-name"} aria-describedby={resourceError ? "resource-error" : invalidResource && error ? "install-error" : undefined} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="bucket-name">R2 存储桶名称</Label>
+                    <Input ref={bucketRef} id="bucket-name" value={bucketName} onChange={(event) => setBucketName(event.target.value)} required aria-invalid={invalidResource === "bucket-name"} aria-describedby={resourceError ? "resource-error" : invalidResource && error ? "install-error" : undefined} />
+                  </div>
+                </div>
+                {resourceError ? <p id="resource-error" role="alert" className="mt-2 text-sm text-destructive">{resourceError}</p> : null}
+              </details>
+
+              <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border pt-4">
+                <div className="text-xs text-muted-foreground">
+                  <p className="flex items-center gap-1"><Check className="size-3" aria-hidden />Cloudflare 已连接</p>
+                  <p className="mt-1">将创建 Worker 和 R2 存储桶，费用按用量计。</p>
+                </div>
               <div className="flex flex-wrap justify-end gap-2">
                 <GuardedBack dirty={dirty} onBack={onBack} label="上一步" />
                 <Button
@@ -640,8 +634,6 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                   disabled={
                     checking ||
                     running ||
-                    !workerName.trim() ||
-                    !bucketName.trim() ||
                     !channel
                   }
                 >
@@ -650,6 +642,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                   ) : null}
                   {running ? "正在部署…" : checking ? "正在检查…" : "检查并部署"}
                 </Button>
+              </div>
               </div>
             </form>
 
@@ -661,13 +654,14 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                 </p>
               </div>
             ) : null}
-            <ErrorAlert
-              error={error}
-              onRetry={installRetryBlocked ? undefined : checkAndInstall}
-              retryLabel="重新检查并部署"
-            />
-          </CardContent>
-        </Card>
+            <div id="install-error">
+              <ErrorAlert
+                error={error}
+                onRetry={installRetryBlocked ? undefined : checkAndInstall}
+                retryLabel="重新检查并部署"
+              />
+            </div>
+        </section>
       ) : (
         <ResultPanel
           title={published ? "服务已部署" : "部署未完成"}
@@ -805,8 +799,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   return (
     <div className="mx-auto max-w-3xl">
       <GuardedBack dirty={dirty} onBack={onBack} />
-      <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">已有部署</p>
-      <h1 className="text-2xl font-semibold tracking-tight">连接已有服务</h1>
+      <PageHeader title="连接已有服务" />
       <p className="mt-2 text-sm text-muted-foreground">
         接管已有部署，保留数据、文件和密钥。
       </p>
@@ -821,9 +814,8 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle>候选 Worker</CardTitle>
-              <CardDescription>按绑定和发布信息识别，不只看名字。</CardDescription>
-            </div>
+              <CardTitle>可连接的服务</CardTitle>
+              </div>
             <Button type="button" variant="outline" size="sm" onClick={() => void loadWorkers()} disabled={loading}>
               {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
               刷新
@@ -872,6 +864,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <details className="min-w-0 break-words"><summary className="cursor-pointer text-sm text-muted-foreground">检查详情</summary>
             <dl className="grid gap-2 text-sm sm:grid-cols-2">
               <Info label="当前发布版本" value={preview.releaseVersion || "未知"} />
               <Info label="DESKWAND_CONFIG" value={preview.configPresent ? "存在" : "不存在"} />
@@ -880,6 +873,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               <Info label="ACTIVE_CHANNEL" value={preview.activeChannel || "未设置"} />
               <Info label="现有 secrets" value={preview.secretNames.join("、") || "无"} />
             </dl>
+            </details>
 
             {preview.preserveSecretNames.length > 0 ? (
               <Alert>
@@ -1038,10 +1032,14 @@ export function ResultPanel({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {result.operationId ? (
-          <p className="text-xs text-muted-foreground">操作 ID：{result.operationId}</p>
-        ) : null}
-        <StepList steps={result.steps ?? []} />
+        {result.state === "published" ? <details>
+          <summary className="cursor-pointer text-xs text-muted-foreground">执行详情</summary>
+          <p className="mt-2 break-all text-xs text-muted-foreground">操作 ID：{result.operationId}</p>
+          <StepList steps={result.steps ?? []} />
+        </details> : <>
+          {result.operationId ? <p className="break-all text-xs text-muted-foreground">操作 ID：{result.operationId}</p> : null}
+          <StepList steps={result.steps ?? []} />
+        </>}
         {result.warnings?.length ? (
           <Alert className="my-3">
             <AlertTitle>注意</AlertTitle>

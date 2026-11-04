@@ -1,5 +1,6 @@
+import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Download, FolderOpen, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, Download, Loader2, Upload } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -301,60 +302,20 @@ export function Backup() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">维护</p>
-          <h1 className="text-2xl font-semibold tracking-tight">数据备份</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            导出云端数据，或从备份整体恢复。备份未加密，请妥善保管。
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" onClick={() => void exportData()} disabled={exportRunning}>
-            {exportRunning ? (
-              <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
-            ) : (
-              <Download aria-hidden />
-            )}
-            立即备份
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void openFolder()}
-            disabled={folderBusy}
-          >
-            <FolderOpen aria-hidden />
-            打开目录
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void chooseBackup()}
-            disabled={choosing || restoreRunning}
-          >
-            {choosing ? (
-              <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
-            ) : (
-              <Upload aria-hidden />
-            )}
-            从本地恢复
-          </Button>
-        </div>
-      </div>
+      <PageHeader title="数据备份" />
 
       <ErrorAlert error={exportError} onRetry={exportData} retryLabel="重新导出" />
       <ErrorAlert error={chooseError} onRetry={chooseBackup} retryLabel="重新选择备份" />
       <ErrorAlert error={settingsError} onRetry={refreshSettings} retryLabel="重新读取备份设置" />
 
-      <Card className="mt-5">
-        <CardHeader>
-          <CardTitle>备份位置</CardTitle>
-          <CardDescription>
+      <section className="mt-5 border-b border-border pb-5" aria-label="备份位置">
+        <div className="mb-3">
+          <h2 className="text-base font-medium">备份位置</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
             每次备份都写到这里；开着客户端时按间隔自动备份。
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+          </p>
+        </div>
+        <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <p className="min-w-0 break-all font-mono text-xs" data-testid="backup-dir">
               {settings ? settings.dir : "读取中…"}
@@ -429,14 +390,24 @@ export function Backup() {
                 }`
               : ""}
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       <Card className="mt-5">
         <CardHeader>
-          <CardTitle>导出</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle>导出</CardTitle>
+          <Button type="button" onClick={() => void exportData()} disabled={exportRunning}>
+            {exportRunning ? (
+              <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : (
+              <Download aria-hidden />
+            )}
+            立即备份
+          </Button>
+          </div>
           <CardDescription>
-            不含部署配置和密钥。期间消息暂停，最长约 15 分钟。
+            不含部署配置和密钥。期间消息暂停，最长约 15 分钟。文件未加密，请妥善保管。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -532,7 +503,21 @@ export function Backup() {
 
       <Card className="mt-4">
         <CardHeader>
-          <CardTitle>恢复</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle>恢复</CardTitle>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void chooseBackup()}
+            disabled={choosing || restoreRunning}
+          >
+            {choosing ? (
+              <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : (
+              <Upload aria-hidden />
+            )}
+            从本地恢复
+          </Button>          </div>
           <CardDescription>
             只能恢复到同一版本。开始前会自动保存当前数据快照。
           </CardDescription>
@@ -602,7 +587,6 @@ export function Backup() {
           {restoreDone ? (
             <Alert className="mt-4">
               <AlertTitle>恢复完成</AlertTitle>
-              <AlertDescription>数据已恢复。</AlertDescription>
             </Alert>
           ) : null}
         </CardContent>

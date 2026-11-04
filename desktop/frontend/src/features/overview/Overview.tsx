@@ -1,14 +1,12 @@
+import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useState } from "react";
-import { ArrowRight, Loader2, RefreshCw, Server } from "lucide-react";
+import { ArrowRight, Loader2, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import {
   Dialog,
@@ -19,7 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useApp } from "@/components/app-context";
-import { ErrorAlert, StatusRow, StateBadge, formatObserved, sourceLabel } from "@/components/feedback";
+import { ErrorAlert, StatusRow, StatusBadge, formatObserved } from "@/components/feedback";
 import { isCode } from "@/services/errors";
 import type { ConfigDTO, ConnectionDTO, PendingRestoreDTO, StatusItemDTO } from "@/services/types";
 
@@ -118,21 +116,14 @@ export function Overview({ initialError }: { initialError?: unknown }) {
 
   return (
     <div>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">我的云端服务</p>
-          <h1 className="text-2xl font-semibold tracking-tight">服务概览</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {config ? `${config.workerName} · Cloudflare` : "正在读取…"}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+      <PageHeader title="服务概览" actions={<>
+<div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
             {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw aria-hidden />}
             刷新
           </Button>
         </div>
-      </div>
+</>} />
 
       <ErrorAlert error={error} onRetry={load} />
 
@@ -263,132 +254,50 @@ export function Overview({ initialError }: { initialError?: unknown }) {
         </Alert>
       ) : null}
 
-      <div className="mt-5 grid gap-4 sm:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardDescription>云端服务</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-2xl">
-              <Server className="size-5 text-muted-foreground" aria-hidden />
-              {config ? config.workerName : "未读取"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            {config ? (
-              <>
-                <p>发布版本 {config.releaseVersion || "未知"}</p>
-                <p>接收流量：{config.activeVersionCount} 个版本</p>
-              </>
-            ) : (
-              <p>读取失败，请稍后重试。</p>
-            )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardDescription>消息入口</CardDescription>
-            <CardTitle className="flex flex-wrap items-center gap-2 text-2xl">
-              {config?.activeChannel ? (config.activeChannel === "wechat" ? "微信" : "Telegram") : "未设置"}
-              {entryStatus ? <StateBadge state={entryStatus.state} /> : null}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            {entryStatus ? (
-              <>
-                <p>来源：{sourceLabel(entryStatus.source)}</p>
-                <p>{formatObserved(entryStatus.observedAt)}</p>
-              </>
-            ) : (
-              <p>还没有连接入口。</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>状态证据</CardTitle>
-          <CardDescription>
-            每项都标明来源和检查时间。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {status.length === 0 ? (
-            <p className="text-sm text-muted-foreground">暂无状态数据。这不代表服务停止。</p>
-          ) : (
-            status.map((item) => <StatusRow key={item.kind} item={item} />)
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>完成你的设置</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <ChecklistRow
-            done={Boolean(config)}
-            title="云端服务已部署"
-            description={config ? `${config.workerName}` : "尚未部署"}
-          />
-          <ChecklistRow
-            done={modelsConfigured}
-            title="配置模型"
-            description={
-              config?.butlerModel
-                ? `管家 ${config.butlerModel.id} · 任务 ${config.taskModel?.id ?? "未设置"}`
-                : "未配置"
-            }
-            action={
-              <Button type="button" size="sm" variant="outline" onClick={() => navigate("models")}>
-                去设置 <ArrowRight aria-hidden />
-              </Button>
-            }
-          />
-          <ChecklistRow
-            done={Boolean(config?.activeChannel)}
-            title="连接微信或 Telegram"
-            description={config?.activeChannel ? "已发布，待验证收发" : "未选择"}
-            action={
-              <Button type="button" size="sm" variant="outline" onClick={() => navigate("entries")}>
-                去设置 <ArrowRight aria-hidden />
-              </Button>
-            }
-          />
-        </CardContent>
-      </Card>
-
-    </div>
-  );
-}
-
-function ChecklistRow({
-  done,
-  title,
-  description,
-  action,
-}: {
-  done: boolean;
-  title: string;
-  description: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-2 last:border-0">
-      <div className="flex items-start gap-3">
-        <span
-          className={`mt-0.5 inline-flex size-6 items-center justify-center rounded-full text-xs ${
-            done ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" : "bg-muted text-muted-foreground"
-          }`}
-          aria-hidden
-        >
-          {done ? "✓" : "·"}
-        </span>
-        <div>
-          <div className="font-medium">{title}</div>
-          <div className="text-sm text-muted-foreground">{description}</div>
+      <div className="grid overflow-hidden rounded-lg border border-border bg-card sm:grid-cols-2">
+        <div className="min-w-0 p-5">
+          <p className="text-xs text-muted-foreground">云端服务</p>
+          <h2 className="mt-2 break-all text-xl font-semibold">{config?.workerName || "未读取"}</h2>
+          <p className="mt-2 text-sm text-muted-foreground">发布版本 {config?.releaseVersion || "未知"}</p>
+        </div>
+        <div className="min-w-0 border-t border-border p-5 sm:border-t-0 sm:border-l">
+          <p className="text-xs text-muted-foreground">当前消息入口</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <h2 className="text-xl font-semibold">{config?.activeChannel ? (config.activeChannel === "wechat" ? "微信" : "Telegram") : "未设置"}</h2>
+            {entryStatus ? <StatusBadge item={entryStatus} /> : <Badge variant="outline">状态未知</Badge>}
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">{entryStatus ? formatObserved(entryStatus.observedAt) : "暂无收发验证记录"}</p>
         </div>
       </div>
-      {action}
+
+      <section className="mt-6" aria-labelledby="overview-config-title">
+        <h2 id="overview-config-title" className="text-base font-medium">配置</h2>
+        {([
+          ["models", "模型", config?.butlerModel ? `管家 ${config.butlerModel.id} · 任务 ${config.taskModel?.id || "未设置"}` : "未配置"],
+          ["mcp", "服务", "管理已接入的服务"],
+          ["entries", "消息入口", config?.activeChannel === "wechat" ? "当前使用微信" : config?.activeChannel === "telegram" ? "当前使用 Telegram" : "未选择"],
+        ] as const).map(([page, title, description]) => (
+          <div key={page} className="flex items-center justify-between gap-4 border-b border-border py-4 last:border-0">
+            <div className="min-w-0"><h3 className="text-sm font-medium">{title}</h3><p className="mt-1 break-words text-xs text-muted-foreground">{description}</p></div>
+            <Button type="button" size="sm" variant="ghost" onClick={() => navigate(page)}>管理 <ArrowRight aria-hidden /></Button>
+          </div>
+        ))}
+      </section>
+
+      {config && (!modelsConfigured || !config.activeChannel) ? (
+        <section data-testid="overview-todos" className="mt-5 rounded-lg bg-muted/50 p-4" aria-label="待完成设置">
+          <h2 className="mb-2 text-sm font-medium">待完成设置</h2>
+          {!modelsConfigured ? <Button type="button" variant="outline" size="sm" onClick={() => navigate("models")}>配置模型</Button> : null}
+          {!config.activeChannel ? <Button type="button" variant="outline" size="sm" onClick={() => navigate("entries")}>连接消息入口</Button> : null}
+        </section>
+      ) : null}
+
+      <details className="mt-6 min-w-0 border-t border-border pt-4">
+        <summary className="cursor-pointer text-sm text-muted-foreground">状态详情</summary>
+        {config ? <p className="mt-3 text-xs text-muted-foreground">接收流量：{config.activeVersionCount} 个版本</p> : null}
+        {status.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">暂无状态数据，服务运行情况未知。</p> : status.map((item) => <StatusRow key={item.kind} item={item} />)}
+      </details>
+
     </div>
   );
 }

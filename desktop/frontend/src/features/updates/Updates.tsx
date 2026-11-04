@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowUpCircle, Download, Loader2, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -89,19 +90,12 @@ export function Updates() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">维护</p>
-          <h1 className="text-2xl font-semibold tracking-tight">更新</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            客户端和云端分开更新，由你决定何时升级。
-          </p>
-        </div>
-        <Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>
+      <PageHeader title="更新" actions={<>
+<Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw aria-hidden />}
           检查云端版本
         </Button>
-      </div>
+</>} />
 
       <ErrorAlert error={error} onRetry={load} />
 
@@ -129,13 +123,14 @@ export function Updates() {
                 当前 {upgrade.currentVersion || "未知"} → 可用 {upgrade.availableVersion || "未知"}
               </p>
               {upgrade.reason ? (
-                <p className="text-muted-foreground">
-                  {upgrade.reason}：{describeCode(upgrade.reason)}
-                </p>
+                <div className="text-muted-foreground">
+                  <p>{describeCode(upgrade.reason)}</p>
+                  <details className="mt-2"><summary className="cursor-pointer text-xs">版本详情</summary><p className="mt-1 break-all text-xs">{upgrade.reason}</p></details>
+                </div>
               ) : null}
               {upgrade.modelKeysMissing?.length ? (
                 <Alert>
-                  <AlertTitle>模型 key 需要重新填写</AlertTitle>
+                  <AlertTitle>需重新填写模型密钥</AlertTitle>
                   <AlertDescription>
                     升级后需在模型页重填：{upgrade.modelKeysMissing.join("、")}
                   </AlertDescription>
@@ -146,12 +141,7 @@ export function Updates() {
                   重新导入
                 </Button>
               ) : null}
-              <Alert>
-                <AlertTitle>升级前确认</AlertTitle>
-                <AlertDescription>
-                  沿用现有数据、资源和密钥。
-                </AlertDescription>
-              </Alert>
+
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">正在读取版本信息。</p>
@@ -172,8 +162,10 @@ export function Updates() {
                 <span className="text-sm font-medium">升级结果</span>
                 <StateBadge state={result.state} />
               </div>
-              <StepList steps={result.steps ?? []} />
-              <p className="text-xs text-muted-foreground">已发布，接着验证收发。</p>
+              {result.state === "published" ? <>
+                <p className="mt-2 text-xs text-muted-foreground">已发布，接着验证收发。</p>
+                <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">执行详情</summary><StepList steps={result.steps ?? []} /></details>
+              </> : <StepList steps={result.steps ?? []} />}
               {result.state === "unknown" || result.state === "needs_input" ? (
                 <Button
                   type="button"
@@ -253,7 +245,7 @@ export function Updates() {
           </Alert>
           {upgrade?.modelKeysMissing?.length ? (
             <Alert>
-              <AlertTitle>模型 key 需要重新填写</AlertTitle>
+              <AlertTitle>需重新填写模型密钥</AlertTitle>
               <AlertDescription>
                 升级后需在模型页重填：{upgrade.modelKeysMissing.join("、")}
               </AlertDescription>

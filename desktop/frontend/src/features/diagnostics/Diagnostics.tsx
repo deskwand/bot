@@ -1,15 +1,9 @@
+import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, Loader2, RefreshCw, Stethoscope, Zap } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -114,15 +108,8 @@ export function Diagnostics() {
 
   return (
     <div>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="mb-2 text-xs tracking-[0.18em] text-muted-foreground">维护</p>
-          <h1 className="text-2xl font-semibold tracking-tight">诊断</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            按证据检查连接，显示来源和时间。
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
+      <PageHeader title="诊断" actions={<>
+<div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>
             {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw aria-hidden />}
             重新检查
@@ -132,7 +119,7 @@ export function Diagnostics() {
             导出诊断
           </Button>
         </div>
-      </div>
+</>} />
 
       <ErrorAlert error={error} onRetry={load} />
       <ErrorAlert error={exportError} onRetry={exportDiagnostics} retryLabel="重新导出" />
@@ -143,33 +130,33 @@ export function Diagnostics() {
         </Alert>
       ) : null}
 
-      <Card className="mt-5">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+      <section className="mt-5" aria-label="状态检查">
+        <div className="mb-3">
+          <h2 className="flex items-center gap-2 text-base font-medium">
             <Stethoscope className="size-4" aria-hidden />
-            状态证据
-          </CardTitle>
-          <CardDescription>
+            状态检查
+          </h2>
+          <p className="mt-1 text-xs text-muted-foreground">
             没有证据时显示“未知”。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
+        </div>
+        <div>
           {items.length === 0 ? (
             <p className="text-sm text-muted-foreground">暂无状态数据。这不代表服务停止。</p>
           ) : (
             items.map((item) => <StatusRow key={item.kind} item={item} />)
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>模型连接测试</CardTitle>
-          <CardDescription>
+      <section className="mt-6 border-t border-border pt-5" aria-label="模型连接测试">
+        <div className="mb-3">
+          <h2 className="text-base font-medium">模型连接测试</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
             用你输入的密钥直接调用供应商。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
+        </div>
+        <div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="probe-model">模型</Label>
@@ -204,8 +191,8 @@ export function Diagnostics() {
             </div>
           ) : null}
           <ErrorAlert error={probeError} onRetry={() => setProbeOpen(true)} retryLabel="重新测试" />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       <Dialog open={probeOpen} onOpenChange={setProbeOpen}>
         <DialogContent>

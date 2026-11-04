@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Loader2, LogOut } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -63,15 +62,15 @@ export function CloudflareAccountCard({
   };
 
   return (
-    <div className="mt-2 border-t border-border pt-4 text-xs text-muted-foreground">
-      <Badge variant="secondary" className="mb-2">
-        Cloudflare 已连接
-      </Badge>
+    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5" aria-label="Cloudflare 已连接">
+        <span className="size-1.5 rounded-full bg-emerald-600" aria-hidden />Cloudflare
+      </span>
       <Button
         type="button"
         variant="ghost"
         size="xs"
-        className="-ml-2 mt-2"
+        className="px-1"
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => change(true)}

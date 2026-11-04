@@ -53,23 +53,15 @@ export function ErrorAlert({
   return (
     <Alert variant="destructive" role="alert" data-testid="error-alert" className="my-4">
       <AlertCircle />
-      <AlertTitle className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className="font-mono text-[11px]" data-testid="error-code">
-          {parsed.code}
-        </Badge>
-      </AlertTitle>
-      <AlertDescription>
-        <span className="block" data-testid="error-short">
-          {line}
-        </span>
-        {folded ? (
-          <details className="mt-2">
-            <summary className="cursor-pointer text-xs opacity-80">详情</summary>
-            <span className="mt-1 block text-xs opacity-80" data-testid="error-detail">
-              {folded}
-            </span>
-          </details>
-        ) : null}
+      <AlertTitle className="min-w-0 [overflow-wrap:anywhere]" data-testid="error-short">{line}</AlertTitle>
+      <AlertDescription className="min-w-0">
+        <details className="mt-2 min-w-0 break-all">
+          <summary className="cursor-pointer text-xs opacity-80">详情</summary>
+          <Badge variant="outline" className="mt-1 font-mono text-[11px]" data-testid="error-code">
+            {parsed.code}
+          </Badge>
+          {folded ? <span className="mt-1 block text-xs opacity-80" data-testid="error-detail">{folded}</span> : null}
+        </details>
         {onRetry || onReload || goUpdates || importAgain || waitForPending ? (
           <span className="mt-3 flex flex-wrap gap-2">
             {goUpdates ? (
@@ -112,6 +104,17 @@ export function ErrorAlert({
 export function StateBadge({ state }: { state: string }) {
   const entry = STATE_LABELS[state] ?? { label: state, variant: "outline" as const };
   return <Badge variant={entry.variant}>{entry.label}</Badge>;
+}
+
+export function StatusBadge({ item }: { item: StatusItemDTO }) {
+  const verify = verificationBadge(item);
+  return (
+    <span data-testid={`status-badge-${item.kind}`}>
+      {verify ? (
+        <Badge variant="secondary" data-testid={`summary-verification-${item.kind}-${verify.key}`}>{verify.label}</Badge>
+      ) : <StateBadge state={item.state} />}
+    </span>
+  );
 }
 
 export function StepIcon({ state }: { state: string }) {
