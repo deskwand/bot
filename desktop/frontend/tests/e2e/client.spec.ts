@@ -1279,3 +1279,18 @@ test("overview config rows show data instead of repeating the row title", async 
   await expect(page.getByRole("button", { name: "管理服务", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "管理消息入口", exact: true })).toBeVisible();
 });
+
+test("backup and diagnostics descriptions stay on the user side of the glass", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+
+  // 自动备份开关就在下面，说明句不该再把这件事讲一遍。
+  await expect(page.getByText("每次备份都写到这里。", { exact: true })).toBeVisible();
+  // 「不用再开文件对话框」是实现细节。
+  await expect(page.getByText("按时间从新到旧。", { exact: true })).toBeVisible();
+  await expect(page.getByText(/不用再开文件对话框/)).toHaveCount(0);
+
+  await page.getByRole("button", { name: "诊断", exact: true }).click();
+  await expect(page.getByText("用你输入的密钥直连供应商。", { exact: true })).toBeVisible();
+  await expect(page.getByText(/直接调用供应商/)).toHaveCount(0);
+});

@@ -137,7 +137,7 @@ export function Diagnostics() {
             状态检查
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            没有证据时显示“未知”。
+            没有证据时显示「未知」。
           </p>
         </div>
         <div>
@@ -148,7 +148,7 @@ export function Diagnostics() {
                 正在加载…
               </p>
             ) : (
-              <p className="text-sm text-muted-foreground">暂无状态数据。这不代表服务停止。</p>
+              <p className="text-sm text-muted-foreground">暂无状态数据，不代表服务已停止。</p>
             )
           ) : (
             items.map((item) => <StatusRow key={item.kind} item={item} />)
@@ -160,7 +160,7 @@ export function Diagnostics() {
         <div className="mb-3">
           <h2 className="text-base font-medium">模型连接测试</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            用你输入的密钥直接调用供应商。
+            用你输入的密钥直连供应商。
           </p>
         </div>
         <div>

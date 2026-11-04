@@ -316,7 +316,7 @@ export function Backup() {
         <div className="mb-3">
           <h2 className="text-base font-medium">备份位置</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            每次备份都写到这里；开着客户端时按间隔自动备份。
+            每次备份都写到这里。
           </p>
         </div>
         <div className="space-y-3">
@@ -411,7 +411,7 @@ export function Backup() {
           </Button>
           </div>
           <CardDescription>
-            不含部署配置和密钥。期间消息暂停，最长约 15 分钟。文件未加密，请妥善保管。
+            不含部署配置和密钥；文件未加密。导出期间消息暂停，最长约 15 分钟。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -468,7 +468,7 @@ export function Backup() {
         <CardHeader>
           <CardTitle>本地备份</CardTitle>
           <CardDescription>
-            按时间从新到旧；选一份即可恢复，不用再开文件对话框。
+            按时间从新到旧。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -523,7 +523,7 @@ export function Backup() {
             从本地恢复
           </Button>          </div>
           <CardDescription>
-            只能恢复到同一版本。开始前会自动保存当前数据快照。
+            只能恢复到同一版本；开始前自动保存快照。
           </CardDescription>
         </CardHeader>
         <CardContent>
