@@ -29,6 +29,10 @@ const (
 // cannot serve the admin routes.
 const UnavailableMessage = "无法连接云端管理接口，请检查 PUBLIC_BASE_URL 与部署状态"
 
+// NetworkUnreachableMessage explains a request that never got an HTTP answer:
+// a timeout or a refused connection points at the network, not the deployment.
+const NetworkUnreachableMessage = "无法访问云端管理接口（网络超时或连接失败），请检查网络或代理设置"
+
 const (
 	probePath       = "/admin/mcp/probe"
 	startPath       = "/admin/mcp/oauth/start"
@@ -177,13 +181,10 @@ func (c *Client) call(ctx context.Context, method, path string, payload, out any
 	}
 	response, err := c.http.Do(req)
 	if err != nil {
-		if ctxErr := requestCtx.Err(); ctxErr != nil && ctx.Err() == nil {
-			return unavailable()
-		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		return fmt.Errorf("mcpadmin: admin request: %s", c.redact(err.Error()))
+		return unreachable()
 	}
 	return c.readResponse(response, path, out)
 }
@@ -232,6 +233,10 @@ func (c *Client) redact(text string) string {
 		return text
 	}
 	return strings.ReplaceAll(text, c.token, domain.RedactedValue)
+}
+
+func unreachable() error {
+	return domain.Error{Code: CodeAdminUnavailable, Message: NetworkUnreachableMessage}
 }
 
 func unavailable() error {

@@ -14,6 +14,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/navigation"
+	"github.com/deskwand/bot/desktop/internal/netproxy"
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/release"
 )
@@ -35,6 +36,9 @@ func main() {
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
 	}
+	// Before any HTTP client is used: a Finder launch has no proxy variables,
+	// so follow the system proxy instead.
+	netproxy.Install()
 	dev := mygo.IsDev()
 	dataDir, err := appDataDir(dev)
 	if err != nil {

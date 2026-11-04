@@ -222,3 +222,34 @@ func errorCode(err error) string {
 	}
 	return ""
 }
+
+func TestClientReportsNetworkFailureSeparately(t *testing.T) {
+	hang := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-hang
+	}))
+	defer slow.Close()
+	defer close(hang)
+
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closedURL := closed.URL
+	closed.Close()
+
+	cases := map[string]*Client{
+		"timeout":            NewClient(slow.URL, testAdminToken, &http.Client{Timeout: 50 * time.Millisecond}),
+		"connection refused": NewClient(closedURL, testAdminToken, nil),
+	}
+	for name, client := range cases {
+		_, err := client.Status(context.Background())
+		var appErr domain.Error
+		if !errors.As(err, &appErr) {
+			t.Fatalf("%s: err = %v, want domain.Error", name, err)
+		}
+		if appErr.Code != CodeAdminUnavailable || appErr.Message != NetworkUnreachableMessage {
+			t.Fatalf("%s: err = %#v", name, appErr)
+		}
+		if strings.Contains(appErr.Message, testAdminToken) {
+			t.Fatalf("%s: token leaked", name)
+		}
+	}
+}
