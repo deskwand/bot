@@ -109,6 +109,8 @@ const SHORT_COPY: Record<string, string> = {
   MAINTENANCE_REQUIRED: "维护租约失效，请重试。",
   MAINTENANCE_BUSY: "另一个备份操作正在进行。",
   BACKUP_INVALID: "备份文件无效。",
+  BACKUP_FAILED: "备份失败，请稍后重试。",
+  BACKUP_SETTINGS_INVALID: "备份目录或设置无效。",
   BACKUP_VERSION_MISMATCH: "备份版本与云端不一致。",
   BACKUP_OBJECT_TOO_LARGE: "备份中有超过 100 MiB 的对象。",
   RESTORE_SNAPSHOT_FAILED: "快照失败，云端未改动。",
