@@ -21,7 +21,7 @@ import { ErrorAlert, StatusRow, StatusBadge, formatObserved } from "@/components
 import { isCode } from "@/services/errors";
 import type { ConfigDTO, ConnectionDTO, PendingRestoreDTO, StatusItemDTO } from "@/services/types";
 
-export function Overview({ initialError }: { initialError?: unknown }) {
+export function Overview() {
   const { client, navigate } = useApp();
   const [config, setConfig] = useState<ConfigDTO | null>(null);
   const [status, setStatus] = useState<StatusItemDTO[]>([]);
@@ -35,7 +35,7 @@ export function Overview({ initialError }: { initialError?: unknown }) {
   const [abandoning, setAbandoning] = useState(false);
   const [abandonError, setAbandonError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<unknown>(initialError ?? null);
+  const [error, setError] = useState<unknown>(null);
 
   const load = useCallback(async () => {
     setLoading(true);

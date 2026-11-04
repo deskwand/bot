@@ -929,21 +929,30 @@ export function createMockClient(): ClientService {
 
     async bootState(): Promise<BootStateDTO> {
       record("bootState");
+      // The real BootState is local-only, but these login scenarios need the
+      // card to stay on "connected" while the cloud status settles.
+      if (
+        state.connected &&
+        ["cf-slow-apply", "cf-slow-apply-fail"].includes(state.scenario)
+      ) {
+        await pause(600);
+      }
       const connection =
-        state.scenario === "store-unavailable"
+        state.scenario === "store-unavailable" ||
+        state.scenario === "cf-slow-apply-fail"
           ? { state: "unavailable" }
           : state.connected
             ? { state: "connected", accountId: state.accountId, accountName: "测试账户" }
             : { state: "disconnected" };
+      const connected = connection.state === "connected";
       const targetMismatch =
-        state.connected && state.target !== null && state.targetAccountId !== state.accountId;
-      const targetSelected =
-        state.connected && state.target !== null && !targetMismatch;
+        connected && state.target !== null && state.targetAccountId !== state.accountId;
+      const targetSelected = connected && state.target !== null && !targetMismatch;
       return {
         connection,
         targetSelected,
         targetMismatch,
-        pending: state.connected
+        pending: connected
           ? state.pending.filter(
               (operation) => !operation.accountId || operation.accountId === state.accountId,
             )
