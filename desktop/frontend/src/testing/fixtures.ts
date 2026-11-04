@@ -786,7 +786,7 @@ export function createMockClient(): ClientService {
 
     async checkClientUpdates() {
       if (state.scenario === "client-update-failed") {
-        fail("CLIENT_UPDATE_FAILED", "无法打开更新窗口");
+        fail("UPDATER_WINDOW_FAILED", "无法打开更新窗口");
       }
     },
 
