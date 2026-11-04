@@ -142,14 +142,14 @@ test("describeCode covers every fixed Go error code", () => {
 test("匿名统计开关默认打开，可以关掉再打开", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
 
-  const toggle = page.getByRole("button", { name: "匿名统计" });
-  await expect(toggle).toHaveText("开");
+  const toggle = page.getByRole("switch", { name: "匿名统计" });
+  await expect(toggle).toBeChecked();
 
   await toggle.click();
-  await expect(page.getByRole("button", { name: "匿名统计" })).toHaveText("关");
+  await expect(toggle).not.toBeChecked();
 
-  await page.getByRole("button", { name: "匿名统计" }).click();
-  await expect(page.getByRole("button", { name: "匿名统计" })).toHaveText("开");
+  await toggle.click();
+  await expect(toggle).toBeChecked();
 });
 
 test("welcome → token connect → preflight → interrupted deployment → resume → models → WeChat QR → publish", async ({ page }) => {
