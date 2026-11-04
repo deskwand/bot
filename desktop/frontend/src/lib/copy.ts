@@ -104,3 +104,10 @@ export function verificationBadge(
   }
   return null;
 }
+
+/**
+ * Cloudflare 免费额度的说明。部署页和模型页都要说同一件事，措辞必须一致，
+ * 所以它是跨页复用句，按本文件的约定放这里。
+ */
+export const CLOUDFLARE_NEURONS_NOTICE =
+  "Cloudflare 模型每天 10,000 neurons 免费额度，UTC 0 点重置；用尽后免费账号暂停，付费账号计费。";

@@ -69,7 +69,7 @@ async function chooseModel(page: Page, label: string, provider: string, model: R
 }
 
 const WORKERS_AI_QUOTA_NOTICE =
-  "使用你 Cloudflare 账号每天 10,000 neurons 的免费额度，用完后 UTC 0 点重置；超出后免费账号会暂停，付费账号按量计费。";
+  "Cloudflare 模型每天 10,000 neurons 免费额度，UTC 0 点重置；用尽后免费账号暂停，付费账号计费。";
 
 // New installs leave the stored role models empty, so the models page falls
 // back to DEFAULT_MODEL for both roles.
@@ -1223,4 +1223,19 @@ test("appearance switch stores the choice and leaves the painting to the media q
     expect(verificationBadge({ ...item, source: "cloudflare-logs" })?.label).toBe("收发已验证");
     expect(verificationBadge({ ...item, state: "unknown" })).toBeNull();
   }
+});
+
+test("free neuron notice reads identically on install and models pages", async ({ page }) => {
+  await page.goto("/test.html");
+  await connectCloudflare(page);
+  await page.getByRole("button", { name: "部署新服务" }).click();
+  await expect(page.getByTestId("workers-ai-quota-notice")).toHaveText(WORKERS_AI_QUOTA_NOTICE);
+
+  await page.locator("#install-channel-telegram").click();
+  await page.getByRole("button", { name: "检查并部署" }).click();
+  await expect(page.getByText("部署未完成")).toBeVisible();
+  await page.getByTestId("result-resume").click();
+  await page.getByRole("button", { name: /设置模型/ }).click();
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.getByTestId("workers-ai-quota-notice")).toHaveText(WORKERS_AI_QUOTA_NOTICE);
 });

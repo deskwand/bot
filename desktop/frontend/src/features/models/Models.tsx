@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useApp } from "@/components/app-context";
+import { CLOUDFLARE_NEURONS_NOTICE } from "@/lib/copy";
 import { ErrorAlert, StateBadge, StatusRow, StepList } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
@@ -586,7 +587,7 @@ export function Models() {
             </p>
             {keylessSelected ? (
               <p className="mb-3 text-sm text-muted-foreground" data-testid="workers-ai-quota-notice">
-                使用你 Cloudflare 账号每天 10,000 neurons 的免费额度，用完后 UTC 0 点重置；超出后免费账号会暂停，付费账号按量计费。
+                {CLOUDFLARE_NEURONS_NOTICE}
               </p>
             ) : null}
             {keyProviders.length === 0 ? (
