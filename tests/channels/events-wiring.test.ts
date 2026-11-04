@@ -249,27 +249,18 @@ describe("channel event wiring", () => {
     expect(channelEvents(lines)).toEqual([]);
   });
 
-  it("emits webhook_rejected only for a malformed Telegram body", async () => {
+  it("emits webhook_rejected only for a malformed Telegram update", async () => {
     const lines = captureConsole();
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const webhookSecret = "s3cret-events";
     setChannelOverride(
       "telegram",
-      createTelegramAdapter({ token: "123:test", webhookSecret }),
+      createTelegramAdapter({ token: "123:test" }),
     );
 
-    const malformed = new Request("https://example.com/telegram/webhook", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-Telegram-Bot-Api-Secret-Token": webhookSecret,
-      },
-      body: "{not-json",
-    });
-    await channels().handleTelegramWebhook(malformed);
+    await channels().handleTelegramUpdate("not-an-object");
 
-    let events = channelEvents(lines);
+    const events = channelEvents(lines);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       channel: "telegram",
@@ -278,34 +269,27 @@ describe("channel event wiring", () => {
     });
   });
 
-  it("does not emit webhook_rejected for wrong secrets, ignored updates or non-owners", async () => {
+  it("does not emit webhook_rejected for ignored updates or non-owners", async () => {
     const lines = captureConsole();
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const webhookSecret = "s3cret-events";
     setChannelOverride(
       "telegram",
-      createTelegramAdapter({ token: "123:test", webhookSecret }),
+      createTelegramAdapter({ token: "123:test" }),
     );
 
-    const request = (body: string, secret = webhookSecret) =>
-      new Request("https://example.com/telegram/webhook", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "X-Telegram-Bot-Api-Secret-Token": secret,
-        },
-        body,
-      });
-
-    await channels().handleTelegramWebhook(
-      request(`{"update_id":1,"message":{"message_id":1,"from":{"id":7},"chat":{"id":42},"text":"hi"}}`, "wrong"),
-    );
-    await channels().handleTelegramWebhook(
-      request(`{"update_id":2,"edited_message":{}}`),
-    );
-    await channels().handleTelegramWebhook(
-      request(`{"update_id":3,"message":{"message_id":2,"from":{"id":999},"chat":{"id":42},"text":"hi"}}`),
-    );
+    await channels().handleTelegramUpdate({
+      update_id: 2,
+      edited_message: {},
+    });
+    await channels().handleTelegramUpdate({
+      update_id: 3,
+      message: {
+        message_id: 2,
+        from: { id: 999 },
+        chat: { id: 42 },
+        text: "hi",
+      },
+    });
 
     expect(channelEvents(lines)).toEqual([]);
   });

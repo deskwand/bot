@@ -21,7 +21,6 @@ declare module "cloudflare:test" {
 const OWNER_ID = readRuntimeConfig(
   env as unknown as Env,
 ).owner.telegramUserIds[0]!;
-const SECRET = "s3cret";
 
 const MESSAGE: MessageEvent = {
   type: "message",
@@ -48,7 +47,7 @@ type Sent = { to: string; msg: OutboundMessage };
 type Edited = { to: string; messageId: string; msg: OutboundMessage };
 type Answered = { actionId: string; text?: string };
 
-function fakeAdapter(parse: (req: Request) => Promise<InboundEvent | null>) {
+function fakeAdapter(parse: (update: unknown) => Promise<InboundEvent | null>) {
   const sent: Sent[] = [];
   const edits: Edited[] = [];
   const answered: Answered[] = [];
@@ -71,18 +70,7 @@ function fakeAdapter(parse: (req: Request) => Promise<InboundEvent | null>) {
 }
 
 function fakeTelegram(inbound: InboundEvent | null) {
-  return fakeAdapter(async (req) =>
-    req.headers.get("X-Telegram-Bot-Api-Secret-Token") === SECRET
-      ? inbound
-      : null,
-  );
-}
-
-function webhook(secret = SECRET): Request {
-  return new Request("https://example.com/telegram/webhook", {
-    method: "POST",
-    headers: { "X-Telegram-Bot-Api-Secret-Token": secret },
-  });
+  return fakeAdapter(async () => inbound);
 }
 
 function channels() {
@@ -203,25 +191,14 @@ afterEach(async () => {
   restoreEnv();
 });
 
-describe("handleTelegramWebhook", () => {
-  it("ignores an update with the wrong webhook secret", async () => {
-    const events = await captureButler();
-    const tg = fakeTelegram(MESSAGE);
-    setChannelOverride("telegram", tg.adapter);
-
-    await channels().handleTelegramWebhook(webhook("wrong"));
-
-    expect(events).toEqual([]);
-    expect(await ownerAddresses()).toEqual([]);
-  });
-
+describe("handleTelegramUpdate", () => {
   it("ignores an update from a non-owner", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const events = await captureButler();
     const tg = fakeTelegram({ ...MESSAGE, userId: "999" });
     setChannelOverride("telegram", tg.adapter);
 
-    await channels().handleTelegramWebhook(webhook());
+    await channels().handleTelegramUpdate({ update_id: 1 });
 
     expect(events).toEqual([]);
     expect(await ownerAddresses()).toEqual([]);
@@ -234,7 +211,7 @@ describe("handleTelegramWebhook", () => {
     const tg = fakeTelegram(MESSAGE);
     setChannelOverride("telegram", tg.adapter);
 
-    await channels().handleTelegramWebhook(webhook());
+    await channels().handleTelegramUpdate({ update_id: 1 });
 
     await vi.waitFor(() => {
       expect(events).toEqual([
@@ -252,7 +229,7 @@ describe("handleTelegramWebhook", () => {
     const tg = fakeTelegram(nonText);
     setChannelOverride("telegram", tg.adapter);
 
-    await channels().handleTelegramWebhook(webhook());
+    await channels().handleTelegramUpdate({ update_id: 1 });
 
     await vi.waitFor(() => {
       expect(events).toEqual([
@@ -274,7 +251,7 @@ describe("handleTelegramWebhook", () => {
     try {
       outcome = await Promise.race([
         channels()
-          .handleTelegramWebhook(webhook())
+          .handleTelegramUpdate({ update_id: 1 })
           .then(() => "returned"),
         new Promise((resolve) => setTimeout(() => resolve("blocked"), 1000)),
       ]);
@@ -298,7 +275,7 @@ describe("handleTelegramWebhook", () => {
     setChannelOverride("telegram", tg.adapter);
 
     await expect(
-      channels().handleTelegramWebhook(webhook()),
+      channels().handleTelegramUpdate({ update_id: 1 }),
     ).resolves.toBe("accepted");
   });
 
@@ -306,7 +283,7 @@ describe("handleTelegramWebhook", () => {
     const tg = fakeTelegram(ACTION);
     setChannelOverride("telegram", tg.adapter);
 
-    await channels().handleTelegramWebhook(webhook());
+    await channels().handleTelegramUpdate({ update_id: 1 });
 
     expect(tg.answered).toEqual([
       { actionId: "cb-1", text: "任务尚未开始，无法取消" },
@@ -320,7 +297,7 @@ describe("handleTelegramWebhook", () => {
     const tg = fakeTelegram(action);
     setChannelOverride("telegram", tg.adapter);
 
-    await channels().handleTelegramWebhook(webhook());
+    await channels().handleTelegramUpdate({ update_id: 1 });
 
     expect(tg.answered).toEqual([
       { actionId: "cb-1", text: "出错了，稍后再试" },
@@ -336,7 +313,7 @@ describe("handleTelegramWebhook", () => {
     setChannelOverride("telegram", tg.adapter);
 
     await expect(
-      channels().handleTelegramWebhook(webhook()),
+      channels().handleTelegramUpdate({ update_id: 1 }),
     ).resolves.toBe("accepted");
   });
 
@@ -347,23 +324,12 @@ describe("handleTelegramWebhook", () => {
     setChannelOverride("telegram", tg.adapter);
     setEnv({ DESKWAND_CONFIG: undefined });
 
-    await channels().handleTelegramWebhook(webhook());
+    await channels().handleTelegramUpdate({ update_id: 1 });
 
     expect(events).toEqual([]);
     expect(await ownerAddresses()).toEqual([]);
     expect(error.mock.calls.flat().join(" ")).toContain("CONFIG_MISSING");
     error.mockRestore();
-  });
-
-  it("rejects every webhook when the webhook secret is absent", async () => {
-    const events = await captureButler();
-    const hub = freshChannels("no-webhook-secret");
-    setEnv({ TELEGRAM_WEBHOOK_SECRET: undefined });
-
-    await hub.handleTelegramWebhook(webhook());
-
-    expect(events).toEqual([]);
-    expect(await ownerAddresses()).toEqual([]);
   });
 });
 
@@ -374,7 +340,7 @@ describe("active channel gating", () => {
     const tg = fakeTelegram(MESSAGE);
     setChannelOverride("telegram", tg.adapter);
 
-    await freshChannels("gated-message").handleTelegramWebhook(webhook());
+    await freshChannels("gated-message").handleTelegramUpdate({ update_id: 1 });
 
     expect(events).toEqual([]);
   });
@@ -386,7 +352,7 @@ describe("active channel gating", () => {
     setChannelOverride("telegram", tg.adapter);
 
     await expect(
-      freshChannels("gated-action").handleTelegramWebhook(webhook()),
+      freshChannels("gated-action").handleTelegramUpdate({ update_id: 1 }),
     ).resolves.toBe("accepted");
 
     expect(events).toEqual([]);
@@ -398,7 +364,7 @@ describe("active channel gating", () => {
   it("re-enables the route after the selection returns to Telegram", async () => {
     setEnv({ ACTIVE_CHANNEL: "wechat" });
     const hub = freshChannels("gated-back");
-    await hub.handleTelegramWebhook(webhook());
+    await hub.handleTelegramUpdate({ update_id: 1 });
 
     setEnv({ ACTIVE_CHANNEL: "telegram" });
     await evictDurableObject(hub);
@@ -406,7 +372,7 @@ describe("active channel gating", () => {
     const tg = fakeTelegram(MESSAGE);
     setChannelOverride("telegram", tg.adapter);
 
-    await hub.handleTelegramWebhook(webhook());
+    await hub.handleTelegramUpdate({ update_id: 1 });
 
     await vi.waitFor(() => {
       expect(events).toHaveLength(1);

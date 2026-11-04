@@ -10,7 +10,6 @@ type RecordedCall = {
 };
 
 const TOKEN = "123:test-token";
-const SECRET = "s3cret";
 
 /** 真实的 8×8 纯色 PNG。 */
 const PNG_B64 =
@@ -64,50 +63,34 @@ function makeAdapter(
 ) {
   return createTelegramAdapter({
     token: TOKEN,
-    webhookSecret: SECRET,
     fetch: fetchImpl,
     ai,
   });
 }
 
-function updateRequest(payload: unknown, secret = SECRET): Request {
-  return new Request("https://example.com/webhook", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "X-Telegram-Bot-Api-Secret-Token": secret,
-    },
-    body: JSON.stringify(payload),
-  });
-}
-
 describe("parseInbound", () => {
-  it("returns null for wrong secret", async () => {
+  it("rejects a payload that is not an object", async () => {
     const { fetchImpl } = fakeFetch();
     const adapter = makeAdapter(fetchImpl);
 
-    const event = await adapter.parseInbound(
-      updateRequest({ update_id: 1, message: { text: "hi" } }, "wrong"),
-    );
-
-    expect(event).toBeNull();
+    await expect(adapter.parseInbound("nope")).rejects.toMatchObject({
+      status: 400,
+    });
   });
 
   it("parses text message", async () => {
     const { fetchImpl } = fakeFetch();
     const adapter = makeAdapter(fetchImpl);
 
-    const event = await adapter.parseInbound(
-      updateRequest({
-        update_id: 1,
-        message: {
-          message_id: 10,
-          from: { id: 7 },
-          chat: { id: 42 },
-          text: "hi",
-        },
-      }),
-    );
+    const event = await adapter.parseInbound({
+      update_id: 1,
+      message: {
+        message_id: 10,
+        from: { id: 7 },
+        chat: { id: 42 },
+        text: "hi",
+      },
+    });
 
     expect(event).toEqual({
       type: "message",
@@ -124,17 +107,15 @@ describe("parseInbound", () => {
     const { fetchImpl } = fakeFetch();
     const adapter = makeAdapter(fetchImpl);
 
-    const event = await adapter.parseInbound(
-      updateRequest({
-        update_id: 2,
-        message: {
-          message_id: 11,
-          from: { id: 7 },
-          chat: { id: 42 },
-          sticker: { file_id: "abc" },
-        },
-      }),
-    );
+    const event = await adapter.parseInbound({
+      update_id: 2,
+      message: {
+        message_id: 11,
+        from: { id: 7 },
+        chat: { id: 42 },
+        sticker: { file_id: "abc" },
+      },
+    });
 
     expect(event).toEqual({
       type: "message",
@@ -152,21 +133,19 @@ describe("parseInbound", () => {
       { status: 200, bytes: pngBytes() },
     ]);
 
-    const event = await makeAdapter(fetchImpl).parseInbound(
-      updateRequest({
-        update_id: 7,
-        message: {
-          message_id: 70,
-          from: { id: 1 },
-          chat: { id: 42 },
-          caption: "看图",
-          photo: [
-            { file_id: "small", width: 90, height: 90 },
-            { file_id: "large", width: 1280, height: 1280 },
-          ],
-        },
-      }),
-    );
+    const event = await makeAdapter(fetchImpl).parseInbound({
+      update_id: 7,
+      message: {
+        message_id: 70,
+        from: { id: 1 },
+        chat: { id: 42 },
+        caption: "看图",
+        photo: [
+          { file_id: "small", width: 90, height: 90 },
+          { file_id: "large", width: 1280, height: 1280 },
+        ],
+      },
+    });
 
     expect(event).toMatchObject({
       text: "看图",
@@ -185,17 +164,15 @@ describe("parseInbound", () => {
       { status: 200, bytes: pngBytes() },
     ]);
 
-    const event = await makeAdapter(fetchImpl).parseInbound(
-      updateRequest({
-        update_id: 8,
-        message: {
-          message_id: 80,
-          from: { id: 1 },
-          chat: { id: 42 },
-          document: { file_id: "doc-1", mime_type: "image/png" },
-        },
-      }),
-    );
+    const event = await makeAdapter(fetchImpl).parseInbound({
+      update_id: 8,
+      message: {
+        message_id: 80,
+        from: { id: 1 },
+        chat: { id: 42 },
+        document: { file_id: "doc-1", mime_type: "image/png" },
+      },
+    });
 
     expect(event).toMatchObject({
       text: null,
@@ -211,18 +188,16 @@ describe("parseInbound", () => {
       { status: 404, body: { ok: false } },
     ]);
 
-    const event = await makeAdapter(fetchImpl).parseInbound(
-      updateRequest({
-        update_id: 9,
-        message: {
-          message_id: 90,
-          from: { id: 1 },
-          chat: { id: 42 },
-          caption: "看图",
-          photo: [{ file_id: "large", width: 1280, height: 1280 }],
-        },
-      }),
-    );
+    const event = await makeAdapter(fetchImpl).parseInbound({
+      update_id: 9,
+      message: {
+        message_id: 90,
+        from: { id: 1 },
+        chat: { id: 42 },
+        caption: "看图",
+        photo: [{ file_id: "large", width: 1280, height: 1280 }],
+      },
+    });
 
     expect(event).toEqual({
       type: "message",
@@ -242,17 +217,15 @@ describe("parseInbound", () => {
       { status: 200, bytes: new TextEncoder().encode("<html>denied</html>") },
     ]);
 
-    const event = await makeAdapter(fetchImpl).parseInbound(
-      updateRequest({
-        update_id: 10,
-        message: {
-          message_id: 100,
-          from: { id: 1 },
-          chat: { id: 42 },
-          photo: [{ file_id: "large", width: 1280, height: 1280 }],
-        },
-      }),
-    );
+    const event = await makeAdapter(fetchImpl).parseInbound({
+      update_id: 10,
+      message: {
+        message_id: 100,
+        from: { id: 1 },
+        chat: { id: 42 },
+        photo: [{ file_id: "large", width: 1280, height: 1280 }],
+      },
+    });
 
     expect(event).not.toHaveProperty("images");
     expect(event).toMatchObject({ imageFailed: true });
@@ -265,17 +238,15 @@ describe("parseInbound", () => {
     ]);
     const ai = { run: async () => ({ text: "明天下午三点提醒我开会" }) };
 
-    const event = await makeAdapter(fetchImpl, ai).parseInbound(
-      updateRequest({
-        update_id: 11,
-        message: {
-          message_id: 101,
-          from: { id: 1 },
-          chat: { id: 42 },
-          voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
-        },
-      }),
-    );
+    const event = await makeAdapter(fetchImpl, ai).parseInbound({
+      update_id: 11,
+      message: {
+        message_id: 101,
+        from: { id: 1 },
+        chat: { id: 42 },
+        voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
+      },
+    });
 
     expect(event).toMatchObject({
       text: "明天下午三点提醒我开会",
@@ -291,17 +262,15 @@ describe("parseInbound", () => {
       new Error("network down"),
     ]);
 
-    const event = await makeAdapter(fetchImpl).parseInbound(
-      updateRequest({
-        update_id: 12,
-        message: {
-          message_id: 102,
-          from: { id: 1 },
-          chat: { id: 42 },
-          voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
-        },
-      }),
-    );
+    const event = await makeAdapter(fetchImpl).parseInbound({
+      update_id: 12,
+      message: {
+        message_id: 102,
+        from: { id: 1 },
+        chat: { id: 42 },
+        voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
+      },
+    });
 
     expect(event).toMatchObject({ text: null, voiceFailed: true });
   });
@@ -313,18 +282,16 @@ describe("parseInbound", () => {
     ]);
     const ai = { run: async () => ({ text: "把这段发给张三" }) };
 
-    const event = await makeAdapter(fetchImpl, ai).parseInbound(
-      updateRequest({
-        update_id: 13,
-        message: {
-          message_id: 103,
-          from: { id: 1 },
-          chat: { id: 42 },
-          caption: "转发一下",
-          voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
-        },
-      }),
-    );
+    const event = await makeAdapter(fetchImpl, ai).parseInbound({
+      update_id: 13,
+      message: {
+        message_id: 103,
+        from: { id: 1 },
+        chat: { id: 42 },
+        caption: "转发一下",
+        voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
+      },
+    });
 
     expect(event).toMatchObject({ text: "转发一下\n把这段发给张三" });
   });
@@ -336,18 +303,16 @@ describe("parseInbound", () => {
       new Error("network down"),
     ]);
 
-    const event = await makeAdapter(fetchImpl).parseInbound(
-      updateRequest({
-        update_id: 14,
-        message: {
-          message_id: 104,
-          from: { id: 1 },
-          chat: { id: 42 },
-          caption: "看这个",
-          voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
-        },
-      }),
-    );
+    const event = await makeAdapter(fetchImpl).parseInbound({
+      update_id: 14,
+      message: {
+        message_id: 104,
+        from: { id: 1 },
+        chat: { id: 42 },
+        caption: "看这个",
+        voice: { file_id: "vf", duration: 8, mime_type: "audio/ogg" },
+      },
+    });
 
     expect(event).toMatchObject({ text: "看这个", voiceFailed: true });
   });
@@ -356,17 +321,15 @@ describe("parseInbound", () => {
     const { fetchImpl } = fakeFetch();
     const adapter = makeAdapter(fetchImpl);
 
-    const event = await adapter.parseInbound(
-      updateRequest({
-        update_id: 3,
-        callback_query: {
-          id: "cb-1",
-          from: { id: 7 },
-          data: "a:cancel:t1",
-          message: { message_id: 11, chat: { id: 42 } },
-        },
-      }),
-    );
+    const event = await adapter.parseInbound({
+      update_id: 3,
+      callback_query: {
+        id: "cb-1",
+        from: { id: 7 },
+        data: "a:cancel:t1",
+        message: { message_id: 11, chat: { id: 42 } },
+      },
+    });
 
     expect(event).toEqual({
       type: "action",
@@ -385,17 +348,15 @@ describe("parseInbound", () => {
     const { fetchImpl } = fakeFetch();
     const adapter = makeAdapter(fetchImpl);
 
-    const event = await adapter.parseInbound(
-      updateRequest({
-        update_id: 4,
-        callback_query: {
-          id: "cb-2",
-          from: { id: 7 },
-          data: "not-an-action",
-          message: { message_id: 11, chat: { id: 42 } },
-        },
-      }),
-    );
+    const event = await adapter.parseInbound({
+      update_id: 4,
+      callback_query: {
+        id: "cb-2",
+        from: { id: 7 },
+        data: "not-an-action",
+        message: { message_id: 11, chat: { id: 42 } },
+      },
+    });
 
     expect(event).toBeNull();
   });
@@ -405,49 +366,25 @@ describe("parseInbound", () => {
     const adapter = makeAdapter(fetchImpl);
 
     expect(
-      await adapter.parseInbound(updateRequest({ update_id: 5, edited_message: {} })),
+      await adapter.parseInbound({ update_id: 5, edited_message: {} }),
     ).toBeNull();
   });
 });
 
-describe("unconfigured secrets", () => {
-  it("rejects every webhook when the webhook secret is absent", async () => {
-    const { fetchImpl } = fakeFetch();
-    const adapter = createTelegramAdapter({ token: TOKEN, fetch: fetchImpl });
-
-    expect(
-      await adapter.parseInbound(
-        updateRequest({
-          update_id: 1,
-          message: {
-            message_id: 10,
-            from: { id: 7 },
-            chat: { id: 42 },
-            text: "hi",
-          },
-        }),
-      ),
-    ).toBeNull();
-  });
-
+describe("unconfigured token", () => {
   it("rejects only sending when the bot token is absent", async () => {
     const { calls, fetchImpl } = fakeFetch();
-    const adapter = createTelegramAdapter({
-      webhookSecret: SECRET,
-      fetch: fetchImpl,
-    });
+    const adapter = createTelegramAdapter({ fetch: fetchImpl });
 
-    const event = await adapter.parseInbound(
-      updateRequest({
-        update_id: 1,
-        message: {
-          message_id: 10,
-          from: { id: 7 },
-          chat: { id: 42 },
-          text: "hi",
-        },
-      }),
-    );
+    const event = await adapter.parseInbound({
+      update_id: 1,
+      message: {
+        message_id: 10,
+        from: { id: 7 },
+        chat: { id: 42 },
+        text: "hi",
+      },
+    });
     expect(event).not.toBeNull();
 
     await expect(adapter.send("42", { text: "hi" })).rejects.toThrow(

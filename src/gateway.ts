@@ -2,9 +2,6 @@ import { createMcpAdminRoutes } from "./admin/mcp-routes";
 import type { McpAuthDO } from "./mcp/mcp-auth-do";
 
 export type GatewayDeps = {
-  channels(): {
-    handleTelegramWebhook(req: Request): Promise<"accepted" | "maintenance">;
-  };
   artifacts: R2Bucket;
   admin: { fetch(req: Request): Promise<Response> };
   mcpAuth(): DurableObjectStub<McpAuthDO>;
@@ -25,14 +22,6 @@ const INLINE_CONTENT_TYPES = new Set([
   "image/webp",
 ]);
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function ok(): Response {
-  return new Response(null, { status: 200 });
-}
-
 function notFound(): Response {
   return new Response("Not found", { status: 404 });
 }
@@ -41,21 +30,6 @@ export function createGateway(deps: GatewayDeps): {
   fetch(req: Request): Promise<Response>;
 } {
   const mcp = createMcpAdminRoutes(deps.mcpAuth);
-
-  async function handleWebhook(req: Request): Promise<Response> {
-    // Telegram retries failed deliveries; always acknowledge and log instead.
-    let outcome: "accepted" | "maintenance";
-    try {
-      outcome = await deps.channels().handleTelegramWebhook(req);
-    } catch (error) {
-      console.error(`gateway: webhook forward failed: ${errorMessage(error)}`);
-      return ok();
-    }
-    if (outcome === "maintenance") {
-      return new Response("Service Unavailable", { status: 503 });
-    }
-    return ok();
-  }
 
   async function handleArtifact(rawKey: string): Promise<Response> {
     let key: string;
@@ -97,10 +71,6 @@ export function createGateway(deps: GatewayDeps): {
 
       if (req.method === "GET" && url.pathname === MCP_CALLBACK_PATH) {
         return mcp.fetch(req);
-      }
-
-      if (req.method === "POST" && url.pathname === "/telegram/webhook") {
-        return handleWebhook(req);
       }
 
       if (req.method === "GET" && url.pathname.startsWith(ARTIFACT_PREFIX)) {

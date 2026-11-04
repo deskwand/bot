@@ -497,7 +497,6 @@ describe("ButlerDO.report", () => {
       "telegram",
       createTelegramAdapter({
         token: "123:test-token",
-        webhookSecret: "s3cret",
         fetch: fetchImpl,
       }),
     );

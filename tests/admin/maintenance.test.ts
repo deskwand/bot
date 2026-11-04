@@ -11,6 +11,8 @@ import {
   setPollTimingOverride,
   setWeChatCredentialsOverride,
 } from "../../src/channels/override";
+import type { MessageEvent } from "../../src/protocol";
+import { readRuntimeConfig } from "../../src/runtime-config";
 import worker from "../../src/index";
 
 declare module "cloudflare:test" {
@@ -18,6 +20,9 @@ declare module "cloudflare:test" {
 }
 
 const OWNER = "wx-owner";
+const TELEGRAM_OWNER = readRuntimeConfig(
+  env as unknown as Env,
+).owner.telegramUserIds[0]!;
 
 const CREDS = {
   token: "token-a",
@@ -82,6 +87,37 @@ async function cancelSchedules(hub: ReturnType<typeof channels>) {
       await instance.cancelSchedule(schedule.id);
     }
   });
+}
+
+async function captureButlerMessages(): Promise<{
+  events: MessageEvent[];
+  restore(): Promise<void>;
+}> {
+  const events: MessageEvent[] = [];
+  const stub = butler();
+  let original: ((evt: MessageEvent) => Promise<void>) | undefined;
+
+  await runInDurableObject(stub, (instance) => {
+    const proto = Object.getPrototypeOf(instance) as {
+      handleMessage(evt: MessageEvent): Promise<void>;
+    };
+    original = proto.handleMessage;
+    proto.handleMessage = async (evt) => {
+      events.push(evt);
+    };
+  });
+
+  return {
+    events,
+    async restore() {
+      await runInDurableObject(stub, (instance) => {
+        const proto = Object.getPrototypeOf(instance) as {
+          handleMessage(evt: MessageEvent): Promise<void>;
+        };
+        proto.handleMessage = original!;
+      });
+    },
+  };
 }
 
 beforeEach(() => {
@@ -184,20 +220,16 @@ describe("MaintenanceStore", () => {
 });
 
 describe("maintenance lease pauses", () => {
-  it("rejects the Telegram webhook while a lease is live", async () => {
+  it("rejects a Telegram update while a lease is live", async () => {
     const hub = channels("maintenance-webhook");
     await hub.acquireMaintenance("export", "op-webhook");
 
-    const request = new Request("https://example.com/telegram/webhook", {
-      method: "POST",
-    });
-
-    await expect(hub.handleTelegramWebhook(request)).resolves.toBe(
-      "maintenance",
-    );
+    await expect(
+      hub.handleTelegramUpdate({ update_id: 1 }),
+    ).resolves.toBe("maintenance");
   });
 
-  it("accepts the Telegram webhook again after the lease expires", async () => {
+  it("accepts the Telegram update again after the lease expires", async () => {
     const hub = channels("maintenance-webhook-expired");
     await hub.acquireMaintenance("export", "op-expired");
     await runInDurableObject(hub, (_instance, state) => {
@@ -207,11 +239,51 @@ describe("maintenance lease pauses", () => {
       );
     });
 
-    const request = new Request("https://example.com/telegram/webhook", {
-      method: "POST",
-    });
+    await expect(
+      hub.handleTelegramUpdate({ update_id: 1 }),
+    ).resolves.toBe("accepted");
+  });
 
-    await expect(hub.handleTelegramWebhook(request)).resolves.toBe("accepted");
+  it("returns maintenance when dispatch is fenced", async () => {
+    const hub = channels("maintenance-fence");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let parsed = false;
+
+    setChannelOverride("telegram", {
+      async parseInbound() {
+        parsed = true;
+        await gate;
+        return {
+          type: "message",
+          channel: "telegram",
+          chatId: "42",
+          userId: String(TELEGRAM_OWNER),
+          text: "hi",
+          eventId: "tg:1",
+        };
+      },
+      async send() {
+        return { messageId: "" };
+      },
+      async edit() {},
+      async answerAction() {},
+    });
+    const captured = await captureButlerMessages();
+
+    try {
+      const pending = hub.handleTelegramUpdate({ update_id: 1 });
+      await vi.waitFor(() => expect(parsed).toBe(true));
+      await hub.acquireMaintenance("export", "op-fence");
+      release();
+
+      await expect(pending).resolves.toBe("maintenance");
+      expect(captured.events).toEqual([]);
+    } finally {
+      await captured.restore();
+    }
   });
 
   it("runs the Butler alarm again after the lease expires", async () => {

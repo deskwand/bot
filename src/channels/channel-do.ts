@@ -196,8 +196,8 @@ export class ChannelDO extends Agent<Env> {
     }
   }
 
-  async handleTelegramWebhook(
-    req: Request,
+  async handleTelegramUpdate(
+    update: unknown,
   ): Promise<"accepted" | "maintenance"> {
     if (this.lease.current() !== null) return "maintenance";
 
@@ -206,7 +206,7 @@ export class ChannelDO extends Agent<Env> {
 
       let event: InboundEvent | null;
       try {
-        event = await adapter.parseInbound(req);
+        event = await adapter.parseInbound(update);
       } catch (error) {
         emitChannelEvent(this.env, {
           channel: "telegram",
@@ -226,7 +226,6 @@ export class ChannelDO extends Agent<Env> {
       }
 
       this.rememberOwner(event);
-      emitChannelEvent(this.env, { channel: "telegram", event: "webhook_ok" });
 
       // The other channel's input must not reach the Butler or a task.
       const route = await this.currentRoute();
@@ -244,8 +243,9 @@ export class ChannelDO extends Agent<Env> {
       }
 
       if (event.type === "message") {
-        this.dispatchMessage(event, route.routeKey);
-        return "accepted";
+        return this.dispatchMessage(event, route.routeKey)
+          ? "accepted"
+          : "maintenance";
       }
 
       let text = "出错了，稍后再试";
@@ -266,8 +266,8 @@ export class ChannelDO extends Agent<Env> {
         );
       }
     } catch (error) {
-      // The webhook must always be acknowledged, even for an unexpected bug.
-      console.error(`channel: webhook failed: ${errorMessage(error)}`);
+      // The update must always be acknowledged, even for an unexpected bug.
+      console.error(`channel: telegram update failed: ${errorMessage(error)}`);
     }
     return "accepted";
   }
@@ -1046,7 +1046,6 @@ export class ChannelDO extends Agent<Env> {
 
     this.telegramInstance ??= createTelegramAdapter({
       token: this.env.TELEGRAM_BOT_TOKEN,
-      webhookSecret: this.env.TELEGRAM_WEBHOOK_SECRET,
       ai: this.env.AI,
     });
     return this.telegramInstance;

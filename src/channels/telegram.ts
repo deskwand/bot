@@ -49,7 +49,6 @@ type TelegramResponse = {
 
 export type TelegramAdapterOptions = {
   token?: string;
-  webhookSecret?: string;
   fetch?: typeof fetch;
   /** 缺省时语音降级为 `voiceFailed`，不影响其他消息。 */
   ai?: VoiceAi;
@@ -175,21 +174,16 @@ export function createTelegramAdapter(
   }
 
   return {
-    async parseInbound(req: Request): Promise<InboundEvent | null> {
-      const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
-      if (!opts.webhookSecret || secret !== opts.webhookSecret) return null;
-
-      let update: TelegramUpdate;
-      try {
-        update = (await req.json()) as TelegramUpdate;
-      } catch {
-        // A malformed body is a parse failure, not an unsupported update. The
+    async parseInbound(update: unknown): Promise<InboundEvent | null> {
+      if (typeof update !== "object" || update === null) {
+        // An invalid update is a parse failure, not an unsupported one. The
         // caller emits the fixed webhook_rejected event for it.
         throw new ChannelError("telegram payload invalid", 400);
       }
+      const parsed = update as TelegramUpdate;
 
-      if (update.message) {
-        const message = update.message;
+      if (parsed.message) {
+        const message = parsed.message;
         // A message without a sender (e.g. a channel post) has no owner to map.
         if (!message.from) return null;
 
@@ -230,13 +224,13 @@ export function createTelegramAdapter(
           ...(message.voice && transcript === undefined
             ? { voiceFailed: true }
             : {}),
-          eventId: `tg:${update.update_id}`,
+          eventId: `tg:${parsed.update_id}`,
         };
         return event;
       }
 
-      if (update.callback_query) {
-        const query = update.callback_query;
+      if (parsed.callback_query) {
+        const query = parsed.callback_query;
         if (!query.message || query.data === undefined) return null;
 
         const decoded = decodeAction(query.data);
@@ -251,7 +245,7 @@ export function createTelegramAdapter(
           messageId: String(query.message.message_id),
           action: decoded.action,
           taskId: decoded.taskId,
-          eventId: `tg:${update.update_id}`,
+          eventId: `tg:${parsed.update_id}`,
           ...(decoded.approvalId === undefined
             ? {}
             : { approvalId: decoded.approvalId }),

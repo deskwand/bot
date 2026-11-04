@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createGateway } from "../src/gateway";
 import type { McpAuthDO } from "../src/mcp/mcp-auth-do";
 
@@ -7,50 +7,17 @@ declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
-type WebhookOutcome = "accepted" | "maintenance";
-
 function setup(
-  handleTelegramWebhook: (req: Request) => Promise<WebhookOutcome> = async () =>
-    "accepted",
   mcpAuth: () => DurableObjectStub<McpAuthDO> = () =>
     env.MCP_AUTH.get(env.MCP_AUTH.idFromName("gateway-test")),
 ) {
   const gateway = createGateway({
-    channels: () => ({ handleTelegramWebhook }),
     artifacts: env.ARTIFACTS,
     admin: { fetch: async () => new Response(null, { status: 404 }) },
     mcpAuth,
   });
   return { gateway };
 }
-
-function webhook(): Request {
-  return new Request("https://example.com/telegram/webhook", {
-    method: "POST",
-  });
-}
-
-describe("POST /telegram/webhook", () => {
-  it("returns 200 when forwarding to the channel hub throws", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const h = setup(async () => {
-      throw new Error("channel hub down");
-    });
-
-    const response = await h.gateway.fetch(webhook());
-
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe("");
-  });
-
-  it("returns 503 when the channel hub is in maintenance", async () => {
-    const h = setup(async () => "maintenance");
-
-    const response = await h.gateway.fetch(webhook());
-
-    expect(response.status).toBe(503);
-  });
-});
 
 describe("GET /a/<key>", () => {
   it("returns 404 for a missing artifact", async () => {
@@ -112,7 +79,7 @@ describe("GET /mcp/oauth/callback", () => {
     const auth = {
       completeAuthorization: async () => true,
     } as unknown as DurableObjectStub<McpAuthDO>;
-    const h = setup(undefined, () => auth);
+    const h = setup(() => auth);
 
     const response = await h.gateway.fetch(
       new Request(
@@ -139,6 +106,14 @@ describe("GET /mcp/oauth/callback", () => {
 describe("worker entry", () => {
   it("returns 404 for unknown paths", async () => {
     const response = await SELF.fetch("https://example.com/unknown");
+
+    expect(response.status).toBe(404);
+  });
+
+  it("answers 404 for the removed Telegram webhook", async () => {
+    const response = await SELF.fetch("https://example.com/telegram/webhook", {
+      method: "POST",
+    });
 
     expect(response.status).toBe(404);
   });

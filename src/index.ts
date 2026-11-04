@@ -36,7 +36,6 @@ function admin(env: Env) {
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const gateway = createGateway({
-      channels: () => channels(env),
       artifacts: env.ARTIFACTS,
       admin: admin(env),
       mcpAuth: () => mcpAuth(env),
