@@ -62,8 +62,11 @@ test("an OAuth service starts authorization and becomes healthy when the status 
 
   const status = page.getByTestId("mcp-status-notion");
   await expect(status).toHaveText("需要授权");
+  // 「需要授权」旁边不必再写一遍「需要在桌面端登录授权」。
+  await expect(page.getByTestId("mcp-failure-notion")).toHaveCount(0);
   await expect.poll(async () => (await mcpCalls(page)).start).toContain("notion");
   await expect(status).toHaveText("正常", { timeout: 15_000 });
+  await expect(page.getByTestId("mcp-failure-notion")).toHaveCount(0);
 });
 
 test("tool approval changes publish only after the explicit save", async ({ page }) => {

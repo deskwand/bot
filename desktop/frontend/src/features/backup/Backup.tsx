@@ -386,6 +386,10 @@ export function Backup() {
           </div>
 
           <p className="text-xs text-muted-foreground">
+            关闭客户端时不会自动备份。
+          </p>
+
+          <p className="text-xs text-muted-foreground">
             上次成功：
             {settings?.lastSuccessAt ? formatExportedAt(settings.lastSuccessAt) : "还没有"}
             {settings?.lastErrorCode
@@ -411,7 +415,7 @@ export function Backup() {
           </Button>
           </div>
           <CardDescription>
-            不含部署配置和密钥；文件未加密，请自行保管。导出期间消息暂停，最长约 15 分钟。
+            不含部署配置和密钥；未加密，请妥善保管。导出期间消息暂停，最长约 15 分钟。
           </CardDescription>
         </CardHeader>
         <CardContent>

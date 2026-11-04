@@ -1271,7 +1271,7 @@ test("overview config rows show data instead of repeating the row title", async 
   await page.goto("/test.html?fixture=configured");
 
   // 「服务」行原来写的是「管理已接入的服务」，和行标题、按钮三处同义。
-  await expect(page.getByText(/^已接入 \d+ 个$|^未接入$/)).toBeVisible();
+  await expect(page.getByText("未接入", { exact: true })).toBeVisible();
 
   // 三个「管理」文字按钮没了，只剩带可访问名的图标按钮。
   await expect(page.getByText("管理", { exact: true })).toHaveCount(0);
@@ -1287,7 +1287,9 @@ test("backup and diagnostics descriptions stay on the user side of the glass", a
   // 自动备份开关就在下面，说明句不该再把这件事讲一遍。
   await expect(page.getByText("每次备份都写到这里。", { exact: true })).toBeVisible();
   // 文件未加密这句必须同时给出处置办法：SENSITIVE_NOTICE 只在导出完成之后才出现。
-  await expect(page.getByText(/未加密，请自行保管/)).toBeVisible();
+  await expect(page.getByText(/未加密，请妥善保管/)).toBeVisible();
+  // 定时备份只在客户端跑着的时候执行，界面不能让人以为关掉也照备份。
+  await expect(page.getByText("关闭客户端时不会自动备份。", { exact: true })).toBeVisible();
   // 「不用再开文件对话框」是实现细节。
   await expect(page.getByText("按时间从新到旧。", { exact: true })).toBeVisible();
   await expect(page.getByText(/不用再开文件对话框/)).toHaveCount(0);
@@ -1295,4 +1297,10 @@ test("backup and diagnostics descriptions stay on the user side of the glass", a
   await page.getByRole("button", { name: "诊断", exact: true }).click();
   await expect(page.getByText("用你输入的密钥直连供应商。", { exact: true })).toBeVisible();
   await expect(page.getByText(/直接调用供应商/)).toHaveCount(0);
+});
+
+test("overview service row reports how many services are connected", async ({ page }) => {
+  await page.goto("/test.html?fixture=mcp-many-tools");
+  // 该 fixture 恰好接入一个服务；数字来自配置，不是写死的文案。
+  await expect(page.getByText("已接入 1 个", { exact: true })).toBeVisible();
 });

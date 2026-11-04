@@ -470,12 +470,12 @@ export function Mcp() {
                       {status.label}
                     </Badge>
                   </div>
-                  {probe && !probe.ok ? (
+                  {status.label === "连接失败" ? (
                     <p
                       className="mt-1 break-all text-xs text-muted-foreground"
                       data-testid={`mcp-failure-${server.name}`}
                     >
-                      {probe.reason || "未知原因"}
+                      {probe?.reason || "未知原因"}
                     </p>
                   ) : null}
                 </CardHeader>
