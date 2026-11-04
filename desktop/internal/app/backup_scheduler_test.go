@@ -13,7 +13,10 @@ import (
 type fakeSettingsStore struct {
 	settings BackupSettingsDTO
 	readErr  error
-	runs     []recordedRun
+	// frozen keeps LastAttemptAt unchanged after RecordRun, as a settings file
+	// that cannot be written would.
+	frozen bool
+	runs   []recordedRun
 }
 
 type recordedRun struct {
@@ -35,6 +38,14 @@ func (f *fakeSettingsStore) Save(BackupSettingsEditDTO) (BackupSettingsDTO, erro
 
 func (f *fakeSettingsStore) RecordRun(at time.Time, path string, runErr error) (BackupSettingsDTO, error) {
 	f.runs = append(f.runs, recordedRun{at: at, path: path, err: runErr})
+	if f.frozen {
+		return f.settings, nil
+	}
+	if runErr == nil {
+		f.settings.LastSuccessAt = at.UTC().Format(time.RFC3339)
+		f.settings.LastSuccessPath = path
+	}
+	f.settings.LastAttemptAt = at.UTC().Format(time.RFC3339)
 	return f.settings, nil
 }
 
@@ -48,26 +59,26 @@ func TestDueForAutoBackup(t *testing.T) {
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 	base := BackupSettingsDTO{Auto: true, IntervalHours: 6, Keep: 5}
 
-	if !dueForAutoBackup(base, now) {
+	if !dueForAutoBackup(base, now, time.Time{}) {
 		t.Fatal("never-run settings must be due")
 	}
 	on := base
 	on.LastSuccessAt = "2026-11-04T08:00:00Z"
-	if dueForAutoBackup(on, now) {
+	if dueForAutoBackup(on, now, time.Time{}) {
 		t.Fatal("four hours after a six-hour run must not be due")
 	}
-	if !dueForAutoBackup(on, now.Add(2*time.Hour)) {
+	if !dueForAutoBackup(on, now.Add(2*time.Hour), time.Time{}) {
 		t.Fatal("six hours after the last run must be due")
 	}
 	off := base
 	off.Auto = false
 	off.LastSuccessAt = "2026-11-01T00:00:00Z"
-	if dueForAutoBackup(off, now) {
+	if dueForAutoBackup(off, now, time.Time{}) {
 		t.Fatal("auto off must never be due")
 	}
 	corrupt := base
 	corrupt.LastSuccessAt = "not a time"
-	if !dueForAutoBackup(corrupt, now) {
+	if !dueForAutoBackup(corrupt, now, time.Time{}) {
 		t.Fatal("an unreadable timestamp must be treated as due")
 	}
 	// A failed attempt counts: the interval starts over instead of retrying
@@ -76,10 +87,10 @@ func TestDueForAutoBackup(t *testing.T) {
 	retried.LastSuccessAt = "2026-11-04T00:00:00Z"
 	retried.LastAttemptAt = "2026-11-04T11:00:00Z"
 	retried.LastErrorCode = "BACKUP_FAILED"
-	if dueForAutoBackup(retried, now) {
+	if dueForAutoBackup(retried, now, time.Time{}) {
 		t.Fatal("a recent failed attempt must not be due")
 	}
-	if !dueForAutoBackup(retried, now.Add(5*time.Hour)) {
+	if !dueForAutoBackup(retried, now.Add(5*time.Hour), time.Time{}) {
 		t.Fatal("an old failed attempt must be due")
 	}
 }
@@ -120,14 +131,23 @@ func TestSchedulerExportsWhenDue(t *testing.T) {
 	}
 }
 
-func TestSchedulerSkipsBusyUnselectedAndLoggedOut(t *testing.T) {
+func TestSchedulerRetriesSkippedFailures(t *testing.T) {
 	for _, code := range []string{CodeAuthRequired, backup.CodeMaintenanceBusy, CodeTargetNotSelected} {
 		settings := &fakeSettingsStore{settings: BackupSettingsDTO{Auto: true, IntervalHours: 6, Keep: 5}}
+		calls := 0
+		now := time.Date(2026, 11, 4, 6, 0, 0, 0, time.UTC)
 		scheduler := newScheduler(settings, func(context.Context) error {
+			calls++
 			return domain.Error{Code: code, Message: "skip"}
-		}, time.Date(2026, 11, 4, 6, 0, 0, 0, time.UTC))
+		}, now)
 
 		scheduler.Step(context.Background())
+		// A skip is not an attempt: the next tick must try again instead of
+		// waiting a whole interval.
+		scheduler.Step(context.Background())
+		if calls != 2 {
+			t.Fatalf("%s: exported %d times, want 2", code, calls)
+		}
 		if len(settings.runs) != 0 {
 			t.Fatalf("%s was recorded as a failure", code)
 		}
@@ -153,18 +173,24 @@ func TestSchedulerWaitsAfterFailure(t *testing.T) {
 	}
 }
 
-func TestSchedulerRecordsRealFailure(t *testing.T) {
-	settings := &fakeSettingsStore{settings: BackupSettingsDTO{Auto: true, IntervalHours: 6, Keep: 5}}
+func TestSchedulerDoesNotRepeatWhenTheAttemptCannotBeStored(t *testing.T) {
+	// backup.json is unwritable, so the stored attempt never advances. The
+	// scheduler must still keep to the interval instead of exporting every tick.
+	settings := &fakeSettingsStore{
+		settings: BackupSettingsDTO{Auto: true, IntervalHours: 6, Keep: 5},
+		frozen:   true,
+	}
+	calls := 0
+	now := time.Date(2026, 11, 4, 6, 0, 0, 0, time.UTC)
 	scheduler := newScheduler(settings, func(context.Context) error {
-		return errors.New("boom")
-	}, time.Date(2026, 11, 4, 6, 0, 0, 0, time.UTC))
+		calls++
+		return nil
+	}, now)
 
 	scheduler.Step(context.Background())
-	if len(settings.runs) != 1 {
-		t.Fatalf("recorded %d runs, want 1", len(settings.runs))
-	}
-	if settings.runs[0].err == nil {
-		t.Fatal("failure was not passed to RecordRun")
+	scheduler.Step(context.Background())
+	if calls != 1 {
+		t.Fatalf("exported %d times with a frozen settings file, want 1", calls)
 	}
 }
 

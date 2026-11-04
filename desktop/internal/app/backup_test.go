@@ -610,6 +610,9 @@ func TestChooseBackupAtUsesListedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "deskwand-backup-b-20261102-100000.zip")
+	if err := os.WriteFile(path, []byte("zip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	f.backup.inspectManifest = backup.Manifest{Release: "1.0.0"}
 
 	preview, err := f.service.ChooseBackupAt(path)
@@ -651,5 +654,102 @@ func TestChooseBackupAtRejectsPathOutsideBackupDir(t *testing.T) {
 	}
 	if f.backup.inspectCalls != 0 {
 		t.Fatalf("rejected path reached Inspect %d times", f.backup.inspectCalls)
+	}
+}
+
+func TestExportDataRecordsFailure(t *testing.T) {
+	f := newBackupFixture(t)
+	f.backup.exportErr = domain.Error{Code: backup.CodeAdminUnavailable, Message: "云端服务尚不支持数据备份"}
+
+	if _, err := f.service.ExportData(); err == nil {
+		t.Fatal("expected the export to fail")
+	}
+	settings, err := f.settings.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.LastErrorCode != backup.CodeAdminUnavailable {
+		t.Fatalf("last error code = %q, want %s", settings.LastErrorCode, backup.CodeAdminUnavailable)
+	}
+	if settings.LastErrorMessage != "云端服务尚不支持数据备份" {
+		t.Fatalf("last error message = %q", settings.LastErrorMessage)
+	}
+	if settings.LastSuccessAt != "" {
+		t.Fatalf("failed export set a success time: %#v", settings)
+	}
+}
+
+func TestExportDataDoesNotRecordSkippedFailures(t *testing.T) {
+	for _, code := range []string{CodeAuthRequired, CodeTargetNotSelected} {
+		f := newBackupFixture(t)
+		f.backup.exportErr = domain.Error{Code: code, Message: "skip"}
+
+		if _, err := f.service.ExportData(); err == nil {
+			t.Fatalf("%s: expected the export to fail", code)
+		}
+		settings, err := f.settings.Settings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settings.LastErrorCode != "" || settings.LastAttemptAt != "" {
+			t.Fatalf("%s was recorded as a failure: %#v", code, settings)
+		}
+	}
+}
+
+func TestChangingFolderForgetsTheChosenBackup(t *testing.T) {
+	f := newBackupFixture(t)
+	first := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: first, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(first, "deskwand-backup-b-20261102-100000.zip")
+	if err := os.WriteFile(path, []byte("zip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.backup.inspectManifest = backup.Manifest{Release: "1.0.0"}
+	if _, err := f.service.ChooseBackupAt(path); err != nil {
+		t.Fatal(err)
+	}
+
+	second := t.TempDir()
+	if _, err := f.service.SaveBackupSettings(BackupSettingsEditDTO{
+		Dir: second, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.service.RestoreData(); !hasCode(err, backup.CodeBackupInvalid) {
+		t.Fatalf("RestoreData after moving the folder = %v, want %s", err, backup.CodeBackupInvalid)
+	}
+	if f.backup.restoreCalls != 0 {
+		t.Fatalf("restored %q from the old folder", f.backup.restorePath)
+	}
+}
+
+func TestChooseBackupAtRejectsSymlink(t *testing.T) {
+	f := newBackupFixture(t)
+	dir := t.TempDir()
+	if _, err := f.settings.Save(BackupSettingsEditDTO{
+		Dir: dir, Auto: false, IntervalHours: 24, Keep: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "real.zip")
+	if err := os.WriteFile(target, []byte("zip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "deskwand-backup-b-20261102-100000.zip")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := f.service.ChooseBackupAt(link); !hasCode(err, backup.CodeBackupInvalid) {
+		t.Fatalf("ChooseBackupAt(symlink) = %v, want %s", err, backup.CodeBackupInvalid)
+	}
+	if f.backup.inspectCalls != 0 {
+		t.Fatal("symlink reached Inspect")
 	}
 }

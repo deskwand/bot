@@ -460,6 +460,15 @@ export function createMockClient(): ClientService {
   const listeners = new Set<(status: LoginStatusDTO) => void>();
   const cfListeners = new Set<(status: CloudflareLoginDTO) => void>();
   const backupListeners = new Set<(progress: Progress) => void>();
+  // Lets a test push a progress event the page did not trigger itself, the way
+  // a background auto backup does.
+  (
+    window as unknown as {
+      __emitBackupProgress?: (progress: Progress) => void;
+    }
+  ).__emitBackupProgress = (progress) => {
+    for (const listener of backupListeners) listener(progress);
+  };
   const backupCalls = {
     restore: 0,
     retry: [] as boolean[],
@@ -467,6 +476,7 @@ export function createMockClient(): ClientService {
     abandon: 0,
     openFolder: 0,
     chooseDir: 0,
+    list: 0,
     chooseAt: [] as string[],
     saved: [] as BackupSettingsEditDTO[],
   };
@@ -480,6 +490,7 @@ export function createMockClient(): ClientService {
         abandon: number;
         openFolder: number;
         chooseDir: number;
+        list: number;
         chooseAt: string[];
         saved: BackupSettingsEditDTO[];
       };
@@ -1222,6 +1233,7 @@ export function createMockClient(): ClientService {
     },
 
     async listBackups(): Promise<BackupFileDTO[]> {
+      backupCalls.list += 1;
       return BACKUP_FILES;
     },
 

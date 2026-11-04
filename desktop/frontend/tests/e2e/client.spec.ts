@@ -868,6 +868,7 @@ type BackupCalls = {
   abandon: number;
   openFolder: number;
   chooseDir: number;
+  list: number;
   chooseAt: string[];
   saved: { dir: string; auto: boolean; intervalHours: number; keep: number }[];
 };
@@ -879,6 +880,7 @@ const NO_BACKUP_CALLS: BackupCalls = {
   abandon: 0,
   openFolder: 0,
   chooseDir: 0,
+  list: 0,
   chooseAt: [],
   saved: [],
 };
@@ -899,6 +901,30 @@ test("exports a backup and shows the sensitivity notice", async ({ page }) => {
   await expect(page.getByText(BACKUP_NOTICE)).toBeVisible();
   // The configured folder is where the file lands; no file dialog is involved.
   await expect(page.getByTestId("backup-file")).toHaveCount(1);
+});
+
+test("a background export refreshes the folder view", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup");
+  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await expect(page.getByTestId("backup-file")).toHaveCount(1);
+  const before = (await backupCalls(page)).list;
+
+  // An auto backup happens without any click on this page; only the progress
+  // stream reports it.
+  await page.evaluate(() => {
+    (
+      window as unknown as { __emitBackupProgress?: (progress: unknown) => void }
+    ).__emitBackupProgress?.({
+      op: "export",
+      phase: "finishing",
+      tables: 3,
+      rows: 120,
+      objects: 1,
+      totalObjects: 1,
+    });
+  });
+
+  await expect.poll(async () => (await backupCalls(page)).list).toBeGreaterThan(before);
 });
 
 test("opens the backup folder in the file manager", async ({ page }) => {

@@ -246,8 +246,8 @@ func TestExportReleasesLeaseOnFailure(t *testing.T) {
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("archive exists after a failure: %v", err)
 	}
-	if _, err := os.Stat(path + ".tmp"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("temporary archive exists after a failure: %v", err)
+	if left, err := os.ReadDir(filepath.Dir(path)); err != nil || len(left) != 0 {
+		t.Fatalf("a failed export left files behind: %v %v", left, err)
 	}
 	if worker.hasLease() {
 		t.Fatal("the lease was not released")

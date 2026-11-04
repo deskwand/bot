@@ -243,18 +243,20 @@ func defaultBackupDir(fallbackDir string) string {
 }
 
 // ensureWritableDir creates dir and proves it is writable, so an export never
-// starts against a folder it cannot finish in.
+// starts against a folder it cannot finish in. The probe has a random name: a
+// fixed one could truncate a file the user keeps there (or be a symlink) and
+// would make the folder unusable when a directory happens to have that name.
 func ensureWritableDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: "备份目录不可创建，请换一个目录"}
 	}
-	probe := filepath.Join(dir, ".deskwand-write-probe")
-	file, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	probe, err := os.CreateTemp(dir, ".deskwand-write-probe-*")
 	if err != nil {
 		return domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: "备份目录不可写，请换一个目录"}
 	}
-	_ = file.Close()
-	_ = os.Remove(probe)
+	name := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(name)
 	return nil
 }
 

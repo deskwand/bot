@@ -187,3 +187,30 @@ func TestFileBackupSettingsSurvivesCorruptFile(t *testing.T) {
 		t.Fatalf("rewritten file = %#v", file)
 	}
 }
+
+func TestEnsureWritableDirKeepsExistingFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".deskwand-write-probe"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kept := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(kept, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureWritableDir(dir); err != nil {
+		t.Fatalf("ensureWritableDir = %v, want nil", err)
+	}
+	if data, err := os.ReadFile(kept); err != nil || string(data) != "keep me" {
+		t.Fatalf("existing file changed: %q %v", data, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "notes.txt" && entry.Name() != ".deskwand-write-probe" {
+			t.Fatalf("probe file was left behind: %s", entry.Name())
+		}
+	}
+}

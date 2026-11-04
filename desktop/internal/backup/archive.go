@@ -130,14 +130,16 @@ func NewWriter(finalPath string) (*Writer, error) {
 	if finalPath == "" {
 		return nil, fmt.Errorf("backup: archive path is empty")
 	}
-	tempPath := finalPath + ".tmp"
-	file, err := os.OpenFile(tempPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	// The temporary name is random and hidden: it holds a full unencrypted copy
+	// of the data, and a predictable name would follow a symlink someone put
+	// there. Backups now default to a folder the user can see.
+	file, err := os.CreateTemp(filepath.Dir(finalPath), "."+filepath.Base(finalPath)+"-*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("backup: create archive: %w", err)
 	}
 	return &Writer{
 		finalPath: finalPath,
-		tempPath:  tempPath,
+		tempPath:  file.Name(),
 		file:      file,
 		zip:       zip.NewWriter(file),
 	}, nil

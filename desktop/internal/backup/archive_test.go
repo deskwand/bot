@@ -257,10 +257,12 @@ func TestAbortLeavesNoFile(t *testing.T) {
 	if err := writer.Abort(); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{path, path + ".tmp"} {
-		if _, err := os.Stat(name); !os.IsNotExist(err) {
-			t.Fatalf("%s exists after abort: %v", name, err)
-		}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("abort left files behind: %v", entries)
 	}
 }
 

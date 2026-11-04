@@ -107,8 +107,6 @@ export function Backup() {
   const [files, setFiles] = useState<BackupFileDTO[]>([]);
   const [filesError, setFilesError] = useState<unknown>(null);
 
-  useEffect(() => client.subscribeBackupProgress(setProgress), [client]);
-
   const refreshSettings = useCallback(async () => {
     try {
       setSettings(await client.backupSettings());
@@ -131,6 +129,21 @@ export function Backup() {
     void refreshSettings();
     void refreshFiles();
   }, [refreshFiles, refreshSettings]);
+
+  // "finishing" is the last phase the exporter reports, and by then the archive
+  // is renamed into place. A background auto backup produces no other signal,
+  // so without this an open page would keep saying "还没有" after one ran.
+  useEffect(
+    () =>
+      client.subscribeBackupProgress((next) => {
+        setProgress(next);
+        if (next.op === "export" && next.phase === "finishing") {
+          void refreshFiles();
+          void refreshSettings();
+        }
+      }),
+    [client, refreshFiles, refreshSettings],
+  );
 
   const refreshPending = useCallback(async () => {
     try {

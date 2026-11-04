@@ -106,6 +106,27 @@ func (s *Service) endBackupOperation() {
 	s.backupMu.Unlock()
 }
 
+// unrecordedFailureCodes are failures that say nothing about the backup itself:
+// not logged in yet, no deployment selected yet, or another backup already
+// running. They are not stored, so the page keeps showing the last real outcome
+// instead of "备份失败" on a client that simply has nothing to back up.
+var unrecordedFailureCodes = map[string]bool{
+	CodeAuthRequired:           true,
+	CodeTargetNotSelected:      true,
+	backup.CodeMaintenanceBusy: true,
+}
+
+// recordsExportFailure reports whether a failed export should be stored for the
+// page. An unclassified error still counts: the user asked for a backup and did
+// not get one.
+func recordsExportFailure(err error) bool {
+	code := appErrorCode(err)
+	if code == "" {
+		return true
+	}
+	return !unrecordedFailureCodes[code]
+}
+
 // ExportData writes a backup into the configured folder. It opens no dialog:
 // the folder is a setting, so one click is enough. The attempt is recorded so
 // the page can show when the last backup succeeded, and old files beyond the
@@ -134,6 +155,9 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 	path := filepath.Join(settings.Dir, backupFileName(target.ScriptName, s.now()))
 	manifest, err := s.backup.Export(ctx, target, path)
 	if err != nil {
+		if recordsExportFailure(err) {
+			_, _ = s.settings.RecordRun(s.now(), "", err)
+		}
 		return nil, safeAppError(err)
 	}
 	_, _ = s.settings.RecordRun(s.now(), path, nil)
@@ -161,11 +185,28 @@ func (s *Service) SaveBackupSettings(input BackupSettingsEditDTO) (BackupSetting
 	if s.settings == nil {
 		return BackupSettingsDTO{}, serviceUnavailable()
 	}
+	previous, err := s.settings.Settings()
+	if err != nil {
+		return BackupSettingsDTO{}, safeAppError(err)
+	}
 	next, err := s.settings.Save(input)
 	if err != nil {
 		return BackupSettingsDTO{}, safeAppError(err)
 	}
+	s.forgetSelectionInOtherFolder(previous.Dir, next.Dir)
 	return next, nil
+}
+
+// forgetSelectionInOtherFolder drops the remembered restore file when the
+// folder changes: a preview from the old folder must not stay restorable from
+// the new one.
+func (s *Service) forgetSelectionInOtherFolder(before, after string) {
+	if filepath.Clean(before) == filepath.Clean(after) {
+		return
+	}
+	s.backupMu.Lock()
+	s.backupPath = ""
+	s.backupMu.Unlock()
 }
 
 // ChooseBackupDir asks for a folder with the native dialog and stores it. A
@@ -194,6 +235,7 @@ func (s *Service) ChooseBackupDir() (BackupSettingsDTO, error) {
 	if err != nil {
 		return BackupSettingsDTO{}, safeAppError(err)
 	}
+	s.forgetSelectionInOtherFolder(settings.Dir, next.Dir)
 	return next, nil
 }
 
@@ -260,6 +302,11 @@ func (s *Service) ChooseBackupAt(path string) (*BackupPreviewDTO, error) {
 		return nil, safeAppError(err)
 	}
 	if !insideBackupDir(settings.Dir, path) {
+		return nil, domain.Error{Code: backup.CodeBackupInvalid, Message: "只能恢复备份目录里的备份文件"}
+	}
+	// A symlink inside the folder would send Inspect and Restore to whatever it
+	// points at.
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
 		return nil, domain.Error{Code: backup.CodeBackupInvalid, Message: "只能恢复备份目录里的备份文件"}
 	}
 	ctx, cancel := s.backupContext()
