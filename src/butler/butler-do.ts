@@ -1152,10 +1152,18 @@ export class ButlerDO extends Agent<Env> {
 
     const result = await this.harness.wait(operationId);
     if (result.status === "unanswered") {
-      const modelError =
-        result.reason === "model_error"
-          ? lastModelError(await this.harness.session().messages())
-          : undefined;
+      let modelError: string | undefined;
+      if (result.reason === "model_error") {
+        try {
+          modelError = lastModelError(await this.harness.session().messages());
+        } catch (error) {
+          const reason =
+            error instanceof Error ? error.message : String(error);
+          console.warn(
+            `butler: could not read the transcript after a model error: ${reason}`,
+          );
+        }
+      }
       await this.sendBestEffort({
         text: userTextForModelError(modelError) ?? "出错了，稍后再试",
       });

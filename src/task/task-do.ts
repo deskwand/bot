@@ -598,10 +598,20 @@ export class TaskDO extends Agent<Env> {
       if (result.status === "unanswered") {
         // Pi resolves `wait` for failed/aborted/withdrawn runs; they are not
         // completions, even when they carry no text.
-        const modelError =
-          result.reason === "model_error"
-            ? lastModelError(await this.harness.session().messages())
-            : undefined;
+        let modelError: string | undefined;
+        if (result.reason === "model_error") {
+          try {
+            modelError = lastModelError(
+              await this.harness.session().messages(),
+            );
+          } catch (error) {
+            const reason =
+              error instanceof Error ? error.message : String(error);
+            console.warn(
+              `task ${this.currentTaskId() ?? "unknown"} could not read the transcript after a model error: ${reason}`,
+            );
+          }
+        }
         await this.fail(
           userTextForModelError(modelError) ?? result.reason ?? "任务未完成",
         );

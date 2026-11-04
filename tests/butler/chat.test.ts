@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { Provider } from "@earendil-works/pi-ai/models";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
-import { PiHarness, type PiModel } from "agents/harness/pi";
+import { PiHarness, PiSession, type PiModel } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
@@ -195,6 +195,7 @@ afterEach(() => {
   setModelOverride(null);
   setChannelOverride("telegram", null);
   setChannelOverride("wechat", null);
+  vi.restoreAllMocks();
   restoreEnv();
 });
 
@@ -246,6 +247,22 @@ describe("butler chat", () => {
 
     await butler("chat-model-error").handleMessage(
       message({ text: "你好", eventId: "tg:model-error" }),
+    );
+
+    expect(channel.sent).toEqual([{ chatId: "42", text: "出错了，稍后再试" }]);
+  });
+
+  it("keeps the fallback reply when the transcript cannot be read", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ error: WORKERS_AI_QUOTA_MARKER }]));
+    vi.spyOn(PiSession.prototype, "messages").mockRejectedValue(
+      new Error("transcript unavailable"),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await butler("chat-transcript-unreadable").handleMessage(
+      message({ text: "你好", eventId: "tg:transcript-unreadable" }),
     );
 
     expect(channel.sent).toEqual([{ chatId: "42", text: "出错了，稍后再试" }]);

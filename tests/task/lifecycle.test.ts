@@ -1,4 +1,4 @@
-import { PiHarness } from "agents/harness/pi";
+import { PiHarness, PiSession } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
@@ -297,6 +297,32 @@ describe("TaskDO lifecycle", () => {
   it("keeps the model error reason for other failures", async () => {
     const taskId = "t-model-error";
     setModelOverride(scriptedModel([{ error: "upstream exploded" }]));
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events[1]?.payload).toMatchObject({
+          type: "failed",
+          reason: "model_error",
+          retryable: false,
+        });
+      },
+      { timeout: 10_000 },
+    );
+
+    expect((await stub.status()).state).toBe("failed");
+  });
+
+  it("keeps the model error when the transcript cannot be read", async () => {
+    const taskId = "t-transcript-unreadable";
+    setModelOverride(scriptedModel([{ error: WORKERS_AI_QUOTA_MARKER }]));
+    vi.spyOn(PiSession.prototype, "messages").mockRejectedValue(
+      new Error("transcript unavailable"),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const stub = task(taskId);
 
     await stub.start(spec(taskId));
