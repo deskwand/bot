@@ -53,7 +53,7 @@ const DETAIL_LABELS: Record<string, string> = {
   heartbeat: "轮询心跳",
   poll_expired: "轮询已过期",
   poll_error: "轮询失败",
-  webhook_rejected: "Webhook 被拒绝",
+  webhook_rejected: "更新解析失败",
   no_evidence: "无可用证据",
   not_configured: "未配置",
   telegram_configured: "已配置",

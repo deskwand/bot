@@ -437,7 +437,7 @@ export function Entries() {
                 <StateBadge state={telegramResult.state} />
               </div>
               <StepList steps={telegramResult.steps ?? []} />
-              {telegramResult.state === "unknown" || telegramResult.state === "partial" ? (
+              {telegramResult.state === "unknown" ? (
                 <Button type="button" size="sm" variant="outline" data-testid="telegram-resume" onClick={() => void resumeTelegram()} disabled={telegramRunning}>
                   继续
                 </Button>

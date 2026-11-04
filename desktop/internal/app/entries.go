@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strconv"
 	"strings"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
@@ -24,8 +23,6 @@ const (
 	// StatePublished matches deployment.Service.StatePublished.
 	StatePublished = "published"
 	StateUnchanged = "unchanged"
-
-	telegramBotIDKey = "telegram.bot-id"
 )
 
 var (
@@ -246,8 +243,7 @@ func (s *EntryService) ConnectTelegram(ctx context.Context, target domain.Target
 	}
 
 	client := s.telegram(botToken)
-	me, err := client.GetMe(ctx)
-	if err != nil {
+	if _, err := client.GetMe(ctx); err != nil {
 		return domain.Result{}, redactedError(err, botToken)
 	}
 	if err := ctx.Err(); err != nil {
@@ -261,9 +257,6 @@ func (s *EntryService) ConnectTelegram(ctx context.Context, target domain.Target
 	if result.State != StatePublished {
 		return result, nil
 	}
-	// Record the non-secret bot id for diagnostics and future migrations. A
-	// credential-store failure must not undo the published token.
-	_ = s.credentials.Set(ctx, telegramBotIDKey, strconv.FormatInt(me.ID, 10))
 
 	// Best effort: the Worker deletes a conflicting webhook itself and keeps
 	// polling, so a failure here must not fail the connection.

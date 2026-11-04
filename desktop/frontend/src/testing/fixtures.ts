@@ -1086,7 +1086,7 @@ export function createMockClient(): ClientService {
       state.secrets.TELEGRAM_BOT_TOKEN = true;
       return published("op-telegram-1", {
         activeChannel: state.activeChannel || "telegram",
-        steps: steps("校验 Bot Token", "发布 secret", "删除 webhook", "核实部署"),
+        steps: steps("校验 Bot Token", "发布 secret", "核实部署"),
       });
     },
 
