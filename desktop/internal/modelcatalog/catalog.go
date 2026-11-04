@@ -182,7 +182,7 @@ func validateRole(role string, ref RoleRef, custom map[string]map[string]bool, c
 func RequiredSecretNames(doc ModelsDoc) []string {
 	seen := map[string]bool{}
 	for _, ref := range []RoleRef{doc.Butler, doc.Task} {
-		if ref.Provider == "" {
+		if ref.Provider == "" || IsKeyless(ref.Provider) {
 			continue
 		}
 		seen[SecretNameFor(ref.Provider)] = true

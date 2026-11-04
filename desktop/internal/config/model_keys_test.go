@@ -67,6 +67,22 @@ const customModelKeyConfig = `{
   "mcpServers": []
 }`
 
+const keylessModelKeyConfig = `{
+  "schemaVersion": 1,
+  "owner": {"telegramUserIds": []},
+  "models": {
+    "butler": {"provider": "workers-ai", "id": "@cf/zai-org/glm-5.3-flash"},
+    "task": {"provider": "workers-ai", "id": "@cf/zai-org/glm-5.3-flash"}
+  },
+  "mcpServers": []
+}`
+
+func TestCheckModelKeysAllowsKeyless(t *testing.T) {
+	if err := CheckModelKeys([]byte(keylessModelKeyConfig), nil, nil); err != nil {
+		t.Fatalf("CheckModelKeys() = %v, want nil", err)
+	}
+}
+
 func TestCheckModelKeysRequiresCustomProviderKey(t *testing.T) {
 	err := CheckModelKeys([]byte(customModelKeyConfig), nil, nil)
 	var coded domain.Error

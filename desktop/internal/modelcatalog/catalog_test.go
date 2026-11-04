@@ -139,6 +139,22 @@ func TestRequiredSecretNamesIsSortedAndUnique(t *testing.T) {
 	}
 }
 
+func TestRequiredSecretNamesSkipsKeyless(t *testing.T) {
+	doc := validModelsDoc()
+	doc.Butler = RoleRef{Provider: "workers-ai", ID: "@cf/zai-org/glm-5.3-flash"}
+	doc.Task = RoleRef{Provider: "opencode-go", ID: "deepseek-v4.1-flash"}
+	got := RequiredSecretNames(doc)
+	want := []string{SecretNameFor("opencode-go")}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("RequiredSecretNames() = %#v, want %#v", got, want)
+	}
+
+	doc.Task = doc.Butler
+	if got := RequiredSecretNames(doc); len(got) != 0 {
+		t.Fatalf("RequiredSecretNames() = %#v, want it to be empty", got)
+	}
+}
+
 func TestWorkersAIIsKeyless(t *testing.T) {
 	if !IsKeyless("workers-ai") {
 		t.Fatal("IsKeyless(\"workers-ai\") = false, want true")
