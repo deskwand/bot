@@ -20,19 +20,24 @@ export const queryKeys = {
   mcpStatus: ["mcpStatus"],
 } as const;
 
+function isAuthLost(error: unknown): boolean {
+  const code = toClientError(error).code;
+  return code === "AUTH_REAUTH_REQUIRED" || code === "AUTH_REQUIRED";
+}
+
 export function createAppQueryClient(onAuthLost: () => void): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
         staleTime: 30_000,
         gcTime: 1_800_000,
-        retry: 1,
+        retry: (count, error) => !isAuthLost(error) && count < 1,
         refetchOnWindowFocus: false,
       },
     },
     queryCache: new QueryCache({
       onError: (error) => {
-        if (toClientError(error).code === "AUTH_REAUTH_REQUIRED") onAuthLost();
+        if (isAuthLost(error)) onAuthLost();
       },
     }),
   });
@@ -60,8 +65,9 @@ export function useConfigQuery(): CachedQuery<ConfigDTO> {
     placeholderData: cached.data?.data ?? undefined,
   });
   const cachedData = cached.data?.data;
-  // A failed refresh drops the query's data; keep showing the disk snapshot
-  // instead so the page can report the failure without blanking.
+  // A later refetch error keeps the query's previous data; only a first-fetch
+  // error leaves it undefined. Fall back to the disk snapshot so the page can
+  // report the failure without blanking.
   const data = query.data ?? (cachedData === null ? undefined : cachedData);
   const isPlaceholder =
     query.isPlaceholderData || (query.data === undefined && cachedData != null);

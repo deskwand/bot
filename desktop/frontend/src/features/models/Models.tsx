@@ -143,6 +143,9 @@ export function Models() {
   // Remounts the form rows after a publish so transient UI (open details) does
   // not outlive the config it was showing.
   const [formVersion, setFormVersion] = useState(0);
+  // The publish result has no fingerprint, so the form stays locked until the
+  // invalidated config fetch confirms the new baseline.
+  const [awaitingFreshConfig, setAwaitingFreshConfig] = useState(false);
 
   const fillFromConfig = useCallback((next: ConfigDTO) => {
     setCustomProviders(next.customProviders ?? []);
@@ -151,10 +154,31 @@ export function Models() {
     setKeyDrafts({});
   }, []);
 
-  const reload = async () => {
+  const applyConfig = (next: ConfigDTO) => {
+    setBaseline(next);
+    fillFromConfig(next);
+    setAwaitingFreshConfig(false);
+    setError(null);
+    setConflict(false);
+  };
+
+  const applyFreshConfig = async (): Promise<ConfigDTO | undefined> => {
+    const fresh = (await configQuery.refetch()) as { data?: ConfigDTO } | undefined;
+    if (fresh?.data) applyConfig(fresh.data);
+    return fresh?.data;
+  };
+
+  const refresh = async () => {
     setError(null);
     setConflict(false);
     await configQuery.refetch();
+    await catalogQuery.refetch();
+  };
+
+  const reload = async () => {
+    setError(null);
+    setConflict(false);
+    await applyFreshConfig();
     await catalogQuery.refetch();
   };
 
@@ -227,6 +251,7 @@ export function Models() {
   useDirty(dirty);
 
   useEffect(() => {
+    if (awaitingFreshConfig) return;
     const next = configQuery.data;
     if (!next) return;
     if (configQuery.isPlaceholder) {
@@ -239,7 +264,14 @@ export function Models() {
       setBaseline(next);
       fillFromConfig(next);
     }
-  }, [baseline, configQuery.data, configQuery.isPlaceholder, dirty, fillFromConfig]);
+  }, [
+    awaitingFreshConfig,
+    baseline,
+    configQuery.data,
+    configQuery.isPlaceholder,
+    dirty,
+    fillFromConfig,
+  ]);
 
   const cloudUpdated = Boolean(
     baseline &&
@@ -249,24 +281,10 @@ export function Models() {
       configQuery.data.fingerprint !== baseline.fingerprint,
   );
 
-  const adoptLocalBaseline = () => {
-    const current = configQuery.data;
-    if (!current) return;
-    setBaseline({
-      ...current,
-      butlerModel: parseModelKey(butler) ?? null,
-      taskModel: parseModelKey(task) ?? null,
-      customProviders: [...customProviders],
-    });
-  };
-
   const loadLatest = () => {
     const next = configQuery.data;
-    if (!next) return;
-    setBaseline(next);
-    fillFromConfig(next);
-    setError(null);
-    setConflict(false);
+    if (!next || configQuery.isPlaceholder) return;
+    applyConfig(next);
   };
 
   const loadError =
@@ -384,9 +402,11 @@ export function Models() {
           : "发布未完成，可继续。",
       );
       setKeyDrafts({});
-      adoptLocalBaseline();
+      setAwaitingFreshConfig(true);
+      setBaseline(null);
       setFormVersion((current) => current + 1);
       invalidate.config();
+      await applyFreshConfig();
     } catch (cause) {
       setPreviewOpen(false);
       if (toClientError(cause).code === "CONFIG_CONFLICT") setConflict(true);
@@ -405,9 +425,11 @@ export function Models() {
     try {
       setResult(await client.resumeOperation(result.operationId));
       setKeyDrafts({});
-      adoptLocalBaseline();
+      setAwaitingFreshConfig(true);
+      setBaseline(null);
       setFormVersion((current) => current + 1);
       invalidate.config();
+      await applyFreshConfig();
     } catch (cause) {
       setError(cause);
     } finally {
@@ -467,7 +489,7 @@ export function Models() {
           isPlaceholder={configQuery.isPlaceholder}
           savedAt={configQuery.savedAt}
           error={configQuery.data ? configQuery.error : null}
-          onRetry={() => void reload()}
+          onRetry={() => void refresh()}
         />
         <Badge variant="outline">
           <ShieldCheck aria-hidden />
@@ -528,7 +550,13 @@ export function Models() {
         </Card>
       ) : null}
 
-      <fieldset disabled={baseline === null} className="m-0 min-w-0 border-0 p-0">
+      <fieldset
+        disabled={
+          baseline === null ||
+          (result !== null && (result.state === "unknown" || result.state === "needs_input"))
+        }
+        className="m-0 min-w-0 border-0 p-0"
+      >
       <section className="mt-5" aria-labelledby="role-models-title">
         <h2 id="role-models-title" className="mb-4 text-base font-medium">角色模型</h2>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -741,6 +769,8 @@ export function Models() {
         </CardContent>
       </Card>
 
+      </fieldset>
+
       <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button type="button" variant="outline" onClick={() => void reload()} disabled={running !== null}>
           <RefreshCw aria-hidden />
@@ -749,13 +779,17 @@ export function Models() {
         <Button
           type="button"
           onClick={() => void openPreview()}
-          disabled={running !== null || baseline === null}
+          disabled={
+            running !== null ||
+            !dirty ||
+            baseline === null ||
+            (result !== null && (result.state === "unknown" || result.state === "needs_input"))
+          }
         >
           {running === "preview" ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <Save aria-hidden />}
           {running === "preview" ? "正在生成预览…" : "保存并发布"}
         </Button>
       </div>
-      </fieldset>
 
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="max-h-[85svh] overflow-y-auto sm:max-w-lg">

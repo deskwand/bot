@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
+import { useInvalidate } from "@/services/queries";
 import {
   Select,
   SelectContent,
@@ -86,6 +87,7 @@ function problemMessage(preview: BackupPreviewDTO): string | null {
 
 export function Backup() {
   const { client } = useApp();
+  const invalidate = useInvalidate();
   const [progress, setProgress] = useState<Progress | null>(null);
   const [exportRunning, setExportRunning] = useState(false);
   const [exportSummary, setExportSummary] = useState<BackupSummaryDTO | null>(null);
@@ -263,6 +265,7 @@ export function Backup() {
       await client.restoreData();
       setRestoreDone(true);
       setPending(null);
+      invalidate.configAndStatus();
     } catch (cause) {
       setRestoreError(cause);
       // A failure after the destructive step leaves a journal record; a
@@ -271,7 +274,7 @@ export function Backup() {
     } finally {
       setRestoreRunning(false);
     }
-  }, [client, refreshPending]);
+  }, [client, invalidate, refreshPending]);
 
   const retryRestore = useCallback(async () => {
     if (!pending) {
@@ -289,13 +292,14 @@ export function Backup() {
       await client.retryRestore(false);
       setRestoreDone(true);
       setPending(null);
+      invalidate.configAndStatus();
     } catch (cause) {
       setRestoreError(cause);
       await refreshPending();
     } finally {
       setRestoreRunning(false);
     }
-  }, [chooseBackup, client, pending, refreshPending]);
+  }, [chooseBackup, client, invalidate, pending, refreshPending]);
 
   const blocked = preview ? problemMessage(preview) : null;
   const canRestore = Boolean(preview) && !blocked;

@@ -118,9 +118,9 @@ export function Mcp() {
   const initialized = useRef(false);
   const configData = configQuery.data;
   const loading = !configData && configQuery.isFetching;
-  const loadError = configData
-    ? null
-    : (configQuery.error ?? catalogQuery.error);
+  const loadError = configData ? null : configQuery.error;
+  const catalogError =
+    catalogQuery.error && !catalogQuery.data ? catalogQuery.error : null;
 
   const reload = async () => {
     setAdminError(null);
@@ -400,6 +400,7 @@ export function Mcp() {
             </span>
           </AlertDescription>
         </Alert>
+        <ErrorAlert error={catalogError} onRetry={() => void reload()} />
       </div>
     );
   }
@@ -409,6 +410,7 @@ export function Mcp() {
       {header}
 
       <ErrorAlert error={loadError} onRetry={() => void reload()} />
+      <ErrorAlert error={catalogError} onRetry={() => void reload()} />
       <ErrorAlert error={error} />
       {enabledToolCount > TOOL_WARNING_THRESHOLD ? (
         <Alert className="my-4" data-testid="mcp-tool-warning">

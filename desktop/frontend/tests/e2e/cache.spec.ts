@@ -109,14 +109,23 @@ test("edit controls wait for cloud data", async ({ page }) => {
   await page.getByRole("button", { name: "模型", exact: true }).click();
   await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
   const publish = page.getByRole("button", { name: "保存并发布" });
+  const keyInput = page
+    .getByTestId("model-key-row-opencode-go")
+    .getByLabel("API 密钥");
   await expect(publish).toBeDisabled({ timeout: 500 });
-  await expect(publish).toBeEnabled({ timeout: 5_000 });
+  await expect(keyInput).toBeDisabled({ timeout: 500 });
+  await expect(keyInput).toBeEnabled({ timeout: 5_000 });
+
+  await keyInput.fill("sk-ready-SENTINEL");
+  await expect(publish).toBeEnabled();
 });
 
 test("background refresh does not clobber edits", async ({ page }) => {
   await page.goto("/test.html?fixture=cloud-updated");
   await page.getByRole("button", { name: "模型", exact: true }).click();
-  await expect(page.getByRole("button", { name: "保存并发布" })).toBeEnabled();
+  await expect(
+    page.getByTestId("model-key-row-opencode-go").getByLabel("API 密钥"),
+  ).toBeEnabled();
 
   await page.getByLabel("管家模型供应商").click();
   await page.getByRole("option", { name: "Anthropic", exact: true }).click();
@@ -137,12 +146,13 @@ test("publish uses cloud fingerprint", async ({ page }) => {
   await page.goto("/test.html?fixture=cloud-slow");
   await page.getByRole("button", { name: "模型", exact: true }).click();
   const publish = page.getByRole("button", { name: "保存并发布" });
-  await expect(publish).toBeEnabled({ timeout: 5_000 });
-
-  await page
+  const keyInput = page
     .getByTestId("model-key-row-opencode-go")
-    .getByLabel("API 密钥")
-    .fill("sk-fingerprint-SENTINEL");
+    .getByLabel("API 密钥");
+  await expect(keyInput).toBeEnabled({ timeout: 5_000 });
+
+  await keyInput.fill("sk-fingerprint-SENTINEL");
+  await expect(publish).toBeEnabled();
   await publish.click();
   const preview = page.getByRole("dialog", { name: "确认保存并发布" });
   await preview.getByRole("button", { name: "确认保存并发布" }).click();
@@ -175,4 +185,51 @@ test("mcp add refetches status", async ({ page }) => {
   await expect(page.getByTestId("mcp-card-deepwiki")).toBeVisible();
 
   await expect.poll(() => mockCallCount(page, "mcpStatus")).toBe(before + 1);
+});
+
+test("own publish does not show cloud updated banner", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  const keyInput = page
+    .getByTestId("model-key-row-opencode-go")
+    .getByLabel("API 密钥");
+  const publish = page.getByRole("button", { name: "保存并发布" });
+  await expect(keyInput).toBeEnabled();
+
+  await keyInput.fill("sk-own-publish-one");
+  await expect(publish).toBeEnabled();
+  await publish.click();
+  let preview = page.getByRole("dialog", { name: "确认保存并发布" });
+  await preview.getByRole("button", { name: "确认保存并发布" }).click();
+  await expect(page.getByText(/配置已发布/).first()).toBeVisible();
+
+  // The form stays locked until the invalidated config fetch supplies the
+  // published fingerprint.
+  await expect(keyInput).toBeEnabled();
+  await keyInput.fill("sk-own-publish-two");
+  await expect(page.getByText("云端配置已更新")).toHaveCount(0);
+  await expect(publish).toBeEnabled();
+  await publish.click();
+  preview = page.getByRole("dialog", { name: "确认保存并发布" });
+  await preview.getByRole("button", { name: "确认保存并发布" }).click();
+
+  await expect(page.getByTestId("error-alert")).toHaveCount(0);
+  await expect.poll(() => mockCallCount(page, "publishConfig")).toBe(2);
+});
+
+test("a successful upgrade refetches config on return", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await expect(
+    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
+  ).toBeVisible();
+  const before = await mockCallCount(page, "getConfig");
+
+  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await page.getByRole("button", { name: "升级云端服务" }).click();
+  const dialog = page.getByRole("dialog", { name: "升级前确认" });
+  await dialog.getByRole("button", { name: "确认升级" }).click();
+  await expect(page.getByText("升级结果")).toBeVisible();
+
+  await page.getByRole("button", { name: "服务概览", exact: true }).click();
+  await expect.poll(() => mockCallCount(page, "getConfig")).toBeGreaterThan(before);
 });

@@ -136,6 +136,7 @@ export function Entries() {
           setPublishFailure(null);
           setLoginError(null);
           setWechatPublished(true);
+          channelTouched.current = false;
           setLoginState("published");
           setLoginMessage("已发布，等待云端启动。");
           invalidate.configAndStatus();
@@ -229,6 +230,7 @@ export function Entries() {
     try {
       const result = await client.resumeOperation(publishFailure.operationId);
       if (result.state === "published") {
+        channelTouched.current = false;
         setWechatPublished(true);
         setLoginState("published");
         setPublishFailure(null);
@@ -256,6 +258,7 @@ export function Entries() {
     try {
       const result = await client.selectEntry(channel);
       setChannelResult(result);
+      channelTouched.current = false;
       invalidate.configAndStatus();
     } catch (cause) {
       setChannelError(cause);
@@ -295,6 +298,7 @@ export function Entries() {
       const result = await client.connectTelegram(telegramToken);
       setTelegramResult(result);
       setTelegramToken("");
+      channelTouched.current = false;
       invalidate.configAndStatus();
     } catch (cause) {
       setTelegramToken("");
@@ -462,6 +466,7 @@ export function Entries() {
               channelTouched.current = true;
               setChannel(next);
             }}
+            disabled={configQuery.isPlaceholder}
             aria-label="当前消息入口"
             className="grid gap-3 sm:grid-cols-2"
           >

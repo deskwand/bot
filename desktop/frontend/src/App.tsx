@@ -83,7 +83,10 @@ export function App({ client }: { client: ClientService }) {
             : "disconnected";
         if (scopeRef.current !== null && scopeRef.current !== scope) {
           // Cached queries are keyed only by resource, so a different account
-          // or deployment must not inherit the previous one's data.
+          // or deployment must not inherit the previous one's data. Unmount the
+          // old shell before dropping what its pages are showing.
+          await queryClient.cancelQueries();
+          setSession({ kind: "loading" });
           queryClient.clear();
         }
         scopeRef.current = scope;
@@ -158,6 +161,7 @@ export function App({ client }: { client: ClientService }) {
 
   const resume = async (operation: OperationDTO) => {
     const result = await client.resumeOperation(operation.operationId);
+    void queryClient.invalidateQueries();
     if (result.state === "published") {
       setPending((current) => current.filter((item) => item.operationId !== operation.operationId));
       await refresh();
@@ -167,6 +171,7 @@ export function App({ client }: { client: ClientService }) {
 
   const abandon = async (operation: OperationDTO) => {
     const result = await client.abandonOperation(operation.operationId);
+    void queryClient.invalidateQueries();
     if (result.state === "cancelled") {
       setPending((current) => current.filter((item) => item.operationId !== operation.operationId));
     }
@@ -258,6 +263,7 @@ export function App({ client }: { client: ClientService }) {
                 onSessionChange={() => refresh(false)}
                 onReady={() => {
                   setSetupImport(false);
+                  void queryClient.invalidateQueries();
                   void refresh(false);
                 }}
               />
