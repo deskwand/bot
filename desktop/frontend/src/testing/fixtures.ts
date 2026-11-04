@@ -84,6 +84,7 @@ type Scenario =
   | "backup-restore-snapshot-failed"
   | "backup-restore-midway-failed"
   | "mcp-many-tools"
+  | "mcp-probe-failed"
   | "mcp-admin-unavailable"
   | "cloud-slow"
   | "cloud-offline"
@@ -334,6 +335,7 @@ function scenarioFromLocation(): Scenario {
     case "backup-restore-snapshot-failed":
     case "backup-restore-midway-failed":
     case "mcp-many-tools":
+    case "mcp-probe-failed":
     case "mcp-admin-unavailable":
     case "cloud-slow":
     case "cloud-offline":
@@ -383,6 +385,7 @@ function initialState(): MockState {
     "backup-restore-snapshot-failed",
     "backup-restore-midway-failed",
     "mcp-many-tools",
+    "mcp-probe-failed",
     "mcp-admin-unavailable",
     "cloud-slow",
     "cloud-offline",
@@ -1058,6 +1061,15 @@ export function createMockClient(): ClientService {
     async probeMcp(name: string): Promise<McpProbeDTO> {
       const server = state.mcpServers.find((entry) => entry.name === name);
       if (!server) fail("INVALID_REQUEST", "服务不存在");
+      // 授权没问题但连不上：这是 UI 里「连接失败」那条分支，原因长度不可控。
+      if (state.scenario === "mcp-probe-failed") {
+        return {
+          ok: false,
+          auth: "ok",
+          reason: "dial tcp 10.0.0.12:443: connect: connection refused",
+          tools: [],
+        };
+      }
       if (server.oauth && state.mcpAuth[name] !== "ok") {
         return {
           ok: false,

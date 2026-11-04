@@ -449,7 +449,7 @@ export function Mcp() {
                 : auth[server.name] === "unauthorized"
                   ? { label: "需要授权", variant: "outline" as const }
                   : probe && !probe.ok
-                    ? { label: `连接失败：${probe.reason || "未知原因"}`, variant: "destructive" as const }
+                    ? { label: "连接失败", variant: "destructive" as const }
                     : probe?.ok
                       ? { label: "正常", variant: "secondary" as const }
                       : { label: "正在测试…", variant: "outline" as const };
@@ -470,6 +470,14 @@ export function Mcp() {
                       {status.label}
                     </Badge>
                   </div>
+                  {probe && !probe.ok ? (
+                    <p
+                      className="mt-1 break-all text-xs text-muted-foreground"
+                      data-testid={`mcp-failure-${server.name}`}
+                    >
+                      {probe.reason || "未知原因"}
+                    </p>
+                  ) : null}
                 </CardHeader>
                 <CardContent>
                   <div className="flex flex-wrap items-center gap-2">

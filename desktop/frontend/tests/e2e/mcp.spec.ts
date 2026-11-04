@@ -39,10 +39,8 @@ test("a catalog service can be added and shows a healthy card", async ({ page })
   const card = page.getByTestId("mcp-card-deepwiki");
   await expect(card).toBeVisible();
   await expect(page.getByTestId("mcp-status-deepwiki")).toHaveText("正常");
-  // 状态用徽章表达，不再混进 emoji。
-  await expect(page.getByTestId("mcp-status-deepwiki")).not.toContainText(/[✅⚠🔑⏸]/);
-  // 一个数字对：已启用 / 总数。
-  await expect(card.getByRole("button", { name: /^工具/ })).toHaveText(/^工具( \d+\/\d+)?$/);
+  // 一个数字对：已启用 / 总数。分母必须非零——探针正常时不可能出现 工具 0/0。
+  await expect(card.getByRole("button", { name: /^工具/ })).toHaveText(/^工具 \d+\/[1-9]\d*$/);
 });
 
 test("an empty required field keeps the save button disabled", async ({ page }) => {
@@ -112,4 +110,17 @@ test("an unavailable admin API replaces the page with a retry action", async ({ 
     page.getByText("无法连接云端管理接口，请检查 PUBLIC_BASE_URL 与部署状态"),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "重试" })).toBeVisible();
+});
+
+test("a failed connection shows the reason outside the badge", async ({ page }) => {
+  await openServices(page, "mcp-probe-failed");
+  const form = await addCatalogEntry(page, "DeepWiki");
+  await form.getByRole("button", { name: "保存", exact: true }).click();
+
+  const card = page.getByTestId("mcp-card-deepwiki");
+  await expect(page.getByTestId("mcp-status-deepwiki")).toHaveText("连接失败");
+  // 失败原因来自 Worker，长度不可控，必须整段可读，不能被徽章的 nowrap 裁掉。
+  await expect(card.getByTestId("mcp-failure-deepwiki")).toHaveText(
+    "dial tcp 10.0.0.12:443: connect: connection refused",
+  );
 });

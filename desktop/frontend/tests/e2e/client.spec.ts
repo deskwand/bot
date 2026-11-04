@@ -1077,7 +1077,7 @@ test("corrupt restore record can be abandoned without breaking the overview", as
   // The other overview calls still render their own data.
   await expect(page.getByRole("heading", { name: "服务概览" })).toBeVisible();
   await expect(page.getByText("云端服务", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("overview-status-details")).toBeVisible();
+  await expect(page.getByTestId("overview-status-details").locator("summary")).toHaveText("详情");
 
   // The corrupt record offers abandonment only, with the no-rollback wording.
   await expect(page.getByText("本机恢复记录无法读取", { exact: false })).toBeVisible();
@@ -1096,7 +1096,7 @@ test("corrupt restore record can be abandoned without breaking the overview", as
   await expect(page.getByText("本机恢复记录无法读取", { exact: false })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "服务概览" })).toBeVisible();
   await expect(page.getByText("云端服务", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("overview-status-details")).toBeVisible();
+  await expect(page.getByTestId("overview-status-details").locator("summary")).toHaveText("详情");
 
   // A generic pending-restore failure must not claim the journal is corrupt.
   await page.goto("/test.html?fixture=backup-pending-unavailable");
@@ -1286,6 +1286,8 @@ test("backup and diagnostics descriptions stay on the user side of the glass", a
 
   // 自动备份开关就在下面，说明句不该再把这件事讲一遍。
   await expect(page.getByText("每次备份都写到这里。", { exact: true })).toBeVisible();
+  // 文件未加密这句必须同时给出处置办法：SENSITIVE_NOTICE 只在导出完成之后才出现。
+  await expect(page.getByText(/未加密，请自行保管/)).toBeVisible();
   // 「不用再开文件对话框」是实现细节。
   await expect(page.getByText("按时间从新到旧。", { exact: true })).toBeVisible();
   await expect(page.getByText(/不用再开文件对话框/)).toHaveCount(0);

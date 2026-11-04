@@ -411,7 +411,7 @@ export function Backup() {
           </Button>
           </div>
           <CardDescription>
-            不含部署配置和密钥；文件未加密。导出期间消息暂停，最长约 15 分钟。
+            不含部署配置和密钥；文件未加密，请自行保管。导出期间消息暂停，最长约 15 分钟。
           </CardDescription>
         </CardHeader>
         <CardContent>
