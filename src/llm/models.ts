@@ -17,6 +17,12 @@ import {
   secretNameFor,
   type CustomProviderConfig,
 } from "./providers";
+import {
+  WORKERS_AI_BINDING_UNAVAILABLE_TEXT,
+  WORKERS_AI_PROVIDER_ID,
+  workersAiBindingReady,
+  workersAiProvider,
+} from "./workers-ai";
 
 export type Role = "butler" | "task";
 
@@ -87,6 +93,7 @@ export function createModelsForEnv(env: Env): MutableModels {
     models.setProvider(customProvider(config));
   }
   for (const provider of testProviders.values()) models.setProvider(provider);
+  if (workersAiBindingReady(env)) models.setProvider(workersAiProvider(env));
   return models;
 }
 
@@ -101,9 +108,16 @@ export function modelReadiness(
 ): string | undefined {
   if (modelOverride || testProviders.has(ref.provider)) return undefined;
 
+  const workersAi = ref.provider === WORKERS_AI_PROVIDER_ID;
+  if (workersAi && !workersAiBindingReady(env)) {
+    return WORKERS_AI_BINDING_UNAVAILABLE_TEXT;
+  }
+
   if (!models.getModel(ref.provider, ref.id)) {
     return `模型 ${ref.provider}/${ref.id} 不可用，请在桌面端模型页重新选择`;
   }
+
+  if (workersAi) return undefined;
 
   const secretName = secretNameFor(ref.provider);
   const key = (env as unknown as Record<string, string | undefined>)[secretName];

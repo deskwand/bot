@@ -127,6 +127,42 @@ describe("modelReadiness", () => {
 
     expect(modelReadiness(env, models, ref)).toBeUndefined();
   });
+
+  describe("Workers AI", () => {
+    const workersRef = {
+      provider: "workers-ai",
+      id: "@cf/google/gemma-4-26b-a4b-it",
+    };
+    const fakeAi = { aiGatewayLogId: null, fetch: async () => new Response("") };
+
+    it("needs no key when the AI binding is available", () => {
+      const env = envWith({ AI: fakeAi });
+      const models = createModelsForEnv(env);
+
+      expect(modelReadiness(env, models, workersRef)).toBeUndefined();
+    });
+
+    it("reports a missing AI binding", () => {
+      const env = envWith({ AI: {} });
+      const models = createModelsForEnv(env);
+
+      expect(modelReadiness(env, models, workersRef)).toBe(
+        "Workers AI binding 不可用，请在桌面端重新部署",
+      );
+    });
+
+    it("reports a model missing from the catalog", () => {
+      const env = envWith({ AI: fakeAi });
+      const models = createModelsForEnv(env);
+
+      expect(
+        modelReadiness(env, models, {
+          provider: "workers-ai",
+          id: "@cf/not-a-model",
+        }),
+      ).toBe("模型 workers-ai/@cf/not-a-model 不可用，请在桌面端模型页重新选择");
+    });
+  });
 });
 
 describe("modelAcceptsImages", () => {
