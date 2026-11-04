@@ -289,27 +289,6 @@ type UpgradeDTO struct {
 	ModelKeysMissing []string `json:"modelKeysMissing,omitempty"`
 }
 
-// ClientUpdateDTO is the desktop client update check result. It is separate
-// from UpgradeDTO: the client version and the deployed cloud version never
-// advance each other. No download URL, signature or key material is exposed.
-type ClientUpdateDTO struct {
-	State            string `json:"state"` // not_configured|up_to_date|available
-	CurrentVersion   string `json:"currentVersion"`
-	AvailableVersion string `json:"availableVersion,omitempty"`
-	Notes            string `json:"notes,omitempty"`
-	Date             string `json:"date,omitempty"`
-	Reason           string `json:"reason,omitempty"`
-	Message          string `json:"message,omitempty"`
-}
-
-// ClientUpdateResultDTO reports a user-triggered client update installation.
-type ClientUpdateResultDTO struct {
-	State          string `json:"state"` // installed|failed|not_checked
-	CurrentVersion string `json:"currentVersion"`
-	Version        string `json:"version,omitempty"`
-	Message        string `json:"message,omitempty"`
-}
-
 // LoginStatusDTO is the only WeChat login state sent to the frontend. It has
 // no credential field.
 type LoginStatusDTO struct {

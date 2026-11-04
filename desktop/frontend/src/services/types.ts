@@ -4,8 +4,6 @@ import type {
   AccountDTO,
   BackupPreviewDTO,
   BackupSummaryDTO,
-  ClientUpdateDTO,
-  ClientUpdateResultDTO,
   CloudflareLoginDTO,
   ConfigDTO,
   ConfigEditDTO as GeneratedConfigEditDTO,
@@ -45,8 +43,6 @@ export type {
   AccountDTO,
   BackupPreviewDTO,
   BackupSummaryDTO,
-  ClientUpdateDTO,
-  ClientUpdateResultDTO,
   CloudflareLoginDTO,
   ConfigDTO,
   ConnectionDTO,
@@ -129,8 +125,7 @@ export interface ClientService {
   install(input: InstallInputDTO): Promise<ResultDTO>;
   upgradeAvailable(): Promise<UpgradeDTO>;
   upgrade(): Promise<ResultDTO>;
-  checkClientUpdate(): Promise<ClientUpdateDTO>;
-  installClientUpdate(): Promise<ClientUpdateResultDTO>;
+  checkClientUpdates(): Promise<void>;
   getConfig(): Promise<ConfigDTO>;
   modelCatalog(): Promise<ModelCatalogDTO>;
   mcpCatalog(): Promise<McpCatalogEntryDTO[]>;

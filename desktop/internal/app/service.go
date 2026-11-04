@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
 	"github.com/deskwand/bot/desktop/internal/auth"
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/deployment"
@@ -160,8 +161,9 @@ type ServiceOptions struct {
 	Release     ReleaseSource
 	Backup      BackupService
 	FileDialogs FileDialogs
-	// ClientUpdates defaults to the pinned MyGo updater with an empty feed.
-	ClientUpdates ClientUpdateProvider
+	// CheckClientUpdates opens the MyGo updater window. It defaults to
+	// updater.CheckForUpdates.
+	CheckClientUpdates func()
 	// Theme is the persisted appearance choice; nil makes SetTheme
 	// appearance-only for this run.
 	Theme ThemeStore
@@ -180,28 +182,28 @@ type ServiceOptions struct {
 // frontend-safe DTO operation; raw clients, tokens, secret getters and
 // arbitrary URL openers are not exposed.
 type Service struct {
-	auth           AuthService
-	publish        PublishService
-	lifecycle      LifecycleService
-	entries        EntriesService
-	diagnostics    StatusService
-	snapshots      SnapshotReader
-	scripts        ScriptLister
-	journal        OperationJournal
-	store          TargetStore
-	browser        platform.BrowserOpener
-	mcpBrowser     platform.BrowserOpener
-	credentials    platform.CredentialStore
-	release        ReleaseSource
-	backup         BackupService
-	dialogs        FileDialogs
-	clientUpdates  ClientUpdateProvider
-	theme          ThemeStore
-	applyTheme     func(string)
-	emitLogin      func(LoginStatusDTO)
-	emitCloudflare func(CloudflareLoginDTO)
-	newOpID        func() (string, error)
-	now            func() time.Time
+	auth               AuthService
+	publish            PublishService
+	lifecycle          LifecycleService
+	entries            EntriesService
+	diagnostics        StatusService
+	snapshots          SnapshotReader
+	scripts            ScriptLister
+	journal            OperationJournal
+	store              TargetStore
+	browser            platform.BrowserOpener
+	mcpBrowser         platform.BrowserOpener
+	credentials        platform.CredentialStore
+	release            ReleaseSource
+	backup             BackupService
+	dialogs            FileDialogs
+	checkClientUpdates func()
+	theme              ThemeStore
+	applyTheme         func(string)
+	emitLogin          func(LoginStatusDTO)
+	emitCloudflare     func(CloudflareLoginDTO)
+	newOpID            func() (string, error)
+	now                func() time.Time
 
 	cfMu          sync.Mutex
 	cfSession     auth.LoginSession
@@ -212,9 +214,6 @@ type Service struct {
 	loginMu     sync.Mutex
 	logins      map[string]context.CancelFunc
 	loginActive bool
-
-	clientUpdateMu      sync.Mutex
-	checkedClientUpdate *ClientUpdateInfo
 
 	backupMu   sync.Mutex
 	backupPath string
@@ -243,38 +242,38 @@ func NewService(options ServiceOptions) *Service {
 	if mcpBrowser == nil {
 		mcpBrowser = options.Browser
 	}
-	clientUpdates := options.ClientUpdates
-	if clientUpdates == nil {
-		clientUpdates = NewMyGoClientUpdateProvider(ClientUpdateFeedURL)
+	checkClientUpdates := options.CheckClientUpdates
+	if checkClientUpdates == nil {
+		checkClientUpdates = updater.CheckForUpdates
 	}
 	applyTheme := options.ApplyTheme
 	if applyTheme == nil {
 		applyTheme = func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) }
 	}
 	return &Service{
-		auth:           options.Auth,
-		publish:        options.Publish,
-		lifecycle:      options.Lifecycle,
-		entries:        options.Entries,
-		diagnostics:    options.Diagnostics,
-		snapshots:      options.Snapshots,
-		scripts:        options.Scripts,
-		journal:        options.Journal,
-		store:          options.Store,
-		browser:        options.Browser,
-		mcpBrowser:     mcpBrowser,
-		credentials:    options.Credentials,
-		release:        options.Release,
-		backup:         options.Backup,
-		dialogs:        options.FileDialogs,
-		clientUpdates:  clientUpdates,
-		theme:          options.Theme,
-		applyTheme:     applyTheme,
-		emitLogin:      emit,
-		emitCloudflare: emitCloudflare,
-		newOpID:        newOpID,
-		now:            now,
-		logins:         map[string]context.CancelFunc{},
+		auth:               options.Auth,
+		publish:            options.Publish,
+		lifecycle:          options.Lifecycle,
+		entries:            options.Entries,
+		diagnostics:        options.Diagnostics,
+		snapshots:          options.Snapshots,
+		scripts:            options.Scripts,
+		journal:            options.Journal,
+		store:              options.Store,
+		browser:            options.Browser,
+		mcpBrowser:         mcpBrowser,
+		credentials:        options.Credentials,
+		release:            options.Release,
+		backup:             options.Backup,
+		dialogs:            options.FileDialogs,
+		checkClientUpdates: checkClientUpdates,
+		theme:              options.Theme,
+		applyTheme:         applyTheme,
+		emitLogin:          emit,
+		emitCloudflare:     emitCloudflare,
+		newOpID:            newOpID,
+		now:                now,
+		logins:             map[string]context.CancelFunc{},
 	}
 }
 

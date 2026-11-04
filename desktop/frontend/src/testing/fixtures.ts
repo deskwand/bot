@@ -46,8 +46,7 @@ type Scenario =
   | "upgrade-required"
   | "upgrade-keys-missing"
   | "model-key-missing"
-  | "client-update-available"
-  | "client-update-unavailable"
+  | "client-update-failed"
   | "catalog-unavailable"
   | "pending-operations"
   | "pending-other-account"
@@ -262,8 +261,7 @@ function scenarioFromLocation(): Scenario {
     case "upgrade-required":
     case "upgrade-keys-missing":
     case "model-key-missing":
-    case "client-update-available":
-    case "client-update-unavailable":
+    case "client-update-failed":
     case "catalog-unavailable":
     case "pending-operations":
     case "pending-other-account":
@@ -305,8 +303,7 @@ function initialState(): MockState {
     "upgrade-required",
     "upgrade-keys-missing",
     "model-key-missing",
-    "client-update-available",
-    "client-update-unavailable",
+    "client-update-failed",
     "pending-operations",
     "pending-other-account",
     "version-unknown",
@@ -786,34 +783,10 @@ export function createMockClient(): ClientService {
       return published("op-upgrade-1");
     },
 
-    async checkClientUpdate() {
-      if (state.scenario === "client-update-unavailable") {
-        return {
-          state: "not_configured",
-          currentVersion: "0.1.0",
-          reason: "CLIENT_UPDATE_NOT_CONFIGURED",
-          message: "未配置更新源",
-        };
+    async checkClientUpdates() {
+      if (state.scenario === "client-update-failed") {
+        fail("UPDATER_WINDOW_FAILED", "无法打开更新窗口");
       }
-      return {
-        state: "available",
-        currentVersion: "0.1.0",
-        availableVersion: "0.2.0",
-        notes: "客户端更新测试发行说明",
-        date: NOW,
-      };
-    },
-
-    async installClientUpdate() {
-      if (state.scenario === "client-update-unavailable") {
-        fail("CLIENT_UPDATE_NOT_CONFIGURED", "未配置更新源");
-      }
-      return {
-        state: "installed",
-        currentVersion: "0.1.0",
-        version: "0.2.0",
-        message: "客户端更新已安装，重启客户端后生效",
-      };
     },
 
     async getConfig() {

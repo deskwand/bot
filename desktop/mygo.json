@@ -10,6 +10,15 @@
   "frontendDist": "frontend/dist",
   "bindings": "frontend/src/mygo.ts",
   "out": "build",
+  "updates": {
+    "publicKey": "sCZid+D+ookI90aoaEfj0iZ6SXVk2WUUHUJagoUkJoo=",
+    "url": "https://updates.example.com/bot",
+    "s3": {
+      "bucket": "my-update-assets",
+      "prefix": "bot",
+      "endpoint": "https://account-id.r2.cloudflarestorage.com"
+    }
+  },
   "macos": {
     "minimumSystemVersion": "12.0",
     "dmgTitle": "DeskWand Bot"
