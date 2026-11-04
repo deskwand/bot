@@ -452,6 +452,7 @@ export function createMockClient(): ClientService {
   ).__backupCalls = backupCalls;
   const configCalls = {
     install: [] as InstallInputDTO[],
+    import: [] as ImportInputDTO[],
     publish: [] as ConfigEditDTO[],
   };
   (
@@ -703,6 +704,7 @@ export function createMockClient(): ClientService {
     },
 
     async confirmImport(input: ImportInputDTO) {
+      configCalls.import.push(input);
       if (input.telegramUserIds) state.ownerUserIds = [...input.telegramUserIds];
       if (input.butlerModel) state.butlerModel = { ...input.butlerModel };
       if (input.taskModel) state.taskModel = { ...input.taskModel };

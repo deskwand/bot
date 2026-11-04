@@ -755,16 +755,21 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
     setRunning(true);
     setSubmitError(null);
     try {
-      const butlerModel = parseModelKey(butler);
-      const taskModel = parseModelKey(task);
-      if (!butlerModel || !taskModel) {
-        throw new Error("MODELS_REQUIRED: 请选择管家模型和任务模型。");
+      let models = {};
+      if (preview.legacy) {
+        const butlerModel = parseModelKey(butler);
+        const taskModel = parseModelKey(task);
+        if (!butlerModel || !taskModel) {
+          throw new Error("MODELS_REQUIRED: 请选择管家模型和任务模型。");
+        }
+        models = { butlerModel, taskModel };
       }
+      const ownerVisible =
+        preview.legacy || preview.requiredInputs?.includes("telegramUserIds") === true;
       const confirmed = await client.confirmImport({
         baseFingerprint: "",
-        telegramUserIds: parseUserIDs(ownerIDs),
-        butlerModel,
-        taskModel,
+        ...(ownerVisible ? { telegramUserIds: parseUserIDs(ownerIDs) } : {}),
+        ...models,
         secrets: Object.entries(secrets)
           .filter(([, value]) => value.trim().length > 0)
           .map(([name, value]) => ({ name, value })),

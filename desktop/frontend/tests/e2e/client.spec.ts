@@ -40,6 +40,11 @@ type ConfigCalls = {
     butlerModel?: { provider: string; id: string };
     taskModel?: { provider: string; id: string };
   }[];
+  import: {
+    telegramUserIds?: number[];
+    butlerModel?: { provider: string; id: string };
+    taskModel?: { provider: string; id: string };
+  }[];
   publish: { secrets?: { name: string; operation: string }[] }[];
 };
 
@@ -342,6 +347,26 @@ test("import preview explains legacy schema, preserved secrets and plaintext mig
 });
 
 
+
+test("importing a readable deployment keeps its models and owners", async ({ page }) => {
+  await page.goto("/test.html");
+  await connectCloudflare(page);
+  await page.getByRole("button", { name: "连接已有服务" }).click();
+  const current = page.locator("li", { hasText: "deskwand-bot-old" }).first();
+  await current.getByRole("button", { name: "检查并接管" }).click();
+  await expect(page.getByText("配置可读取")).toBeVisible();
+  await expect(page.getByLabel("管家模型")).toHaveCount(0);
+  await expect(page.getByLabel("允许使用的 Telegram 用户 ID")).toHaveCount(0);
+  await page.getByRole("button", { name: "确认配置并接管" }).click();
+  await expect(page.getByRole("button", { name: "进入管理首页" })).toBeVisible();
+
+  const calls = await recordedConfigCalls(page);
+  expect(calls?.import).toHaveLength(1);
+  const input = calls!.import[0]!;
+  expect(input.butlerModel).toBeUndefined();
+  expect(input.taskModel).toBeUndefined();
+  expect(input.telegramUserIds).toBeUndefined();
+});
 
 test("import resume continues an unknown takeover result", async ({ page }) => {
   await page.goto("/test.html?fixture=import-resume");

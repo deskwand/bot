@@ -702,6 +702,42 @@ func TestImportRetainsWeChatCredentialsAndActiveChannel(t *testing.T) {
 	}
 }
 
+func TestImportWithoutModelsOrOwnerKeepsExistingConfig(t *testing.T) {
+	pkg := lifecyclePackage(t, "1.0.0", "1.0.0", nil)
+	f := newLifecycleFixture(t, pkg)
+	config, err := domain.CanonicalJSON(map[string]any{
+		"schemaVersion": 1,
+		"owner":         map[string]any{"telegramUserIds": []any{101}},
+		"models": map[string]any{
+			"butler": map[string]any{"provider": "opencode-go", "id": "deepseek-v4.1-flash"},
+			"task":   map[string]any{"provider": "opencode-go", "id": "kimi-k3"},
+		},
+		"mcpServers": []any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.API.configJSON = config
+	f.API.settingsJSON = lifecycleSettings(t, pkg.Manifest().ResourceTemplate, config, ChannelWeChat, true)
+	f.API.secretNames = []string{"WECHAT_CREDENTIALS"}
+	f.API.scripts = []cloudflare.ScriptSummary{{ID: "deskwand-bot", MigrationTag: "v2"}}
+
+	result, err := f.Lifecycle.ConfirmImport(context.Background(), f.target(), ImportConfirmation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLifecycleState(t, result, StatePublished)
+	create := f.API.creates[0]
+	for _, want := range []string{`"telegramUserIds":[101]`, `"deepseek-v4.1-flash"`, `"kimi-k3"`} {
+		if !bytes.Contains(create.Plan.ConfigJSON, []byte(want)) {
+			t.Fatalf("config lost %s: %s", want, create.Plan.ConfigJSON)
+		}
+	}
+	if bytes.Contains(create.Plan.ConfigJSON, []byte("workers-ai")) {
+		t.Fatalf("config was overwritten with the default model: %s", create.Plan.ConfigJSON)
+	}
+}
+
 func TestImportRefusesUnknownForkBindings(t *testing.T) {
 	pkg := lifecyclePackage(t, "1.0.0", "1.0.0", nil)
 	f := newLifecycleFixture(t, pkg)
