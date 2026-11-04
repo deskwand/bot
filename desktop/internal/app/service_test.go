@@ -216,7 +216,6 @@ type fakeEntries struct {
 	loginFunc      func(ctx context.Context, onStatus func(wechat.LoginStatus)) (domain.Result, error)
 	loginCalls     int
 	telegramToken  string
-	telegramOpts   TelegramConnectOptions
 	telegramErr    error
 	telegramResult domain.Result
 	selectResult   EntrySelection
@@ -235,11 +234,10 @@ func (f *fakeEntries) ConnectWeChatWithStatus(ctx context.Context, _ domain.Targ
 	return login(ctx, onStatus)
 }
 
-func (f *fakeEntries) ConnectTelegramWithOptions(_ context.Context, _ domain.Target, token string, options TelegramConnectOptions) (domain.Result, error) {
+func (f *fakeEntries) ConnectTelegram(_ context.Context, _ domain.Target, token string) (domain.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.telegramToken = token
-	f.telegramOpts = options
 	result := f.telegramResult
 	if result.OperationID == "" && f.telegramErr == nil {
 		result = domain.Result{OperationID: "op-telegram", State: StatePublished}
@@ -523,7 +521,7 @@ func TestServiceReleaseGatePrecedesNetworkAndJournal(t *testing.T) {
 				return err
 			},
 			"ConnectTelegram": func() error {
-				_, err := f.service.ConnectTelegram(serviceToken, false)
+				_, err := f.service.ConnectTelegram(serviceToken)
 				return err
 			},
 			"StartWeChatLogin": func() error {
@@ -1242,17 +1240,17 @@ func TestServiceLoginDoesNotEmitDuplicateCancelled(t *testing.T) {
 
 func TestServiceConnectTelegramRedactsToken(t *testing.T) {
 	f := newServiceFixture(t)
-	result, err := f.service.ConnectTelegram(serviceToken, true)
+	result, err := f.service.ConnectTelegram(serviceToken)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.entries.telegramToken != serviceToken || !f.entries.telegramOpts.RotateWebhookSecret {
-		t.Fatalf("token/options = %q/%v", f.entries.telegramToken, f.entries.telegramOpts)
+	if f.entries.telegramToken != serviceToken {
+		t.Fatalf("token = %q", f.entries.telegramToken)
 	}
 	assertNoSentinel(t, serviceToken, result, err)
 
 	f.entries.telegramErr = fmt.Errorf("telegram rejected %s", serviceToken)
-	_, err = f.service.ConnectTelegram(serviceToken, false)
+	_, err = f.service.ConnectTelegram(serviceToken)
 	if err == nil {
 		t.Fatal("expected telegram error")
 	}

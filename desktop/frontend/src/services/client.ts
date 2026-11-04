@@ -42,7 +42,7 @@ export function createProductionClient(): ClientService {
     pendingOperations: () => Service.pendingOperations(),
     startWeChatLogin: () => Service.startWeChatLogin(),
     cancelWeChatLogin: (opId) => Service.cancelWeChatLogin(opId),
-    connectTelegram: (token, rotate) => Service.connectTelegram(token, rotate),
+    connectTelegram: (token) => Service.connectTelegram(token),
     selectEntry: (channel) => Service.selectEntry(channel),
     status: () => Service.status(),
     exportDiagnostics: () => Service.exportDiagnostics(),

@@ -460,11 +460,11 @@ export const Service = {
     return call("Service.ConfirmImport", input);
   },
   /**
-   * ConnectTelegram validates the bot token, publishes it and registers the
-   * webhook. rotate replaces an existing webhook secret explicitly.
+   * ConnectTelegram validates the bot token, publishes it and removes any
+   * registered webhook so the Worker can poll for updates.
    */
-  connectTelegram(token: string, rotate: boolean): Promise<ResultDTO> {
-    return call("Service.ConnectTelegram", token, rotate);
+  connectTelegram(token: string): Promise<ResultDTO> {
+    return call("Service.ConnectTelegram", token);
   },
   /** DisconnectCloudflare revokes the authorization and removes local credentials. */
   disconnectCloudflare(): Promise<void> {

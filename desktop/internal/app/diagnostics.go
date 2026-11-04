@@ -169,7 +169,7 @@ func configuredEvidence(snapshot domain.Snapshot, observedAt string) []domain.Ev
 			Detail:     "configured",
 		})
 	}
-	if secrets["TELEGRAM_BOT_TOKEN"] && secrets["TELEGRAM_WEBHOOK_SECRET"] {
+	if secrets["TELEGRAM_BOT_TOKEN"] {
 		evidence = append(evidence, domain.Evidence{
 			Kind:       "telegram",
 			Source:     diagnostics.SourceConfig,

@@ -352,7 +352,6 @@ function initialState(): MockState {
       MODEL_KEY_OPENCODE_GO: shellScenario,
       MODEL_KEY_ANTHROPIC: false,
       TELEGRAM_BOT_TOKEN: false,
-      TELEGRAM_WEBHOOK_SECRET: false,
       WECHAT_CREDENTIALS: scenario === "user-evidence",
     },
     mcpServers:
@@ -1080,15 +1079,14 @@ export function createMockClient(): ClientService {
       emit({ operationId: opId, state: "cancelled", message: "登录已取消" });
     },
 
-    async connectTelegram(token, _rotate) {
+    async connectTelegram(token) {
       if (token.trim().length < 6 || /wrong/i.test(token)) {
         throw new Error("telegram: bot token was rejected");
       }
       state.secrets.TELEGRAM_BOT_TOKEN = true;
-      state.secrets.TELEGRAM_WEBHOOK_SECRET = true;
       return published("op-telegram-1", {
         activeChannel: state.activeChannel || "telegram",
-        steps: steps("校验 Bot Token", "发布 secret", "设置 webhook", "核实部署"),
+        steps: steps("校验 Bot Token", "发布 secret", "删除 webhook", "核实部署"),
       });
     },
 

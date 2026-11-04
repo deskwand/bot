@@ -1,6 +1,7 @@
 // Package telegram implements the small Telegram Bot API surface needed to
-// configure a webhook. The bot token is part of the request path, so every
-// error and log value is redacted before it leaves this package.
+// validate a bot token and remove a registered webhook. The bot token is part
+// of the request path, so every error and log value is redacted before it
+// leaves this package.
 package telegram
 
 import (
@@ -34,17 +35,6 @@ type User struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	Username  string `json:"username"`
-}
-
-// WebhookInfo is the subset of getWebhookInfo returned to the application.
-type WebhookInfo struct {
-	URL                  string   `json:"url"`
-	HasCustomCertificate bool     `json:"has_custom_certificate"`
-	PendingUpdateCount   int      `json:"pending_update_count"`
-	LastErrorDate        int64    `json:"last_error_date"`
-	LastErrorMessage     string   `json:"last_error_message"`
-	MaxConnections       int      `json:"max_connections"`
-	AllowedUpdates       []string `json:"allowed_updates"`
 }
 
 // Error is a sanitized Telegram API error.
@@ -105,24 +95,11 @@ func (c *Client) GetMe(ctx context.Context) (User, error) {
 	return user, nil
 }
 
-// SetWebhook registers the exact webhook URL and secret token. It uses the
-// same allowed update set as the existing command-line setup script.
-func (c *Client) SetWebhook(ctx context.Context, webhookURL, secretToken string) error {
-	body := map[string]any{
-		"url":             webhookURL,
-		"secret_token":    secretToken,
-		"allowed_updates": []string{"message", "callback_query"},
-	}
-	return c.call(ctx, "setWebhook", http.MethodPost, body, nil)
-}
-
-// GetWebhookInfo reads the current webhook registration.
-func (c *Client) GetWebhookInfo(ctx context.Context) (WebhookInfo, error) {
-	var info WebhookInfo
-	if err := c.call(ctx, "getWebhookInfo", http.MethodGet, nil, &info); err != nil {
-		return WebhookInfo{}, err
-	}
-	return info, nil
+// DeleteWebhook removes any registered webhook so the Worker can receive
+// updates with getUpdates. It omits drop_pending_updates so messages queued
+// while the webhook was active are still delivered to the first long poll.
+func (c *Client) DeleteWebhook(ctx context.Context) error {
+	return c.call(ctx, "deleteWebhook", http.MethodPost, map[string]any{}, nil)
 }
 
 func (c *Client) call(ctx context.Context, method, httpMethod string, body any, result any) error {

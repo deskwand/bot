@@ -90,7 +90,7 @@ type LifecycleService interface {
 // EntriesService is WeChat login and Telegram / ACTIVE_CHANNEL configuration.
 type EntriesService interface {
 	ConnectWeChatWithStatus(ctx context.Context, target domain.Target, onStatus func(wechat.LoginStatus)) (domain.Result, error)
-	ConnectTelegramWithOptions(ctx context.Context, target domain.Target, botToken string, options TelegramConnectOptions) (domain.Result, error)
+	ConnectTelegram(ctx context.Context, target domain.Target, botToken string) (domain.Result, error)
 	SelectEntry(ctx context.Context, target domain.Target, channel string) (EntrySelection, error)
 }
 
@@ -1238,9 +1238,9 @@ func (s *Service) CancelWeChatLogin(opID string) error {
 	return nil
 }
 
-// ConnectTelegram validates the bot token, publishes it and registers the
-// webhook. rotate replaces an existing webhook secret explicitly.
-func (s *Service) ConnectTelegram(token string, rotate bool) (ResultDTO, error) {
+// ConnectTelegram validates the bot token, publishes it and removes any
+// registered webhook so the Worker can poll for updates.
+func (s *Service) ConnectTelegram(token string) (ResultDTO, error) {
 	ctx := context.Background()
 	if _, err := s.releasePackage(); err != nil {
 		return ResultDTO{}, err
@@ -1252,9 +1252,7 @@ func (s *Service) ConnectTelegram(token string, rotate bool) (ResultDTO, error) 
 	if s.entries == nil {
 		return ResultDTO{}, serviceUnavailable()
 	}
-	result, err := s.entries.ConnectTelegramWithOptions(ctx, target, strings.TrimSpace(token), TelegramConnectOptions{
-		RotateWebhookSecret: rotate,
-	})
+	result, err := s.entries.ConnectTelegram(ctx, target, strings.TrimSpace(token))
 	return s.summaryFromResult(result, target.ScriptName), safeAppError(err, token)
 }
 

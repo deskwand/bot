@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/deployment"
-	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/navigation"
 	"github.com/deskwand/bot/desktop/internal/netproxy"
 	"github.com/deskwand/bot/desktop/internal/platform"
@@ -92,13 +90,6 @@ func main() {
 		Snapshots:   api,
 		Selector:    app.NewActiveChannelSelector(publish, api),
 		Credentials: credentials,
-		PublicBaseURLFor: func(ctx context.Context, target domain.Target) (string, error) {
-			snapshot, err := api.ReadSnapshot(ctx, target)
-			if err != nil {
-				return "", err
-			}
-			return app.ReadPlainVar(snapshot.SettingsJSON, "PUBLIC_BASE_URL"), nil
-		},
 	})
 
 	service := app.NewService(app.ServiceOptions{

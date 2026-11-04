@@ -67,7 +67,6 @@ export function Entries() {
   const [channelResumeError, setChannelResumeError] = useState<unknown>(null);
 
   const [telegramToken, setTelegramToken] = useState("");
-  const [rotate, setRotate] = useState(false);
   const [telegramRunning, setTelegramRunning] = useState(false);
   const [telegramError, setTelegramError] = useState<unknown>(null);
   const [telegramResult, setTelegramResult] = useState<ResultDTO | null>(null);
@@ -84,7 +83,7 @@ export function Entries() {
   const confirmedRef = useRef(false);
   const [wechatPublished, setWechatPublished] = useState(false);
 
-  const dirty = channel !== (config?.activeChannel ?? "") || telegramToken.length > 0 || rotate;
+  const dirty = channel !== (config?.activeChannel ?? "") || telegramToken.length > 0;
   useDirty(dirty);
 
   const load = useCallback(async () => {
@@ -295,10 +294,9 @@ export function Entries() {
     setTelegramError(null);
     setTelegramResult(null);
     try {
-      const result = await client.connectTelegram(telegramToken, rotate);
+      const result = await client.connectTelegram(telegramToken);
       setTelegramResult(result);
       setTelegramToken("");
-      setRotate(false);
       await load();
     } catch (cause) {
       setTelegramToken("");
@@ -395,7 +393,7 @@ export function Entries() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle>Telegram</CardTitle>
-              <CardDescription>验证令牌，发布密钥并设置 webhook。</CardDescription>
+              <CardDescription>验证令牌，发布密钥并删除已注册的 webhook。</CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {telegramStatus ? <StateBadge state={telegramStatus.state} /> : <Badge variant="outline">状态未知</Badge>}
@@ -418,20 +416,6 @@ export function Entries() {
                 spellCheck={false}
               />
             </div>
-            <label className="flex items-start gap-2 self-end pb-2 text-sm">
-              <input
-                type="checkbox"
-                className="mt-1 size-4 accent-primary"
-                checked={rotate}
-                onChange={(event) => setRotate(event.target.checked)}
-              />
-              <span>
-                轮换 webhook secret
-                <span className="block text-xs text-muted-foreground">
-                  默认保留现有密钥。
-                </span>
-              </span>
-            </label>
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground">

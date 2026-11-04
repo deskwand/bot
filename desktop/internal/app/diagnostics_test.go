@@ -44,7 +44,6 @@ func diagnosticsSnapshot() domain.Snapshot {
 		SecretNames: []string{
 			"WECHAT_CREDENTIALS",
 			"TELEGRAM_BOT_TOKEN",
-			"TELEGRAM_WEBHOOK_SECRET",
 			"MODEL_KEY_ANTHROPIC",
 			"MODEL_KEY_OPENCODE_GO",
 		},
@@ -95,7 +94,7 @@ func TestStatusCombinesConfiguredStateAndMissingLogs(t *testing.T) {
 	}
 }
 
-func TestConfiguredRequiresRequiredSecrets(t *testing.T) {
+func TestTelegramIsConfiguredWithTokenOnly(t *testing.T) {
 	snapshot := diagnosticsSnapshot()
 	snapshot.SecretNames = []string{"WECHAT_CREDENTIALS", "TELEGRAM_BOT_TOKEN"}
 	reader := &fakeChannelEventReader{}
@@ -105,8 +104,8 @@ func TestConfiguredRequiresRequiredSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if item := findItem(t, report.Items, "telegram"); item.State != diagnostics.StateUnknown {
-		t.Fatalf("telegram without webhook secret = %+v", item)
+	if item := findItem(t, report.Items, "telegram"); item.State != diagnostics.StateConfigured {
+		t.Fatalf("telegram with only a bot token = %+v", item)
 	}
 	if item := findItem(t, report.Items, "model"); item.State != diagnostics.StateUnknown {
 		t.Fatalf("model without provider secret = %+v", item)
@@ -118,7 +117,7 @@ func TestConfiguredRequiresRequiredSecrets(t *testing.T) {
 
 func TestConfiguredModelAcceptsKeylessProvider(t *testing.T) {
 	snapshot := diagnosticsSnapshot()
-	snapshot.SecretNames = []string{"WECHAT_CREDENTIALS", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"}
+	snapshot.SecretNames = []string{"WECHAT_CREDENTIALS", "TELEGRAM_BOT_TOKEN"}
 	snapshot.ConfigJSON = []byte(`{"schemaVersion":1,"models":{"butler":{"provider":"workers-ai","id":"@cf/google/gemma-4-26b-a4b-it"},"task":{"provider":"workers-ai","id":"@cf/google/gemma-4-26b-a4b-it"}}}`)
 	service := newTestDiagnostics(snapshot, &fakeChannelEventReader{})
 
@@ -136,7 +135,6 @@ func TestConfiguredModelIgnoresLegacySecretNames(t *testing.T) {
 	snapshot.SecretNames = []string{
 		"WECHAT_CREDENTIALS",
 		"TELEGRAM_BOT_TOKEN",
-		"TELEGRAM_WEBHOOK_SECRET",
 		"ANTHROPIC_API_KEY",
 		"OPENCODE_API_KEY",
 	}

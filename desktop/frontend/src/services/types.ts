@@ -151,7 +151,7 @@ export interface ClientService {
   pendingOperations(): Promise<OperationDTO[]>;
   startWeChatLogin(): Promise<string>;
   cancelWeChatLogin(opId: string): Promise<void>;
-  connectTelegram(token: string, rotate: boolean): Promise<ResultDTO>;
+  connectTelegram(token: string): Promise<ResultDTO>;
   selectEntry(channel: string): Promise<EntryResultDTO>;
   status(): Promise<StatusItemDTO[]>;
   exportDiagnostics(): Promise<string>;

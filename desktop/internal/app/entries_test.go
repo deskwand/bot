@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -104,22 +103,14 @@ func (f *fakeSelector) SetActiveChannel(_ context.Context, _ domain.Target, chan
 	return f.result, nil
 }
 
-type webhookCall struct {
-	url    string
-	secret string
-}
-
 type fakeTelegram struct {
 	mu sync.Mutex
 
-	userID         int64
-	getMeErr       error
-	setWebhookErr  error
-	setWebhookHook func()
-	webhookInfoURL string
-	webhookInfoErr error
-	calls          []string
-	webhooks       []webhookCall
+	userID             int64
+	getMeErr           error
+	deleteWebhookErr   error
+	deleteWebhookCalls int
+	calls              []string
 }
 
 func (f *fakeTelegram) GetMe(context.Context) (telegram.User, error) {
@@ -136,50 +127,26 @@ func (f *fakeTelegram) GetMe(context.Context) (telegram.User, error) {
 	return telegram.User{ID: id, IsBot: true, FirstName: "DeskWand"}, nil
 }
 
-func (f *fakeTelegram) SetWebhook(ctx context.Context, webhookURL, secretToken string) error {
+func (f *fakeTelegram) DeleteWebhook(ctx context.Context) error {
 	f.mu.Lock()
-	f.calls = append(f.calls, "setWebhook")
-	hook := f.setWebhookHook
-	err := f.setWebhookErr
+	f.calls = append(f.calls, "deleteWebhook")
+	f.deleteWebhookCalls++
+	err := f.deleteWebhookErr
 	f.mu.Unlock()
 
-	if hook != nil {
-		hook()
-	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	if err != nil {
-		return err
-	}
-	f.mu.Lock()
-	f.webhooks = append(f.webhooks, webhookCall{url: webhookURL, secret: secretToken})
-	f.mu.Unlock()
-	return nil
-}
-
-func (f *fakeTelegram) GetWebhookInfo(context.Context) (telegram.WebhookInfo, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "getWebhookInfo")
-	if f.webhookInfoErr != nil {
-		return telegram.WebhookInfo{}, f.webhookInfoErr
-	}
-	url := f.webhookInfoURL
-	if url == "" {
-		url = "https://bot.example/telegram/webhook"
-	}
-	return telegram.WebhookInfo{URL: url}, nil
+	return err
 }
 
 func newTestService(publisher *fakePublisher, selector *fakeSelector, credentials platform.CredentialStore, login func(context.Context, func(wechat.LoginStatus)) (wechat.Credentials, error), telegramClient *fakeTelegram) *EntryService {
 	return NewEntryService(EntryOptions{
-		Publisher:     publisher,
-		Snapshots:     publisher,
-		Selector:      selector,
-		Credentials:   credentials,
-		PublicBaseURL: "https://bot.example/",
-		Login:         login,
+		Publisher:   publisher,
+		Snapshots:   publisher,
+		Selector:    selector,
+		Credentials: credentials,
+		Login:       login,
 		Telegram: func(string) TelegramAPI {
 			return telegramClient
 		},
@@ -318,11 +285,10 @@ func TestConnectWeChatRejectsUntrustedCredentials(t *testing.T) {
 	}
 }
 
-func TestConnectTelegramFirstEnableGeneratesAndVerifiesWebhook(t *testing.T) {
+func TestConnectTelegramPublishesTokenAndDeletesWebhook(t *testing.T) {
 	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1", VersionID: "v1"}}
-	store := platform.NewMemoryCredentialStore()
 	client := &fakeTelegram{}
-	service := newTestService(publisher, &fakeSelector{}, store, nil, client)
+	service := newTestService(publisher, &fakeSelector{}, platform.NewMemoryCredentialStore(), nil, client)
 	target := domain.Target{AccountID: "a", ScriptName: "bot"}
 
 	result, err := service.ConnectTelegram(context.Background(), target, telegramTokenSentinel)
@@ -334,179 +300,59 @@ func TestConnectTelegramFirstEnableGeneratesAndVerifiesWebhook(t *testing.T) {
 	}
 
 	change := publisher.lastChange(t)
-	values := secretValues(change.Secrets)
-	if values["TELEGRAM_BOT_TOKEN"] != telegramTokenSentinel {
-		t.Fatalf("bot token edit = %q", values["TELEGRAM_BOT_TOKEN"])
+	if len(change.Secrets) != 1 || change.Secrets[0].Name != "TELEGRAM_BOT_TOKEN" ||
+		change.Secrets[0].Operation != domain.SecretReplace ||
+		change.Secrets[0].Value() != telegramTokenSentinel {
+		t.Fatalf("secret edits = %#v, want only the bot token", change.Secrets)
 	}
-	webhookSecret := values["TELEGRAM_WEBHOOK_SECRET"]
-	if len(webhookSecret) != 64 {
-		t.Fatalf("webhook secret length = %d, want 64 hex chars", len(webhookSecret))
-	}
-	if _, err := hex.DecodeString(webhookSecret); err != nil {
-		t.Fatalf("webhook secret is not hex: %v", err)
-	}
-	if len(client.webhooks) != 1 {
-		t.Fatalf("setWebhook calls = %#v", client.webhooks)
-	}
-	if client.webhooks[0].url != "https://bot.example/telegram/webhook" {
-		t.Fatalf("webhook URL = %q", client.webhooks[0].url)
-	}
-	if client.webhooks[0].secret != webhookSecret {
-		t.Fatal("setWebhook did not use the published secret")
+	if client.deleteWebhookCalls != 1 {
+		t.Fatalf("deleteWebhook calls = %d, want 1", client.deleteWebhookCalls)
 	}
 	if len(client.calls) < 2 || client.calls[0] != "getMe" {
 		t.Fatalf("call order = %v, want getMe before publish", client.calls)
 	}
-	if _, err := store.Get(context.Background(), telegramWebhookPendingKey(target)); !errors.Is(err, platform.ErrCredentialNotFound) {
-		t.Fatalf("pending secret still stored after success: %v", err)
-	}
 	for _, output := range []string{fmt.Sprint(result), fmt.Sprint(change)} {
-		if strings.Contains(output, telegramTokenSentinel) || strings.Contains(output, webhookSecret) {
+		if strings.Contains(output, telegramTokenSentinel) {
 			t.Fatalf("output leaked a secret: %s", output)
 		}
 	}
 }
 
-func TestConnectTelegramPublishFailureDoesNotSetWebhook(t *testing.T) {
+func TestConnectTelegramPublishFailureDoesNotDeleteWebhook(t *testing.T) {
 	publisher := &fakePublisher{
 		snapshot:   domain.Snapshot{Fingerprint: "fp-1"},
 		applyState: "failed",
 		applyErr:   errors.New("publish failed"),
 	}
 	client := &fakeTelegram{}
-	store := platform.NewMemoryCredentialStore()
-	service := newTestService(publisher, &fakeSelector{}, store, nil, client)
-	target := domain.Target{AccountID: "a", ScriptName: "bot"}
+	service := newTestService(publisher, &fakeSelector{}, platform.NewMemoryCredentialStore(), nil, client)
 
-	result, err := service.ConnectTelegram(context.Background(), target, telegramTokenSentinel)
+	result, err := service.ConnectTelegram(context.Background(), domain.Target{AccountID: "a", ScriptName: "bot"}, telegramTokenSentinel)
 	if err == nil || result.State != "failed" {
 		t.Fatalf("ConnectTelegram result=%#v err=%v", result, err)
 	}
-	if len(client.webhooks) != 0 {
-		t.Fatal("setWebhook was called after a publish failure")
-	}
-	if _, err := store.Get(context.Background(), telegramWebhookPendingKey(target)); err != nil {
-		t.Fatalf("retry secret was not retained after publish failure: %v", err)
+	if client.deleteWebhookCalls != 0 {
+		t.Fatalf("deleteWebhook calls = %d, want 0", client.deleteWebhookCalls)
 	}
 	if strings.Contains(err.Error(), telegramTokenSentinel) {
 		t.Fatalf("publish error leaked token: %v", err)
 	}
 }
 
-func TestConnectTelegramWebhookFailureReportsPartialState(t *testing.T) {
+func TestConnectTelegramDeleteWebhookFailureStillPublished(t *testing.T) {
 	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1"}}
-	client := &fakeTelegram{setWebhookErr: errors.New("Telegram unavailable")}
-	store := platform.NewMemoryCredentialStore()
-	service := newTestService(publisher, &fakeSelector{}, store, nil, client)
-	target := domain.Target{AccountID: "a", ScriptName: "bot"}
+	client := &fakeTelegram{deleteWebhookErr: errors.New("Telegram unavailable")}
+	service := newTestService(publisher, &fakeSelector{}, platform.NewMemoryCredentialStore(), nil, client)
 
-	result, err := service.ConnectTelegram(context.Background(), target, telegramTokenSentinel)
-	if !errors.Is(err, ErrWebhookRegistration) {
-		t.Fatalf("ConnectTelegram error = %v, want ErrWebhookRegistration", err)
-	}
-	if result.State != StatePartial {
-		t.Fatalf("state = %q, want %q", result.State, StatePartial)
-	}
-	webhookSecret := secretValues(publisher.lastChange(t).Secrets)["TELEGRAM_WEBHOOK_SECRET"]
-	if webhookSecret == "" {
-		t.Fatal("webhook secret was not published")
-	}
-	if _, err := store.Get(context.Background(), telegramWebhookPendingKey(target)); err != nil {
-		t.Fatalf("retry secret was not retained: %v", err)
-	}
-	if strings.Contains(err.Error(), telegramTokenSentinel) || strings.Contains(err.Error(), webhookSecret) {
-		t.Fatalf("error leaked a secret: %v", err)
-	}
-}
-
-func TestConnectTelegramRetryReusesSecret(t *testing.T) {
-	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1"}}
-	client := &fakeTelegram{setWebhookErr: errors.New("first webhook attempt failed")}
-	store := platform.NewMemoryCredentialStore()
-	service := newTestService(publisher, &fakeSelector{}, store, nil, client)
-	target := domain.Target{AccountID: "a", ScriptName: "bot"}
-
-	firstResult, firstErr := service.ConnectTelegram(context.Background(), target, telegramTokenSentinel)
-	if !errors.Is(firstErr, ErrWebhookRegistration) || firstResult.State != StatePartial {
-		t.Fatalf("first attempt result=%#v err=%v", firstResult, firstErr)
-	}
-	firstSecret := secretValues(publisher.lastChange(t).Secrets)["TELEGRAM_WEBHOOK_SECRET"]
-
-	client.mu.Lock()
-	client.setWebhookErr = nil
-	client.mu.Unlock()
-	secondResult, secondErr := service.ConnectTelegram(context.Background(), target, telegramTokenSentinel)
-	if secondErr != nil {
-		t.Fatalf("second ConnectTelegram: %v", secondErr)
-	}
-	if secondResult.State != StatePublished {
-		t.Fatalf("second result = %#v", secondResult)
-	}
-	secondSecret := secretValues(publisher.lastChange(t).Secrets)["TELEGRAM_WEBHOOK_SECRET"]
-	if secondSecret != firstSecret {
-		t.Fatal("retry generated a different webhook secret")
-	}
-	if len(client.webhooks) != 1 || client.webhooks[0].secret != firstSecret {
-		t.Fatalf("retry webhook calls = %#v", client.webhooks)
-	}
-	if _, err := store.Get(context.Background(), telegramWebhookPendingKey(target)); !errors.Is(err, platform.ErrCredentialNotFound) {
-		t.Fatalf("pending secret not cleared after retry success: %v", err)
-	}
-}
-
-func TestConnectTelegramRetainsExistingSecretWithoutRotate(t *testing.T) {
-	publisher := &fakePublisher{snapshot: domain.Snapshot{
-		Fingerprint: "fp-1",
-		SecretNames: []string{"TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"},
-	}}
-	client := &fakeTelegram{}
-	store := platform.NewMemoryCredentialStore()
-	service := newTestService(publisher, &fakeSelector{}, store, nil, client)
-	target := domain.Target{AccountID: "a", ScriptName: "bot"}
-
-	result, err := service.ConnectTelegram(context.Background(), target, telegramTokenSentinel)
+	result, err := service.ConnectTelegram(context.Background(), domain.Target{AccountID: "a", ScriptName: "bot"}, telegramTokenSentinel)
 	if err != nil {
 		t.Fatalf("ConnectTelegram: %v", err)
 	}
 	if result.State != StatePublished {
 		t.Fatalf("result = %#v", result)
 	}
-	change := publisher.lastChange(t)
-	if len(change.Secrets) != 1 || change.Secrets[0].Name != "TELEGRAM_BOT_TOKEN" {
-		t.Fatalf("secret edits = %#v, want only the bot token", change.Secrets)
-	}
-	if len(client.webhooks) != 0 {
-		t.Fatal("existing unreadable webhook secret was re-registered without rotation")
-	}
-	if _, err := store.Get(context.Background(), telegramWebhookPendingKey(target)); !errors.Is(err, platform.ErrCredentialNotFound) {
-		t.Fatalf("unexpected pending secret: %v", err)
-	}
-}
-
-func TestConnectTelegramRotateReplacesSecret(t *testing.T) {
-	publisher := &fakePublisher{snapshot: domain.Snapshot{
-		Fingerprint: "fp-1",
-		SecretNames: []string{"TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"},
-	}}
-	client := &fakeTelegram{}
-	service := newTestService(publisher, &fakeSelector{}, platform.NewMemoryCredentialStore(), nil, client)
-	target := domain.Target{AccountID: "a", ScriptName: "bot"}
-
-	result, err := service.ConnectTelegramWithOptions(context.Background(), target, telegramTokenSentinel, TelegramConnectOptions{
-		RotateWebhookSecret: true,
-	})
-	if err != nil {
-		t.Fatalf("ConnectTelegramWithOptions: %v", err)
-	}
-	if result.State != StatePublished {
-		t.Fatalf("result = %#v", result)
-	}
-	values := secretValues(publisher.lastChange(t).Secrets)
-	if values["TELEGRAM_WEBHOOK_SECRET"] == "" {
-		t.Fatal("rotation did not replace the webhook secret")
-	}
-	if len(client.webhooks) != 1 || client.webhooks[0].secret != values["TELEGRAM_WEBHOOK_SECRET"] {
-		t.Fatalf("rotation webhook calls = %#v", client.webhooks)
+	if client.deleteWebhookCalls != 1 {
+		t.Fatalf("deleteWebhook calls = %d, want 1", client.deleteWebhookCalls)
 	}
 }
 
@@ -527,133 +373,14 @@ func TestConnectTelegramGetMeFailureDoesNotPublish(t *testing.T) {
 	}
 }
 
-func TestConnectTelegramInvalidPublicBaseURLDoesNotCallNetworkOrPublish(t *testing.T) {
-	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1"}}
-	client := &fakeTelegram{}
-	service := NewEntryService(EntryOptions{
-		Publisher:     publisher,
-		Snapshots:     publisher,
-		Selector:      &fakeSelector{},
-		Credentials:   platform.NewMemoryCredentialStore(),
-		PublicBaseURL: "http://bot.example",
-		Telegram:      func(string) TelegramAPI { return client },
-	})
-
-	result, err := service.ConnectTelegram(context.Background(), domain.Target{AccountID: "a", ScriptName: "bot"}, telegramTokenSentinel)
-	if !errors.Is(err, ErrInvalidPublicBaseURL) {
-		t.Fatalf("ConnectTelegram error = %v, want ErrInvalidPublicBaseURL", err)
-	}
-	if result != (domain.Result{}) {
-		t.Fatalf("result = %#v, want zero result", result)
-	}
-	if publisher.callCount() != 0 {
-		t.Fatal("invalid PUBLIC_BASE_URL still published secrets")
-	}
-	if len(client.calls) != 0 {
-		t.Fatalf("invalid PUBLIC_BASE_URL called Telegram: %v", client.calls)
-	}
-}
-
-func TestConnectTelegramExistingSecretChecksWebhookInfo(t *testing.T) {
-	publisher := &fakePublisher{snapshot: domain.Snapshot{
-		Fingerprint: "fp-1",
-		SecretNames: []string{"TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"},
-	}}
-	client := &fakeTelegram{}
-	service := newTestService(publisher, &fakeSelector{}, platform.NewMemoryCredentialStore(), nil, client)
-
-	if _, err := service.ConnectTelegram(context.Background(), domain.Target{AccountID: "a", ScriptName: "bot"}, telegramTokenSentinel); err != nil {
-		t.Fatalf("ConnectTelegram: %v", err)
-	}
-	found := false
-	for _, call := range client.calls {
-		if call == "getWebhookInfo" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("GetWebhookInfo was not called: %v", client.calls)
-	}
-}
-
-func TestConnectTelegramChangedBotRotatesExistingSecret(t *testing.T) {
-	publisher := &fakePublisher{snapshot: domain.Snapshot{
-		Fingerprint: "fp-1",
-		SecretNames: []string{"TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"},
-	}}
-	client := &fakeTelegram{}
-	store := platform.NewMemoryCredentialStore()
-	target := domain.Target{AccountID: "a", ScriptName: "bot"}
-	if err := store.Set(context.Background(), telegramBotIDKey, "999"); err != nil {
-		t.Fatalf("seed bot id: %v", err)
-	}
-	service := newTestService(publisher, &fakeSelector{}, store, nil, client)
-
-	result, err := service.ConnectTelegram(context.Background(), target, telegramTokenSentinel)
-	if err != nil {
-		t.Fatalf("ConnectTelegram: %v", err)
-	}
-	if result.State != StatePublished {
-		t.Fatalf("result = %#v", result)
-	}
-	change := publisher.lastChange(t)
-	values := secretValues(change.Secrets)
-	if values["TELEGRAM_WEBHOOK_SECRET"] == "" {
-		t.Fatal("changed bot did not rotate the webhook secret")
-	}
-	if len(client.webhooks) != 1 || client.webhooks[0].secret != values["TELEGRAM_WEBHOOK_SECRET"] {
-		t.Fatalf("webhook calls = %#v", client.webhooks)
-	}
-	stored, err := store.Get(context.Background(), telegramBotIDKey)
-	if err != nil || stored != "1" {
-		t.Fatalf("stored bot id = %q, err=%v", stored, err)
-	}
-}
-
-func TestConnectTelegramChangedWebhookURLRotatesThroughWebhookInfo(t *testing.T) {
-	publisher := &fakePublisher{snapshot: domain.Snapshot{
-		Fingerprint: "fp-1",
-		SecretNames: []string{"TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"},
-	}}
-	client := &fakeTelegram{webhookInfoURL: "https://old.example/telegram/webhook"}
-	store := platform.NewMemoryCredentialStore()
-	target := domain.Target{AccountID: "a", ScriptName: "bot"}
-	if err := store.Set(context.Background(), telegramBotIDKey, "1"); err != nil {
-		t.Fatalf("seed bot id: %v", err)
-	}
-	service := newTestService(publisher, &fakeSelector{}, store, nil, client)
-
-	result, err := service.ConnectTelegram(context.Background(), target, telegramTokenSentinel)
-	if err != nil {
-		t.Fatalf("ConnectTelegram: %v", err)
-	}
-	if result.State != StatePublished {
-		t.Fatalf("result = %#v", result)
-	}
-	if publisher.callCount() != 2 {
-		t.Fatalf("Apply calls = %d, want token-only then rotated secret", publisher.callCount())
-	}
-	values := secretValues(publisher.lastChange(t).Secrets)
-	if values["TELEGRAM_WEBHOOK_SECRET"] == "" {
-		t.Fatal("webhook URL change did not rotate the secret")
-	}
-	if len(client.webhooks) != 1 || client.webhooks[0].url != "https://bot.example/telegram/webhook" {
-		t.Fatalf("webhook calls = %#v", client.webhooks)
-	}
-	if len(client.webhooks) != 0 && client.webhooks[0].secret != values["TELEGRAM_WEBHOOK_SECRET"] {
-		t.Fatal("rotated webhook did not use the published secret")
-	}
-}
-
 func TestConnectTelegramWithoutSnapshotsIsBlocked(t *testing.T) {
 	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1"}}
 	client := &fakeTelegram{}
 	service := NewEntryService(EntryOptions{
-		Publisher:     publisher,
-		Selector:      &fakeSelector{},
-		Credentials:   platform.NewMemoryCredentialStore(),
-		PublicBaseURL: "https://bot.example",
-		Telegram:      func(string) TelegramAPI { return client },
+		Publisher:   publisher,
+		Selector:    &fakeSelector{},
+		Credentials: platform.NewMemoryCredentialStore(),
+		Telegram:    func(string) TelegramAPI { return client },
 	})
 
 	_, err := service.ConnectTelegram(context.Background(), domain.Target{AccountID: "a", ScriptName: "bot"}, telegramTokenSentinel)
@@ -662,53 +389,6 @@ func TestConnectTelegramWithoutSnapshotsIsBlocked(t *testing.T) {
 	}
 	if publisher.callCount() != 0 || len(client.calls) != 0 {
 		t.Fatal("missing snapshot reader still performed work")
-	}
-}
-
-func TestConnectTelegramCancelDuringSetWebhookIsPartial(t *testing.T) {
-	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1"}}
-	ctx, cancel := context.WithCancel(context.Background())
-	client := &fakeTelegram{setWebhookHook: cancel}
-	store := platform.NewMemoryCredentialStore()
-	service := newTestService(publisher, &fakeSelector{}, store, nil, client)
-	target := domain.Target{AccountID: "a", ScriptName: "bot"}
-
-	result, err := service.ConnectTelegram(ctx, target, telegramTokenSentinel)
-	if !errors.Is(err, ErrWebhookRegistration) {
-		t.Fatalf("ConnectTelegram error = %v, want ErrWebhookRegistration", err)
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("ConnectTelegram error = %v, want context.Canceled", err)
-	}
-	if result.State != StatePartial {
-		t.Fatalf("state = %q, want %q", result.State, StatePartial)
-	}
-	if _, err := store.Get(context.Background(), telegramWebhookPendingKey(target)); err != nil {
-		t.Fatalf("retry secret was not retained: %v", err)
-	}
-}
-
-type deleteFailStore struct {
-	platform.CredentialStore
-}
-
-func (deleteFailStore) Delete(context.Context, string) error {
-	return errors.New("delete failed")
-}
-
-func TestConnectTelegramPendingSecretDeleteFailureIsReported(t *testing.T) {
-	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1"}}
-	client := &fakeTelegram{}
-	service := newTestService(publisher, &fakeSelector{}, deleteFailStore{
-		CredentialStore: platform.NewMemoryCredentialStore(),
-	}, nil, client)
-
-	result, err := service.ConnectTelegram(context.Background(), domain.Target{AccountID: "a", ScriptName: "bot"}, telegramTokenSentinel)
-	if !errors.Is(err, ErrPendingSecretCleanup) {
-		t.Fatalf("ConnectTelegram error = %v, want ErrPendingSecretCleanup", err)
-	}
-	if result.State != StatePublished {
-		t.Fatalf("state = %q, want published", result.State)
 	}
 }
 
@@ -877,12 +557,4 @@ func TestSelectEntryDefaultSelectorIsExplicitlyNotWired(t *testing.T) {
 	if selection.Channel != EntryWeChat {
 		t.Fatalf("selection = %#v", selection)
 	}
-}
-
-func secretValues(edits []domain.SecretEdit) map[string]string {
-	values := make(map[string]string, len(edits))
-	for _, edit := range edits {
-		values[edit.Name] = edit.Value()
-	}
-	return values
 }
