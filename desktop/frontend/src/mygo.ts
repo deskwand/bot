@@ -33,31 +33,6 @@ export interface BackupSummaryDTO {
 }
 
 /**
- * ClientUpdateDTO is the desktop client update check result. It is separate
- * from UpgradeDTO: the client version and the deployed cloud version never
- * advance each other. No download URL, signature or key material is exposed.
- */
-export interface ClientUpdateDTO {
-  /** not_configured|up_to_date|available */
-  state: string;
-  currentVersion: string;
-  availableVersion?: string;
-  notes?: string;
-  date?: string;
-  reason?: string;
-  message?: string;
-}
-
-/** ClientUpdateResultDTO reports a user-triggered client update installation. */
-export interface ClientUpdateResultDTO {
-  /** installed|failed|not_checked */
-  state: string;
-  currentVersion: string;
-  version?: string;
-  message?: string;
-}
-
-/**
  * CloudflareLoginDTO is the only OAuth login state sent to the frontend. It
  * carries no token, authorization code or PKCE verifier.
  */
@@ -428,13 +403,13 @@ export const Service = {
     return call("Service.CancelWeChatLogin", opID);
   },
   /**
-   * CheckClientUpdate performs a user-triggered check. A configured feed that is
-   * up to date returns state "up_to_date"; a newer client returns "available".
-   * Unconfigured builds return "not_configured" without attempting a network
-   * request. Signature and downgrade failures use fixed error codes.
+   * CheckClientUpdates opens the MyGo updater window. The window, its background
+   * checks, signature verification and installation all belong to the updater
+   * plugin; in a development build the window explains why the app cannot update
+   * itself.
    */
-  checkClientUpdate(): Promise<ClientUpdateDTO> {
-    return call("Service.CheckClientUpdate");
+  checkClientUpdates(): Promise<void> {
+    return call("Service.CheckClientUpdates");
   },
   /**
    * ChooseBackup asks the user for a backup file and returns its summary. The
@@ -489,14 +464,6 @@ export const Service = {
   /** Install creates a new deployment. */
   install(input: InstallInputDTO): Promise<ResultDTO> {
     return call("Service.Install", input);
-  },
-  /**
-   * InstallClientUpdate installs the update found by the most recent
-   * CheckClientUpdate call. It is never automatic and never modifies the cloud
-   * deployment. MyGo stages the update; the new version runs at the next launch.
-   */
-  installClientUpdate(): Promise<ClientUpdateResultDTO> {
-    return call("Service.InstallClientUpdate");
   },
   /** ListWorkers lists Worker scripts in the connected account. */
   listWorkers(): Promise<WorkerDTO[]> {

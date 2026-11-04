@@ -22,8 +22,6 @@ import { useApp } from "@/components/app-context";
 import { ErrorAlert, StateBadge, StepList } from "@/components/feedback";
 import { describeCode } from "@/services/errors";
 import type {
-  ClientUpdateDTO,
-  ClientUpdateResultDTO,
   ResultDTO,
   UpgradeDTO,
 } from "@/services/types";
@@ -39,11 +37,9 @@ export function Updates() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ResultDTO | null>(null);
   const [runError, setRunError] = useState<unknown>(null);
-  const [clientUpdate, setClientUpdate] = useState<ClientUpdateDTO | null>(null);
-  const [clientLoading, setClientLoading] = useState(true);
+  const [clientChecking, setClientChecking] = useState(false);
+  const [clientChecked, setClientChecked] = useState(false);
   const [clientError, setClientError] = useState<unknown>(null);
-  const [clientInstalling, setClientInstalling] = useState(false);
-  const [clientResult, setClientResult] = useState<ClientUpdateResultDTO | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,38 +53,23 @@ export function Updates() {
     }
   }, [client]);
 
-  const loadClientUpdate = useCallback(async () => {
-    setClientLoading(true);
+  const checkClientUpdates = async () => {
+    setClientChecking(true);
+    setClientChecked(false);
     setClientError(null);
     try {
-      setClientUpdate(await client.checkClientUpdate());
+      await client.checkClientUpdates();
+      setClientChecked(true);
     } catch (cause) {
       setClientError(cause);
     } finally {
-      setClientLoading(false);
+      setClientChecking(false);
     }
-  }, [client]);
+  };
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    void loadClientUpdate();
-  }, [loadClientUpdate]);
-
-  const installClientUpdate = async () => {
-    setClientInstalling(true);
-    setClientError(null);
-    setClientResult(null);
-    try {
-      setClientResult(await client.installClientUpdate());
-    } catch (cause) {
-      setClientError(cause);
-    } finally {
-      setClientInstalling(false);
-    }
-  };
 
   const upgradeCloud = async () => {
     setConfirmOpen(false);
@@ -227,88 +208,32 @@ export function Updates() {
                 桌面客户端
               </CardTitle>
               <CardDescription>
-                只有你点了才会更新。
+                后台每 6 小时检查一次，有新版本会弹窗询问，你确认后才安装。
               </CardDescription>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {clientUpdate?.state === "available" ? <Badge>客户端可更新</Badge> : null}
-              <Badge variant="outline">v{clientUpdate?.currentVersion || __APP_VERSION__}</Badge>
-            </div>
+            <Badge variant="outline">v{__APP_VERSION__}</Badge>
           </div>
         </CardHeader>
         <CardContent>
-          {clientLoading ? (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
-              正在检查客户端更新…
-            </p>
-          ) : clientUpdate?.state === "not_configured" ? (
-            <Alert>
-              <AlertTitle>未配置更新源</AlertTitle>
-              <AlertDescription>
-                此构建没有更新源，无法检查更新。云端照常可用。
-              </AlertDescription>
-            </Alert>
-          ) : clientUpdate?.state === "available" ? (
-            <div className="space-y-2 text-sm">
-              <p>
-                当前 {clientUpdate.currentVersion || "未知"} → 可用{" "}
-                {clientUpdate.availableVersion || "未知"}
-              </p>
-              {clientUpdate.date ? (
-                <p className="text-xs text-muted-foreground">发布于 {clientUpdate.date}</p>
-              ) : null}
-              {clientUpdate.notes ? (
-                <p className="whitespace-pre-wrap text-muted-foreground">{clientUpdate.notes}</p>
-              ) : null}
-              <p className="text-xs text-muted-foreground">
-                安装后重启生效。
-              </p>
-            </div>
-          ) : clientUpdate?.state === "up_to_date" ? (
-            <p className="text-sm text-muted-foreground">客户端已是最新。</p>
-          ) : (
-            <p className="text-sm text-muted-foreground">正在读取更新状态。</p>
-          )}
-
-          {clientResult ? (
-            <Alert className="mt-4">
-              <AlertTitle>{clientResult.state === "installed" ? "客户端更新已安装" : "客户端更新未完成"}</AlertTitle>
-              <AlertDescription>
-                {clientResult.message || clientResult.state}
-                {clientResult.version ? `（版本 ${clientResult.version}）` : ""}
-              </AlertDescription>
-            </Alert>
-          ) : null}
-
-          <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
             <Button
               type="button"
               variant="outline"
-              onClick={() => void loadClientUpdate()}
-              disabled={clientLoading || clientInstalling}
+              onClick={() => void checkClientUpdates()}
+              disabled={clientChecking}
             >
-              {clientLoading ? (
+              {clientChecking ? (
                 <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
               ) : (
                 <RefreshCw aria-hidden />
               )}
               检查客户端更新
             </Button>
-            <Button
-              type="button"
-              onClick={() => void installClientUpdate()}
-              disabled={clientUpdate?.state !== "available" || clientInstalling}
-            >
-              {clientInstalling ? (
-                <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
-              ) : (
-                <Download aria-hidden />
-              )}
-              {clientInstalling ? "正在安装…" : "安装客户端更新"}
-            </Button>
           </div>
-          <ErrorAlert error={clientError} onRetry={loadClientUpdate} retryLabel="重新检查" />
+          {clientChecked ? (
+            <p className="mt-2 text-xs text-muted-foreground">已打开更新窗口</p>
+          ) : null}
+          <ErrorAlert error={clientError} onRetry={checkClientUpdates} retryLabel="重试" />
         </CardContent>
       </Card>
 

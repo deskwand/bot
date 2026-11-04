@@ -819,36 +819,29 @@ test("user-confirmed evidence is labelled separately from cloud verification", a
   await expectNoVerifiedClaim(page);
 });
 
-test("client update is installed only on request and stays separate from the cloud", async ({ page }) => {
-  await page.goto("/test.html?fixture=client-update-available");
+test("client update button opens the updater window", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "更新", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "更新", exact: true })).toBeVisible();
-  await expect(page.getByText("客户端可更新")).toBeVisible();
-  await expect(page.getByText(/当前 0\.1\.0 → 可用 0\.2\.0/)).toBeVisible();
-  await expect(page.getByText("云端服务").first()).toBeVisible();
-  await expect(page.getByText("升级结果")).toHaveCount(0);
-
-  await page.getByRole("button", { name: "安装客户端更新" }).click();
-  await expect(page.getByText("客户端更新已安装", { exact: true })).toBeVisible();
-  await expect(page.getByText(/重启客户端后生效/)).toBeVisible();
-  await expect(page.getByText("升级结果")).toHaveCount(0);
+  await expect(page.getByText("v0.1.5")).toBeVisible();          // __APP_VERSION__
+  await expect(page.getByRole("button", { name: "安装客户端更新" })).toHaveCount(0);
+  await page.getByRole("button", { name: "检查客户端更新" }).click();
+  await expect(page.getByText("已打开更新窗口")).toBeVisible();
   await screenshot(page, "05-client-update.png");
 });
 
-test("client update shows the unconfigured feed state", async ({ page }) => {
-  await page.goto("/test.html?fixture=client-update-unavailable");
+test("client update failure shows an error", async ({ page }) => {
+  await page.goto("/test.html?fixture=client-update-failed");
   await page.getByRole("button", { name: "更新", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "更新", exact: true })).toBeVisible();
-  await expect(page.getByText("未配置更新源")).toBeVisible();
-  await expect(page.getByRole("button", { name: "安装客户端更新" })).toBeDisabled();
+  await page.getByRole("button", { name: "检查客户端更新" }).click();
+  await expect(page.getByText("无法打开更新窗口")).toBeVisible();
 });
 
 test("cloud upgrade requires confirmation and reports the control-plane result", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
   await page.getByRole("button", { name: "更新", exact: true }).click();
   await expect(page.getByRole("heading", { name: "更新", exact: true })).toBeVisible();
-  await expect(page.getByText("有新版本")).toBeVisible();
-  await expect(page.getByText("v0.1.0")).toBeVisible();
+  await expect(page.getByText("有新版本", { exact: true })).toBeVisible();
+  await expect(page.getByText("v0.1.5")).toBeVisible();
   await page.getByRole("button", { name: "升级云端服务" }).click();
   const dialog = page.getByRole("dialog", { name: "升级前确认" });
   await expect(dialog).toBeVisible();
