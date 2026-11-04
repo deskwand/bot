@@ -1,0 +1,141 @@
+import { useCallback, useMemo } from "react";
+import {
+  QueryCache,
+  QueryClient,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
+import { useApp } from "@/components/app-context";
+import { toClientError } from "@/services/errors";
+import type { ClientService, ConfigDTO, StatusItemDTO } from "@/services/types";
+
+export const queryKeys = {
+  config: ["config"],
+  status: ["status"],
+  cachedConfig: ["cachedConfig"],
+  cachedStatus: ["cachedStatus"],
+  modelCatalog: ["modelCatalog"],
+  mcpCatalog: ["mcpCatalog"],
+  mcpStatus: ["mcpStatus"],
+} as const;
+
+export function createAppQueryClient(onAuthLost: () => void): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 30_000,
+        gcTime: 1_800_000,
+        retry: 1,
+        refetchOnWindowFocus: false,
+      },
+    },
+    queryCache: new QueryCache({
+      onError: (error) => {
+        if (toClientError(error).code === "AUTH_REAUTH_REQUIRED") onAuthLost();
+      },
+    }),
+  });
+}
+
+export interface CachedQuery<T> {
+  data: T | undefined;
+  isPlaceholder: boolean;
+  savedAt: string | null;
+  isFetching: boolean;
+  error: unknown;
+  refetch: () => Promise<unknown>;
+}
+
+export function useConfigQuery(): CachedQuery<ConfigDTO> {
+  const { client } = useApp();
+  const cached = useQuery({
+    queryKey: queryKeys.cachedConfig,
+    queryFn: () => client.cachedConfig(),
+    staleTime: Infinity,
+  });
+  const query = useQuery({
+    queryKey: queryKeys.config,
+    queryFn: () => client.getConfig(),
+    placeholderData: cached.data?.data ?? undefined,
+  });
+  return {
+    data: query.data,
+    isPlaceholder: query.isPlaceholderData,
+    savedAt: query.isPlaceholderData ? (cached.data?.savedAt ?? null) : null,
+    isFetching: query.isFetching,
+    error: query.error,
+    refetch: query.refetch,
+  };
+}
+
+export function useStatusQuery(): CachedQuery<StatusItemDTO[]> {
+  const { client } = useApp();
+  const cached = useQuery({
+    queryKey: queryKeys.cachedStatus,
+    queryFn: () => client.cachedStatus(),
+    staleTime: Infinity,
+  });
+  const query = useQuery({
+    queryKey: queryKeys.status,
+    queryFn: () => client.status(),
+    placeholderData: cached.data?.data ?? undefined,
+  });
+  return {
+    data: query.data,
+    isPlaceholder: query.isPlaceholderData,
+    savedAt: query.isPlaceholderData ? (cached.data?.savedAt ?? null) : null,
+    isFetching: query.isFetching,
+    error: query.error,
+    refetch: query.refetch,
+  };
+}
+
+export function useModelCatalogQuery() {
+  const { client } = useApp();
+  return useQuery({
+    queryKey: queryKeys.modelCatalog,
+    queryFn: () => client.modelCatalog(),
+    staleTime: 600_000,
+  });
+}
+
+export function useMcpCatalogQuery() {
+  const { client } = useApp();
+  return useQuery({
+    queryKey: queryKeys.mcpCatalog,
+    queryFn: () => client.mcpCatalog(),
+    staleTime: 600_000,
+  });
+}
+
+export function useMcpStatusQuery(): UseQueryResult<Awaited<ReturnType<ClientService["mcpStatus"]>>> {
+  const { client } = useApp();
+  return useQuery({
+    queryKey: queryKeys.mcpStatus,
+    queryFn: () => client.mcpStatus(),
+  });
+}
+
+export function useInvalidate(): {
+  config: () => void;
+  configAndStatus: () => void;
+  mcp: () => void;
+} {
+  const queryClient = useQueryClient();
+  const config = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.config });
+  }, [queryClient]);
+  const configAndStatus = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.config });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.status });
+  }, [queryClient]);
+  const mcp = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.config });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.mcpStatus });
+  }, [queryClient]);
+  return useMemo(
+    () => ({ config, configAndStatus, mcp }),
+    [config, configAndStatus, mcp],
+  );
+}

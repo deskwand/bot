@@ -7,6 +7,9 @@ import type {
   BackupSettingsDTO,
   BackupSettingsEditDTO,
   BackupSummaryDTO,
+  BootStateDTO,
+  CachedConfigDTO,
+  CachedStatusDTO,
   CloudflareLoginDTO,
   ConfigDTO,
   ConfigEditDTO,
@@ -81,7 +84,11 @@ type Scenario =
   | "backup-restore-snapshot-failed"
   | "backup-restore-midway-failed"
   | "mcp-many-tools"
-  | "mcp-admin-unavailable";
+  | "mcp-admin-unavailable"
+  | "cloud-slow"
+  | "cloud-offline"
+  | "cloud-updated"
+  | "target-other-account";
 
 interface MockState {
   scenario: Scenario;
@@ -89,6 +96,7 @@ interface MockState {
   connected: boolean;
   accountId: string;
   target: string | null;
+  targetAccountId: string;
   fingerprint: string;
   configPresent: boolean;
   activeChannel: string;
@@ -325,6 +333,10 @@ function scenarioFromLocation(): Scenario {
     case "backup-restore-midway-failed":
     case "mcp-many-tools":
     case "mcp-admin-unavailable":
+    case "cloud-slow":
+    case "cloud-offline":
+    case "cloud-updated":
+    case "target-other-account":
       return value;
     default:
       return "default";
@@ -368,6 +380,10 @@ function initialState(): MockState {
     "backup-restore-midway-failed",
     "mcp-many-tools",
     "mcp-admin-unavailable",
+    "cloud-slow",
+    "cloud-offline",
+    "cloud-updated",
+    "target-other-account",
   ].includes(scenario);
   return {
     scenario,
@@ -375,7 +391,9 @@ function initialState(): MockState {
     connected: shellScenario,
     accountId: "a".repeat(32),
     target: scenario === "layout-long-content" ? "long-name-".repeat(18) : shellScenario ? "deskwand-bot" : null,
-    fingerprint: "fp-current",
+    targetAccountId:
+      scenario === "target-other-account" ? "b".repeat(32) : "a".repeat(32),
+    fingerprint: scenario === "cloud-updated" ? "fp-1" : "fp-current",
     configPresent: shellScenario,
     activeChannel: scenario === "user-evidence" ? "wechat" : ["entry-unknown", "entry-unchanged", "entry-failed"].includes(scenario) ? "telegram" : "",
     ownerUserIds: configured ? [100000001] : [],
@@ -475,6 +493,15 @@ function unknownResult(opId: string): ResultDTO {
 
 export function createMockClient(): ClientService {
   const state = initialState();
+  const mockCalls: Record<string, unknown[][]> = {};
+  (
+    window as unknown as {
+      __mockCalls?: Record<string, unknown[][]>;
+    }
+  ).__mockCalls = mockCalls;
+  const record = (name: string, ...args: unknown[]) => {
+    (mockCalls[name] ??= []).push(args);
+  };
   const listeners = new Set<(status: LoginStatusDTO) => void>();
   const cfListeners = new Set<(status: CloudflareLoginDTO) => void>();
   const backupListeners = new Set<(progress: Progress) => void>();
@@ -542,6 +569,8 @@ export function createMockClient(): ClientService {
   };
   const statusItems = () => statusItemsFor(state);
   let sequence = 0;
+  let configReads = 0;
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const emit = (status: LoginStatusDTO) => {
     for (const listener of listeners) listener(status);
@@ -550,6 +579,9 @@ export function createMockClient(): ClientService {
   const config = (): ConfigDTO => {
     if (state.scenario === "unknown-long-error") throw new Error(`网络请求失败 https://example.com/${"x".repeat(220)}`);
     if (!state.target) fail("TARGET_NOT_SELECTED", "请先选择一个 Worker 部署");
+    if (state.targetAccountId !== state.accountId) {
+      fail("TARGET_ACCOUNT_MISMATCH", "该部署属于另一个账号");
+    }
     if (state.scenario === "multi-version") {
       fail(
         "MULTI_VERSION_DEPLOYMENT",
@@ -574,6 +606,11 @@ export function createMockClient(): ClientService {
         .map((name) => ({ name, configured: state.secrets[name] === true })),
     };
   };
+
+  const hasCachedSnapshot = ["cloud-slow", "cloud-offline", "cloud-updated"].includes(state.scenario);
+  const cachedConfigData = hasCachedSnapshot ? config() : null;
+  const cachedStatusData = hasCachedSnapshot ? statusItemsFor(state) : null;
+  const cachedSavedAt = () => new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
   const applyEdit = (input: ConfigEditDTO) => {
     if (state.scenario === "config-conflict") {
@@ -685,7 +722,7 @@ export function createMockClient(): ClientService {
         return operationId;
       }
       queueMicrotask(() => {
-        if (state.scenario === "multi-account") {
+        if (state.scenario === "multi-account" || state.scenario === "cloud-slow") {
           emitCloudflare({
             operationId,
             state: "select_account",
@@ -722,7 +759,6 @@ export function createMockClient(): ClientService {
         fail("CREDENTIAL_STORE_UNAVAILABLE", "无法删除本机凭据");
       }
       state.connected = false;
-      state.target = null;
     },
 
     async listWorkers(): Promise<WorkerDTO[]> {
@@ -734,6 +770,7 @@ export function createMockClient(): ClientService {
 
     async selectDeployment(scriptName) {
       state.target = scriptName;
+      state.targetAccountId = state.accountId;
     },
 
     async inspectImport(): Promise<ImportPreviewDTO> {
@@ -826,6 +863,7 @@ export function createMockClient(): ClientService {
         return unknownResult("op-install-1");
       }
       state.target = "deskwand-bot";
+      state.targetAccountId = state.accountId;
       state.configPresent = true;
       return published("op-install-1");
     },
@@ -861,7 +899,56 @@ export function createMockClient(): ClientService {
     },
 
     async getConfig() {
+      record("getConfig");
+      if (state.scenario === "cloud-offline") {
+        await pause(2000);
+        fail("NETWORK_ERROR", "无法连接云端服务");
+      }
+      if (state.scenario === "cloud-slow") await pause(2000);
+      if (state.scenario === "cloud-updated") {
+        configReads += 1;
+        if (configReads > 1) {
+          state.fingerprint = "fp-2";
+          state.butlerModel = { provider: "opencode-go", id: "deepseek-v4-pro" };
+        }
+      }
       return config();
+    },
+
+    async cachedConfig(): Promise<CachedConfigDTO> {
+      record("cachedConfig");
+      if (!state.target) return { data: null, savedAt: "" };
+      if (state.targetAccountId !== state.accountId) {
+        fail("TARGET_ACCOUNT_MISMATCH", "该部署属于另一个账号");
+      }
+      if (!cachedConfigData || cachedConfigData.accountId !== state.accountId) {
+        return { data: null, savedAt: "" };
+      }
+      return { data: cachedConfigData, savedAt: cachedSavedAt() };
+    },
+
+    async bootState(): Promise<BootStateDTO> {
+      record("bootState");
+      const connection =
+        state.scenario === "store-unavailable"
+          ? { state: "unavailable" }
+          : state.connected
+            ? { state: "connected", accountId: state.accountId, accountName: "测试账户" }
+            : { state: "disconnected" };
+      const targetMismatch =
+        state.connected && state.target !== null && state.targetAccountId !== state.accountId;
+      const targetSelected =
+        state.connected && state.target !== null && !targetMismatch;
+      return {
+        connection,
+        targetSelected,
+        targetMismatch,
+        pending: state.connected
+          ? state.pending.filter(
+              (operation) => !operation.accountId || operation.accountId === state.accountId,
+            )
+          : [],
+      };
     },
 
     async mcpCatalog() {
@@ -974,6 +1061,7 @@ export function createMockClient(): ClientService {
     },
 
     async mcpStatus(): Promise<McpAuthDTO[]> {
+      record("mcpStatus");
       if (state.scenario === "mcp-admin-unavailable") {
         fail(
           "MCP_ADMIN_UNAVAILABLE",
@@ -1012,6 +1100,7 @@ export function createMockClient(): ClientService {
     },
 
     async publishConfig(input: ConfigEditDTO) {
+      record("publishConfig", input);
       configCalls.publish.push(input);
       if (state.scenario === "upgrade-required") {
         fail("UPGRADE_REQUIRED", "请先在“更新”页升级云端服务。");
@@ -1037,6 +1126,7 @@ export function createMockClient(): ClientService {
         return published("op-resumed-publish");
       }
       state.target = state.target ?? "deskwand-bot";
+      state.targetAccountId = state.accountId;
       state.configPresent = true;
       return published("op-install-1");
     },
@@ -1135,6 +1225,7 @@ export function createMockClient(): ClientService {
     },
 
     async selectEntry(channel: string): Promise<EntryResultDTO> {
+      record("selectEntry", channel);
       if (channel !== "telegram" && channel !== "wechat") {
         fail("INVALID_ENTRY_CHANNEL", "入口必须是 telegram 或 wechat");
       }
@@ -1176,7 +1267,25 @@ export function createMockClient(): ClientService {
     },
 
     async status() {
+      record("status");
+      if (state.scenario === "cloud-offline") {
+        await pause(2000);
+        fail("NETWORK_ERROR", "无法连接云端服务");
+      }
+      if (state.scenario === "cloud-slow") await pause(2000);
       return statusItems();
+    },
+
+    async cachedStatus(): Promise<CachedStatusDTO> {
+      record("cachedStatus");
+      if (!state.target) return { data: [], savedAt: "" };
+      if (state.targetAccountId !== state.accountId) {
+        fail("TARGET_ACCOUNT_MISMATCH", "该部署属于另一个账号");
+      }
+      if (!cachedStatusData || cachedConfigData?.accountId !== state.accountId) {
+        return { data: [], savedAt: "" };
+      }
+      return { data: cachedStatusData, savedAt: cachedSavedAt() };
     },
 
     async exportDiagnostics() {

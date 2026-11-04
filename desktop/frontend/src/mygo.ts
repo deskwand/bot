@@ -68,6 +68,35 @@ export interface BackupSummaryDTO {
 }
 
 /**
+ * BootStateDTO is the local-only state the app needs to pick its first
+ * screen. It is computed without any Cloudflare request.
+ */
+export interface BootStateDTO {
+  connection: ConnectionDTO;
+  targetSelected: boolean;
+  targetMismatch: boolean;
+  pending: OperationDTO[];
+}
+
+/**
+ * CachedConfigDTO is the last config written to the local snapshot cache. An
+ * absent cache is a nil Data and an empty SavedAt.
+ */
+export interface CachedConfigDTO {
+  data: ConfigDTO | null;
+  savedAt: string;
+}
+
+/**
+ * CachedStatusDTO is the last status written to the local snapshot cache. An
+ * absent cache is a nil Data and an empty SavedAt.
+ */
+export interface CachedStatusDTO {
+  data: StatusItemDTO[];
+  savedAt: string;
+}
+
+/**
  * CloudflareLoginDTO is the only OAuth login state sent to the frontend. It
  * carries no token, authorization code or PKCE verifier.
  */
@@ -436,6 +465,28 @@ export const Service = {
    */
   backupSettings(): Promise<BackupSettingsDTO> {
     return call("Service.BackupSettings");
+  },
+  /**
+   * BootState reports what the app needs to choose its first screen. It reads
+   * only local credentials, the target file and the journal; it never contacts
+   * Cloudflare.
+   */
+  bootState(): Promise<BootStateDTO> {
+    return call("Service.BootState");
+  },
+  /**
+   * CachedConfig returns the last config this app wrote for the managed target.
+   * It reads only local files and never contacts Cloudflare.
+   */
+  cachedConfig(): Promise<CachedConfigDTO> {
+    return call("Service.CachedConfig");
+  },
+  /**
+   * CachedStatus returns the last status this app wrote for the managed target.
+   * It reads only local files and never contacts Cloudflare.
+   */
+  cachedStatus(): Promise<CachedStatusDTO> {
+    return call("Service.CachedStatus");
   },
   /** CancelCloudflareLogin stops an unfinished OAuth login. */
   cancelCloudflareLogin(opID: string): Promise<void> {
