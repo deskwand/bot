@@ -25,6 +25,7 @@ import { createBotTaskTools } from "../bot/bot-tools";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import { lastModelError, userTextForModelError } from "../llm/model-errors";
 import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
+import { PI_PROGRESS } from "../llm/pi-settings";
 import type {
   ActionEvent,
   Artifact,
@@ -238,6 +239,7 @@ export class TaskDO extends Agent<Env> {
             models: createModelsForEnv(this.env),
             registry: this.registry,
             onWake,
+            settings: { progress: PI_PROGRESS },
             onReport: (error, info) => {
               this.ctx.waitUntil(this.handleReport(error, info));
             },
