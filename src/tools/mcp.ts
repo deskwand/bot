@@ -25,7 +25,13 @@ export type McpToolInfo = {
 };
 
 /** How the loader treats one tool of a server. */
-export type McpToolMode = "disabled" | "approval" | "auto";
+export type McpToolMode = "disabled" | "approval" | "review" | "auto";
+
+/** The two gates installed tools may use: forced approval and auto review. */
+export type McpGates = {
+  approval: ApprovalGateLike;
+  review: ApprovalGateLike;
+};
 
 /** A configured server that could not be loaded for this run. */
 export type McpUnavailable = { name: string; reason: string };
@@ -152,7 +158,8 @@ export function resolveMcpUrl(server: McpServerConfig, env: object): string {
 /**
  * Decide how a tool is treated, in the order the design document gives:
  * disabled, forced approval, forced auto, the `writes` policy, then legacy
- * auto approval.
+ * auto approval. Under `writes`, unannotated tools go to the reviewer, which
+ * only asks the owner about risky calls.
  */
 export function mcpToolMode(
   server: McpServerConfig,
@@ -162,7 +169,7 @@ export function mcpToolMode(
   if (server.requireApproval?.includes(tool.name)) return "approval";
   if (server.autoApprove?.includes(tool.name)) return "auto";
   if (server.approvalPolicy === "writes") {
-    return tool.annotations?.readOnlyHint === true ? "auto" : "approval";
+    return tool.annotations?.readOnlyHint === true ? "auto" : "review";
   }
   return "auto";
 }
@@ -275,16 +282,16 @@ export function mcpConnector(
  * Connect to every configured MCP server and expose its tools to pi.
  *
  * Tool names are `<server>__<tool>`; `mcpToolMode` decides whether a tool is
- * skipped, gated behind approval, or runs directly, and every loaded tool
- * reports progress first like the builtin tools. Servers connect concurrently
- * and one that cannot be reached (or does not answer within `timeoutMs`) is
- * logged and reported as unavailable so one broken integration cannot block
- * the task or the others. MCP tools have unknown side effects, so none is
- * marked replay-safe.
+ * skipped, gated behind approval or review, or runs directly, and every loaded
+ * tool reports progress first like the builtin tools. Servers connect
+ * concurrently and one that cannot be reached (or does not answer within
+ * `timeoutMs`) is logged and reported as unavailable so one broken integration
+ * cannot block the task or the others. MCP tools have unknown side effects, so
+ * none is marked replay-safe.
  */
 export async function loadMcpTools(
   servers: McpServerConfig[],
-  gate: ApprovalGateLike,
+  gates: McpGates,
   connect: McpConnector,
   emit: (body: TaskEventBody) => Promise<void>,
   timeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
@@ -292,7 +299,7 @@ export async function loadMcpTools(
   const enabled = servers.filter((server) => server.enabled !== false);
   const results = await Promise.allSettled(
     enabled.map((server) =>
-      loadServerTools(server, gate, connect, emit, timeoutMs),
+      loadServerTools(server, gates, connect, emit, timeoutMs),
     ),
   );
 
@@ -316,7 +323,7 @@ export async function loadMcpTools(
 /** Connect one server and build its tools; rejects with the failure reason. */
 async function loadServerTools(
   server: McpServerConfig,
-  gate: ApprovalGateLike,
+  gates: McpGates,
   connect: McpConnector,
   emit: (body: TaskEventBody) => Promise<void>,
   timeoutMs: number,
@@ -370,7 +377,9 @@ async function loadServerTools(
     };
 
     if (mode === "approval") {
-      tool = withApproval(tool, gate);
+      tool = withApproval(tool, gates.approval);
+    } else if (mode === "review") {
+      tool = withApproval(tool, gates.review);
     }
     tool = { ...tool, deferred: true };
     tools.push(

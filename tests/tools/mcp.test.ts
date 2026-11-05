@@ -2,7 +2,7 @@ import type { Context } from "@earendil-works/chord";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import type { McpServerConfig } from "../../src/config";
 import type { TaskEventBody } from "../../src/protocol";
-import type { ApprovalGateLike } from "../../src/task/approvals";
+import type { ApprovalGateLike, ApprovalNote } from "../../src/task/approvals";
 import { describe, expect, it, vi } from "vitest";
 import {
   loadMcpTools,
@@ -72,12 +72,16 @@ function fakeClient(calls: string[]): McpClientLike {
 
 function gate(decision: "approved" | "rejected"): ApprovalGateLike & {
   requests: { tool: string; args: unknown }[];
+  notes: (ApprovalNote | undefined)[];
 } {
   const requests: { tool: string; args: unknown }[] = [];
+  const notes: (ApprovalNote | undefined)[] = [];
   return {
     requests,
-    async request(tool, args) {
+    notes,
+    async request(tool, args, _signal, note) {
       requests.push({ tool, args });
+      notes.push(note);
       return decision;
     },
     async resolve() {
@@ -139,7 +143,7 @@ function fakeManager(listed: readonly McpToolInfo[] = []) {
 }
 
 it("marks discovered MCP tools deferred", async () => {
-  const { tools } = await loadMcpTools([server()], gate("approved"), async () => fakeClient([]), recorder().emit);
+  const { tools } = await loadMcpTools([server()], { approval: gate("approved"), review: gate("approved") }, async () => fakeClient([]), recorder().emit);
   expect(tools.length).toBeGreaterThan(0);
   for (const tool of tools) expect(tool.deferred, tool.name).toBe(true);
 });
@@ -182,7 +186,12 @@ describe("mcpToolMode", () => {
     });
     expect(mcpToolMode(s, ro)).toBe("auto");
     expect(mcpToolMode(s, rw)).toBe("auto"); // autoApprove beats policy
-    expect(mcpToolMode({ ...s, autoApprove: [] }, rw)).toBe("approval");
+    // `writes` sends tools without a read-only hint to the reviewer.
+    expect(mcpToolMode({ ...s, autoApprove: [] }, rw)).toBe("review");
+    expect(
+      mcpToolMode({ ...s, autoApprove: [] }, { name: "create", annotations: {} }),
+    ).toBe("review");
+    expect(mcpToolMode({ ...s, autoApprove: [], requireApproval: ["create_page"] }, rw)).toBe("approval");
     expect(mcpToolMode({ ...s, requireApproval: ["search"] }, ro)).toBe(
       "approval",
     );
@@ -249,7 +258,7 @@ describe("mcpConnector", () => {
     try {
       const { tools } = await loadMcpTools(
         [server({ headers: { Authorization: "env:MISSING_TOKEN" } })],
-        gate("approved"),
+        { approval: gate("approved"), review: gate("approved") },
         connect,
         recorder().emit,
       );
@@ -320,7 +329,7 @@ describe("loadMcpTools", () => {
 
     const { tools } = await loadMcpTools(
       [server()],
-      approval,
+      { approval, review: gate("approved") },
       connect,
       progress.emit,
     );
@@ -363,6 +372,48 @@ describe("loadMcpTools", () => {
     ]);
   });
 
+  it("sends tools without a read-only hint to the review gate under writes", async () => {
+    const calls: string[] = [];
+    const approval = gate("approved");
+    const review = gate("approved");
+
+    const { tools } = await loadMcpTools(
+      [server({ approvalPolicy: "writes", requireApproval: [] })],
+      { approval, review },
+      async () => fakeClient(calls),
+      recorder().emit,
+    );
+
+    await tools[0]!.execute({ title: "Hello" }, {} as never, context());
+
+    expect(review.requests).toEqual([
+      { tool: "notion__create_page", args: { title: "Hello" } },
+    ]);
+    expect(review.notes).toEqual([{ description: "Create a Notion page" }]);
+    expect(approval.requests).toEqual([]);
+    expect(calls).toEqual(['create_page:{"title":"Hello"}']);
+  });
+
+  it("keeps requireApproval tools on the approval gate", async () => {
+    const approval = gate("approved");
+    const review = gate("approved");
+
+    const { tools } = await loadMcpTools(
+      [server()],
+      { approval, review },
+      async () => fakeClient([]),
+      recorder().emit,
+    );
+
+    await tools[0]!.execute({ title: "Hello" }, {} as never, context());
+
+    expect(approval.requests).toEqual([
+      { tool: "notion__create_page", args: { title: "Hello" } },
+    ]);
+    expect(approval.notes).toEqual([{ description: "Create a Notion page" }]);
+    expect(review.requests).toEqual([]);
+  });
+
   it("runs the approved tool and forwards the abort signal", async () => {
     const seen: (AbortSignal | undefined)[] = [];
     const client: McpClientLike = {
@@ -378,7 +429,7 @@ describe("loadMcpTools", () => {
 
     const { tools } = await loadMcpTools(
       [server()],
-      gate("approved"),
+      { approval: gate("approved"), review: gate("approved") },
       async () => client,
       recorder().emit,
     );
@@ -407,7 +458,7 @@ describe("loadMcpTools", () => {
 
     const { tools } = await loadMcpTools(
       [server({ requireApproval: [] })],
-      gate("approved"),
+      { approval: gate("approved"), review: gate("approved") },
       async () => client,
       recorder().emit,
     );
@@ -427,7 +478,7 @@ describe("loadMcpTools", () => {
 
     const { tools } = await loadMcpTools(
       [server(), server({ name: "broken", url: "https://broken.test" })],
-      gate("approved"),
+      { approval: gate("approved"), review: gate("approved") },
       connect,
       recorder().emit,
     );
@@ -452,7 +503,7 @@ describe("loadMcpTools", () => {
     const started = Date.now();
     const { tools } = await loadMcpTools(
       [server({ name: "slow", url: "https://slow.test" }), server()],
-      gate("approved"),
+      { approval: gate("approved"), review: gate("approved") },
       connect,
       recorder().emit,
       50,
@@ -472,7 +523,7 @@ describe("loadMcpTools", () => {
     const connect = vi.fn<McpConnector>();
 
     await expect(
-      loadMcpTools([], gate("approved"), connect, recorder().emit),
+      loadMcpTools([], { approval: gate("approved"), review: gate("approved") }, connect, recorder().emit),
     ).resolves.toEqual({ tools: [], unavailable: [] });
     expect(connect).not.toHaveBeenCalled();
   });
@@ -485,7 +536,7 @@ describe("loadMcpTools", () => {
         server({ name: "off", url: "https://off.test", enabled: false }),
         server({ disabledTools: ["search"] }),
       ],
-      gate("approved"),
+      { approval: gate("approved"), review: gate("approved") },
       connect,
       recorder().emit,
     );
@@ -510,7 +561,7 @@ describe("loadMcpTools", () => {
       const started = Date.now();
       const loaded = await loadMcpTools(
         [server({ name: "slow", url: "https://slow.test" }), server()],
-        gate("approved"),
+        { approval: gate("approved"), review: gate("approved") },
         connect,
         recorder().emit,
         100,
@@ -539,7 +590,7 @@ describe("loadMcpTools", () => {
     try {
       const loaded = await loadMcpTools(
         [server({ oauth: true })],
-        gate("approved"),
+        { approval: gate("approved"), review: gate("approved") },
         connect,
         recorder().emit,
       );
@@ -573,7 +624,7 @@ describe("loadMcpTools", () => {
     try {
       const loaded = await loadMcpTools(
         [server({ name: "s", requireApproval: [] })],
-        gate("approved"),
+        { approval: gate("approved"), review: gate("approved") },
         async () => client,
         recorder().emit,
       );
@@ -613,7 +664,7 @@ describe("probeMcpServer", () => {
       ok: true,
       tools: [
         { name: "search", description: "Search", mode: "auto" },
-        { name: "create_page", description: "", mode: "approval" },
+        { name: "create_page", description: "", mode: "review" },
       ],
     });
 

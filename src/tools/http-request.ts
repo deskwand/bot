@@ -93,10 +93,17 @@ export function redactArgs(args: HttpRequestArgs): Record<string, unknown> {
   };
 }
 
+/** What the model and the reviewer are told about this tool. */
+const DESCRIPTION =
+  "Call an HTTP endpoint. GET/HEAD run directly; other methods are reviewed " +
+  "automatically and only risky ones (money, deletion, permissions, outbound " +
+  "publishing) wait for the owner. Redirects are not followed: a 3xx comes " +
+  "back with its Location. Private and link-local addresses are refused.";
+
 /**
- * Call an HTTP endpoint with any method. Reads go straight through; anything
- * that can change remote state waits for the owner, and the summary the gate
- * stores has its secret header values masked.
+ * Call an HTTP endpoint with any method. Reads go straight through; other
+ * methods are reviewed first, and the summary the gate stores has its secret
+ * header values masked.
  */
 export function httpRequestTool(
   gate: ApprovalGateLike,
@@ -104,10 +111,7 @@ export function httpRequestTool(
 ): ToolRegistration<typeof HttpRequest> {
   return {
     name: "http_request",
-    description:
-      "Call an HTTP endpoint. GET/HEAD need nothing; every other method asks " +
-      "the owner first. Redirects are not followed: a 3xx comes back with its " +
-      "Location. Private and link-local addresses are refused.",
+    description: DESCRIPTION,
     parameters: HttpRequest,
     structuredOutputSchema: HttpResult,
     replay: "unsafe",
@@ -142,6 +146,7 @@ export function httpRequestTool(
           "http_request",
           redactArgs(args),
           context.abortSignal ?? new AbortController().signal,
+          { description: DESCRIPTION },
         );
         if (decision !== "approved") {
           if (context.abortSignal?.aborted) throw context.abortSignal.reason;

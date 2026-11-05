@@ -4,7 +4,7 @@ import type { Context } from "@earendil-works/chord";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
 import { isBlockedHost, httpRequestTool, safeRequestUrl } from "../../src/tools/http-request";
-import type { ApprovalDecision, ApprovalGateLike } from "../../src/task/approvals";
+import type { ApprovalDecision, ApprovalGateLike, ApprovalNote } from "../../src/task/approvals";
 
 function context(signal?: AbortSignal): Context {
   return { abortSignal: signal } as unknown as Context;
@@ -18,16 +18,18 @@ function textOf(result: ToolExecutionResult): string {
 
 function gate(decision: ApprovalDecision) {
   const seen: unknown[] = [];
+  const notes: (ApprovalNote | undefined)[] = [];
   const g: ApprovalGateLike = {
-    async request(_tool, args) {
+    async request(_tool, args, _signal, note) {
       seen.push(args);
+      notes.push(note);
       return decision;
     },
     async resolve() {
       return { ok: true, message: "" };
     },
   };
-  return { g, seen };
+  return { g, seen, notes };
 }
 
 describe("isBlockedHost", () => {
@@ -68,7 +70,7 @@ describe("httpRequestTool", () => {
   });
 
   it("asks for approval on POST and sends after it is granted", async () => {
-    const { g, seen } = gate("approved");
+    const { g, seen, notes } = gate("approved");
     let sent = 0;
     const fakeFetch = (async () => {
       sent += 1;
@@ -88,8 +90,16 @@ describe("httpRequestTool", () => {
     );
 
     expect(seen.length).toBe(1);
+    expect(notes).toEqual([{ description: tool.description }]);
     expect(JSON.stringify(seen[0])).not.toContain("secret-token");
     expect(sent).toBe(1);
+  });
+
+  it("describes writes as reviewed, with only risky ones waiting", () => {
+    const tool = httpRequestTool(gate("approved").g);
+
+    expect(tool.description).toContain("risky");
+    expect(tool.description).not.toContain("asks the owner first");
   });
 
   it("does not send when the approval is rejected", async () => {
