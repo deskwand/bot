@@ -64,9 +64,13 @@ const WECHAT_POLL_RUN_MS = 0;
 const WECHAT_POLL_BACKOFF_MS = 1_000;
 const WECHAT_POLL_MAX_BACKOFF_MS = 10_000;
 const WECHAT_GET_UPDATES_TIMEOUT_MS = 40_000;
-// Longer than one long poll plus the longest backoff, so a live chain is never
-// doubled, and short enough that the per-minute Cron revives a dead one fast.
-const WECHAT_HEARTBEAT_MAX_AGE_MS = 60_000;
+// Skip the pre-poll heartbeat while it is fresh: the write after the previous
+// long poll is enough to keep ensurePolling from starting a second chain.
+const WECHAT_PREPOLL_HEARTBEAT_MS = 20_000;
+// One long poll (40s) plus a skipped pre-poll write (20s) plus the longest
+// backoff (10s) stays under this, so a live chain is never doubled, and a dead
+// one is revived by the per-minute Cron within two minutes.
+const WECHAT_HEARTBEAT_MAX_AGE_MS = 75_000;
 const TELEGRAM_POLL_RUN_MS = 0;
 const TELEGRAM_POLL_BACKOFF_MS = 1_000;
 const TELEGRAM_POLL_MAX_BACKOFF_MS = 10_000;
@@ -1000,9 +1004,16 @@ export class ChannelDO extends Agent<Env> {
       do {
         if (!(await ownsRun())) return;
         const cursor = this.readWeChatState().cursor ?? "";
-        // Refresh the heartbeat before the long poll so ensurePolling does not
-        // start a second chain while getupdates is still waiting.
-        this.updateWeChatState({ last_poll_at: Date.now() });
+        // Refresh the heartbeat before the long poll only when the previous
+        // one is stale, so ensurePolling does not start a second chain while
+        // getupdates is still waiting. A fresh heartbeat already does that.
+        const lastPollAt = this.readWeChatState().last_poll_at;
+        if (
+          lastPollAt === null ||
+          Date.now() - lastPollAt > WECHAT_PREPOLL_HEARTBEAT_MS
+        ) {
+          this.updateWeChatState({ last_poll_at: Date.now() });
+        }
 
         try {
           const batch = await client.getUpdates(

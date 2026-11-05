@@ -157,6 +157,69 @@ async function pollThroughDO(): Promise<number> {
   });
 }
 
+/** Seeds the stored WeChat heartbeat so the next poll sees it at a chosen age. */
+async function seedLastPoll(at: number | null): Promise<void> {
+  await runInDurableObject(channels(), (_instance, state) => {
+    state.storage.sql.exec("UPDATE wechat_state SET last_poll_at = ?", at);
+  });
+}
+
+/**
+ * Runs one pollWeChat and records the stored heartbeat at the instant
+ * getupdates is issued. Reading it from the passed-in storage is required:
+ * another runInDurableObject inside the fetch would deadlock on this instance.
+ */
+async function pollCapturingHeartbeat(
+  responses: Array<Reply | Error> = [jsonResponse({})],
+): Promise<{ atFetch: number | null; calls: RecordedCall[] }> {
+  return runInDurableObject(channels(), async (instance, state) => {
+    const calls: RecordedCall[] = [];
+    let captured = false;
+    let atFetch: number | null = null;
+    setILinkFetchOverride((async (input, init) => {
+      if (!captured) {
+        captured = true;
+        atFetch =
+          state.storage.sql
+            .exec<{ last_poll_at: number | null }>(
+              "SELECT last_poll_at FROM wechat_state LIMIT 1",
+            )
+            .toArray()[0]?.last_poll_at ?? null;
+      }
+      const url = typeof input === "string" ? input : input.toString();
+      calls.push({
+        url,
+        method: init?.method ?? "GET",
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        body:
+          typeof init?.body === "string"
+            ? (JSON.parse(init.body) as Record<string, unknown>)
+            : undefined,
+      });
+      const next = responses.shift() ?? jsonResponse({});
+      if (next instanceof Error) throw next;
+      return new Response(JSON.stringify(next.body), {
+        status: next.status ?? 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch);
+
+    const target = instance as unknown as {
+      pollWeChat(): Promise<void>;
+      listSchedules(): Promise<{ id: string; callback: string }[]>;
+      cancelSchedule(id: string): Promise<boolean>;
+    };
+    await target.pollWeChat();
+    const schedules = (await target.listSchedules()).filter(
+      (schedule) => schedule.callback === "pollWeChat",
+    );
+    for (const schedule of schedules) {
+      await target.cancelSchedule(schedule.id);
+    }
+    return { atFetch, calls };
+  });
+}
+
 async function cancelSchedules(): Promise<void> {
   await runInDurableObject(channels(), async (instance) => {
     const target = instance as unknown as {
@@ -422,6 +485,31 @@ describe("ensurePolling", () => {
     expect(await pollSchedules()).toEqual([]);
     expect(tg.sent).toEqual([]);
     expect(calls).toHaveLength(1);
+  });
+
+  it("keeps a chain whose heartbeat is 70s old", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    setPollTimingOverride({ runMs: 0, baseBackoffMs: 1 });
+    await seedLastPoll(Date.now() - 70_000);
+
+    await channels().ensurePolling();
+
+    expect(await pollSchedules()).toHaveLength(0);
+  });
+
+  it("revives a chain whose heartbeat is 80s old", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    setPollTimingOverride({ runMs: 0, baseBackoffMs: 1 });
+    await seedLastPoll(Date.now() - 80_000);
+
+    await channels().ensurePolling();
+
+    expect(await pollSchedules()).toHaveLength(1);
+    await cancelSchedules();
   });
 });
 
@@ -868,6 +956,65 @@ describe("pollWeChat", () => {
       cursor: "cursor-after-retry",
       status: "running",
     });
+  });
+});
+
+describe("poll heartbeat", () => {
+  it("writes the heartbeat before the first poll", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    await seedLastPoll(null);
+
+    const { atFetch } = await pollCapturingHeartbeat();
+
+    expect(atFetch).not.toBeNull();
+  });
+
+  it("skips the pre-poll write while the heartbeat is fresh", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    const seeded = Date.now() - 5_000;
+    await seedLastPoll(seeded);
+
+    const { atFetch } = await pollCapturingHeartbeat();
+
+    expect(atFetch).toBe(seeded);
+    expect((await readState())!.last_poll_at!).toBeGreaterThan(seeded);
+  });
+
+  it("writes the heartbeat before polling when it is older than 20s", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    await seedLastPoll(Date.now() - 25_000);
+    const before = Date.now();
+
+    const { atFetch } = await pollCapturingHeartbeat();
+
+    expect(atFetch).toBeGreaterThanOrEqual(before);
+  });
+
+  it("refreshes the heartbeat on the next poll after a failed one", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    const seeded = Date.now() - 15_000;
+    await seedLastPoll(seeded);
+
+    await pollCapturingHeartbeat([
+      jsonResponse({ errmsg: "server down" }, 500),
+    ]);
+
+    expect((await readState())!.last_poll_at).toBe(seeded);
+
+    await seedLastPoll(Date.now() - 25_000);
+    const before = Date.now();
+    const { atFetch } = await pollCapturingHeartbeat();
+
+    expect(atFetch).toBeGreaterThanOrEqual(before);
   });
 });
 
