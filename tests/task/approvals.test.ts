@@ -7,7 +7,12 @@ import type {
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
-import { ApprovalGate, withApproval } from "../../src/task/approvals";
+import {
+  ApprovalGate,
+  approvalSummary,
+  PROPOSE_RULES_TOOL,
+  withApproval,
+} from "../../src/task/approvals";
 import type { ActionEvent, TaskEventBody, TaskSpec } from "../../src/protocol";
 import { withProgress } from "../../src/tools/wrap";
 import { setModelOverride } from "../../src/llm/models";
@@ -558,3 +563,60 @@ async function waitForApproval(taskId: string): Promise<string> {
   );
   return approvalId!;
 }
+
+describe("rules approval card", () => {
+  it("shows the full new rules and reason in the event and pending list", async () => {
+    const content = "x".repeat(2000);
+    const outcome = await withGate(
+      "t-rules-card",
+      async (gate, _sql, events) => {
+        const decision = gate.request(
+          PROPOSE_RULES_TOOL,
+          { content, reason: "踩坑" },
+          new AbortController().signal,
+        );
+        await vi.waitFor(() => expect(gate.pending()).toHaveLength(1));
+        const [pending] = gate.pending();
+        await gate.resolve(pending!.approvalId, "approved");
+        await decision;
+        return { pending, events: [...events] };
+      },
+      5000,
+    );
+
+    const requested = outcome.events.find(
+      (event) => event.type === "approval_requested",
+    );
+    const expectedPrefix = "理由：踩坑\n新守则：\n";
+    expect(outcome.pending?.argsSummary.startsWith(expectedPrefix)).toBe(true);
+    expect(outcome.pending?.argsSummary).toContain(content);
+    expect(requested).toMatchObject({
+      tool: PROPOSE_RULES_TOOL,
+      argsSummary: outcome.pending?.argsSummary,
+    });
+  });
+
+  it("shows a deletion marker for empty rules", () => {
+    expect(
+      approvalSummary(
+        PROPOSE_RULES_TOOL,
+        JSON.stringify({ content: "  ", reason: "不设限" }),
+      ),
+    ).toBe("理由：不设限\n新守则：\n（清空守则）");
+  });
+
+  it("truncates a long reason and keeps other tools at 200 JSON chars", () => {
+    const summary = approvalSummary(
+      PROPOSE_RULES_TOOL,
+      JSON.stringify({ content: "a", reason: "r".repeat(400) }),
+    );
+    expect(summary).toContain(`${"r".repeat(300)}…`);
+    expect(summary).not.toContain("r".repeat(301));
+
+    const argsJson = JSON.stringify({ content: "x".repeat(400) });
+    expect(approvalSummary("create_page", argsJson)).toBe(
+      argsJson.slice(0, 200),
+    );
+    expect(approvalSummary(PROPOSE_RULES_TOOL, "not json")).toBe("not json");
+  });
+});
