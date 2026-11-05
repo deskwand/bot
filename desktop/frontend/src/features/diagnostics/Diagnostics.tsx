@@ -18,6 +18,7 @@ import { useApp } from "@/components/app-context";
 import { ErrorAlert, StatusRow } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
+import { useT } from "@/i18n";
 import { useModelCatalogQuery, useStatusQuery } from "@/services/queries";
 import type { StatusItemDTO } from "@/services/types";
 import {
@@ -30,6 +31,7 @@ import { ModelSelect } from "@/features/models/ModelSelect";
 
 export function Diagnostics() {
   const { client } = useApp();
+  const t = useT();
   const statusQuery = useStatusQuery();
   const catalogQuery = useModelCatalogQuery();
   const items = statusQuery.data ?? [];
@@ -78,7 +80,7 @@ export function Diagnostics() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
-      setExportMessage(`已导出（${new Blob([json]).size} 字节），敏感字段已脱敏。`);
+      setExportMessage(t("diagnostics.exported", { size: new Blob([json]).size }));
     } catch (cause) {
       setExportError(cause);
     } finally {
@@ -93,7 +95,7 @@ export function Diagnostics() {
     setProbeResult(null);
     const ref = parseModelKey(probeModel);
     try {
-      if (!ref) throw new Error("MODELS_REQUIRED: 请选择要测试的模型。");
+      if (!ref) throw new Error(`MODELS_REQUIRED: ${t("diagnostics.selectModel")}`);
       setProbeResult(await client.probeModel(ref.provider, ref.id, probeKey, "", ""));
     } catch (cause) {
       setProbeError(cause);
@@ -105,7 +107,7 @@ export function Diagnostics() {
 
   return (
     <div>
-      <PageHeader title="诊断" actions={<>
+      <PageHeader title={t("shell.pages.diagnostics")} actions={<>
 <div className="flex flex-wrap gap-2">
           <SyncStatus
             isFetching={statusQuery.isFetching}
@@ -116,28 +118,28 @@ export function Diagnostics() {
           />
           <Button type="button" onClick={() => void exportDiagnostics()} disabled={exportRunning}>
             {exportRunning ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <Download aria-hidden />}
-            导出诊断
+            {t("diagnostics.export")}
           </Button>
         </div>
 </>} />
 
       <ErrorAlert error={error} onRetry={refresh} />
-      <ErrorAlert error={exportError} onRetry={exportDiagnostics} retryLabel="重新导出" />
+      <ErrorAlert error={exportError} onRetry={exportDiagnostics} retryLabel={t("diagnostics.reexport")} />
       {exportMessage ? (
         <Alert className="my-4">
-          <AlertTitle>导出完成</AlertTitle>
+          <AlertTitle>{t("diagnostics.exportDone")}</AlertTitle>
           <AlertDescription>{exportMessage}</AlertDescription>
         </Alert>
       ) : null}
 
-      <section className="mt-5" aria-label="状态检查">
+      <section className="mt-5" aria-label={t("diagnostics.statusCheck")}>
         <div className="mb-3">
           <h2 className="flex items-center gap-2 text-base font-medium">
             <Stethoscope className="size-4" aria-hidden />
-            状态检查
+            {t("diagnostics.statusCheck")}
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            没有证据时显示「未知」。
+            {t("diagnostics.unknownHint")}
           </p>
         </div>
         <div>
@@ -145,10 +147,10 @@ export function Diagnostics() {
             loading ? (
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
-                正在加载…
+                {t("shell.pageLoading")}
               </p>
             ) : (
-              <p className="text-sm text-muted-foreground">暂无状态数据，不代表服务已停止。</p>
+              <p className="text-sm text-muted-foreground">{t("common.noStatusData")}</p>
             )
           ) : (
             items.map((item) => <StatusRow key={item.kind} item={item} />)
@@ -156,27 +158,27 @@ export function Diagnostics() {
         </div>
       </section>
 
-      <section className="mt-6 border-t border-border pt-5" aria-label="模型连接测试">
+      <section className="mt-6 border-t border-border pt-5" aria-label={t("diagnostics.probeTitle")}>
         <div className="mb-3">
-          <h2 className="text-base font-medium">模型连接测试</h2>
+          <h2 className="text-base font-medium">{t("diagnostics.probeTitle")}</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            用你输入的密钥直连供应商。
+            {t("diagnostics.probeDescription")}
           </p>
         </div>
         <div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="probe-model">模型</Label>
-              <ModelSelect id="probe-model" label="模型" value={probeModel} onChange={setProbeModel} options={options} />
+              <Label htmlFor="probe-model">{t("diagnostics.model")}</Label>
+              <ModelSelect id="probe-model" label={t("diagnostics.model")} value={probeModel} onChange={setProbeModel} options={options} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="probe-key">API 密钥</Label>
+              <Label htmlFor="probe-key">{t("diagnostics.apiKey")}</Label>
               <Input
                 id="probe-key"
                 type="password"
                 value={probeKey}
                 onChange={(event) => setProbeKey(event.target.value)}
-                placeholder="已有密钥不可读，需重新输入"
+                placeholder={t("diagnostics.apiKeyPlaceholder")}
                 autoComplete="new-password"
                 spellCheck={false}
               />
@@ -185,37 +187,37 @@ export function Diagnostics() {
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button type="button" onClick={() => setProbeOpen(true)} disabled={!probeKey.trim() || probeRunning}>
               {probeRunning ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <Zap aria-hidden />}
-              {probeRunning ? "正在测试…" : "测试模型连接"}
+              {probeRunning ? t("diagnostics.probing") : t("diagnostics.probeButton")}
             </Button>
           </div>
           {probeResult ? (
             <div className="mt-3 rounded-md border border-border p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">测试结果</span>
-                <Badge variant="outline">本机测试</Badge>
+                <span className="text-sm font-medium">{t("diagnostics.probeResult")}</span>
+                <Badge variant="outline">{t("states.sources.local")}</Badge>
               </div>
               <StatusRow item={probeResult} />
             </div>
           ) : null}
-          <ErrorAlert error={probeError} onRetry={() => setProbeOpen(true)} retryLabel="重新测试" />
+          <ErrorAlert error={probeError} onRetry={() => setProbeOpen(true)} retryLabel={t("diagnostics.retest")} />
         </div>
       </section>
 
       <Dialog open={probeOpen} onOpenChange={setProbeOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>运行模型连接测试？</DialogTitle>
+            <DialogTitle>{t("diagnostics.confirmTitle")}</DialogTitle>
             <DialogDescription>
-              会真实调用一次模型，可能产生费用；密钥不写入云端。
+              {t("diagnostics.confirmDescription")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setProbeOpen(false)}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button type="button" onClick={() => void probe()} disabled={probeRunning}>
               {probeRunning ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-              确认并测试
+              {t("diagnostics.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>

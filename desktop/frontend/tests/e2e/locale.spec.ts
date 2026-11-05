@@ -164,6 +164,48 @@ test("shell is English", async ({ page }) => {
   await expectNoChinese(page, "aside");
 });
 
+async function openPage(page: Page, name: string) {
+  await page
+    .locator("#primary-nav")
+    .getByRole("button", { name, exact: true })
+    .click();
+  await expect(page.locator("main h1")).toHaveText(name);
+}
+
+test("overview is English", async ({ page }) => {
+  await useEnglish(page, "/test.html?fixture=configured");
+  await openPage(page, "Overview");
+  await page.getByTestId("overview-status-details").locator("summary").click();
+  await expect(page.getByTestId("status-model")).toBeVisible();
+  await expectNoChinese(page, "main");
+});
+
+test("overview todos are English", async ({ page }) => {
+  await useEnglish(page, "/test.html?fixture=configured");
+  await openPage(page, "Overview");
+  const todo = page.getByTestId("overview-todos");
+  await expect(
+    todo.getByRole("button", { name: "Connect channel", exact: true }),
+  ).toBeVisible();
+  await expectNoChinese(page, "main");
+});
+
+test("diagnostics is English", async ({ page }) => {
+  for (const fixture of ["configured", "diagnostics-unknown"]) {
+    await useEnglish(page, `/test.html?fixture=${fixture}`);
+    await openPage(page, "Diagnostics");
+    await expectNoChinese(page, "main");
+  }
+});
+
+test("updates is English", async ({ page }) => {
+  for (const fixture of ["configured", "upgrade-required"]) {
+    await useEnglish(page, `/test.html?fixture=${fixture}`);
+    await openPage(page, "Updates");
+    await expectNoChinese(page, "main");
+  }
+});
+
 test("expectNoChinese ignores marked regions", async ({ page }) => {
   await page.setContent(
     "<div>Hello<span data-i18n-ignore>中文</span></div>",

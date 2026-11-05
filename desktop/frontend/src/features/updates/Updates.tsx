@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StateBadge, StepList } from "@/components/feedback";
+import { useT } from "@/i18n";
 import { describeCode } from "@/services/errors";
 import { useInvalidate } from "@/services/queries";
 import type {
@@ -32,6 +33,7 @@ declare const __APP_VERSION__: string;
 
 export function Updates() {
   const { client, navigateImport } = useApp();
+  const t = useT();
   const invalidate = useInvalidate();
   const [upgrade, setUpgrade] = useState<UpgradeDTO | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,8 +95,8 @@ export function Updates() {
 
   return (
     <div>
-      <PageHeader title="更新" actions={<>
-        <Button type="button" variant="outline" size="icon" aria-label="刷新" onClick={() => void load()} disabled={loading}>
+      <PageHeader title={t("shell.pages.updates")} actions={<>
+        <Button type="button" variant="outline" size="icon" aria-label={t("shell.refresh")} onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw aria-hidden />}
         </Button>
 </>} />
@@ -107,14 +109,14 @@ export function Updates() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <ArrowUpCircle className="size-4" aria-hidden />
-                云端服务
+                {t("common.cloudService")}
               </CardTitle>
-              <CardDescription>升级前会校验包签名。</CardDescription>
+              <CardDescription>{t("updates.verifySignature")}</CardDescription>
             </div>
             {upgrade?.available ? (
-              <Badge>有新版本</Badge>
+              <Badge>{t("updates.available")}</Badge>
             ) : (
-              <Badge variant="outline">{upgrade?.reason === "UP_TO_DATE" ? "已是最新" : "无需升级"}</Badge>
+              <Badge variant="outline">{upgrade?.reason === "UP_TO_DATE" ? t("updates.upToDate") : t("updates.noUpgrade")}</Badge>
             )}
           </div>
         </CardHeader>
@@ -122,31 +124,34 @@ export function Updates() {
           {upgrade ? (
             <div className="space-y-2 text-sm">
               <p>
-                当前 {upgrade.currentVersion || "未知"} → 可用 {upgrade.availableVersion || "未知"}
+                {t("updates.versionLine", {
+                  current: upgrade.currentVersion || t("common.unknown"),
+                  available: upgrade.availableVersion || t("common.unknown"),
+                })}
               </p>
               {upgrade.reason ? (
                 <div className="text-muted-foreground">
                   <p>{describeCode(upgrade.reason)}</p>
-                  <details className="mt-2"><summary className="cursor-pointer text-xs" data-testid="upgrade-reason">详情</summary><p className="mt-1 break-all text-xs">{upgrade.reason}</p></details>
+                  <details className="mt-2"><summary className="cursor-pointer text-xs" data-testid="upgrade-reason">{t("common.details")}</summary><p className="mt-1 break-all text-xs" data-i18n-ignore>{upgrade.reason}</p></details>
                 </div>
               ) : null}
               {upgrade.modelKeysMissing?.length ? (
                 <Alert>
-                  <AlertTitle>需重新填写模型密钥</AlertTitle>
+                  <AlertTitle>{t("updates.modelKeysMissingTitle")}</AlertTitle>
                   <AlertDescription>
-                    升级后需在模型页重填：{upgrade.modelKeysMissing.join("、")}
+                    {t("updates.modelKeysMissingDescription", { keys: upgrade.modelKeysMissing.join(t("updates.listSeparator")) })}
                   </AlertDescription>
                 </Alert>
               ) : null}
               {upgrade.reason === "VERSION_UNKNOWN_REIMPORT" ? (
                 <Button type="button" size="sm" variant="outline" onClick={navigateImport}>
-                  重新导入
+                  {t("errors.reimport")}
                 </Button>
               ) : null}
 
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">正在读取版本信息。</p>
+            <p className="text-sm text-muted-foreground">{t("updates.readingVersions")}</p>
           )}
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button
@@ -156,18 +161,18 @@ export function Updates() {
               disabled={!upgrade?.available || running}
             >
               {running ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-              {running ? "正在升级…" : "升级"}
+              {running ? t("updates.upgrading") : t("updates.upgrade")}
             </Button>
           </div>
           {result ? (
             <div className="mt-4 rounded-md border border-border p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">升级结果</span>
+                <span className="text-sm font-medium">{t("updates.resultTitle")}</span>
                 <StateBadge state={result.state} />
               </div>
               {result.state === "published" ? <>
-                <p className="mt-2 text-xs text-muted-foreground">已发布，接着验证收发。</p>
-                <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">详情</summary><StepList steps={result.steps ?? []} /></details>
+                <p className="mt-2 text-xs text-muted-foreground">{t("updates.publishedHint")}</p>
+                <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">{t("common.details")}</summary><StepList steps={result.steps ?? []} /></details>
               </> : <StepList steps={result.steps ?? []} />}
               {result.state === "unknown" || result.state === "needs_input" ? (
                 <Button
@@ -188,12 +193,12 @@ export function Updates() {
                       .finally(() => setRunning(false));
                   }}
                 >
-                  继续
+                  {t("common.continue")}
                 </Button>
               ) : null}
             </div>
           ) : null}
-          <ErrorAlert error={runError} onRetry={() => setConfirmOpen(true)} retryLabel="重新升级" />
+          <ErrorAlert error={runError} onRetry={() => setConfirmOpen(true)} retryLabel={t("updates.retryUpgrade")} />
         </CardContent>
       </Card>
 
@@ -203,10 +208,10 @@ export function Updates() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Download className="size-4" aria-hidden />
-                桌面客户端
+                {t("updates.desktopClient")}
               </CardTitle>
               <CardDescription>
-                每 6 小时自动检查，确认后才安装。
+                {t("updates.clientDescription")}
               </CardDescription>
             </div>
             <Badge variant="outline">v{__APP_VERSION__}</Badge>
@@ -225,44 +230,47 @@ export function Updates() {
               ) : (
                 <RefreshCw aria-hidden />
               )}
-              检查更新
+              {t("updates.checkClient")}
             </Button>
           </div>
           {clientChecked ? (
-            <p className="mt-2 text-xs text-muted-foreground">已打开更新窗口</p>
+            <p className="mt-2 text-xs text-muted-foreground">{t("updates.clientWindowOpened")}</p>
           ) : null}
-          <ErrorAlert error={clientError} onRetry={checkClientUpdates} retryLabel="重试" />
+          <ErrorAlert error={clientError} onRetry={checkClientUpdates} retryLabel={t("common.retry")} />
         </CardContent>
       </Card>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>升级前确认</DialogTitle>
+            <DialogTitle>{t("updates.confirmTitle")}</DialogTitle>
             <DialogDescription>
-              从 {upgrade?.currentVersion || "未知"} 升级到 {upgrade?.availableVersion || "未知"}，保留资源和数据。
+              {t("updates.confirmDescription", {
+                current: upgrade?.currentVersion || t("common.unknown"),
+                available: upgrade?.availableVersion || t("common.unknown"),
+              })}
             </DialogDescription>
           </DialogHeader>
           <Alert>
-            <AlertTitle>兼容性</AlertTitle>
+            <AlertTitle>{t("updates.compatTitle")}</AlertTitle>
             <AlertDescription>
-              签名与迁移历史已校验；失败不会改云端。
+              {t("updates.compatDescription")}
             </AlertDescription>
           </Alert>
           {upgrade?.modelKeysMissing?.length ? (
             <Alert>
-              <AlertTitle>需重新填写模型密钥</AlertTitle>
+              <AlertTitle>{t("updates.modelKeysMissingTitle")}</AlertTitle>
               <AlertDescription>
-                升级后需在模型页重填：{upgrade.modelKeysMissing.join("、")}
+                {t("updates.modelKeysMissingDescription", { keys: upgrade.modelKeysMissing.join(t("updates.listSeparator")) })}
               </AlertDescription>
             </Alert>
           ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button type="button" onClick={() => void upgradeCloud()}>
-              确认升级
+              {t("updates.confirmUpgrade")}
             </Button>
           </DialogFooter>
         </DialogContent>

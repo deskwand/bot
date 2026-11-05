@@ -1,8 +1,12 @@
 import { common } from "./common";
+import { diagnostics } from "./diagnostics";
 import { errors } from "./errors";
 import { locale } from "./locale";
+import { models } from "./models";
+import { overview } from "./overview";
 import { shell } from "./shell";
 import { states } from "./states";
+import { updates } from "./updates";
 
 // Baseline dictionary. Every user-facing string the new UI adds lives here;
 // the English table is typed against it so a missing key fails `tsc`.
@@ -12,4 +16,8 @@ export const zh = {
   shell,
   states,
   errors,
+  overview,
+  diagnostics,
+  updates,
+  models,
 } as const;

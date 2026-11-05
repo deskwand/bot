@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { Popover } from "radix-ui";
 import { cn } from "cn";
 import { CheckIcon, ChevronDownIcon, SearchIcon } from "lucide-react";
+import { useT } from "@/i18n";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -30,6 +31,7 @@ export function ModelSelect({
   onChange: (value: string) => void;
   options: ProviderOption[];
 }) {
+  const t = useT();
   const current = parseModelKey(value);
   const [providerID, setProviderID] = useState(current?.provider ?? "");
   const [open, setOpen] = useState(false);
@@ -114,8 +116,8 @@ export function ModelSelect({
             openAfterProvider.current = next !== current?.provider;
           }}
         >
-          <SelectTrigger id={`${id}-provider`} aria-label={`${label}供应商`} className="w-full">
-            <SelectValue placeholder="选择供应商">{provider?.label ?? providerID}</SelectValue>
+          <SelectTrigger id={`${id}-provider`} aria-label={t("models.providerAria", { label })} className="w-full">
+            <SelectValue placeholder="选择供应商">{provider?.label ? <span data-i18n-ignore>{provider.label}</span> : providerID}</SelectValue>
           </SelectTrigger>
           <SelectContent
             onCloseAutoFocus={(event) => {
