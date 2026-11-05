@@ -2,6 +2,7 @@ import { common } from "./common";
 import { diagnostics } from "./diagnostics";
 import { errors } from "./errors";
 import { locale } from "./locale";
+import { mcp } from "./mcp";
 import { models } from "./models";
 import { overview } from "./overview";
 import { shell } from "./shell";
@@ -20,4 +21,5 @@ export const zh = {
   diagnostics,
   updates,
   models,
+  mcp,
 } as const;

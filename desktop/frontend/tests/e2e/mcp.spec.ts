@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { expectNoChinese, useEnglish } from "./i18n-helpers";
 
 async function openServices(page: Page, scenario = "configured") {
   await page.goto(`/test.html?fixture=${scenario}`);
@@ -157,6 +158,28 @@ test("an unavailable admin API replaces the page with a retry action", async ({ 
     page.getByText("无法连接云端管理接口，请检查 PUBLIC_BASE_URL 与部署状态"),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "重试" })).toBeVisible();
+});
+
+test("mcp page is English", async ({ page }) => {
+  await useEnglish(page, "/test.html?fixture=configured");
+  await page
+    .locator("#primary-nav")
+    .getByRole("button", { name: "Services", exact: true })
+    .click();
+  await expect(page.locator("main h1")).toHaveText("Services");
+  await expectNoChinese(page, "main");
+
+  await page.getByRole("button", { name: "Add service" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expectNoChinese(page, '[role="dialog"]');
+
+  await useEnglish(page, "/test.html?fixture=mcp-many-tools");
+  await page
+    .locator("#primary-nav")
+    .getByRole("button", { name: "Services", exact: true })
+    .click();
+  await page.getByRole("button", { name: /^Tools/ }).click();
+  await expectNoChinese(page, "main");
 });
 
 test("a failed connection shows the reason outside the badge", async ({ page }) => {
