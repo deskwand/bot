@@ -13,10 +13,26 @@ import (
 	"strings"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 )
 
 //go:embed catalog.json
 var embeddedCatalog []byte
+
+// Text is one localized string in the catalog. A missing English text falls
+// back to Chinese.
+type Text struct {
+	Zh string `json:"zh"`
+	En string `json:"en"`
+}
+
+// In returns the text for locale.
+func (t Text) In(locale string) string {
+	if locale == i18n.EN && t.En != "" {
+		return t.En
+	}
+	return t.Zh
+}
 
 // Field is one value the user supplies for a catalog entry.
 type Field struct {
@@ -43,8 +59,30 @@ type Entry struct {
 }
 
 type catalog struct {
-	SchemaVersion int     `json:"schemaVersion"`
-	Entries       []Entry `json:"entries"`
+	SchemaVersion int        `json:"schemaVersion"`
+	Entries       []rawEntry `json:"entries"`
+}
+
+type rawEntry struct {
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	Category        Text       `json:"category"`
+	Description     Text       `json:"description"`
+	URL             string     `json:"url"`
+	OAuth           bool       `json:"oauth"`
+	Fields          []rawField `json:"fields"`
+	AutoApprove     []string   `json:"autoApprove,omitempty"`
+	RequireApproval []string   `json:"requireApproval,omitempty"`
+}
+
+type rawField struct {
+	Key        string `json:"key"`
+	Label      Text   `json:"label"`
+	Help       Text   `json:"help"`
+	HelpURL    string `json:"helpUrl"`
+	Placement  string `json:"placement"`
+	HeaderName string `json:"headerName,omitempty"`
+	Prefix     string `json:"prefix,omitempty"`
 }
 
 var (
@@ -62,24 +100,56 @@ func mustCatalog() catalog {
 	return parsed
 }
 
-// All returns the catalog entries.
-func All() []Entry {
-	return builtin.Entries
+// All returns the catalog entries with their text in locale.
+func All(locale string) []Entry {
+	entries := make([]Entry, 0, len(builtin.Entries))
+	for _, entry := range builtin.Entries {
+		entries = append(entries, entry.localized(locale))
+	}
+	return entries
 }
 
-// Lookup finds an entry by ID.
-func Lookup(id string) (Entry, bool) {
+// Lookup finds an entry by ID with its text in locale.
+func Lookup(locale, id string) (Entry, bool) {
 	for _, entry := range builtin.Entries {
 		if entry.ID == id {
-			return entry, true
+			return entry.localized(locale), true
 		}
 	}
 	return Entry{}, false
 }
 
+func (e rawEntry) localized(locale string) Entry {
+	out := Entry{
+		ID:              e.ID,
+		Name:            e.Name,
+		Category:        e.Category.In(locale),
+		Description:     e.Description.In(locale),
+		URL:             e.URL,
+		OAuth:           e.OAuth,
+		AutoApprove:     e.AutoApprove,
+		RequireApproval: e.RequireApproval,
+	}
+	if e.Fields != nil {
+		out.Fields = make([]Field, 0, len(e.Fields))
+		for _, field := range e.Fields {
+			out.Fields = append(out.Fields, Field{
+				Key:        field.Key,
+				Label:      field.Label.In(locale),
+				Help:       field.Help.In(locale),
+				HelpURL:    field.HelpURL,
+				Placement:  field.Placement,
+				HeaderName: field.HeaderName,
+				Prefix:     field.Prefix,
+			})
+		}
+	}
+	return out
+}
+
 // Build turns an entry plus user values into one mcpServers element and the
 // secret edits that carry the values. name is the server name the caller chose.
-func Build(entry Entry, name string, values map[string]string) (map[string]any, []domain.SecretEdit, error) {
+func Build(locale string, entry Entry, name string, values map[string]string) (map[string]any, []domain.SecretEdit, error) {
 	server := map[string]any{
 		"name":            name,
 		"url":             entry.URL,
@@ -97,7 +167,7 @@ func Build(entry Entry, name string, values map[string]string) (map[string]any, 
 	for _, field := range entry.Fields {
 		value := strings.TrimSpace(values[field.Key])
 		if value == "" {
-			return nil, nil, fmt.Errorf("%s：请填写%s", entry.Name, field.Label)
+			return nil, nil, fmt.Errorf("%s", i18n.T(locale, "mcpcatalog.missingField", entry.Name, field.Label))
 		}
 		secretName := SecretName(name, field.Key)
 		secretValue := value

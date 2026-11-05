@@ -13,6 +13,8 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
+	"github.com/deskwand/bot/desktop/internal/i18n/i18ntest"
 	"github.com/deskwand/bot/desktop/internal/platform"
 )
 
@@ -98,6 +100,26 @@ func TestMcpCatalogIncludesCatalogFields(t *testing.T) {
 	}
 	if github.Fields[0].Key != "token" || github.Fields[0].HelpURL == "" {
 		t.Fatalf("github field = %#v", github.Fields[0])
+	}
+}
+
+func TestMcpCatalogFollowsLocale(t *testing.T) {
+	f := newMcpFixture(t, `[]`, []string{"ADMIN_TOKEN"}, nil)
+	setServiceLocale(f.service, i18n.EN)
+	entries, err := f.service.McpCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		i18ntest.NoHan(t, entry.ID+" category", entry.Category)
+		i18ntest.NoHan(t, entry.ID+" description", entry.Description)
+		for _, field := range entry.Fields {
+			i18ntest.NoHan(t, entry.ID+"."+field.Key+" label", field.Label)
+			i18ntest.NoHan(t, entry.ID+"."+field.Key+" help", field.Help)
+		}
+		if entry.ID == "firecrawl" && entry.Description != "Firecrawl: web scraping, search and content parsing (limited free quota)" {
+			t.Fatalf("firecrawl description = %q", entry.Description)
+		}
 	}
 }
 

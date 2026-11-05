@@ -120,7 +120,7 @@ type McpHeaderInput struct {
 
 // McpCatalog returns the built-in service catalog.
 func (s *Service) McpCatalog() ([]McpCatalogEntryDTO, error) {
-	entries := mcpcatalog.All()
+	entries := mcpcatalog.All(s.locale.Current())
 	out := make([]McpCatalogEntryDTO, 0, len(entries))
 	for _, entry := range entries {
 		fields := make([]McpFieldDTO, 0, len(entry.Fields))
@@ -175,11 +175,11 @@ func (s *Service) AddMcpServer(input McpAddInput) (ResultDTO, error) {
 		}
 		server, secrets, err = buildCustomMcpServer(s.locale.Current(), name, *input.Custom)
 	} else {
-		entry, ok := mcpcatalog.Lookup(strings.TrimSpace(input.CatalogID))
+		entry, ok := mcpcatalog.Lookup(s.locale.Current(), strings.TrimSpace(input.CatalogID))
 		if !ok {
 			return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.mcpCatalogEntryMissing")}
 		}
-		server, secrets, err = mcpcatalog.Build(entry, name, input.Values)
+		server, secrets, err = mcpcatalog.Build(s.locale.Current(), entry, name, input.Values)
 	}
 	if err != nil {
 		return ResultDTO{}, safeAppError(err, values...)
