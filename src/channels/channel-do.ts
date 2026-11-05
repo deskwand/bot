@@ -36,7 +36,7 @@ import {
 } from "./route-identity";
 import { emitChannelEvent } from "./events";
 import { OutboundQueue } from "./outbound-queue";
-import { prepareInboundImage } from "./media";
+import { describeImageBytes, prepareInboundImage } from "./media";
 import { createTelegramAdapter } from "./telegram";
 import {
   createTelegramPollClient,
@@ -1125,13 +1125,27 @@ export class ChannelDO extends Agent<Env> {
     }
 
     const prepared = await prepareInboundImage(bytes);
-    if (!prepared) {
-      console.warn(`channel: wechat image unusable (${event.eventId})`);
+    if (!prepared.ok) {
+      // The CDN answers 200 even when the body is not the image the item
+      // promised, so name what arrived: key present, header bytes, format.
+      const key = image.aesKeyHex
+        ? "hex"
+        : image.mediaAesKey
+          ? "base64"
+          : "none";
+      const detail =
+        prepared.detail === undefined
+          ? ""
+          : ` detail=${prepared.detail.slice(0, 120)}`;
+      console.warn(
+        `channel: wechat image unusable (${event.eventId})` +
+          ` reason=${prepared.reason} key=${key} ${describeImageBytes(bytes)}${detail}`,
+      );
       this.dispatchMessage({ ...event, imageFailed: true }, routeKey);
       return;
     }
 
-    this.dispatchMessage({ ...event, images: [prepared] }, routeKey);
+    this.dispatchMessage({ ...event, images: [prepared.image] }, routeKey);
   }
 
   private dispatchWeChatAction(

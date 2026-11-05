@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   INBOUND_IMAGE_LIMITS,
   MAX_INBOUND_PIXELS,
+  describeImageBytes,
   imageSize,
   prepareInboundImage,
   sniffImageType,
@@ -105,28 +106,66 @@ describe("sniffImageType", () => {
 describe("prepareInboundImage", () => {
   it("passes an image within the quota through unchanged", async () => {
     await expect(prepareInboundImage(bytes(PNG_B64))).resolves.toEqual({
-      mimeType: "image/png",
-      data: PNG_B64,
+      ok: true,
+      image: { mimeType: "image/png", data: PNG_B64 },
     });
   });
 
   it("downscales an image over the pixel quota", async () => {
-    const prepared = await prepareInboundImage(bytes(PNG_B64), {
+    const outcome = await prepareInboundImage(bytes(PNG_B64), {
       ...INBOUND_IMAGE_LIMITS,
       maxWidth: 4,
       maxHeight: 4,
     });
+    const image = outcome.ok ? outcome.image : undefined;
 
-    expect(prepared?.mimeType).toBe("image/png");
-    expect(prepared?.data).not.toBe(PNG_B64);
+    expect(image?.mimeType).toBe("image/png");
+    expect(image?.data).not.toBe(PNG_B64);
   });
 
-  it("returns undefined for bytes that only look like an image", async () => {
-    const broken = new Uint8Array([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0,
-    ]);
+  it("names the stage that dropped the image", async () => {
+    await expect(
+      prepareInboundImage(new TextEncoder().encode("<html>not found</html>")),
+    ).resolves.toEqual({ ok: false, reason: "format" });
 
-    expect(await prepareInboundImage(broken)).toBeUndefined();
+    await expect(
+      prepareInboundImage(bytes(PNG_B64), INBOUND_IMAGE_LIMITS, 16),
+    ).resolves.toEqual({ ok: false, reason: "pixels" });
+  });
+
+  it("reports the decoder's own error when Photon refuses the bytes", async () => {
+    // A whole PNG header and IHDR, then nothing where the image data should
+    // be: the checks on the header pass, the decoder does not.
+    const truncated = makePng(8, 8, () => [1, 2, 3]).subarray(0, 40);
+
+    const outcome = await prepareInboundImage(truncated);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "prepare" });
+    expect(Boolean(outcome.ok === false && outcome.detail)).toBe(true);
+  });
+
+  it("decodes again after a failure instead of keeping the broken decoder", async () => {
+    const truncated = makePng(8, 8, () => [1, 2, 3]).subarray(0, 40);
+    expect((await prepareInboundImage(truncated)).ok).toBe(false);
+
+    await expect(prepareInboundImage(bytes(PNG_B64))).resolves.toMatchObject({
+      ok: true,
+    });
+  });
+});
+
+describe("describeImageBytes", () => {
+  it("names the format and size without the payload", () => {
+    expect(describeImageBytes(bytes(PNG_B64))).toBe(
+      "len=74 head=89504e470d0a1a0a0000000d format=image/png size=8x8",
+    );
+  });
+
+  it("says unknown for bytes that are not one of the inline formats", () => {
+    const body = new TextEncoder().encode("{\"errcode\":0}");
+    expect(describeImageBytes(body)).toMatch(
+      /^len=13 head=7b22657272636f6465223a30 format=unknown$/,
+    );
   });
 });
 
@@ -175,8 +214,12 @@ describe("the inbound image quota", () => {
   it("rejects an image over the pixel cap before decoding it", async () => {
     const png = makePng(8, 8, () => [1, 2, 3]);
 
-    expect(await prepareInboundImage(png, INBOUND_IMAGE_LIMITS, 16)).toBeUndefined();
-    expect(await prepareInboundImage(png, INBOUND_IMAGE_LIMITS, MAX_INBOUND_PIXELS)).toBeDefined();
+    await expect(
+      prepareInboundImage(png, INBOUND_IMAGE_LIMITS, 16),
+    ).resolves.toEqual({ ok: false, reason: "pixels" });
+    await expect(
+      prepareInboundImage(png, INBOUND_IMAGE_LIMITS, MAX_INBOUND_PIXELS),
+    ).resolves.toMatchObject({ ok: true });
   });
 
   it("shrinks an image until its base64 fits the byte budget", async () => {
@@ -187,13 +230,13 @@ describe("the inbound image quota", () => {
     ]);
     const budget = 500;
 
-    const prepared = await prepareInboundImage(png, {
+    const outcome = await prepareInboundImage(png, {
       ...INBOUND_IMAGE_LIMITS,
       maxBytes: budget,
     });
 
-    expect(prepared).toBeDefined();
-    expect(prepared!.data.length).toBeLessThanOrEqual(budget);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.ok && outcome.image.data.length).toBeLessThanOrEqual(budget);
   });
 
   it("keeps the numbers the ChannelDO → ButlerDO budget depends on", () => {

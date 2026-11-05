@@ -190,9 +190,13 @@ export function createTelegramAdapter(
         const images: InboundImage[] = [];
         const source = imageSource(message);
         const bytes = source ? await downloadFile(source) : undefined;
-        const image = bytes ? await prepareInboundImage(bytes) : undefined;
-        if (image) images.push(image);
-        else if (source) console.warn(`telegram image dropped (${source})`);
+        const prepared = bytes ? await prepareInboundImage(bytes) : undefined;
+        if (prepared?.ok) images.push(prepared.image);
+        else if (source) {
+          console.warn(
+            `telegram image dropped (${source}) reason=${prepared?.reason ?? "download"}`,
+          );
+        }
 
         // A voice note is transcribed here, not in the model: the transcript
         // becomes the message text, so the butler never sees audio.

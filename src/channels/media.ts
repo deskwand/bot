@@ -141,29 +141,75 @@ function readImageSize(
 }
 
 /**
+ * One line describing bytes that failed preparation: length, leading bytes and
+ * the format they claim. Never the payload itself, so it stays safe to log.
+ */
+export function describeImageBytes(bytes: Uint8Array): string {
+  const head = Array.from(bytes.subarray(0, 12), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  const mimeType = sniffImageType(bytes);
+  const size = mimeType === undefined ? undefined : imageSize(bytes, mimeType);
+  return `len=${bytes.length} head=${head} format=${mimeType ?? "unknown"}${
+    size === undefined ? "" : ` size=${size.width}x${size.height}`
+  }`;
+}
+
+/** Why an inbound image was dropped, and what the decoder said when it refused. */
+export type InboundImageOutcome =
+  | { ok: true; image: InboundImage }
+  | {
+      ok: false;
+      /** `format` and `pixels` are judged from the bytes; `prepare` is the decoder. */
+      reason: "format" | "pixels" | "prepare";
+      detail?: string;
+    };
+
+/**
  * Turns inbound bytes into something the model can take: sniffed, oriented,
- * downscaled and re-encoded to fit `limits`. `undefined` when the bytes are not
- * one of the inline formats or cannot be prepared.
+ * downscaled and re-encoded to fit `limits`. Never throws.
  *
  * `limits` and `maxPixels` are seams for tests; production callers never
- * pass them. Nothing here throws: a failure drops the image.
+ * pass them. The caller gets the reason a failure happened, so a log line can
+ * say which stage dropped the image.
  */
 export async function prepareInboundImage(
   bytes: Uint8Array,
   limits: ImageLimits = INBOUND_IMAGE_LIMITS,
   maxPixels: number = MAX_INBOUND_PIXELS,
-): Promise<InboundImage | undefined> {
+): Promise<InboundImageOutcome> {
   const mimeType = sniffImageType(bytes);
-  if (!mimeType) return undefined;
+  if (!mimeType) return { ok: false, reason: "format" };
 
   const size = imageSize(bytes, mimeType);
-  if (!size || size.width * size.height > maxPixels) return undefined;
-
-  try {
-    processor ??= createCloudflarePhotonImages();
-    const prepared = await processor.prepare(bytes, mimeType, limits);
-    return prepared ? { mimeType: prepared.mimeType, data: prepared.data } : undefined;
-  } catch {
-    return undefined;
+  if (!size || size.width * size.height > maxPixels) {
+    return { ok: false, reason: "pixels" };
   }
+
+  // Photon keeps one WebAssembly heap per isolate and never gives it back, so a
+  // processor that failed once can fail every later image until the isolate
+  // restarts. Rebuild it and try once more before calling the image unusable.
+  let detail: string | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const current = (processor ??= createCloudflarePhotonImages());
+    try {
+      const prepared = await current.prepare(bytes, mimeType, limits);
+      if (!prepared) {
+        // Nothing fit the limits: a second decoder cannot change that.
+        return {
+          ok: false,
+          reason: "prepare",
+          detail: "not encodable within limits",
+        };
+      }
+      return {
+        ok: true,
+        image: { mimeType: prepared.mimeType, data: prepared.data },
+      };
+    } catch (error) {
+      detail = error instanceof Error ? error.message : String(error);
+      processor = undefined;
+    }
+  }
+  return { ok: false, reason: "prepare", detail };
 }
