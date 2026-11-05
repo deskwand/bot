@@ -1,8 +1,13 @@
 import type { ActionKind } from "../protocol";
 
+export type TextTarget =
+  | { kind: "implicit" }
+  | { kind: "handle"; handle: number }
+  | { kind: "taskId"; taskId: string };
+
 export type TextAction = {
   action: ActionKind;
-  taskId: string;
+  target: TextTarget;
   approvalId?: string;
 };
 
@@ -23,7 +28,7 @@ const QUOTE_PAIRS: ReadonlyArray<readonly [string, string]> = [
 /**
  * Drops one matched surrounding quote pair.
  *
- * The WeChat text hint reads 回复"批准 t3 ap1", so a verbatim copy arrives
+ * The WeChat text hint reads 回复"批准 #1 ap1", so a verbatim copy arrives
  * wrapped in quotes. Only a balanced pair at both ends is removed; chatter
  * inside the quotes still has to match the command shape.
  */
@@ -43,24 +48,44 @@ function unquote(command: string): string {
 /**
  * Deterministic owner commands for channels without buttons.
  *
- * Approve and reject must name the approval explicitly: the model is never
- * allowed to guess which pending approval the owner means. Cancel names only
- * the task, because `TaskDO.handleAction` resolves it without an approval id.
+ * The owner may name the task by display handle (`#1`, or just `1`), by the
+ * legacy internal id (`t61`), or not at all. An implicit approval or rejection
+ * is left for the Butler to resolve against the pending candidates: the model
+ * is never allowed to guess which approval the owner means.
  */
 export function parseTextAction(text: string): TextAction | null {
-  // Task ids are `t<number>` and approval ids `ap<number>`; anything else is
-  // ordinary chat, never an implicit approval target.
-  const match = /^(批准|拒绝|取消)\s+(t\d+)(?:\s+(ap\d+))?$/.exec(
-    unquote(text.trim()),
+  // The owner's IME emits the full-width hash; both spellings mean #N.
+  const command = unquote(text.trim()).replace(/＃/g, "#");
+  const match = /^(批准|拒绝|取消)(?:\s+(?:#?(\d+)|(t\d+)))?(?:\s+(ap\d+))?$/.exec(
+    command,
   );
   if (!match) return null;
 
   const action = COMMANDS[match[1]!];
-  const taskId = match[2]!;
-  const approvalId = match[3];
+  const handle = match[2];
+  const taskId = match[3];
+  const approvalId = match[4];
 
+  const target: TextTarget | null =
+    handle !== undefined
+      ? { kind: "handle", handle: Number(handle) }
+      : taskId !== undefined
+        ? { kind: "taskId", taskId }
+        : null;
+
+  if (approvalId !== undefined && target === null) return null;
   if (action === "cancel") {
-    return approvalId === undefined ? { action, taskId } : null;
+    return approvalId === undefined
+      ? { action, target: target ?? { kind: "implicit" } }
+      : null;
   }
-  return approvalId === undefined ? null : { action, taskId, approvalId };
+  if (target === null) return { action, target: { kind: "implicit" } };
+  if (target.kind === "handle") {
+    return approvalId === undefined
+      ? { action, target }
+      : { action, target, approvalId };
+  }
+  return approvalId === undefined
+    ? null
+    : { action, target, approvalId };
 }

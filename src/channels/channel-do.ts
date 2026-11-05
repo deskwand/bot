@@ -1111,7 +1111,20 @@ export class ChannelDO extends Agent<Env> {
       const textAction =
         update.text === null ? null : parseTextAction(update.text);
       if (textAction !== null) {
-        this.dispatchWeChatAction(event, eventId, routeKey, textAction);
+        // Only the legacy `t<n>` form goes straight to the Task DO for now.
+        // Implicit and `#N` targets are ordinary chat until the Butler
+        // resolver is wired in.
+        if (textAction.target.kind === "taskId") {
+          this.dispatchWeChatAction(event, eventId, routeKey, {
+            action: textAction.action,
+            target: textAction.target,
+            ...(textAction.approvalId === undefined
+              ? {}
+              : { approvalId: textAction.approvalId }),
+          });
+        } else {
+          this.dispatchMessage(event, routeKey);
+        }
         return;
       }
 
@@ -1172,7 +1185,7 @@ export class ChannelDO extends Agent<Env> {
     event: MessageEvent,
     eventId: string,
     routeKey: string,
-    parsed: TextAction,
+    parsed: TextAction & { target: { kind: "taskId"; taskId: string } },
   ): void {
     const action: ActionEvent = {
       type: "action",
@@ -1182,7 +1195,7 @@ export class ChannelDO extends Agent<Env> {
       actionId: eventId,
       messageId: eventId,
       action: parsed.action,
-      taskId: parsed.taskId,
+      taskId: parsed.target.taskId,
       ...(parsed.approvalId === undefined
         ? {}
         : { approvalId: parsed.approvalId }),
