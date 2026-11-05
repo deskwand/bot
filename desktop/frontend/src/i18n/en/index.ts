@@ -1,4 +1,5 @@
 import type { Messages } from "../types";
+import { backup } from "./backup";
 import { common } from "./common";
 import { diagnostics } from "./diagnostics";
 import { entries } from "./entries";
@@ -23,4 +24,5 @@ export const en: Messages = {
   models,
   mcp,
   entries,
+  backup,
 };

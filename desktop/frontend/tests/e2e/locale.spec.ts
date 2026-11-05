@@ -288,3 +288,42 @@ test("models is English", async ({ page }) => {
   await expect(page.getByTestId("error-alert")).toBeVisible();
   await expectNoChinese(page, "body");
 });
+
+test("backup page is English", async ({ page }) => {
+  for (const fixture of ["backup", "backup-pending"]) {
+    await useEnglish(page, `/test.html?fixture=${fixture}`);
+    await openPage(page, "Backup");
+    await expectNoChinese(page, "main");
+  }
+
+  // The progress card while an export runs.
+  await useEnglish(page, "/test.html?fixture=backup-progress");
+  await openPage(page, "Backup");
+  await page.getByRole("button", { name: "Back up now", exact: true }).click();
+  await expect(page.getByTestId("backup-progress")).toBeVisible();
+  await expectNoChinese(page, "main");
+
+  // A version mismatch blocks restore with an English explanation.
+  await useEnglish(page, "/test.html?fixture=backup-version-mismatch");
+  await openPage(page, "Backup");
+  await page
+    .getByRole("button", { name: "Restore from file", exact: true })
+    .click();
+  await expect(page.getByText("Restore summary", { exact: true })).toBeVisible();
+  await expectNoChinese(page, "main");
+
+  // The overwrite confirmation dialog.
+  await useEnglish(page, "/test.html?fixture=backup");
+  await openPage(page, "Backup");
+  await page
+    .getByRole("button", { name: "Restore this one", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Overwrite and restore", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "Confirm overwrite restore",
+  });
+  await expect(dialog).toBeVisible();
+  await expectNoChinese(page, '[role="dialog"]');
+});

@@ -1,3 +1,4 @@
+import { backup } from "./backup";
 import { common } from "./common";
 import { diagnostics } from "./diagnostics";
 import { entries } from "./entries";
@@ -24,4 +25,5 @@ export const zh = {
   models,
   mcp,
   entries,
+  backup,
 } as const;
