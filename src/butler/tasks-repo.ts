@@ -19,6 +19,7 @@ export type TaskRow = {
   createdAt: number;
   updatedAt: number;
   botId: string | null;
+  handle: number | null;
 };
 
 type RawTaskRow = {
@@ -33,6 +34,7 @@ type RawTaskRow = {
   created_at: number;
   updated_at: number;
   bot_id: string | null;
+  handle: number | null;
 };
 
 const COUNTER_KEY = "task_counter";
@@ -70,17 +72,23 @@ export class TasksRepo {
     title: string;
     chatId: string | null;
     botId?: string | null;
+    handle?: boolean;
   }): void {
     const now = Date.now();
+    // Read and write happen in one synchronous step, so two active owner
+    // tasks can never end up with the same handle.
+    const handle =
+      row.botId == null && row.handle !== false ? this.freeHandle() : null;
     this.sql.exec(
-      `INSERT INTO tasks (id, title, status, created_at, updated_at, chat_id, artifacts_json, last_seq, bot_id)
-       VALUES (?, ?, 'queued', ?, ?, ?, '[]', 0, ?)`,
+      `INSERT INTO tasks (id, title, status, created_at, updated_at, chat_id, artifacts_json, last_seq, bot_id, handle)
+       VALUES (?, ?, 'queued', ?, ?, ?, '[]', 0, ?, ?)`,
       row.id,
       row.title,
       now,
       now,
       row.chatId,
       row.botId ?? null,
+      handle,
     );
   }
 
@@ -89,6 +97,76 @@ export class TasksRepo {
       .exec<RawTaskRow>(`SELECT * FROM tasks WHERE id = ?`, id)
       .toArray()[0];
     return row ? toTaskRow(row) : null;
+  }
+
+  /** Active owner tasks, ordered by their display handle. */
+  listActiveOwner(): TaskRow[] {
+    const rows = this.sql
+      .exec<RawTaskRow>(
+        `SELECT * FROM tasks
+         WHERE status IN ('queued', 'running') AND bot_id IS NULL
+         ORDER BY handle ASC, created_at ASC, id ASC`,
+      )
+      .toArray();
+    return rows.map(toTaskRow);
+  }
+
+  /** The active owner task that currently shows `#handle`, if any. */
+  findActiveByHandle(handle: number): TaskRow | null {
+    const row = this.sql
+      .exec<RawTaskRow>(
+        `SELECT * FROM tasks
+         WHERE status IN ('queued', 'running') AND bot_id IS NULL AND handle = ?`,
+        handle,
+      )
+      .toArray()[0];
+    return row ? toTaskRow(row) : null;
+  }
+
+  /**
+   * Gives a restarted task a handle again. A failed task keeps its old handle
+   * for history, but by the time it runs again another task may own it, so a
+   * null or conflicting handle is re-assigned the smallest free one.
+   */
+  ensureHandle(id: string): void {
+    const row = this.get(id);
+    if (!row || row.botId !== null) return;
+    if (row.handle !== null) {
+      const taken = this.sql
+        .exec<{ id: string }>(
+          `SELECT id FROM tasks
+           WHERE status IN ('queued', 'running') AND bot_id IS NULL
+             AND handle = ? AND id <> ?`,
+          row.handle,
+          id,
+        )
+        .toArray();
+      if (taken.length === 0) return;
+    }
+    this.sql.exec(
+      `UPDATE tasks SET handle = ? WHERE id = ?`,
+      this.freeHandle(id),
+      id,
+    );
+  }
+
+  /**
+   * The smallest positive integer not used by an active owner task. Passing
+   * `excludeId` lets a row keep counting itself out when it is re-assigned.
+   */
+  private freeHandle(excludeId?: string): number {
+    const rows = this.sql
+      .exec<{ handle: number }>(
+        `SELECT handle FROM tasks
+         WHERE status IN ('queued', 'running') AND handle IS NOT NULL
+           AND bot_id IS NULL${excludeId === undefined ? "" : " AND id <> ?"}`,
+        ...(excludeId === undefined ? [] : [excludeId]),
+      )
+      .toArray();
+    const used = new Set(rows.map((row) => row.handle));
+    let handle = 1;
+    while (used.has(handle)) handle += 1;
+    return handle;
   }
 
   list(filter?: { active?: boolean }): TaskRow[] {
@@ -149,6 +227,8 @@ export class TasksRepo {
       sets.push("bot_id = ?");
       values.push(patch.botId);
     }
+    // `handle` is assigned only by `insert` and `ensureHandle`; callers never
+    // patch it directly.
     sets.push("updated_at = ?");
     values.push(patch.updatedAt ?? Date.now());
 
@@ -158,6 +238,11 @@ export class TasksRepo {
       id,
     );
   }
+}
+
+/** The owner-facing label: the reusable `#N`, or the id for legacy rows. */
+export function taskLabel(row: Pick<TaskRow, "id" | "handle">): string {
+  return row.handle === null ? row.id : `#${row.handle}`;
 }
 
 function toTaskRow(row: RawTaskRow): TaskRow {
@@ -173,6 +258,7 @@ function toTaskRow(row: RawTaskRow): TaskRow {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     botId: row.bot_id,
+    handle: row.handle,
   };
 }
 

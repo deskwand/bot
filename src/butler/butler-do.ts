@@ -195,6 +195,7 @@ export class ButlerDO extends Agent<Env> {
     this.ensureColumn("tasks", "progress_message_ref_json", "TEXT");
     this.ensureColumn("approval_messages", "message_ref_json", "TEXT");
     this.ensureColumn("tasks", "bot_id", "TEXT");
+    this.ensureColumn("tasks", "handle", "INTEGER");
 
     this.repo = new TasksRepo(this.db);
     this.bots = new BotsRepo(this.db);
@@ -572,7 +573,12 @@ export class ButlerDO extends Agent<Env> {
 
     // Events can arrive before the Butler has spawned/indexed the task.
     if (!this.repo.get(event.taskId)) {
-      this.repo.insert({ id: event.taskId, title: "", chatId: null });
+      this.repo.insert({
+        id: event.taskId,
+        title: "",
+        chatId: null,
+        handle: false,
+      });
     }
 
     const row = this.repo.get(event.taskId);
@@ -596,6 +602,9 @@ export class ButlerDO extends Agent<Env> {
 
     switch (body.type) {
       case "started":
+        // A retry keeps the task id, so a handle left over from the failed
+        // run may have been taken by a newer task in the meantime.
+        this.repo.ensureHandle(taskId);
         this.repo.update(taskId, { status: "running", updatedAt: now });
         break;
       case "progress":
