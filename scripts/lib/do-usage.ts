@@ -68,35 +68,14 @@ export function parseArgs(argv: string[]): {
   days: number;
   objects?: { className: string; date: string };
 } {
-  let days = 3;
-  let className: string | undefined;
-  let date: string | undefined;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]!;
-    if (arg === "--days") {
-      const parsed = Number(argv[index + 1]);
-      index += 1;
-      if (Number.isFinite(parsed) && parsed > 0) days = Math.floor(parsed);
-    } else if (arg.startsWith("--days=")) {
-      const parsed = Number(arg.slice("--days=".length));
-      if (Number.isFinite(parsed) && parsed > 0) days = Math.floor(parsed);
-    } else if (arg === "--objects") {
-      className = argv[index + 1];
-      index += 1;
-    } else if (arg.startsWith("--objects=")) {
-      className = arg.slice("--objects=".length);
-    } else if (arg === "--date") {
-      date = argv[index + 1];
-      index += 1;
-    } else if (arg.startsWith("--date=")) {
-      date = arg.slice("--date=".length);
-    }
-  }
-
-  if (!className) return { days };
+  const value = (flag: string) => {
+    const index = argv.indexOf(flag);
+    return index === -1 ? undefined : argv[index + 1];
+  };
+  const className = value("--objects");
+  if (!className) return { days: 3 };
   return {
-    days,
-    objects: { className, date: date ?? new Date().toISOString().slice(0, 10) },
+    days: 3,
+    objects: { className, date: value("--date") ?? new Date().toISOString().slice(0, 10) },
   };
 }

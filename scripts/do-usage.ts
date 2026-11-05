@@ -3,12 +3,11 @@
  *
  * Usage:
  *   npm run do-usage                                  # last 3 days per class
- *   npm run do-usage -- --days 7
  *   npm run do-usage -- --objects TaskDO --date 2026-11-05
  *
  * Reuses the OAuth token that `wrangler login` already stored. The account id
  * comes from CLOUDFLARE_ACCOUNT_ID or the first 32-hex id printed by
- * `wrangler whoami`.
+ * `wrangler whoami`, which runs first so it can refresh an expired token.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -202,14 +201,14 @@ async function printObjectUsage(
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const token = loadOAuthToken();
-  if (!token) {
-    console.error("找不到 wrangler 的 OAuth token，请先运行 npx wrangler login。");
-    process.exit(1);
-  }
   const accountId = resolveAccountId();
   if (!accountId) {
     console.error("无法确定 Cloudflare 账号 ID，请设置 CLOUDFLARE_ACCOUNT_ID 或运行 npx wrangler whoami。");
+    process.exit(1);
+  }
+  const token = loadOAuthToken();
+  if (!token) {
+    console.error("找不到 wrangler 的 OAuth token，请先运行 npx wrangler login。");
     process.exit(1);
   }
 
