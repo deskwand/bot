@@ -7,7 +7,6 @@ import type {
   DumpRow,
   TableSchema,
 } from "../admin/sql-dump";
-import { MemoryStore, type MemoryItem } from "../butler/memory";
 import { getClock } from "../butler/notifier";
 import { QUOTA_EXHAUSTED_TEXT } from "../llm/model-errors";
 import {
@@ -17,6 +16,7 @@ import {
   type RunRow,
 } from "./bot-store";
 import { buildBotAuthorization, buildBotInstructions } from "./instructions";
+import { RULES_DOC, checkDocWrite, type BotDoc } from "./docs";
 import {
   CHANNEL_DISABLED_RETRY_MS,
   DAILY_WAKE_LIMIT,
@@ -36,11 +36,12 @@ export type BotInit = {
   mission: string;
   defaultIntervalMs: number;
   firstWakeAt: number;
+  rules?: string;
 };
 
 export type BotSnapshot = {
   meta: BotMeta;
-  memories: MemoryItem[];
+  docs: BotDoc[];
   runs: RunRow[];
 };
 
@@ -64,6 +65,7 @@ export type BotButler = {
     taskId: string,
   ): Promise<{ outcome: RunOutcome | null; summary: string }>;
   botNotice(botId: string, text: string): Promise<void>;
+  ownerProfile(): Promise<string>;
   maintenanceActive(): Promise<boolean>;
 };
 
@@ -87,21 +89,24 @@ export function setBotTaskOverride(
 }
 
 /**
- * Long-lived identity for one autonomous bot: mission, memories, run log and
+ * Long-lived identity for one autonomous bot: mission, documents, run log and
  * wake time. It never runs a model; every wake goes through the Butler, which
  * dispatches a TaskDO and reports the outcome back here.
  */
 export class BotDO extends DurableObject<Env> {
   store: BotStore;
 
-  memories: MemoryStore;
-
   private readonly backup: BackupRpc;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = new BotStore(ctx.storage.sql);
-    this.memories = new MemoryStore(ctx.storage.sql);
+    // Tables restore in name order, so `memories` is fully written before
+    // `meta` gets its row. Migrating mid-restore would fold a partial table
+    // into `记忆` and drop it, breaking the remaining restore pages.
+    if (this.store.readMeta() !== null) {
+      this.store.migrateLegacyMemories(getClock().now());
+    }
     // Bots have no maintenance lease of their own; the Butler holds it.
     this.backup = new BackupRpc(ctx, null);
   }
@@ -162,6 +167,10 @@ export class BotDO extends DurableObject<Env> {
       pendingSteer: [],
     };
     this.store.writeMeta(meta);
+    const rules = spec.rules?.trim();
+    if (rules !== undefined && rules.length > 0) {
+      this.store.putDoc(RULES_DOC, rules, getClock().now());
+    }
     await this.ctx.storage.setAlarm(spec.firstWakeAt);
   }
 
@@ -170,19 +179,42 @@ export class BotDO extends DurableObject<Env> {
     if (meta === null) return null;
     return {
       meta,
-      memories: this.memories.all(),
+      docs: this.store.readDocs(),
       runs: this.store.recentRuns(5),
     };
   }
 
-  async remember(content: string): Promise<number> {
-    if (this.store.readMeta() === null) return -1;
-    return this.memories.add(content);
+  /** Writes or deletes one document after the shared name and size checks. */
+  async writeDoc(
+    name: string,
+    content: string,
+    options: { allowRules: boolean },
+  ): Promise<{ ok: boolean; message: string }> {
+    if (this.store.readMeta() === null) {
+      return { ok: false, message: "机器人不存在" };
+    }
+    const check = checkDocWrite(
+      this.store.readDocs(),
+      name,
+      content,
+      options,
+    );
+    if (!check.ok) return { ok: false, message: check.message };
+    if (check.content === null) {
+      return this.store.deleteDoc(check.name)
+        ? { ok: true, message: `已删除「${check.name}」` }
+        : { ok: false, message: `没有文档「${check.name}」` };
+    }
+    this.store.putDoc(check.name, check.content, getClock().now());
+    return {
+      ok: true,
+      message: `已写入「${check.name}」（${check.used}/${check.limit} 字）`,
+    };
   }
 
-  async forget(id: number): Promise<boolean> {
-    if (this.store.readMeta() === null) return false;
-    return this.memories.remove(id);
+  async searchRuns(keyword: string): Promise<RunRow[]> {
+    if (this.store.readMeta() === null) return [];
+    return this.store.searchRuns(keyword);
   }
 
   /**
@@ -245,10 +277,12 @@ export class BotDO extends DurableObject<Env> {
     if (meta.currentTaskId !== null) {
       // The run in flight cannot be preempted: schedule right after it ends.
       meta.nextWakeAt = now + MIN_WAKE_MS;
+      meta.manualWakeAt = meta.nextWakeAt;
       this.store.writeMeta(meta);
       return "after_run";
     }
     meta.nextWakeAt = now;
+    meta.manualWakeAt = meta.nextWakeAt;
     this.store.writeMeta(meta);
     await this.ctx.storage.setAlarm(now);
     return "scheduled";
@@ -259,6 +293,7 @@ export class BotDO extends DurableObject<Env> {
     if (meta === null) return;
     meta.status = "paused";
     meta.nextWakeAt = null;
+    meta.manualWakeAt = null;
     this.store.writeMeta(meta);
     await this.ctx.storage.deleteAlarm();
   }
@@ -272,6 +307,7 @@ export class BotDO extends DurableObject<Env> {
     meta.nextWakeAt = wakeNow
       ? now
       : clampWakeAt(now, now + meta.defaultIntervalMs).at;
+    meta.manualWakeAt = wakeNow ? meta.nextWakeAt : null;
     this.store.writeMeta(meta);
     // Pausing deleted the watchdog: check an in-flight run right away so a
     // lost outcome cannot leave the bot stuck on it.
@@ -337,7 +373,17 @@ export class BotDO extends DurableObject<Env> {
     }
     if (meta.status !== "active") return;
 
+    // Keep a manual wake manual when the run ended before the owner's requested
+    // time and the bot did not reschedule: the minimum-interval clamp is not a
+    // schedule change, so move the marker with the wake time.
+    const requestedAt = meta.nextWakeAt;
+    const keepManual =
+      meta.manualWakeAt != null &&
+      meta.manualWakeAt === requestedAt &&
+      requestedAt !== null &&
+      requestedAt > now;
     meta.nextWakeAt = clampWakeAt(now, nextBase(meta, now)).at;
+    if (keepManual) meta.manualWakeAt = meta.nextWakeAt;
     this.store.writeMeta(meta);
     await this.ctx.storage.setAlarm(meta.nextWakeAt);
   }
@@ -345,10 +391,9 @@ export class BotDO extends DurableObject<Env> {
   async destroy(): Promise<void> {
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
-    // `deleteAll` also drops the SQL tables. Rebuild empty stores so late
+    // `deleteAll` also drops the SQL tables. Rebuild an empty store so late
     // RPCs see a missing meta row instead of failing on a missing table.
     this.store = new BotStore(this.ctx.storage.sql);
-    this.memories = new MemoryStore(this.ctx.storage.sql);
   }
 
   async alarm(): Promise<void> {
@@ -392,12 +437,22 @@ export class BotDO extends DurableObject<Env> {
       return;
     }
 
+    let ownerProfile = "";
+    try {
+      ownerProfile = await this.butler().ownerProfile();
+    } catch (error) {
+      console.warn("bot owner profile failed:", error);
+    }
+
     const instructions = buildBotInstructions({
       name: meta.name,
       mission: meta.mission,
-      memories: this.memories.all(),
+      docs: this.store.readDocs(),
+      ownerProfile,
       runs: this.store.recentRuns(3),
       steer: meta.pendingSteer,
+      manualWake:
+        meta.manualWakeAt != null && meta.manualWakeAt === meta.nextWakeAt,
     });
     const authorization = buildBotAuthorization({
       name: meta.name,
@@ -444,6 +499,7 @@ export class BotDO extends DurableObject<Env> {
       // Keep the run so the cancelled outcome is recorded against it.
       current.wakesCount += 1;
       current.pendingSteer = current.pendingSteer.slice(consumed);
+      current.manualWakeAt = null;
       this.store.insertRun(result.taskId, now);
       current.currentTaskId = result.taskId;
       this.store.writeMeta(current);
@@ -451,6 +507,7 @@ export class BotDO extends DurableObject<Env> {
     }
     current.wakesCount += 1;
     current.pendingSteer = current.pendingSteer.slice(consumed);
+    current.manualWakeAt = null;
     this.store.writeMeta(current);
 
     this.store.insertRun(result.taskId, now);

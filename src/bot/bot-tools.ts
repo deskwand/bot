@@ -1,11 +1,22 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
+import {
+  PROPOSE_RULES_TOOL,
+  rejectionText,
+  type ApprovalGateLike,
+} from "../task/approvals";
+import type { RunRow } from "./bot-store";
+import { RULES_DOC, checkDocWrite } from "./docs";
 import { parseDuration } from "./wake";
 
 /** The Bot DO operations one bot run needs. Structural so tests can fake it. */
 export type BotControl = {
-  remember(content: string): Promise<number>;
-  forget(id: number): Promise<boolean>;
+  writeDoc(
+    name: string,
+    content: string,
+    options: { allowRules: boolean },
+  ): Promise<{ ok: boolean; message: string }>;
+  searchRuns(keyword: string): Promise<RunRow[]>;
   setNextWake(req: {
     afterMs?: number;
     at?: number;
@@ -18,11 +29,25 @@ export type BotTaskToolDeps = {
   bot: BotControl;
   taskId: () => string;
   notify(text: string): Promise<boolean>;
+  approvals: ApprovalGateLike;
 };
 
-const BotRemember = Type.Object({ content: Type.String() });
+/** Used when the tool context carries no abort signal. */
+const NEVER_ABORTED = new AbortController().signal;
 
-const BotForget = Type.Object({ id: Type.Number() });
+const RECORD_TEXT_LIMIT = 500;
+
+const WriteDoc = Type.Object({
+  name: Type.String(),
+  content: Type.String(),
+});
+
+const ProposeRules = Type.Object({
+  content: Type.String(),
+  reason: Type.String(),
+});
+
+const SearchRuns = Type.Object({ keyword: Type.String() });
 
 const SetNextWake = Type.Object({
   after: Type.Optional(Type.String()),
@@ -47,40 +72,110 @@ function iso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
+function clampText(text: string): string {
+  if (text.length <= RECORD_TEXT_LIMIT) return text;
+  return `${text.slice(0, RECORD_TEXT_LIMIT)}…`;
+}
+
 /**
  * Tools installed on a TaskDO that runs for a bot. They write through to the
- * bot's own storage. `bot_remember`, `notify_owner` and `finish_bot` are not
+ * bot's own storage. `propose_rules`, `notify_owner` and `finish_bot` are not
  * idempotent and must not replay after a restart.
  */
 export function createBotTaskTools(
   deps: BotTaskToolDeps,
 ): ToolRegistration[] {
-  const { bot, taskId, notify } = deps;
+  const { bot, taskId, notify, approvals } = deps;
 
-  const remember: ToolRegistration<typeof BotRemember> = {
-    name: "bot_remember",
-    description: "Save a long-term memory that later runs of this bot will see.",
-    parameters: BotRemember,
-    // Appends a row: a replay after a restart would store it twice.
-    async execute({ content }) {
+  const writeDoc: ToolRegistration<typeof WriteDoc> = {
+    name: "write_doc",
+    description:
+      "Overwrite one of this bot's documents with its full new text (empty text deletes it). `记忆` holds curated long-term facts and state; any other name is a method document. Changes take effect from the next run. `守则` cannot be written here.",
+    parameters: WriteDoc,
+    replay: "safe",
+    async execute({ name, content }) {
       try {
-        const id = await bot.remember(content);
-        if (id < 0) return output("机器人不存在");
-        return output(`已记住（#${id}）`);
+        const result = await bot.writeDoc(name, content, {
+          allowRules: false,
+        });
+        return output(result.message);
       } catch (error) {
         return output(errorText(error));
       }
     },
   };
 
-  const forget: ToolRegistration<typeof BotForget> = {
-    name: "bot_forget",
-    description: "Delete one of this bot's memories by its id.",
-    parameters: BotForget,
+  const proposeRules: ToolRegistration<typeof ProposeRules> = {
+    name: PROPOSE_RULES_TOOL,
+    description:
+      "Propose the full new text of this bot's rules (`守则`) with a short reason. The owner must approve; nothing changes if they reject or do not answer.",
+    parameters: ProposeRules,
+    // The approval gate already refuses to wake a tool after a restart.
+    async execute({ content, reason }, _api, context) {
+      const trimmed = content.trim();
+      // Reject an over-long proposal before asking the owner.
+      const check = checkDocWrite([], RULES_DOC, trimmed, {
+        allowRules: true,
+      });
+      if (!check.ok) return output(check.message);
+
+      const signal = context.abortSignal;
+      const decision = await approvals.request(
+        PROPOSE_RULES_TOOL,
+        { content: trimmed, reason },
+        signal ?? NEVER_ABORTED,
+      );
+      if (decision === "approved") {
+        try {
+          const result = await bot.writeDoc(RULES_DOC, trimmed, {
+            allowRules: true,
+          });
+          return output(result.message);
+        } catch (error) {
+          return output(errorText(error));
+        }
+      }
+
+      if (signal?.aborted) {
+        throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      }
+      return {
+        isError: true,
+        output: [
+          {
+            type: "text",
+            text: rejectionText(decision),
+          },
+        ],
+      };
+    },
+  };
+
+  const searchRuns: ToolRegistration<typeof SearchRuns> = {
+    name: "search_runs",
+    description:
+      "Search this bot's older runs (notes and summaries) by keyword.",
+    parameters: SearchRuns,
     replay: "safe",
-    async execute({ id }) {
+    async execute({ keyword }) {
       try {
-        return output((await bot.forget(id)) ? "已忘记" : "没有这条记忆");
+        const runs = await bot.searchRuns(keyword);
+        if (runs.length === 0) return output("没有匹配的运行记录");
+        return output(
+          runs
+            .map((run) => {
+              const details = [run.note, run.summary]
+                .filter(
+                  (value): value is string =>
+                    value !== null && value.length > 0,
+                )
+                .map(clampText);
+              return `- ${run.taskId} ${iso(run.startedAt)}（${
+                run.outcome ?? "未结束"
+              }）：${details.join("；")}`;
+            })
+            .join("\n"),
+        );
       } catch (error) {
         return output(errorText(error));
       }
@@ -166,5 +261,13 @@ export function createBotTaskTools(
     },
   };
 
-  return [remember, forget, setNextWake, note, notifyOwner, finishBot];
+  return [
+    writeDoc,
+    proposeRules,
+    searchRuns,
+    note,
+    setNextWake,
+    notifyOwner,
+    finishBot,
+  ];
 }

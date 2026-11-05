@@ -3,6 +3,9 @@ export type MemoryItem = { id: number; content: string };
 /** How many memories the system prompt section renders each turn. */
 export const RENDER_LIMIT = 50;
 
+/** Longest owner profile a bot wake embeds. */
+export const OWNER_PROFILE_LIMIT = 1500;
+
 /**
  * The memory prompt section: every known fact about the owner, newest last,
  * capped so a long-lived Butler cannot blow up the system prompt.
@@ -14,6 +17,29 @@ export function renderMemorySection(items: readonly MemoryItem[]): string {
     "关于主人的已知信息：",
     ...latest.map((item) => `- ${item.content}`),
   ].join("\n");
+}
+
+/**
+ * The owner profile a bot sees: newest memories kept until the limit, then
+ * ordered oldest first. An over-long newest memory is truncated on its own.
+ */
+export function renderOwnerProfile(
+  items: readonly MemoryItem[],
+  limit = OWNER_PROFILE_LIMIT,
+): string {
+  const lines: string[] = [];
+  let used = 0;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const line = `- ${items[index]!.content}`;
+    const next = used === 0 ? line.length : used + 1 + line.length;
+    if (next > limit) {
+      if (lines.length === 0) return `${line.slice(0, limit - 1)}…`;
+      break;
+    }
+    lines.unshift(line);
+    used = next;
+  }
+  return lines.join("\n");
 }
 
 /** Typed access to the Butler's long-term memory. */

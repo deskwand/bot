@@ -1,6 +1,11 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { MemoryStore, renderMemorySection } from "../../src/butler/memory";
+import {
+  MemoryStore,
+  OWNER_PROFILE_LIMIT,
+  renderMemorySection,
+  renderOwnerProfile,
+} from "../../src/butler/memory";
 import type { ButlerDO } from "../../src/butler/butler-do";
 
 declare module "cloudflare:test" {
@@ -88,6 +93,50 @@ describe("MemoryStore", () => {
     expect(rendered.startsWith("关于主人的已知信息：\n- 记忆 11")).toBe(true);
     expect(rendered).toContain("- 记忆 60");
     expect(rendered.match(/^- /gm)).toHaveLength(50);
+  });
+
+  it("renders a short owner profile oldest first", () => {
+    expect(renderOwnerProfile([])).toBe("");
+    expect(
+      renderOwnerProfile([
+        { id: 1, content: "a" },
+        { id: 2, content: "b" },
+        { id: 3, content: "c" },
+      ]),
+    ).toBe("- a\n- b\n- c");
+  });
+
+  it("keeps the newest memories within the owner profile limit", () => {
+    const items = Array.from({ length: 20 }, (_, index) => ({
+      id: index + 1,
+      content: `item-${index}-${"x".repeat(100)}`,
+    }));
+    const profile = renderOwnerProfile(items);
+
+    expect(profile.length).toBeLessThanOrEqual(OWNER_PROFILE_LIMIT);
+    expect(profile).toContain(`- ${items[19]!.content}`);
+    expect(profile).not.toContain(items[0]!.content);
+  });
+
+  it("truncates a single over-long owner memory", () => {
+    const profile = renderOwnerProfile([{ id: 1, content: "x".repeat(2000) }]);
+
+    expect(profile).toHaveLength(OWNER_PROFILE_LIMIT);
+    expect(profile.endsWith("…")).toBe(true);
+  });
+
+  it("serves the owner profile through the butler RPC", async () => {
+    const profile = await runInDurableObject(
+      butler("owner-profile"),
+      async (instance, state) => {
+        const store = new MemoryStore(state.storage.sql);
+        store.add("时区 UTC+8");
+        store.add("喜欢绿茶");
+        return instance.ownerProfile();
+      },
+    );
+
+    expect(profile).toBe("- 时区 UTC+8\n- 喜欢绿茶");
   });
 
   it("answers remember, recall and forget through the butler tools", async () => {

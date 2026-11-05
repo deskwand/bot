@@ -13,8 +13,13 @@ export type ApprovalNote = {
   reviewArgs?: unknown;
 };
 
+export const PROPOSE_RULES_TOOL = "propose_rules";
+
 /** Longest argument summary sent to the channel. */
 const ARGS_SUMMARY_LIMIT = 200;
+
+/** Longest reason shown on a proposed rules card. */
+const REASON_SUMMARY_LIMIT = 300;
 
 /** Used by wrappers when the tool context carries no abort signal. */
 const NEVER_ABORTED = new AbortController().signal;
@@ -42,6 +47,37 @@ export interface ApprovalGateLike {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Card text for one approval. A proposed rules change shows its reason and the
+ * full new text; other tools keep the bounded JSON snippet.
+ */
+export function approvalSummary(tool: string, argsJson: string): string {
+  if (tool === PROPOSE_RULES_TOOL) {
+    let args: unknown;
+    try {
+      args = JSON.parse(argsJson);
+    } catch {
+      return argsJson.slice(0, ARGS_SUMMARY_LIMIT);
+    }
+    if (typeof args === "object" && args !== null) {
+      const { content, reason } = args as {
+        content?: unknown;
+        reason?: unknown;
+      };
+      if (typeof content === "string") {
+        const text = typeof reason === "string" ? reason : "";
+        const summary =
+          text.length > REASON_SUMMARY_LIMIT
+            ? `${text.slice(0, REASON_SUMMARY_LIMIT)}…`
+            : text;
+        const rules = content.trim();
+        return `理由：${summary}\n新守则：\n${rules.length > 0 ? rules : "（清空守则）"}`;
+      }
+    }
+  }
+  return argsJson.slice(0, ARGS_SUMMARY_LIMIT);
 }
 
 /**
@@ -120,7 +156,7 @@ export class ApprovalGate implements ApprovalGateLike {
         type: "approval_requested",
         approvalId: id,
         tool,
-        argsSummary: argsJson.slice(0, ARGS_SUMMARY_LIMIT),
+        argsSummary: approvalSummary(tool, argsJson),
         ...(note?.reason !== undefined ? { reason: note.reason } : {}),
       });
     } catch (error) {
@@ -170,7 +206,7 @@ export class ApprovalGate implements ApprovalGateLike {
       .map((row) => ({
         approvalId: row.id,
         tool: row.tool,
-        argsSummary: row.args_json.slice(0, ARGS_SUMMARY_LIMIT),
+        argsSummary: approvalSummary(row.tool, row.args_json),
         ...(row.reason !== null ? { reason: row.reason } : {}),
       }));
   }

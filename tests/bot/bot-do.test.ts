@@ -3,9 +3,10 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFER_MS } from "../../src/admin/maintenance";
 import {
+  BotDO,
   setBotButlerOverride,
   setBotTaskOverride,
   type BotButler,
@@ -24,6 +25,7 @@ import {
   nextUtcMidnight,
   utcDay,
 } from "../../src/bot/wake";
+import { buildBotInstructions } from "../../src/bot/instructions";
 import { setClockOverride } from "../../src/butler/notifier";
 import { QUOTA_EXHAUSTED_TEXT } from "../../src/llm/model-errors";
 
@@ -56,6 +58,7 @@ type FakeState = {
   outcomeGate: Promise<void> | null;
   maintenance: boolean;
   maintenanceThrows: boolean;
+  profile: string | Error;
 };
 
 /** A Butler stand-in that records calls and answers from mutable state. */
@@ -70,6 +73,7 @@ function fakeButler(): FakeState {
     outcomeGate: null,
     maintenance: false,
     maintenanceThrows: false,
+    profile: "",
   };
 
   const butler: BotButler = {
@@ -85,6 +89,10 @@ function fakeButler(): FakeState {
     },
     async botNotice(botId, text) {
       state.notices.push({ botId, text });
+    },
+    async ownerProfile() {
+      if (state.profile instanceof Error) throw state.profile;
+      return state.profile;
     },
     async maintenanceActive() {
       if (state.maintenanceThrows) throw new Error("butler down");
@@ -167,6 +175,7 @@ afterEach(() => {
   setBotButlerOverride(null);
   setBotTaskOverride(null);
   setClockOverride(null);
+  vi.restoreAllMocks();
 });
 
 describe("BotDO lifecycle", () => {
@@ -463,10 +472,12 @@ describe("BotDO lifecycle", () => {
     await initBot(stub);
 
     await stub.destroy();
-    const remembered = await stub.remember("迟到的记忆");
+    const wrote = await stub.writeDoc("记忆", "迟到的记忆", {
+      allowRules: false,
+    });
     await stub.onRunEnded("t-late", "completed", "跑完了");
 
-    expect(remembered).toBe(-1);
+    expect(wrote).toEqual({ ok: false, message: "机器人不存在" });
     expect(await stub.snapshot()).toBeNull();
     expect(await alarmAt(stub)).toBeNull();
   });
@@ -475,7 +486,7 @@ describe("BotDO lifecycle", () => {
     const fake = fakeButler();
     const stub = botStub("b-lifecycle-authorization");
     await initBot(stub);
-    await stub.remember("记忆内容abc");
+    await stub.writeDoc("记忆", "记忆内容abc", { allowRules: false });
 
     await fireAlarm(stub);
 
@@ -784,6 +795,314 @@ describe("BotDO lifecycle", () => {
     const snapshot = await stub.snapshot();
     expect(snapshot?.meta.status).toBe("paused");
     expect(await alarmAt(stub)).toBeNull();
+  });
+});
+
+describe("BotDO documents", () => {
+  it("writes the initial rules during init", async () => {
+    fakeButler();
+    const stub = botStub("b-docs-init");
+    await initBot(stub, { rules: "凌晨不发消息" });
+
+    expect((await stub.snapshot())?.docs).toEqual([
+      { name: "守则", content: "凌晨不发消息" },
+    ]);
+  });
+
+  it("writes and deletes documents with the shared rules", async () => {
+    fakeButler();
+    const stub = botStub("b-docs-write");
+    await initBot(stub);
+
+    expect(
+      await stub.writeDoc(" 方法 ", " 先看主站 ", { allowRules: false }),
+    ).toEqual({ ok: true, message: "已写入「方法」（4/6000 字）" });
+    expect((await stub.snapshot())?.docs).toEqual([
+      { name: "方法", content: "先看主站" },
+    ]);
+
+    expect(await stub.writeDoc("守则", "x", { allowRules: false })).toEqual({
+      ok: false,
+      message: "「守则」不能直接写，请用 propose_rules 提议",
+    });
+
+    expect(await stub.writeDoc("方法", "", { allowRules: false })).toEqual({
+      ok: true,
+      message: "已删除「方法」",
+    });
+    expect(await stub.writeDoc("不存在", "", { allowRules: false })).toEqual({
+      ok: false,
+      message: "没有文档「不存在」",
+    });
+  });
+
+  it("reports a missing bot", async () => {
+    fakeButler();
+    const stub = botStub("b-docs-missing");
+
+    expect(
+      await stub.writeDoc("方法", "先看主站", { allowRules: false }),
+    ).toEqual({ ok: false, message: "机器人不存在" });
+    expect(await stub.searchRuns("价格")).toEqual([]);
+  });
+
+  it("renders documents and the owner profile on wake", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-docs-wake");
+    await initBot(stub);
+    await stub.writeDoc("守则", "凌晨不发消息", { allowRules: true });
+    await stub.writeDoc("方法B", "再看备份", { allowRules: false });
+    await stub.writeDoc("方法A", "先看主站", { allowRules: false });
+    await stub.writeDoc("记忆", "上次价格 239", { allowRules: false });
+    fake.profile = "- 时区 UTC+8";
+
+    await fireAlarm(stub);
+
+    const snapshot = await stub.snapshot();
+    expect(fake.spawns).toHaveLength(1);
+    expect(fake.spawns[0]!.instructions).toBe(
+      buildBotInstructions({
+        name: "价格哨兵",
+        mission: "盯着价格",
+        docs: snapshot!.docs,
+        ownerProfile: "- 时区 UTC+8",
+        runs: [],
+        steer: [],
+        manualWake: false,
+      }),
+    );
+  });
+
+  it("spawns without the owner profile when the Butler fails", async () => {
+    const fake = fakeButler();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stub = botStub("b-docs-profile-down");
+    await initBot(stub);
+    fake.profile = new Error("down");
+
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(1);
+    expect(fake.spawns[0]!.instructions).not.toContain("关于主人：");
+    expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe("BotDO legacy memory migration", () => {
+  function seedLegacyMemories(sql: SqlStorage, contents: string[]): void {
+    sql.exec(
+      `CREATE TABLE memories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`,
+    );
+    for (const content of contents) {
+      sql.exec(
+        `INSERT INTO memories (content, created_at) VALUES (?, ?)`,
+        content,
+        1,
+      );
+    }
+  }
+
+  const meta: BotMeta = {
+    botId: "b1",
+    name: "价格哨兵",
+    mission: "盯着价格",
+    status: "active",
+    nextWakeAt: null,
+    defaultIntervalMs: 86_400_000,
+    currentTaskId: null,
+    consecutiveFailures: 0,
+    wakesDay: null,
+    wakesCount: 0,
+    pendingSteer: [],
+  };
+
+  it("leaves a partial memories table alone until meta is restored", async () => {
+    const result = await runInDurableObject(
+      botStub("b-migrate-partial"),
+      (_instance, state) => {
+        const sql = state.storage.sql;
+        seedLegacyMemories(sql, ["喜欢绿茶"]);
+        new BotDO(state, env);
+        return {
+          meta: new BotStore(sql).readMeta(),
+          docs: new BotStore(sql).readDocs(),
+          rows: sql
+            .exec<{ content: string }>(`SELECT content FROM memories`)
+            .toArray(),
+        };
+      },
+    );
+
+    expect(result.meta).toBeNull();
+    expect(result.docs).toEqual([]);
+    expect(result.rows).toEqual([{ content: "喜欢绿茶" }]);
+  });
+
+  it("migrates legacy memories once meta exists", async () => {
+    const result = await runInDurableObject(
+      botStub("b-migrate-complete"),
+      (_instance, state) => {
+        const sql = state.storage.sql;
+        seedLegacyMemories(sql, ["喜欢绿茶", "上次价格 239"]);
+        new BotStore(sql).writeMeta(meta);
+        new BotDO(state, env);
+        return {
+          docs: new BotStore(sql).readDocs(),
+          legacy: sql
+            .exec<{ name: string }>(
+              `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories'`,
+            )
+            .toArray(),
+        };
+      },
+    );
+
+    expect(result.docs).toEqual([
+      { name: "记忆", content: "- 喜欢绿茶\n- 上次价格 239" },
+    ]);
+    expect(result.legacy).toEqual([]);
+  });
+});
+
+describe("BotDO manual wakes", () => {
+  it("marks a wakeNow wake and clears it after dispatch", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-manual-wake-now");
+    await initBot(stub);
+
+    expect(await stub.wakeNow()).toBe("scheduled");
+    expect((await stub.snapshot())?.meta.manualWakeAt).toBe(now);
+
+    await fireAlarm(stub);
+    expect(fake.spawns[0]!.instructions).toContain(
+      "唤醒原因：主人要求立即唤醒",
+    );
+    expect((await stub.snapshot())?.meta.manualWakeAt).toBeNull();
+
+    fake.outcome = { outcome: "completed", summary: "看完了" };
+    now += WATCHDOG_MS;
+    await fireAlarm(stub);
+    const scheduled = await stub.snapshot();
+    expect(scheduled?.meta.currentTaskId).toBeNull();
+
+    now = scheduled!.meta.nextWakeAt!;
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(2);
+    expect(fake.spawns[1]!.instructions).toContain("唤醒原因：按计划唤醒");
+    expect(fake.spawns[1]!.instructions).not.toContain("主人要求立即唤醒");
+  });
+
+  it("marks a wake requested during a run that ends promptly", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-manual-wake-after-run");
+    await initBot(stub);
+    await fireAlarm(stub);
+
+    now += 60_000;
+    expect(await stub.wakeNow()).toBe("after_run");
+    const requestedAt = now + MIN_WAKE_MS;
+    expect((await stub.snapshot())?.meta.manualWakeAt).toBe(requestedAt);
+
+    fake.outcome = { outcome: "completed", summary: "看完了" };
+    now += 2 * 60_000; // ends well within the 5-minute minimum
+    await fireAlarm(stub);
+    const scheduled = await stub.snapshot();
+    expect(scheduled?.meta.currentTaskId).toBeNull();
+    expect(scheduled?.meta.nextWakeAt).toBe(now + MIN_WAKE_MS);
+
+    now = scheduled!.meta.nextWakeAt!;
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(2);
+    expect(fake.spawns[1]!.instructions).toContain(
+      "唤醒原因：主人要求立即唤醒",
+    );
+  });
+
+  it("treats a wake rescheduled by the run as routine", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-manual-wake-rescheduled");
+    await initBot(stub);
+    await fireAlarm(stub);
+
+    now += 60_000;
+    expect(await stub.wakeNow()).toBe("after_run");
+    await stub.setNextWake({ afterMs: 2 * 3_600_000 });
+
+    fake.outcome = { outcome: "completed", summary: "看完了" };
+    await fireAlarm(stub);
+    const scheduled = await stub.snapshot();
+    expect(scheduled?.meta.currentTaskId).toBeNull();
+
+    now = scheduled!.meta.nextWakeAt!;
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(2);
+    expect(fake.spawns[1]!.instructions).toContain("唤醒原因：按计划唤醒");
+    expect(fake.spawns[1]!.instructions).not.toContain("主人要求立即唤醒");
+  });
+
+  it("treats a slow run's fallback wake as routine", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-manual-wake-slow-run");
+    await initBot(stub);
+    await fireAlarm(stub);
+
+    now += 60_000;
+    expect(await stub.wakeNow()).toBe("after_run");
+
+    fake.outcome = { outcome: "completed", summary: "看完了" };
+    now += WATCHDOG_MS;
+    await fireAlarm(stub);
+    const scheduled = await stub.snapshot();
+    expect(scheduled?.meta.currentTaskId).toBeNull();
+
+    now = scheduled!.meta.nextWakeAt!;
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(2);
+    expect(fake.spawns[1]!.instructions).toContain("唤醒原因：按计划唤醒");
+  });
+
+  it("clears a manual wake when the bot is paused and resumed later", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-manual-wake-paused");
+    await initBot(stub);
+    await stub.wakeNow();
+    await stub.pause();
+    expect((await stub.snapshot())?.meta.manualWakeAt).toBeNull();
+
+    await stub.resume(false);
+    const resumed = await stub.snapshot();
+    expect(resumed?.meta.manualWakeAt).toBeNull();
+
+    now = resumed!.meta.nextWakeAt!;
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(1);
+    expect(fake.spawns[0]!.instructions).toContain("唤醒原因：按计划唤醒");
+  });
+
+  it("marks a resume with an immediate wake", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-manual-resume");
+    await initBot(stub);
+    await stub.pause();
+
+    await stub.resume(true);
+    expect((await stub.snapshot())?.meta.manualWakeAt).toBe(now);
+
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(1);
+    expect(fake.spawns[0]!.instructions).toContain(
+      "唤醒原因：主人要求立即唤醒",
+    );
   });
 });
 
