@@ -1,0 +1,7 @@
+[
+  "src/butler/prompt.ts",
+  "src/task/prompt.ts",
+  "src/task/review.ts",
+  "src/bot/instructions.ts",
+  "src/tools/**"
+]
