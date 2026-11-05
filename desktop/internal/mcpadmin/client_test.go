@@ -13,6 +13,8 @@ import (
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
+	"github.com/deskwand/bot/desktop/internal/i18n/i18ntest"
 	"github.com/deskwand/bot/desktop/internal/platform"
 )
 
@@ -221,6 +223,38 @@ func errorCode(err error) string {
 		return coded.Code
 	}
 	return ""
+}
+
+func TestAdminErrorsFollowLocale(t *testing.T) {
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closedURL := closed.URL
+	closed.Close()
+
+	hang := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-hang
+	}))
+	defer slow.Close()
+	defer close(hang)
+
+	invalid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	defer invalid.Close()
+
+	clients := map[string]*Client{
+		"connection failure": NewClient(closedURL, testAdminToken, nil),
+		"timeout":            NewClient(slow.URL, testAdminToken, &http.Client{Timeout: 50 * time.Millisecond}),
+		"invalid response":   NewClient(invalid.URL, testAdminToken, nil),
+	}
+	for name, client := range clients {
+		client.Locale = func() string { return i18n.EN }
+		_, err := client.Status(context.Background())
+		if err == nil {
+			t.Fatalf("%s: expected an error", name)
+		}
+		i18ntest.NoHan(t, name, err.Error())
+	}
 }
 
 func TestClientReportsNetworkFailureSeparately(t *testing.T) {

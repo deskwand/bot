@@ -139,8 +139,10 @@ func TestLoginStatusesAndSharedFixtureCredentials(t *testing.T) {
 	}
 
 	states := make([]string, len(statuses))
+	phases := make([]string, len(statuses))
 	for index, status := range statuses {
 		states[index] = status.State
+		phases[index] = status.Phase
 		if status.OperationID == "" {
 			t.Fatal("status has no operation id")
 		}
@@ -151,6 +153,45 @@ func TestLoginStatusesAndSharedFixtureCredentials(t *testing.T) {
 	for _, state := range []string{LoginWaiting, LoginScanned, LoginConfirmed} {
 		if !contains(states, state) {
 			t.Fatalf("states %v do not include %q", states, state)
+		}
+	}
+	wantPhases := []string{"prompt", "scanned", "confirmed"}
+	if len(phases) != len(wantPhases) {
+		t.Fatalf("phases = %v, want %v", phases, wantPhases)
+	}
+	for index, phase := range wantPhases {
+		if phases[index] != phase {
+			t.Fatalf("phases = %v, want %v", phases, wantPhases)
+		}
+	}
+}
+
+func TestWaitPhaseDistinguishesPromptAndPending(t *testing.T) {
+	fixture := loadFixture(t)
+	server := httptest.NewServer(&fakeILink{statuses: []map[string]any{
+		{"status": QRScanned},
+		{"status": QRWait},
+		fixture,
+	}})
+	defer server.Close()
+
+	var phases []string
+	_, err := loginWith(context.Background(), testClient(server), func(context.Context, time.Duration) error {
+		return nil
+	}, func(status LoginStatus) {
+		phases = append(phases, status.Phase)
+	})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	want := []string{"prompt", "scanned", "pending", "confirmed"}
+	if len(phases) != len(want) {
+		t.Fatalf("phases = %v, want %v", phases, want)
+	}
+	for index, phase := range want {
+		if phases[index] != phase {
+			t.Fatalf("phases = %v, want %v", phases, want)
 		}
 	}
 }

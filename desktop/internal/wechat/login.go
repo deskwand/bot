@@ -38,8 +38,10 @@ const RedactedToken = "<redacted>"
 type LoginStatus struct {
 	OperationID string
 	State       string
-	QRContent   string
-	Message     string
+	// Phase names the step within State so the app can localize the text.
+	Phase     string
+	QRContent string
+	Message   string
 }
 
 // Credentials is the value stored in the WECHAT_CREDENTIALS secret. The JSON
@@ -144,65 +146,65 @@ func loginWith(
 	if err != nil {
 		return Credentials{}, err
 	}
-	emit := func(state, qr, message string) {
+	emit := func(state, phase, qr string) {
 		if onStatus == nil {
 			return
 		}
 		onStatus(LoginStatus{
 			OperationID: operationID,
 			State:       state,
+			Phase:       phase,
 			QRContent:   qr,
-			Message:     message,
 		})
 	}
 
 	for attempt := 0; attempt < maxQRRefresh; attempt++ {
 		if err := ctx.Err(); err != nil {
-			emit(LoginCancelled, "", "登录已取消")
+			emit(LoginCancelled, "cancelled", "")
 			return Credentials{}, err
 		}
 
 		qr, err := client.GetBotQRCode(ctx)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				emit(LoginCancelled, "", "登录已取消")
+				emit(LoginCancelled, "cancelled", "")
 				return Credentials{}, ctxErr
 			}
 			return Credentials{}, err
 		}
-		emit(LoginWaiting, qr.ImageContent, "请使用微信扫描二维码")
+		emit(LoginWaiting, "prompt", qr.ImageContent)
 		lastState := LoginWaiting
 
 		for {
 			if err := sleep(ctx, pollInterval); err != nil {
-				emit(LoginCancelled, qr.ImageContent, "登录已取消")
+				emit(LoginCancelled, "cancelled", qr.ImageContent)
 				return Credentials{}, err
 			}
 
 			status, err := client.GetQRStatus(ctx, qr.QRCode)
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
-					emit(LoginCancelled, qr.ImageContent, "登录已取消")
+					emit(LoginCancelled, "cancelled", qr.ImageContent)
 					return Credentials{}, ctxErr
 				}
 				return Credentials{}, err
 			}
 			if err := ctx.Err(); err != nil {
-				emit(LoginCancelled, qr.ImageContent, "登录已取消")
+				emit(LoginCancelled, "cancelled", qr.ImageContent)
 				return Credentials{}, err
 			}
 
 			switch status.State {
 			case QRWait:
 				if lastState != LoginWaiting {
-					emit(LoginWaiting, qr.ImageContent, "等待扫码")
+					emit(LoginWaiting, "pending", qr.ImageContent)
 				}
 				lastState = LoginWaiting
 			case QRScanned:
-				emit(LoginScanned, qr.ImageContent, "已扫码，请在手机上确认")
+				emit(LoginScanned, "scanned", qr.ImageContent)
 				lastState = LoginScanned
 			case QRExpired:
-				emit(LoginExpired, qr.ImageContent, "二维码已过期，正在刷新")
+				emit(LoginExpired, "expired", qr.ImageContent)
 				lastState = LoginExpired
 				goto nextQR
 			case QRConfirmed:
@@ -211,10 +213,10 @@ func loginWith(
 					return Credentials{}, err
 				}
 				if err := ctx.Err(); err != nil {
-					emit(LoginCancelled, qr.ImageContent, "登录已取消")
+					emit(LoginCancelled, "cancelled", qr.ImageContent)
 					return Credentials{}, err
 				}
-				emit(LoginConfirmed, qr.ImageContent, "已确认登录")
+				emit(LoginConfirmed, "confirmed", qr.ImageContent)
 				return credentials, nil
 			}
 		}

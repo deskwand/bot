@@ -191,6 +191,7 @@ func (s *EntryService) ConnectWeChatWithStatus(ctx context.Context, target domai
 		if status.State == wechat.LoginConfirmed {
 			confirmed = true
 		}
+		status.Message = i18n.T(s.lang(), "wechat."+status.Phase)
 		if onStatus != nil {
 			onStatus(status)
 		}

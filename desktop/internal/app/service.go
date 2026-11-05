@@ -1498,7 +1498,7 @@ func (s *Service) ProbeModel(provider, model, key, api, baseURL string) (StatusI
 	if err != nil {
 		return StatusItemDTO{}, safeAppError(err, key)
 	}
-	items := diagnostics.Summarize([]string{"model"}, []domain.Evidence{evidence}, "")
+	items := diagnostics.Summarize(s.locale.Current(), []string{"model"}, []domain.Evidence{evidence}, "")
 	if len(items) == 0 {
 		return StatusItemDTO{}, domain.Error{Code: CodeServiceUnavailable, Message: s.t("app.modelProbeNoStatus")}
 	}

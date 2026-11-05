@@ -153,7 +153,7 @@ func (s *DiagnosticsService) status(ctx context.Context, target domain.Target) (
 		}
 	}
 
-	items := diagnostics.Summarize(s.kinds, evidence, snapshot.VersionID)
+	items := diagnostics.Summarize(s.lang(), s.kinds, evidence, snapshot.VersionID)
 	return DiagnosticsReport{
 		AccountID:  target.AccountID,
 		WorkerName: target.ScriptName,

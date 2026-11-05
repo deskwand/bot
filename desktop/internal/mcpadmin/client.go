@@ -17,6 +17,7 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 )
 
 // Error codes returned in domain.Error.Code by this package.
@@ -25,13 +26,14 @@ const (
 	CodeRequestFailed    = "MCP_FAILED"
 )
 
-// UnavailableMessage is the user-facing explanation for a deployment that
-// cannot serve the admin routes.
-const UnavailableMessage = "无法连接云端管理接口，请检查 PUBLIC_BASE_URL 与部署状态"
+// UnavailableMessage is the Chinese user-facing explanation for a deployment
+// that cannot serve the admin routes.
+var UnavailableMessage = i18n.T(i18n.ZH, "mcpadmin.unavailable")
 
-// NetworkUnreachableMessage explains a request that never got an HTTP answer:
-// a timeout or a refused connection points at the network, not the deployment.
-const NetworkUnreachableMessage = "无法访问云端管理接口（网络超时或连接失败），请检查网络或代理设置"
+// NetworkUnreachableMessage is the Chinese explanation for a request that
+// never got an HTTP answer: a timeout or a refused connection points at the
+// network, not the deployment.
+var NetworkUnreachableMessage = i18n.T(i18n.ZH, "mcpadmin.networkUnreachable")
 
 const (
 	probePath       = "/admin/mcp/probe"
@@ -77,6 +79,8 @@ type Client struct {
 	baseURL string
 	token   string
 	http    *http.Client
+	// Locale supplies the error language; nil means zh.
+	Locale func() string
 }
 
 // NewClient builds a client for baseURL. A nil httpClient gets the 20 second
@@ -184,7 +188,7 @@ func (c *Client) call(ctx context.Context, method, path string, payload, out any
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		return unreachable()
+		return c.unreachable()
 	}
 	return c.readResponse(response, path, out)
 }
@@ -196,7 +200,7 @@ func (c *Client) readResponse(response *http.Response, path string, out any) err
 		return fmt.Errorf("mcpadmin: read %s response: %s", path, c.redact(err.Error()))
 	}
 	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusNotFound {
-		return unavailable()
+		return c.unavailable()
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return c.statusError(response.StatusCode, raw)
@@ -205,7 +209,7 @@ func (c *Client) readResponse(response *http.Response, path string, out any) err
 		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return domain.Error{Code: CodeRequestFailed, Message: "云端管理接口返回了无法解析的响应"}
+		return domain.Error{Code: CodeRequestFailed, Message: c.t("mcpadmin.invalidResponse")}
 	}
 	return nil
 }
@@ -235,10 +239,31 @@ func (c *Client) redact(text string) string {
 	return strings.ReplaceAll(text, c.token, domain.RedactedValue)
 }
 
+func (c *Client) lang() string {
+	if c == nil || c.Locale == nil {
+		return i18n.ZH
+	}
+	return c.Locale()
+}
+
+func (c *Client) t(key string) string {
+	return i18n.T(c.lang(), key)
+}
+
+// unreachable is the Chinese default used before a client's Locale is set.
 func unreachable() error {
 	return domain.Error{Code: CodeAdminUnavailable, Message: NetworkUnreachableMessage}
 }
 
+// unavailable is the Chinese default used before a client's Locale is set.
 func unavailable() error {
 	return domain.Error{Code: CodeAdminUnavailable, Message: UnavailableMessage}
+}
+
+func (c *Client) unreachable() error {
+	return domain.Error{Code: CodeAdminUnavailable, Message: c.t("mcpadmin.networkUnreachable")}
+}
+
+func (c *Client) unavailable() error {
+	return domain.Error{Code: CodeAdminUnavailable, Message: c.t("mcpadmin.unavailable")}
 }

@@ -382,13 +382,18 @@ func (s *Service) mcpClient(ctx context.Context, target domain.Target) (*mcpadmi
 	if s.snapshots == nil || s.publish == nil || s.credentials == nil {
 		return nil, s.serviceUnavailable()
 	}
-	return mcpadmin.Connect(ctx, mcpadmin.Deps{
+	client, err := mcpadmin.Connect(ctx, mcpadmin.Deps{
 		Token: backup.TokenDeps{
 			Snapshots:   s.snapshots,
 			Publisher:   s.publish,
 			Credentials: s.credentials,
 		},
 	}, target)
+	if err != nil {
+		return nil, err
+	}
+	client.Locale = s.locale.Current
+	return client, nil
 }
 
 func (s *Service) currentMcpServers(ctx context.Context) (ConfigDTO, []json.RawMessage, error) {

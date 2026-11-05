@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
+	"github.com/deskwand/bot/desktop/internal/i18n/i18ntest"
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/telegram"
 	"github.com/deskwand/bot/desktop/internal/wechat"
@@ -540,6 +542,70 @@ func TestActiveChannelSelectorRejectsUnknownChannelBeforeReading(t *testing.T) {
 	}
 	if publisher.callCount() != 0 {
 		t.Fatal("invalid channel reached the publisher")
+	}
+}
+
+func TestWeChatLoginStatusFollowsLocale(t *testing.T) {
+	credentials := wechat.Credentials{
+		Token:     wechatTokenSentinel,
+		BaseURL:   "https://ilinkai.weixin.qq.com",
+		AccountID: "account-1",
+		UserID:    "owner-1",
+	}
+	cases := []struct {
+		phase string
+		state string
+		zh    string
+	}{
+		{"prompt", wechat.LoginWaiting, "请使用微信扫描二维码"},
+		{"pending", wechat.LoginWaiting, "等待扫码"},
+		{"scanned", wechat.LoginScanned, "已扫码，请在手机上确认"},
+		{"expired", wechat.LoginExpired, "二维码已过期，正在刷新"},
+		{"cancelled", wechat.LoginCancelled, "登录已取消"},
+		{"confirmed", wechat.LoginConfirmed, "已确认登录"},
+	}
+
+	for _, locale := range []string{i18n.ZH, i18n.EN} {
+		t.Run(locale, func(t *testing.T) {
+			publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp-1"}}
+			service := NewEntryService(EntryOptions{
+				Publisher:   publisher,
+				Snapshots:   publisher,
+				Selector:    &fakeSelector{},
+				Credentials: platform.NewMemoryCredentialStore(),
+				Login: func(_ context.Context, onStatus func(wechat.LoginStatus)) (wechat.Credentials, error) {
+					for _, test := range cases {
+						onStatus(wechat.LoginStatus{OperationID: "login-1", State: test.state, Phase: test.phase})
+					}
+					return credentials, nil
+				},
+				Telegram: func(string) TelegramAPI { return &fakeTelegram{} },
+				Locale:   func() string { return locale },
+			})
+
+			var forwarded []wechat.LoginStatus
+			_, err := service.ConnectWeChatWithStatus(context.Background(), domain.Target{AccountID: "a", ScriptName: "bot"}, func(status wechat.LoginStatus) {
+				forwarded = append(forwarded, status)
+			})
+			if err != nil {
+				t.Fatalf("ConnectWeChatWithStatus: %v", err)
+			}
+			if len(forwarded) != len(cases) {
+				t.Fatalf("forwarded %d statuses, want %d", len(forwarded), len(cases))
+			}
+			for index, status := range forwarded {
+				if status.Message == "" {
+					t.Fatalf("phase %q has no message", cases[index].phase)
+				}
+				if locale == i18n.ZH {
+					if status.Message != cases[index].zh {
+						t.Fatalf("phase %q message = %q, want %q", cases[index].phase, status.Message, cases[index].zh)
+					}
+					continue
+				}
+				i18ntest.NoHan(t, "phase "+cases[index].phase, status.Message)
+			}
+		})
 	}
 }
 
