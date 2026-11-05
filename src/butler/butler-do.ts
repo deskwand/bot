@@ -39,7 +39,11 @@ import {
   ProgressThrottle,
   type ProgressPolicy,
 } from "./notifier";
-import { MemoryStore, renderMemorySection } from "./memory";
+import {
+  MemoryStore,
+  renderMemorySection,
+  renderOwnerProfile,
+} from "./memory";
 import { BotsRepo } from "./bots-repo";
 import { createBotTools } from "./bot-tools";
 import { butlerSystemPrompt } from "./prompt";
@@ -558,6 +562,11 @@ export class ButlerDO extends Agent<Env> {
   /** Sends a bot message as-is (the text already carries any prefix). */
   async botNotice(_botId: string, text: string): Promise<void> {
     await this.sendBestEffort({ text: clampMessage(text) });
+  }
+
+  /** What the Butler knows about the owner, for a bot's wake context. */
+  async ownerProfile(): Promise<string> {
+    return renderOwnerProfile(this.memory.all());
   }
 
   /** Sends `notify_owner` output, prefixed with the bot's name. */
