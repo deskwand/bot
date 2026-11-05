@@ -36,5 +36,6 @@ export const overview = {
   todosTitle: "待完成设置",
   configureModels: "配置模型",
   connectChannel: "连接消息入口",
-  traffic: "接收流量：{count} 个版本",
+  traffic_one: "接收流量：{count} 个版本",
+  traffic_other: "接收流量：{count} 个版本",
 } as const;

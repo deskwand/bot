@@ -85,7 +85,7 @@ export const errors: Messages["errors"] = {
   fallback: "Check the details below, fix the problem, then retry.",
   wechatFallback: "WeChat request failed; retry later.",
   operationFailed: "Operation failed. Retry.",
-  reauthWithAccount: "Cloudflare authorization expired; sign in again ({account}).",
+  reauthAccount: "Account to sign in again: ",
   reload: "Reload",
   goToUpdates: "Go to Updates",
   reimport: "Import again",

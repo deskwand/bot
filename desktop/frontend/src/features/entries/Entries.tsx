@@ -24,17 +24,22 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useApp } from "@/components/app-context";
-import { ErrorAlert, StateBadge, StatusBadge, StatusRow, StepList } from "@/components/feedback";
-import { getT, useT } from "@/i18n";
+import {
+  ErrorAlert,
+  type LocalizedStep,
+  StateBadge,
+  StatusBadge,
+  StatusRow,
+  StepList,
+} from "@/components/feedback";
+import { getT, useT, type MessageKey } from "@/i18n";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
-import { describeCode } from "@/services/errors";
 import { useConfigQuery, useInvalidate, useStatusQuery } from "@/services/queries";
 import type {
   EntryResultDTO,
   LoginStatusDTO,
   ResultDTO,
-  StepDTO,
 } from "@/services/types";
 
 type LoginState =
@@ -53,6 +58,10 @@ interface PublishFailure {
   message: string;
   operationId: string;
 }
+
+type LoginMessage =
+  | { key: MessageKey; params?: Record<string, string | number> }
+  | { text: string };
 
 export function Entries() {
   const { client } = useApp();
@@ -88,7 +97,7 @@ export function Entries() {
   const [qrOpen, setQrOpen] = useState(false);
   const [loginState, setLoginState] = useState<LoginState>("idle");
   const [qrContent, setQrContent] = useState("");
-  const [loginMessage, setLoginMessage] = useState("");
+  const [loginMessage, setLoginMessage] = useState<LoginMessage | null>(null);
   const [loginError, setLoginError] = useState<unknown>(null);
   const [publishFailure, setPublishFailure] = useState<PublishFailure | null>(null);
   const [loginResumeRunning, setLoginResumeRunning] = useState(false);
@@ -121,7 +130,8 @@ export function Entries() {
       // one login can be active, so after confirmation the follow-up belongs to it.
       if (!isLoginEvent && !isFollowUp) return;
 
-      setLoginMessage(update.message ?? "");
+      // Login status messages come from Go; keep them verbatim.
+      setLoginMessage(update.message ? { text: update.message } : null);
       if (update.qrContent) setQrContent(update.qrContent);
       switch (update.state) {
         case "wait":
@@ -140,7 +150,7 @@ export function Entries() {
           setWechatPublished(true);
           channelTouched.current = false;
           setLoginState("published");
-          setLoginMessage(getT()("entries.publishedWaiting"));
+          setLoginMessage({ key: "entries.publishedWaiting" });
           invalidate.configAndStatus();
           break;
         case "publish_failed":
@@ -149,7 +159,7 @@ export function Entries() {
           setLoginState("publish_failed");
           setPublishFailure({
             code: update.code ?? "",
-            message: update.message ?? getT()("entries.publishFailedFallback"),
+            message: update.message ?? "",
             operationId: update.operationId,
           });
           break;
@@ -167,8 +177,8 @@ export function Entries() {
           setLoginState("error");
           setLoginError(
             code
-              ? new Error(`${code}: ${describeCode(code)}`)
-              : new Error(update.message ?? getT()("entries.loginFailedFallback")),
+              ? new Error(`${code}: `)
+              : new Error(update.message || getT()("entries.loginFailedFallback")),
           );
           break;
         }
@@ -198,7 +208,7 @@ export function Entries() {
     setQrOpen(false);
     setLoginState("idle");
     setQrContent("");
-    setLoginMessage("");
+    setLoginMessage(null);
     setPublishFailure(null);
     setLoginError(null);
   };
@@ -209,7 +219,7 @@ export function Entries() {
     opIDRef.current = "";
     setLoginState("wait");
     setQrContent("");
-    setLoginMessage(t("entries.creatingQr"));
+    setLoginMessage({ key: "entries.creatingQr" });
     setLoginError(null);
     setPublishFailure(null);
     setWechatPublished(false);
@@ -236,13 +246,14 @@ export function Entries() {
         setWechatPublished(true);
         setLoginState("published");
         setPublishFailure(null);
-        setLoginMessage(t("entries.publishedWaiting"));
+        setLoginMessage({ key: "entries.publishedWaiting" });
         invalidate.configAndStatus();
       } else {
         setLoginState("publish_failed");
-        setLoginMessage(
-          t("entries.resumeState", { state: result.state || t("common.unknown") }),
-        );
+        setLoginMessage({
+          key: "entries.resumeState",
+          params: { state: result.state },
+        });
         setPublishFailure((current) =>
           current ? { ...current, operationId: result.operationId || current.operationId } : current,
         );
@@ -569,8 +580,15 @@ export function Entries() {
 
           {qrContent &&
           !["expired", "cancelled", "error", "published", "publish_failed"].includes(loginState) ? (
-            <div className="mx-auto rounded-lg border border-border bg-white p-3" data-testid="wechat-qr" data-i18n-ignore>
-              <QRCodeSVG value={qrContent} size={188} marginSize={2} aria-label={t("entries.qrAria")} />
+            <div
+              className="mx-auto rounded-lg border border-border bg-white p-3"
+              data-testid="wechat-qr"
+            >
+              <span role="img" aria-label={t("entries.qrAria")}>
+                <span data-i18n-ignore>
+                  <QRCodeSVG value={qrContent} size={188} marginSize={2} aria-hidden />
+                </span>
+              </span>
             </div>
           ) : null}
           {!qrContent && ["wait", "idle"].includes(loginState) ? (
@@ -579,7 +597,15 @@ export function Entries() {
               {t("entries.creatingQr")}
             </div>
           ) : null}
-          {loginMessage ? <p className="text-sm text-muted-foreground" data-i18n-ignore>{loginMessage}</p> : null}
+          {loginMessage ? (
+            <p className="text-sm text-muted-foreground">
+              {"text" in loginMessage ? (
+                <span data-i18n-ignore>{loginMessage.text}</span>
+              ) : (
+                t(loginMessage.key, loginMessage.params)
+              )}
+            </p>
+          ) : null}
 
           <StepList steps={loginSteps(loginState)} compact />
 
@@ -600,8 +626,10 @@ export function Entries() {
             <ErrorAlert
               error={
                 publishFailure.code
-                  ? new Error(`${publishFailure.code}: ${describeCode(publishFailure.code)}`)
-                  : new Error(publishFailure.message)
+                  ? new Error(`${publishFailure.code}: `)
+                  : new Error(
+                      publishFailure.message || t("entries.publishFailedFallback"),
+                    )
               }
               onRetry={resumePublish}
               retryLabel={t("common.continue")}
@@ -681,7 +709,7 @@ function loginDescription(state: LoginState): string {
   }
 }
 
-function loginSteps(state: LoginState): StepDTO[] {
+function loginSteps(state: LoginState): LocalizedStep[] {
   const doneThrough = (() => {
     switch (state) {
       case "scaned":

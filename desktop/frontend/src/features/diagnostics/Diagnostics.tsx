@@ -18,7 +18,7 @@ import { useApp } from "@/components/app-context";
 import { ErrorAlert, StatusRow } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
-import { useT } from "@/i18n";
+import { useT, type MessageKey } from "@/i18n";
 import { useModelCatalogQuery, useStatusQuery } from "@/services/queries";
 import type { StatusItemDTO } from "@/services/types";
 import {
@@ -44,7 +44,10 @@ export function Diagnostics() {
         ? catalogQuery.error
         : null;
   const [exportRunning, setExportRunning] = useState(false);
-  const [exportMessage, setExportMessage] = useState("");
+  const [exportMessage, setExportMessage] = useState<{
+    key: MessageKey;
+    params?: Record<string, string | number>;
+  } | null>(null);
   const [exportError, setExportError] = useState<unknown>(null);
 
   const [probeModel, setProbeModel] = useState(modelKey(DEFAULT_MODEL));
@@ -68,7 +71,7 @@ export function Diagnostics() {
   const exportDiagnostics = async () => {
     setExportRunning(true);
     setExportError(null);
-    setExportMessage("");
+    setExportMessage(null);
     try {
       const json = await client.exportDiagnostics();
       const blob = new Blob([json], { type: "application/json" });
@@ -80,7 +83,10 @@ export function Diagnostics() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
-      setExportMessage(t("diagnostics.exported", { size: new Blob([json]).size }));
+      setExportMessage({
+        key: "diagnostics.exported",
+        params: { size: new Blob([json]).size },
+      });
     } catch (cause) {
       setExportError(cause);
     } finally {
@@ -128,7 +134,7 @@ export function Diagnostics() {
       {exportMessage ? (
         <Alert className="my-4">
           <AlertTitle>{t("diagnostics.exportDone")}</AlertTitle>
-          <AlertDescription>{exportMessage}</AlertDescription>
+          <AlertDescription>{t(exportMessage.key, exportMessage.params)}</AlertDescription>
         </Alert>
       ) : null}
 

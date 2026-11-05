@@ -29,7 +29,7 @@ import { ThemeSwitcher } from "@/components/theme-switcher";
 import { LocaleChoice } from "@/components/locale-choice";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { ErrorAlert, StepList, StateBadge } from "@/components/feedback";
-import { getT, useT } from "@/i18n";
+import { useT } from "@/i18n";
 import { createAppQueryClient } from "@/services/queries";
 import type { ClientService, OperationDTO } from "@/services/types";
 import { useUiStore } from "@/store/ui";
@@ -45,9 +45,13 @@ const Entries = lazy(() =>
   import("@/features/entries/Entries").then((module) => ({ default: module.Entries })),
 );
 
+type ConnectionFailure =
+  | { code: string; accountName?: string }
+  | { error: unknown };
+
 type Session =
   | { kind: "loading" }
-  | { kind: "disconnected"; connectionError?: unknown }
+  | { kind: "disconnected"; connectionFailure?: ConnectionFailure }
   | { kind: "choose" }
   | { kind: "ready" };
 
@@ -100,21 +104,18 @@ export function App({ client }: { client: ClientService }) {
           // An expired authorization is not the same as never having
           // connected: say so, and keep the account name so the welcome page
           // can tell the user which account needs re-login.
-          const connectionError =
+          // Keep only the data here; the line is built at render time so it
+          // follows a language switch made before signing in.
+          const connectionFailure: ConnectionFailure | undefined =
             connection.state === "unavailable"
-              ? new Error(
-                  `CREDENTIAL_STORE_UNAVAILABLE: ${getT()("errors.CREDENTIAL_STORE_UNAVAILABLE")}`,
-                )
+              ? { code: "CREDENTIAL_STORE_UNAVAILABLE" }
               : connection.state === "reauth_required"
-                ? new Error(
-                    `AUTH_REAUTH_REQUIRED: ${
-                      connection.accountName
-                        ? getT()("errors.reauthWithAccount", { account: connection.accountName })
-                        : getT()("errors.AUTH_REAUTH_REQUIRED")
-                    }`,
-                  )
+                ? {
+                    code: "AUTH_REAUTH_REQUIRED",
+                    accountName: connection.accountName || undefined,
+                  }
                 : undefined;
-          setSession({ kind: "disconnected", connectionError });
+          setSession({ kind: "disconnected", connectionFailure });
           return;
         }
         setSession(
@@ -123,7 +124,7 @@ export function App({ client }: { client: ClientService }) {
             : { kind: "choose" },
         );
       } catch (error) {
-        setSession({ kind: "disconnected", connectionError: error });
+        setSession({ kind: "disconnected", connectionFailure: { error } });
         setPending([]);
         setDirtyState(false);
       }
@@ -195,6 +196,16 @@ export function App({ client }: { client: ClientService }) {
   );
 
   const shell = session.kind === "ready";
+  const connectionFailure =
+    session.kind === "disconnected" ? session.connectionFailure : undefined;
+  const connectionError =
+    connectionFailure && "code" in connectionFailure
+      ? new Error(`${connectionFailure.code}: `)
+      : connectionFailure?.error;
+  const connectionAccount =
+    connectionFailure && "code" in connectionFailure
+      ? connectionFailure.accountName
+      : undefined;
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -311,9 +322,8 @@ export function App({ client }: { client: ClientService }) {
             ) : (
               <Setup
                 phase={session.kind === "disconnected" ? "disconnected" : "choose"}
-                connectionError={
-                  session.kind === "disconnected" ? session.connectionError : undefined
-                }
+                connectionError={connectionError}
+                connectionAccount={connectionAccount}
                 onSessionChange={() => refresh(false)}
                 onReady={() => refresh(false)}
               />

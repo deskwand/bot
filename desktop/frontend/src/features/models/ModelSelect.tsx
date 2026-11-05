@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { Popover } from "radix-ui";
 import { cn } from "cn";
 import { CheckIcon, ChevronDownIcon, SearchIcon } from "lucide-react";
@@ -38,6 +45,7 @@ export function ModelSelect({
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   // Set when a new provider is picked; the model list opens once the provider
   // dropdown has finished closing, so it does not take focus back.
   const openAfterProvider = useRef(false);
@@ -45,6 +53,23 @@ export function ModelSelect({
   useEffect(() => {
     setProviderID(current?.provider ?? "");
   }, [current?.provider]);
+
+  // Radix mirrors every provider option into a visually hidden native select,
+  // where the Go-provided provider names become plain text nodes. Mark that
+  // element (and only it) so the copy scan does not read them as UI copy.
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const mark = () => {
+      root.querySelectorAll("select[aria-hidden]").forEach((node) => {
+        node.setAttribute("data-i18n-ignore", "");
+      });
+    };
+    mark();
+    const observer = new MutationObserver(mark);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
 
   const provider = options.find((option) => option.id === providerID);
   const models = provider?.models ?? [];
@@ -105,7 +130,7 @@ export function ModelSelect({
   const custom = options.filter((option) => option.custom);
 
   return (
-    <div className="@container">
+    <div className="@container" ref={rootRef}>
       <div className="grid gap-2 @sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <Select
           value={providerID}
@@ -179,7 +204,6 @@ export function ModelSelect({
                 <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   autoFocus
-                  data-i18n-ignore
                   value={query}
                   onChange={(event) => {
                     setQuery(event.target.value);
@@ -187,7 +211,7 @@ export function ModelSelect({
                   }}
                   onKeyDown={onSearchKey}
                   placeholder={t("models.searchPlaceholder")}
-                  aria-label={t("models.searchAria", { provider: provider?.label ?? "" })}
+                  aria-label={t("models.searchModelsAria")}
                   aria-controls={`${id}-list`}
                   aria-activedescendant={matches[active] ? `${id}-option-${active}` : undefined}
                   className="pl-8"
@@ -196,14 +220,15 @@ export function ModelSelect({
               </div>
               <p className="px-2 pb-1 text-xs text-muted-foreground">
                 <span data-i18n-ignore>{provider?.label}</span> ·{" "}
-                {t("models.modelCount", { count: models.length })}
+                {models.length === 1
+                  ? t("models.modelCount_one", { count: models.length })
+                  : t("models.modelCount_other", { count: models.length })}
               </p>
               <div
                 ref={listRef}
                 id={`${id}-list`}
                 role="listbox"
-                aria-label={t("models.listAria", { provider: provider?.label ?? "" })}
-                data-i18n-ignore
+                aria-label={t("models.modelListAria")}
                 className="max-h-72 overflow-y-auto"
               >
                 {matches.length === 0 ? (
@@ -227,7 +252,9 @@ export function ModelSelect({
                       >
                         <span className="truncate">{modelName(model)}</span>
                         {model.label !== model.id ? (
-                          <span className="truncate text-xs text-muted-foreground">{model.id}</span>
+                          <span className="truncate text-xs text-muted-foreground" data-i18n-ignore>
+                            {model.id}
+                          </span>
                         ) : null}
                         {selected ? (
                           <CheckIcon className="pointer-events-none absolute top-1/2 right-2 size-4 -translate-y-1/2" />

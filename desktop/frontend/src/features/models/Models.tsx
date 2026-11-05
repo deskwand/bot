@@ -29,7 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useApp } from "@/components/app-context";
-import { getT, useT } from "@/i18n";
+import { getT, useT, type MessageKey } from "@/i18n";
 import { cloudflareNeuronsNotice } from "@/lib/copy";
 import { ErrorAlert, StateBadge, StatusRow, StepList } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
@@ -137,7 +137,7 @@ export function Models() {
   const [previewSteps, setPreviewSteps] = useState<ResultDTO["steps"]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [result, setResult] = useState<ResultDTO | null>(null);
-  const [success, setSuccess] = useState("");
+  const [success, setSuccess] = useState<MessageKey | null>(null);
   const [probeOpen, setProbeOpen] = useState(false);
   const [probeTarget, setProbeTarget] = useState<string | null>(null);
   const [probeItem, setProbeItem] = useState<{ provider: string; item: StatusItemDTO } | null>(null);
@@ -383,7 +383,7 @@ export function Models() {
     setRunning("preview");
     setError(null);
     setConflict(false);
-    setSuccess("");
+    setSuccess(null);
     try {
       const steps = await client.previewConfig(edit());
       setPreviewSteps(
@@ -408,8 +408,8 @@ export function Models() {
       setResult(publishedResult);
       setSuccess(
         publishedResult.state === "published"
-          ? t("models.published")
-          : t("models.publishPending"),
+          ? "models.published"
+          : "models.publishPending",
       );
       setKeyDrafts({});
       setAwaitingFreshConfig(true);
@@ -525,7 +525,7 @@ export function Models() {
       {success ? (
         <Alert className="my-4 border-emerald-300 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20">
           <AlertTitle>{t("models.submitted")}</AlertTitle>
-          <AlertDescription>{success}</AlertDescription>
+          <AlertDescription>{t(success)}</AlertDescription>
         </Alert>
       ) : null}
       {result ? (

@@ -28,7 +28,7 @@ export const overview: Messages["overview"] = {
   authExpired: "Authorization expired",
   authExpiredDescription: "Sign in again to continue.",
   notRead: "Not read",
-  releaseVersion: "Released version",
+  releaseVersion: "Published version",
   statusUnknown: "Status unknown",
   noVerification: "No messaging verification yet",
   butlerModel: "Butler",
@@ -42,5 +42,6 @@ export const overview: Messages["overview"] = {
   todosTitle: "Setup to finish",
   configureModels: "Configure models",
   connectChannel: "Connect channel",
-  traffic: "Traffic: {count} versions",
+  traffic_one: "Traffic: {count} version",
+  traffic_other: "Traffic: {count} versions",
 };

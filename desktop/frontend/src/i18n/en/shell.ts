@@ -48,10 +48,10 @@ export const shell: Messages["shell"] = {
     "This clears the local authorization; the cloud service keeps running. Sign in again to keep managing it.",
   unpublishedWillDiscard: "Unpublished changes will be discarded.",
   confirmSignOut: "Sign out",
-  justNow: "data from just now",
-  minutesAgo: "data from {minutes} min ago",
+  justNow: "Data from just now",
+  minutesAgo: "Data from {minutes} min ago",
   syncing: "Syncing…",
   refresh: "Refresh",
   syncError: "Could not sync the latest data",
-  syncErrorWithAge: "Could not sync the latest data · showing {age}",
+  syncErrorWithAge: "Could not sync the latest data · {age}",
 };

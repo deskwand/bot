@@ -82,7 +82,7 @@ export const errors = {
   fallback: "请查看下方详情，修正后重试。",
   wechatFallback: "微信请求失败，请稍后重试。",
   operationFailed: "操作失败，请重试",
-  reauthWithAccount: "Cloudflare 授权已过期，请重新登录（{account}）。",
+  reauthAccount: "需要重新登录的账号：",
   reload: "重新加载",
   goToUpdates: "前往更新页",
   reimport: "重新导入",

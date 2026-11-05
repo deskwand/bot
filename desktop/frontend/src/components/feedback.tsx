@@ -137,7 +137,9 @@ export function StepIcon({ state }: { state: string }) {
   return <Circle className="size-4 text-muted-foreground" aria-hidden />;
 }
 
-export function StepList({ steps, compact = false }: { steps: StepDTO[]; compact?: boolean }) {
+export type LocalizedStep = StepDTO & { localized?: boolean };
+
+export function StepList({ steps, compact = false }: { steps: LocalizedStep[]; compact?: boolean }) {
   useLocale();
   if (steps.length === 0) return null;
   return (
@@ -148,7 +150,9 @@ export function StepList({ steps, compact = false }: { steps: StepDTO[]; compact
             <StepIcon state={step.state} />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block" data-i18n-ignore>{step.message}</span>
+            <span className="block" data-i18n-ignore={step.localized ? undefined : ""}>
+              {step.message}
+            </span>
             {compact ? null : (
               <span className="block text-xs text-muted-foreground">
                 {stateLabel(step.state)}

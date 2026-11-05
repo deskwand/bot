@@ -463,6 +463,20 @@ test("language can be chosen before connecting", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("connection errors follow a language switch", async ({ page }) => {
+  await page.goto("/test.html?fixture=store-unavailable");
+  await page
+    .getByRole("group", { name: "语言" })
+    .getByRole("button", { name: "English", exact: true })
+    .click();
+
+  const alert = page.getByTestId("error-alert");
+  await expect(alert).toBeVisible();
+  await alert.locator("summary").click();
+  await expect(alert).toContainText("Keychain unavailable");
+  await expectNoChinese(page, '[data-testid="error-alert"]');
+});
+
 test("switching language mid-setup keeps inputs", async ({ page }) => {
   await page.goto("/test.html");
   await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
@@ -479,6 +493,99 @@ test("switching language mid-setup keeps inputs", async ({ page }) => {
     page.getByRole("heading", { name: "Deploy a new cloud service" }),
   ).toBeVisible();
   await expect(page.getByLabel("Service name")).toHaveValue("my-worker");
+});
+
+test("dialogs are English", async ({ page }) => {
+  await useEnglish(page, "/test.html?fixture=upgrade-required");
+  await openPage(page, "Updates");
+  await page.getByTestId("upgrade-cloud").click();
+  const upgrade = page.getByRole("dialog", { name: "Confirm upgrade" });
+  await expect(upgrade).toBeVisible();
+  await expectNoChinese(page, '[role="dialog"]');
+  await upgrade.getByRole("button", { name: "Cancel" }).click();
+
+  await useEnglish(page, "/test.html?fixture=configured");
+  await openPage(page, "Models");
+  const row = page.getByTestId("model-key-row-opencode-go");
+  await row.getByLabel("API key").fill("sk-en-SENTINEL");
+  await row.getByRole("button", { name: "Test connection" }).click();
+  const probe = page.getByRole("dialog", { name: "Run the model connection test?" });
+  await expect(probe).toBeVisible();
+  await expectNoChinese(page, '[role="dialog"]');
+  await probe.getByRole("button", { name: "Cancel" }).click();
+
+  // The draft key makes the page dirty, so switching pages asks first.
+  await page.locator("#primary-nav").getByRole("button", { name: "Overview", exact: true }).click();
+  const unsaved = page.getByRole("dialog", { name: "Unsaved changes" });
+  await expect(unsaved).toBeVisible();
+  await expectNoChinese(page, '[role="dialog"]');
+  await unsaved.getByRole("button", { name: "Keep editing" }).click();
+
+  await page.locator("aside").getByRole("button", { name: "Sign out" }).click();
+  const signOut = page.getByRole("dialog", { name: "Sign out of Cloudflare?" });
+  await expect(signOut).toBeVisible();
+  await expectNoChinese(page, '[role="dialog"]');
+  await signOut.getByRole("button", { name: "Cancel" }).click();
+
+  await useEnglish(page, "/test.html?fixture=backup-pending");
+  await page.getByRole("button", { name: "Abandon record" }).click();
+  const abandonRestore = page.getByRole("dialog", {
+    name: "Abandon the unfinished restore record?",
+  });
+  await expect(abandonRestore).toBeVisible();
+  await expectNoChinese(page, '[role="dialog"]');
+  await abandonRestore.getByRole("button", { name: "Cancel" }).click();
+
+  await useEnglish(page, "/test.html?fixture=configured");
+  await openPage(page, "Channels");
+  await page.getByRole("button", { name: "Scan to connect" }).click();
+  const qrDialog = page.getByRole("dialog", { name: "Connect WeChat" });
+  await expect(qrDialog).toBeVisible();
+  await expect(page.getByTestId("wechat-qr")).toBeVisible();
+  await expectNoChinese(page, '[role="dialog"]');
+
+  await useEnglish(page, "/test.html?fixture=pending-operations");
+  const pending = page.getByTestId("pending-operations");
+  await expect(pending).toBeVisible();
+  await pending.getByRole("button", { name: "Abandon", exact: true }).click();
+  const abandonOperation = page.getByRole("dialog", {
+    name: "Abandon this operation?",
+  });
+  await expect(abandonOperation).toBeVisible();
+  await expectNoChinese(page, '[role="dialog"]');
+});
+
+test("pending cards are English", async ({ page }) => {
+  await useEnglish(page, "/test.html?fixture=pending-operations");
+  await expect(page.getByTestId("pending-operations")).toBeVisible();
+  await expectNoChinese(page, "main");
+
+  await useEnglish(page, "/test.html?fixture=backup-pending");
+  await expect(page.getByText("Data restore did not finish")).toBeVisible();
+  await expectNoChinese(page, "main");
+});
+
+test("messages follow a language switch", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page
+    .getByTestId("model-key-row-opencode-go")
+    .getByLabel("API 密钥")
+    .fill("sk-switch-SENTINEL");
+  await page.getByRole("button", { name: "保存并发布" }).click();
+  await page
+    .getByRole("dialog", { name: "确认保存并发布" })
+    .getByRole("button", { name: "确认保存并发布" })
+    .click();
+  await expect(page.getByText("配置已发布。", { exact: true })).toBeVisible();
+
+  await page
+    .getByRole("group", { name: "语言" })
+    .getByRole("button", { name: "English", exact: true })
+    .click();
+  await expect(
+    page.getByText("Configuration published.", { exact: true }),
+  ).toBeVisible();
 });
 
 test("English shell fits the narrow window", async ({ page }) => {

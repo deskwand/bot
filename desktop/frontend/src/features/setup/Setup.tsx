@@ -86,12 +86,14 @@ function useCatalogModelOptions(): {
 export function Setup({
   phase,
   connectionError,
+  connectionAccount,
   onSessionChange,
   onReady,
   initialStep = "welcome",
 }: {
   phase: SetupPhase;
   connectionError?: unknown;
+  connectionAccount?: string;
   onSessionChange: () => void;
   onReady: () => void;
   initialStep?: "welcome" | "deploy" | "import";
@@ -102,6 +104,7 @@ export function Setup({
     return (
       <Welcome
         connectionError={connectionError}
+        connectionAccount={connectionAccount}
         onConnected={onSessionChange}
         onShowDeploy={() => setStep("deploy")}
         onShowImport={() => setStep("import")}
@@ -129,12 +132,14 @@ export function Setup({
 function Welcome({
   connected = false,
   connectionError,
+  connectionAccount,
   onConnected,
   onShowDeploy,
   onShowImport,
 }: {
   connected?: boolean;
   connectionError?: unknown;
+  connectionAccount?: string;
   onConnected: () => void;
   onShowDeploy: () => void;
   onShowImport: () => void;
@@ -168,7 +173,11 @@ function Welcome({
       </p>
 
       {!connected ? (
-        <ConnectCard connectionError={connectionError} onConnected={onConnected} />
+        <ConnectCard
+          connectionError={connectionError}
+          connectionAccount={connectionAccount}
+          onConnected={onConnected}
+        />
       ) : (
         <>
           <div className="mt-7 grid gap-4 sm:grid-cols-2">
@@ -222,9 +231,11 @@ function Welcome({
 
 function ConnectCard({
   connectionError,
+  connectionAccount,
   onConnected,
 }: {
   connectionError?: unknown;
+  connectionAccount?: string;
   onConnected: () => void;
 }) {
   const { client } = useApp();
@@ -338,6 +349,12 @@ function ConnectCard({
       </CardHeader>
       <CardContent>
         <ErrorAlert error={connectionError} />
+        {connectionAccount ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            {t("errors.reauthAccount")}
+            <span data-i18n-ignore>{connectionAccount}</span>
+          </p>
+        ) : null}
 
         {showLogin ? (
           <div className="space-y-3">
@@ -505,7 +522,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
       const butlerModel = parseModelKey(butler);
       const taskModel = parseModelKey(task);
       if (!butlerModel || !taskModel) {
-        setError(new Error(`MODELS_REQUIRED: ${t("setup.modelsRequired")}`));
+        setError(new Error("MODELS_REQUIRED: "));
         return;
       }
       setProgress(25);
@@ -576,8 +593,8 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               <section aria-label={t("setup.modelsSection")}>
                 <h2 className="mb-3 text-base font-medium">{t("setup.modelsSection")}</h2>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2"><Label htmlFor="install-butler">{t("models.butlerModel")}</Label><div data-i18n-ignore><ModelSelect id="install-butler" label={t("models.butlerModel")} value={butler} onChange={setButler} options={modelOptions} /></div></div>
-                  <div className="space-y-2"><Label htmlFor="install-task">{t("models.taskModel")}</Label><div data-i18n-ignore><ModelSelect id="install-task" label={t("models.taskModel")} value={task} onChange={setTask} options={modelOptions} /></div></div>
+                  <div className="space-y-2"><Label htmlFor="install-butler">{t("models.butlerModel")}</Label><ModelSelect id="install-butler" label={t("models.butlerModel")} value={butler} onChange={setButler} options={modelOptions} /></div>
+                  <div className="space-y-2"><Label htmlFor="install-task">{t("models.taskModel")}</Label><ModelSelect id="install-task" label={t("models.taskModel")} value={task} onChange={setTask} options={modelOptions} /></div>
                 </div>
               </section>
 
@@ -764,7 +781,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
         const butlerModel = parseModelKey(butler);
         const taskModel = parseModelKey(task);
         if (!butlerModel || !taskModel) {
-          throw new Error(`MODELS_REQUIRED: ${t("setup.modelsRequired")}`);
+          throw new Error("MODELS_REQUIRED: ");
         }
         models = { butlerModel, taskModel };
       }
@@ -936,11 +953,11 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="import-butler">{t("models.butlerModel")}</Label>
-                  <div data-i18n-ignore><ModelSelect id="import-butler" label={t("models.butlerModel")} value={butler} onChange={setButler} options={modelOptions} /></div>
+                  <ModelSelect id="import-butler" label={t("models.butlerModel")} value={butler} onChange={setButler} options={modelOptions} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="import-task">{t("models.taskModel")}</Label>
-                  <div data-i18n-ignore><ModelSelect id="import-task" label={t("models.taskModel")} value={task} onChange={setTask} options={modelOptions} /></div>
+                  <ModelSelect id="import-task" label={t("models.taskModel")} value={task} onChange={setTask} options={modelOptions} />
                 </div>
               </div>
             ) : null}

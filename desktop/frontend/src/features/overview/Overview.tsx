@@ -19,7 +19,7 @@ import {
 import { pageLabel, useApp, type Page } from "@/components/app-context";
 import { ErrorAlert, StatusRow, StatusBadge, formatObserved } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
-import { useT } from "@/i18n";
+import { useT, type MessageKey } from "@/i18n";
 import { isCode } from "@/services/errors";
 import { useConfigQuery, useInvalidate, useStatusQuery } from "@/services/queries";
 import type { ConnectionDTO, PendingRestoreDTO } from "@/services/types";
@@ -38,7 +38,7 @@ export function Overview() {
   const [pendingError, setPendingError] = useState<unknown>(null);
   const [retrying, setRetrying] = useState<"backup" | "snapshot" | null>(null);
   const [retryError, setRetryError] = useState<unknown>(null);
-  const [retryMessage, setRetryMessage] = useState("");
+  const [retryMessage, setRetryMessage] = useState<MessageKey | null>(null);
   const [abandonOpen, setAbandonOpen] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
   const [abandonError, setAbandonError] = useState<unknown>(null);
@@ -92,10 +92,10 @@ export function Overview() {
   const retryRestore = async (useSnapshot: boolean) => {
     setRetrying(useSnapshot ? "snapshot" : "backup");
     setRetryError(null);
-    setRetryMessage("");
+    setRetryMessage(null);
     try {
       await client.retryRestore(useSnapshot);
-      setRetryMessage(t("overview.restoreRetried"));
+      setRetryMessage("overview.restoreRetried");
       invalidate.configAndStatus();
       await loadLocal();
     } catch (cause) {
@@ -112,7 +112,7 @@ export function Overview() {
       await client.abandonPendingRestore();
       setAbandonOpen(false);
       setRetryError(null);
-      setRetryMessage(t("overview.recordCleared"));
+      setRetryMessage("overview.recordCleared");
       invalidate.configAndStatus();
       await loadLocal();
     } catch (cause) {
@@ -229,7 +229,7 @@ export function Overview() {
               </Button>
             </div>
             {retryMessage ? (
-              <p className="mt-2 text-xs text-muted-foreground">{retryMessage}</p>
+              <p className="mt-2 text-xs text-muted-foreground">{t(retryMessage)}</p>
             ) : null}
             <ErrorAlert error={retryError} onRetry={() => void retryRestore(false)} />
             <ErrorAlert error={abandonError} />
@@ -338,7 +338,13 @@ export function Overview() {
 
       <details className="mt-6 min-w-0 border-t border-border pt-4" data-testid="overview-status-details">
         <summary className="cursor-pointer text-sm text-muted-foreground">{t("common.details")}</summary>
-        {config ? <p className="mt-3 text-xs text-muted-foreground">{t("overview.traffic", { count: config.activeVersionCount })}</p> : null}
+        {config ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {config.activeVersionCount === 1
+              ? t("overview.traffic_one", { count: config.activeVersionCount })
+              : t("overview.traffic_other", { count: config.activeVersionCount })}
+          </p>
+        ) : null}
         {status.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">{t("common.noStatusData")}</p> : status.map((item) => <StatusRow key={item.kind} item={item} />)}
       </details>
 
