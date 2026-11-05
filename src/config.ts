@@ -1,5 +1,6 @@
 import type { CustomProviderConfig } from "./llm/providers";
 import type { ModelRef, Role } from "./llm/models";
+import type { Locale } from "./i18n";
 
 export type McpServerConfig = {
   name: string;
@@ -23,7 +24,12 @@ export type AppConfig = {
   owner: { telegramUserIds: number[] };
   models: ModelsConfig;
   mcpServers: McpServerConfig[];
+  locale?: Locale;
 };
+
+export function configLocale(cfg: AppConfig): Locale {
+  return cfg.locale ?? "zh";
+}
 
 export function isOwner(cfg: AppConfig, telegramUserId: number): boolean {
   return cfg.owner.telegramUserIds.includes(telegramUserId);

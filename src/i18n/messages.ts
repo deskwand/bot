@@ -1,0 +1,56 @@
+import type { Locale } from "./index";
+
+export const zh = {
+  prompt: {
+    replyLanguage: "始终用中文回复主人。",
+  },
+} as const;
+
+/** Recursively widens every dictionary leaf to `string`. */
+export type DeepString<T> = {
+  readonly [K in keyof T]: T[K] extends string ? string : DeepString<T[K]>;
+};
+
+export type Messages = DeepString<typeof zh>;
+
+export const en: Messages = {
+  prompt: {
+    replyLanguage: "Always reply to the owner in English.",
+  },
+};
+
+type DotPaths<T, Prefix extends string = ""> = {
+  [K in keyof T & string]: T[K] extends string
+    ? `${Prefix}${K}`
+    : DotPaths<T[K], `${Prefix}${K}.`>;
+}[keyof T & string];
+
+export type MessageKey = DotPaths<typeof zh>;
+
+function lookup(table: unknown, key: string): string | undefined {
+  let node: unknown = table;
+  for (const part of key.split(".")) {
+    if (node === null || typeof node !== "object") return undefined;
+    node = (node as Record<string, unknown>)[part];
+  }
+  return typeof node === "string" ? node : undefined;
+}
+
+export function formatTemplate(
+  template: string,
+  params: Record<string, string | number> = {},
+): string {
+  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in params ? String(params[name]) : match,
+  );
+}
+
+export function t(
+  locale: Locale,
+  key: MessageKey,
+  params: Record<string, string | number> = {},
+): string {
+  const table = locale === "en" ? en : zh;
+  const template = lookup(table, key) ?? lookup(zh, key) ?? key;
+  return formatTemplate(template, params);
+}
