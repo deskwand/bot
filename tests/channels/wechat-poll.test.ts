@@ -198,7 +198,10 @@ async function captureButler(): Promise<MessageEvent[]> {
 }
 
 /** Records the ActionEvent a WeChat text command forwards to the Task DO. */
-async function captureTaskAction(taskId: string): Promise<ActionEvent[]> {
+async function captureTaskAction(
+  taskId: string,
+  replyText = "已批准",
+): Promise<ActionEvent[]> {
   const events: ActionEvent[] = [];
   const stub = env.TASK.get(env.TASK.idFromName(taskId));
   await runInDurableObject(stub, (instance) => {
@@ -208,7 +211,7 @@ async function captureTaskAction(taskId: string): Promise<ActionEvent[]> {
     const original = proto.handleAction;
     proto.handleAction = async (evt) => {
       events.push(evt);
-      return "已批准";
+      return replyText;
     };
     restores.push(async () => {
       await runInDurableObject(stub, (restored) => {
@@ -221,6 +224,40 @@ async function captureTaskAction(taskId: string): Promise<ActionEvent[]> {
     });
   });
   return events;
+}
+
+function butlerStub() {
+  return env.BUTLER.get(env.BUTLER.idFromName("owner"));
+}
+
+/** Seeds a running owner task straight into the Butler's index. */
+async function seedButlerTask(row: {
+  id: string;
+  handle: number | null;
+  title?: string;
+  status?: string;
+}): Promise<void> {
+  await runInDurableObject(butlerStub(), (_instance, state) => {
+    state.storage.sql.exec(
+      `INSERT INTO tasks
+        (id, title, status, created_at, updated_at, chat_id,
+         progress_message_id, progress_message_ref_json, artifacts_json,
+         last_seq, bot_id, handle)
+       VALUES (?, ?, ?, 0, 0, ?, NULL, NULL, '[]', 0, NULL, ?)`,
+      row.id,
+      row.title ?? "沙箱测试",
+      row.status ?? "running",
+      OWNER,
+      row.handle,
+    );
+  });
+}
+
+function sentText(call: RecordedCall | undefined): string | undefined {
+  const body = call?.body as
+    | { msg?: { item_list?: Array<{ text_item?: { text?: string } }> } }
+    | undefined;
+  return body?.msg?.item_list?.[0]?.text_item?.text;
 }
 
 let textActionCounter = 0;
@@ -878,6 +915,13 @@ describe("WeChat sending", () => {
 });
 
 describe("WeChat text actions", () => {
+  beforeEach(async () => {
+    await runInDurableObject(butlerStub(), (_instance, state) => {
+      state.storage.sql.exec("DELETE FROM task_events");
+      state.storage.sql.exec("DELETE FROM tasks");
+    });
+  });
+
   it("executes an owner's approval command and replies on WeChat", async () => {
     setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
     await channels().ensurePolling();
@@ -914,6 +958,112 @@ describe("WeChat text actions", () => {
         to_user_id: OWNER,
         item_list: [{ type: 1, text_item: { text: "已批准" } }],
       },
+    });
+  });
+
+  it("cancels the only running task on an implicit command and labels the reply", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    await seedButlerTask({ id: "t7", handle: 1 });
+
+    const actions = await captureTaskAction("t7", "任务 t7 已取消");
+    const butlerEvents = await captureButler();
+    const { calls, fetchImpl } = scriptedILink([
+      jsonResponse(textActionUpdate("取消")),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+
+    await pollThroughDO();
+
+    await vi.waitFor(() => expect(actions).toHaveLength(1));
+    expect(actions[0]).toMatchObject({
+      type: "action",
+      channel: "wechat",
+      action: "cancel",
+      taskId: "t7",
+    });
+    expect(actions[0]?.approvalId).toBeUndefined();
+    expect(butlerEvents).toEqual([]);
+
+    await vi.waitFor(() => {
+      expect(sentText(calls.find((call) => call.url.endsWith("/sendmessage")))).toBe(
+        "任务 #1 已取消",
+      );
+    });
+  });
+
+  it("cancels the task named by a display handle", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    await seedButlerTask({ id: "t7", handle: 1 });
+
+    const actions = await captureTaskAction("t7", "任务 t7 已取消");
+    const butlerEvents = await captureButler();
+    const { calls, fetchImpl } = scriptedILink([
+      jsonResponse(textActionUpdate("取消 #1")),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+
+    await pollThroughDO();
+
+    await vi.waitFor(() => expect(actions).toHaveLength(1));
+    expect(actions[0]).toMatchObject({ action: "cancel", taskId: "t7" });
+    expect(butlerEvents).toEqual([]);
+
+    await vi.waitFor(() => {
+      expect(sentText(calls.find((call) => call.url.endsWith("/sendmessage")))).toBe(
+        "任务 #1 已取消",
+      );
+    });
+  });
+
+  it("lists the candidates instead of guessing which task to cancel", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    await seedButlerTask({ id: "t8", handle: 1, title: "沙箱测试" });
+    await seedButlerTask({ id: "t9", handle: 2, title: "周报" });
+
+    const first = await captureTaskAction("t8");
+    const second = await captureTaskAction("t9");
+    const butlerEvents = await captureButler();
+    const { calls, fetchImpl } = scriptedILink([
+      jsonResponse(textActionUpdate("取消")),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+
+    await pollThroughDO();
+
+    await vi.waitFor(() => {
+      expect(sentText(calls.find((call) => call.url.endsWith("/sendmessage")))).toBe(
+        "当前有 2 个任务在进行，请写明编号：\n#1 沙箱测试\n#2 周报",
+      );
+    });
+    expect(first).toEqual([]);
+    expect(second).toEqual([]);
+    expect(butlerEvents).toEqual([]);
+  });
+
+  it("hands an implicit cancel to the butler when no task is running", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+
+    const butlerEvents = await captureButler();
+    const { fetchImpl } = scriptedILink([
+      jsonResponse(textActionUpdate("取消")),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+
+    await pollThroughDO();
+
+    await vi.waitFor(() => expect(butlerEvents).toHaveLength(1));
+    expect(butlerEvents[0]).toMatchObject({
+      type: "message",
+      channel: "wechat",
+      text: "取消",
     });
   });
 

@@ -162,6 +162,12 @@ function forWechat(msg: OutboundMessage): OutboundMessage {
     : { text: `${text}\n${hints.join("\n")}` };
 }
 
+/** Replaces a whole `t<n>` id, so `t7` is not rewritten inside `t70`. */
+function replaceTaskId(text: string, taskId: string, label: string): string {
+  const escaped = taskId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(`\\b${escaped}\\b`, "g"), label);
+}
+
 /**
  * Single channel hub: the only place that talks to a channel API, and the only
  * place inbound channel events enter the control plane.
@@ -1116,20 +1122,7 @@ export class ChannelDO extends Agent<Env> {
       const textAction =
         update.text === null ? null : parseTextAction(update.text);
       if (textAction !== null) {
-        // Only the legacy `t<n>` form goes straight to the Task DO for now.
-        // Implicit and `#N` targets are ordinary chat until the Butler
-        // resolver is wired in.
-        if (textAction.target.kind === "taskId") {
-          this.dispatchWeChatAction(event, eventId, routeKey, {
-            action: textAction.action,
-            target: textAction.target,
-            ...(textAction.approvalId === undefined
-              ? {}
-              : { approvalId: textAction.approvalId }),
-          });
-        } else {
-          this.dispatchMessage(event, routeKey);
-        }
+        this.dispatchWeChatAction(event, eventId, routeKey, textAction);
         return;
       }
 
@@ -1190,42 +1183,94 @@ export class ChannelDO extends Agent<Env> {
     event: MessageEvent,
     eventId: string,
     routeKey: string,
-    parsed: TextAction & { target: { kind: "taskId"; taskId: string } },
+    parsed: TextAction,
   ): void {
-    const action: ActionEvent = {
-      type: "action",
-      channel: "wechat",
-      chatId: event.chatId,
-      userId: event.userId,
-      actionId: eventId,
-      messageId: eventId,
-      action: parsed.action,
-      taskId: parsed.target.taskId,
-      ...(parsed.approvalId === undefined
-        ? {}
-        : { approvalId: parsed.approvalId }),
-      eventId,
-    };
-
     this.ctx.waitUntil(
-      this.handleWeChatAction(action, routeKey).catch((error: unknown) => {
-        console.error(`channel: action failed: ${errorMessage(error)}`);
-      }),
+      this.handleWeChatAction(event, eventId, routeKey, parsed).catch(
+        (error: unknown) => {
+          console.error(`channel: action failed: ${errorMessage(error)}`);
+        },
+      ),
     );
   }
 
   private async handleWeChatAction(
-    event: ActionEvent,
+    event: MessageEvent,
+    eventId: string,
     routeKey: string,
+    parsed: TextAction,
   ): Promise<void> {
     if (!(await this.isAdmissionCurrent("wechat", routeKey))) return;
 
+    // The legacy `t<n>` form needs no lookup: the id is already the target.
+    let target: { taskId: string; label: string; approvalId?: string } | null =
+      parsed.target.kind === "taskId"
+        ? {
+            taskId: parsed.target.taskId,
+            label: parsed.target.taskId,
+            ...(parsed.approvalId === undefined
+              ? {}
+              : { approvalId: parsed.approvalId }),
+          }
+        : null;
+
+    if (target === null) {
+      try {
+        const butler = this.env.BUTLER.get(
+          this.env.BUTLER.idFromName("owner"),
+        );
+        const resolution = await butler.resolveTextAction(parsed);
+        if (resolution.kind === "chat") {
+          // The Butler already had its round trip, so a later message in this
+          // batch may reach it first. Best-effort ordering is acceptable here.
+          this.dispatchMessage(event, routeKey);
+          return;
+        }
+        if (resolution.kind === "reply") {
+          if (!(await this.isAdmissionCurrent("wechat", routeKey))) return;
+          await this.sendCurrent({ text: resolution.text });
+          return;
+        }
+        target = {
+          taskId: resolution.taskId,
+          label: resolution.label,
+          ...(resolution.approvalId === undefined
+            ? {}
+            : { approvalId: resolution.approvalId }),
+        };
+      } catch (error) {
+        console.error(
+          `channel: action resolution failed: ${errorMessage(error)}`,
+        );
+        if (!(await this.isAdmissionCurrent("wechat", routeKey))) return;
+        await this.sendCurrent({ text: "出错了，稍后再试" });
+        return;
+      }
+    }
+
     let text = "出错了，稍后再试";
     try {
+      const action: ActionEvent = {
+        type: "action",
+        channel: "wechat",
+        chatId: event.chatId,
+        userId: event.userId,
+        actionId: eventId,
+        messageId: eventId,
+        action: parsed.action,
+        taskId: target.taskId,
+        ...(target.approvalId === undefined
+          ? {}
+          : { approvalId: target.approvalId }),
+        eventId,
+      };
       const task = this.env.TASK.get(
-        this.env.TASK.idFromName(event.taskId),
+        this.env.TASK.idFromName(action.taskId),
       );
-      text = await task.handleAction(event);
+      text = await task.handleAction(action);
+      if (target.label !== target.taskId) {
+        text = replaceTaskId(text, target.taskId, target.label);
+      }
     } catch (error) {
       console.error(`channel: action failed: ${errorMessage(error)}`);
     }
