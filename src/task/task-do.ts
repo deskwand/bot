@@ -152,7 +152,11 @@ export class TaskDO extends Agent<Env> {
         reviewAction(
           {
             authorization:
-              this.spec?.authorization ?? this.spec?.instructions ?? "",
+              this.spec?.authorization ??
+              (this.spec?.botId !== undefined
+                ? ""
+                : this.spec?.instructions) ??
+              "",
             tool,
             toolDescription: description,
             args,

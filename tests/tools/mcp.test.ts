@@ -203,6 +203,20 @@ describe("mcpToolMode", () => {
     ).toBe("disabled");
     expect(mcpToolMode(server({ requireApproval: [] }), rw)).toBe("auto"); // legacy: no policy
   });
+
+  it("always approves destructive tools under writes unless auto-approve wins", () => {
+    const s = server({ approvalPolicy: "writes", requireApproval: [] });
+    const destructive = { name: "delete_page", annotations: { destructiveHint: true } };
+    const readOnly = {
+      name: "search",
+      annotations: { readOnlyHint: true, destructiveHint: true },
+    };
+    expect(mcpToolMode(s, destructive)).toBe("approval");
+    expect(mcpToolMode(s, readOnly)).toBe("auto");
+    expect(mcpToolMode({ ...s, autoApprove: ["delete_page"] }, destructive)).toBe(
+      "auto",
+    );
+  });
 });
 
 describe("mcpToolName", () => {

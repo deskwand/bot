@@ -162,6 +162,22 @@ describe("TaskDO codemode",()=>{
     const tools=seen!.messages.filter(m=>m.role==="system").flatMap(m=>m.toolsAdded??[]);
     expect(tools).toEqual([]);
   });
+  it("does not treat bot instructions as authorization",async()=>{
+    let seen:TranscriptContext|undefined;
+    vi.spyOn(globalThis,"fetch").mockImplementation(async()=>new Response("created",{status:201,headers:{"content-type":"text/plain"}}));
+    setModelOverride(scriptedModel([
+      {toolCalls:[{name:"codemode",args:{code:'const r=await tools.http_request({url:"https://fixture.test/items",method:"POST",body:"{}"});return r.status;'}}]},
+      {observe:c=>{seen=c;},text:'{"verdict":"allow","reason":"按指令提交"}'},
+      {toolCalls:[{name:"finish_task",args:{summary:"bot review done"}}]},
+    ]));
+    const id="t-code-review-bot",stub=task(id);
+    await stub.start({taskId:id,title:id,instructions:"机器人记忆xyz",botId:"b1"});
+    await complete(stub);
+    expect(seen).toBeDefined();
+    const user=seen!.messages.find(m=>m.role==="user");
+    expect(user).toBeDefined();
+    expect(contentText(user!.content)).not.toContain("机器人记忆xyz");
+  });
   it("calls deferred MCP tools from scripts without loading them into the prompt",async()=>{
     const {result}=await script("t-code-deferred",'return await tools.fixture__echo({text:"from script"});',fixtureMcp);
     expect(result.isError).toBe(false);expect(text(result)).toContain("echo:from script");

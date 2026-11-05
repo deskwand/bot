@@ -21,7 +21,7 @@ export type McpToolInfo = {
   name: string;
   description?: string;
   inputSchema?: unknown;
-  annotations?: { readOnlyHint?: boolean };
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
 };
 
 /** How the loader treats one tool of a server. */
@@ -169,7 +169,9 @@ export function mcpToolMode(
   if (server.requireApproval?.includes(tool.name)) return "approval";
   if (server.autoApprove?.includes(tool.name)) return "auto";
   if (server.approvalPolicy === "writes") {
-    return tool.annotations?.readOnlyHint === true ? "auto" : "review";
+    if (tool.annotations?.readOnlyHint === true) return "auto";
+    if (tool.annotations?.destructiveHint === true) return "approval";
+    return "review";
   }
   return "auto";
 }

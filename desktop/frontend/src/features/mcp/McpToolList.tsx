@@ -18,6 +18,7 @@ const MODE_LABELS: Record<string, string> = {
 
 export function McpToolList({
   tools,
+  reviewable,
   dirty,
   saving,
   disabled = false,
@@ -25,6 +26,8 @@ export function McpToolList({
   onSave,
 }: {
   tools: McpToolDTO[];
+  /** Tool names whose probed mode is "review"; only they may offer 智能. */
+  reviewable: ReadonlySet<string>;
   dirty: boolean;
   saving: boolean;
   disabled?: boolean;
@@ -61,11 +64,13 @@ export function McpToolList({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {Object.entries(MODE_LABELS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
+                {Object.entries(MODE_LABELS).map(([value, label]) =>
+                  value === "review" && !reviewable.has(tool.name) ? null : (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ),
+                )}
               </SelectContent>
             </Select>
           </li>

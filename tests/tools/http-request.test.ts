@@ -3,7 +3,7 @@ import { withProgress } from "../../src/tools/wrap";
 import type { Context } from "@earendil-works/chord";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
-import { isBlockedHost, httpRequestTool, safeRequestUrl } from "../../src/tools/http-request";
+import { isBlockedHost, httpRequestTool, reviewArgs, safeRequestUrl } from "../../src/tools/http-request";
 import type { ApprovalDecision, ApprovalGateLike, ApprovalNote } from "../../src/task/approvals";
 
 function context(signal?: AbortSignal): Context {
@@ -56,6 +56,32 @@ describe("isBlockedHost", () => {
   );
 });
 
+describe("reviewArgs", () => {
+  it("keeps ordinary query values and masks secret ones", () => {
+    const review = reviewArgs({
+      method: "POST",
+      url: "https://user:pass@api.example.com/x?action=delete&api_key=x&token=y#frag",
+      headers: { Authorization: "Bearer secret", "X-Trace": "abc" },
+      body: '{"a":1}',
+    });
+    const url = new URL(String(review.url));
+    expect(url.username).toBe("");
+    expect(url.password).toBe("");
+    expect(url.hash).toBe("");
+    expect(url.searchParams.get("action")).toBe("delete");
+    expect(url.searchParams.get("api_key")).toBe("***");
+    expect(url.searchParams.get("token")).toBe("***");
+    expect(review.headers).toEqual({ Authorization: "***", "X-Trace": "abc" });
+    expect(review.body).toBe('{"a":1}');
+  });
+
+  it("truncates a long body and omits a missing one", () => {
+    const review = reviewArgs({ url: "https://example.com", body: "x".repeat(2500) });
+    expect(review.body).toBe(`${"x".repeat(2000)}…`);
+    expect(reviewArgs({ url: "https://example.com" })).not.toHaveProperty("body");
+  });
+});
+
 describe("httpRequestTool", () => {
   it("sends a GET without asking for approval", async () => {
     const { g, seen } = gate("approved");
@@ -90,9 +116,36 @@ describe("httpRequestTool", () => {
     );
 
     expect(seen.length).toBe(1);
-    expect(notes).toEqual([{ description: tool.description }]);
+    expect(notes).toEqual([
+      { description: tool.description, reviewArgs: expect.anything() },
+    ]);
     expect(JSON.stringify(seen[0])).not.toContain("secret-token");
+    expect(JSON.stringify(notes[0]?.reviewArgs)).not.toContain("secret-token");
     expect(sent).toBe(1);
+  });
+
+  it("shows the reviewer the body and non-secret query values", async () => {
+    const { g, seen, notes } = gate("approved");
+    const tool = httpRequestTool(g, (async () => new Response("ok")) as unknown as typeof fetch);
+
+    await tool.execute(
+      {
+        url: "https://api.example.com/pay?action=delete&token=y",
+        method: "POST",
+        body: "transfer 100",
+      },
+      {} as never,
+      context(),
+    );
+
+    const review = notes[0]?.reviewArgs as Record<string, unknown>;
+    const url = new URL(String(review.url));
+    expect(url.searchParams.get("action")).toBe("delete");
+    expect(url.searchParams.get("token")).toBe("***");
+    expect(review.body).toBe("transfer 100");
+    // The stored and inner-gate view stays fully redacted.
+    expect(JSON.stringify(seen[0])).not.toContain("transfer 100");
+    expect(JSON.stringify(seen[0])).not.toContain("action=delete");
   });
 
   it("describes writes as reviewed, with only risky ones waiting", () => {

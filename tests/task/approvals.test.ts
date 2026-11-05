@@ -708,6 +708,44 @@ describe("ReviewedGate", () => {
     expect(outcome.rows[0]).toMatchObject({ verdict: "ask", failed: 1 });
   });
 
+  it("gives the reviewer reviewArgs but records and asks with args", async () => {
+    const stub = taskStub("t-review-review-args");
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const sql = sqlOf(instance);
+      const inner = fakeInner();
+      const seen: unknown[] = [];
+      const gate = reviewedGate(sql, inner.gate, async (_tool, args) => {
+        seen.push(args);
+        return { verdict: "ask", reason: "涉及付款", failed: false };
+      });
+      const args = { method: "POST", url: "https://api.example.com/pay?token=***", bodyBytes: 9 };
+      const result = await gate.request(
+        "http_request",
+        args,
+        new AbortController().signal,
+        { reviewArgs: { method: "POST", url: "https://api.example.com/pay?token=y", body: "transfer" } },
+      );
+      return { result, seen, requests: inner.requests, rows: reviewRows(sql) };
+    });
+
+    expect(outcome.seen).toEqual([
+      { method: "POST", url: "https://api.example.com/pay?token=y", body: "transfer" },
+    ]);
+    expect(outcome.requests[0]?.args).toEqual({
+      method: "POST",
+      url: "https://api.example.com/pay?token=***",
+      bodyBytes: 9,
+    });
+    expect(outcome.requests[0]?.note).not.toHaveProperty("reviewArgs");
+    expect(outcome.rows[0]?.args_summary).toBe(
+      JSON.stringify({
+        method: "POST",
+        url: "https://api.example.com/pay?token=***",
+        bodyBytes: 9,
+      }),
+    );
+  });
+
   it("passes the tool description to the review, or an empty string", async () => {
     const stub = taskStub("t-review-description");
     const outcome = await runInDurableObject(stub, async (instance) => {

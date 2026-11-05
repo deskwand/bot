@@ -6,7 +6,12 @@ import { REVIEW_FAILED_REASON, type ReviewVerdict } from "./review";
 export type ApprovalDecision = "approved" | "rejected" | "expired";
 
 /** Optional context for an approval request, shown to the owner and the reviewer. */
-export type ApprovalNote = { description?: string; reason?: string };
+export type ApprovalNote = {
+  description?: string;
+  reason?: string;
+  /** Unredacted-enough arguments for the reviewer; never sent to the inner gate. */
+  reviewArgs?: unknown;
+};
 
 /** Longest argument summary sent to the channel. */
 const ARGS_SUMMARY_LIMIT = 200;
@@ -311,7 +316,7 @@ export class ReviewedGate implements ApprovalGateLike {
     try {
       verdict = await this.review(
         tool,
-        args,
+        note?.reviewArgs ?? args,
         note?.description ?? "",
         signal,
       );

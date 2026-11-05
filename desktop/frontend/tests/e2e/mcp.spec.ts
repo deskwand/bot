@@ -116,6 +116,22 @@ test("write tools default to 智能 and save outside every list", async ({ page 
   expect(server.disabledTools ?? []).not.toContain("ask_question");
 });
 
+test("only tools the Worker probed as review offer 智能", async ({ page }) => {
+  await openServices(page);
+  const form = await addCatalogEntry(page, "DeepWiki");
+  await form.getByRole("button", { name: "保存", exact: true }).click();
+
+  const card = page.getByTestId("mcp-card-deepwiki");
+  await card.getByRole("button", { name: /工具/ }).click();
+
+  await page.getByLabel("read_wiki_structure 审批方式").click();
+  await expect(page.getByRole("option", { name: "智能" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await page.getByLabel("ask_question 审批方式").click();
+  await expect(page.getByRole("option", { name: "智能" })).toBeVisible();
+});
+
 test("deleting a service removes its card", async ({ page }) => {
   await openServices(page);
   const form = await addCatalogEntry(page, "DeepWiki");

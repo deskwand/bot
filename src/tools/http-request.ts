@@ -38,6 +38,7 @@ const TIMEOUT_MS = 30_000;
 const MAX_REQUEST_BODY_BYTES = 256 * 1024;
 const MAX_SCRIPT_BODY_CHARS = 1_000_000;
 const SECRET_HEADER = /authorization|api[-_]?key|cookie|token|secret/i;
+const REVIEW_BODY_LIMIT = 2000;
 
 const BLOCKED_HOST = /^(localhost|.*\.local|.*\.internal)$/i;
 const BLOCKED_V4 =
@@ -93,6 +94,45 @@ export function redactArgs(args: HttpRequestArgs): Record<string, unknown> {
   };
 }
 
+/**
+ * What the reviewer sees. Unlike {@link redactArgs}, non-secret query values
+ * and the request body stay visible, because the reviewer has to tell a
+ * transfer from a save.
+ */
+export function reviewArgs(args: HttpRequestArgs): Record<string, unknown> {
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(args.headers ?? {})) {
+    headers[name] = SECRET_HEADER.test(name) ? "***" : value;
+  }
+
+  let url: string;
+  try {
+    const parsed = new URL(args.url);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.hash = "";
+    for (const name of [...parsed.searchParams.keys()]) {
+      if (SECRET_HEADER.test(name)) parsed.searchParams.set(name, "***");
+    }
+    url = parsed.toString();
+  } catch {
+    url = "[无效 URL]";
+  }
+
+  const review: Record<string, unknown> = {
+    method: args.method ?? "GET",
+    url,
+    headers,
+  };
+  if (args.body !== undefined) {
+    review.body =
+      args.body.length > REVIEW_BODY_LIMIT
+        ? `${args.body.slice(0, REVIEW_BODY_LIMIT)}…`
+        : args.body;
+  }
+  return review;
+}
+
 /** What the model and the reviewer are told about this tool. */
 const DESCRIPTION =
   "Call an HTTP endpoint. GET/HEAD run directly; other methods are reviewed " +
@@ -146,7 +186,7 @@ export function httpRequestTool(
           "http_request",
           redactArgs(args),
           context.abortSignal ?? new AbortController().signal,
-          { description: DESCRIPTION },
+          { description: DESCRIPTION, reviewArgs: reviewArgs(args) },
         );
         if (decision !== "approved") {
           if (context.abortSignal?.aborted) throw context.abortSignal.reason;

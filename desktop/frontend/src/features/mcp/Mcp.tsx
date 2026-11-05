@@ -435,6 +435,11 @@ export function Mcp() {
           {servers.map((server) => {
             const probe = probes[server.name];
             const tools = drafts[server.name] ?? probe?.tools ?? [];
+            const reviewable = new Set(
+              (probe?.ok ? probe.tools : [])
+                .filter((tool) => tool.mode === "review")
+                .map((tool) => tool.name),
+            );
             const enabled = server.enabled !== false;
             const needsAuth =
               auth[server.name] === "unauthorized" ||
@@ -535,6 +540,7 @@ export function Mcp() {
                     <div className="mt-3 border-t border-border pt-3">
                       <McpToolList
                         tools={tools}
+                        reviewable={reviewable}
                         dirty={dirtyServers.some((entry) => entry.name === server.name)}
                         saving={savingTools === server.name}
                         disabled={!ready}
