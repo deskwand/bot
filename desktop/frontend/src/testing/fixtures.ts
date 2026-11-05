@@ -612,6 +612,7 @@ export function createMockClient(): ClientService {
       taskModel: state.taskModel,
       customProviders: state.customProviders,
       mcpServers: state.mcpServers,
+      locale: "zh",
       secrets: Object.keys(state.secrets)
         .sort()
         .map((name) => ({ name, configured: state.secrets[name] === true })),

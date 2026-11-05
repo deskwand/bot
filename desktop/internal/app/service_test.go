@@ -2216,3 +2216,28 @@ func TestServiceConfigEditWritesMcpServersPatch(t *testing.T) {
 		t.Fatalf("patched = %#v", patched)
 	}
 }
+
+func TestGetConfigDefaultsLocaleToZh(t *testing.T) {
+	f := newServiceFixture(t)
+	config, err := f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Locale != "zh" {
+		t.Fatalf("locale = %q, want zh", config.Locale)
+	}
+
+	f.snapshots.snapshot.ConfigJSON = []byte(strings.Replace(
+		string(f.snapshots.snapshot.ConfigJSON),
+		`"schemaVersion": 1,`,
+		`"schemaVersion": 1, "locale": "en",`,
+		1,
+	))
+	config, err = f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Locale != "en" {
+		t.Fatalf("locale = %q, want en", config.Locale)
+	}
+}

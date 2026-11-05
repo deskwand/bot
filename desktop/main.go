@@ -114,6 +114,8 @@ func main() {
 	locker := deployment.NewTargetLocker()
 	lifecycle := deployment.NewLifecycleWithLocker(api, journal, pkg, credentials, nil, locker)
 	publish := deployment.NewServiceWithLocker(api, journal, credentials, pkg, nil, locker)
+	lifecycle.Locale = locale.Current
+	publish.Locale = locale.Current
 	entries := app.NewEntryService(app.EntryOptions{
 		Publisher:   publish,
 		Snapshots:   api,

@@ -884,6 +884,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		OwnerUserIDs:       []int64{},
 		CustomProviders:    []CustomProviderDTO{},
 		McpServers:         json.RawMessage("[]"),
+		Locale:             "zh",
 		Secrets:            s.secretStatuses(snapshot),
 	}
 	if len(snapshot.ConfigJSON) > 0 {
@@ -897,6 +898,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 				CustomProviders []CustomProviderDTO `json:"customProviders"`
 			} `json:"models"`
 			McpServers json.RawMessage `json:"mcpServers"`
+			Locale     string          `json:"locale"`
 		}
 		if err := json.Unmarshal(snapshot.ConfigJSON, &document); err != nil {
 			return dto, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "DESKWAND_CONFIG 不是有效的 JSON"}
@@ -911,6 +913,9 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		}
 		if raw := bytes.TrimSpace(document.McpServers); len(raw) > 0 && string(raw) != "null" {
 			dto.McpServers = raw
+		}
+		if document.Locale == "en" {
+			dto.Locale = "en"
 		}
 	}
 	if s.cache != nil {

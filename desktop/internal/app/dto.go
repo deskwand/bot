@@ -121,6 +121,7 @@ type ConfigDTO struct {
 	TaskModel          *ModelDTO           `json:"taskModel"`
 	CustomProviders    []CustomProviderDTO `json:"customProviders"`
 	McpServers         json.RawMessage     `json:"mcpServers"`
+	Locale             string              `json:"locale"`
 	Secrets            []SecretNameDTO     `json:"secrets"`
 }
 

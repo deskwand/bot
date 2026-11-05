@@ -109,6 +109,9 @@ type Lifecycle struct {
 	creds   platform.CredentialStore
 	clock   func() time.Time
 	locker  *TargetLocker
+	// Locale is inherited by the publish service Install, Import and Upgrade
+	// create. Nil publishes no locale.
+	Locale func() string
 }
 
 // NewLifecycle constructs the lifecycle service. The package must already be
@@ -152,7 +155,7 @@ func (l *Lifecycle) Install(ctx context.Context, request InstallRequest) (domain
 	if request.ActiveChannel != ChannelTelegram && request.ActiveChannel != ChannelWeChat {
 		return domain.Result{}, domain.Error{Code: CodeInvalidRequest, Message: "ACTIVE_CHANNEL must be telegram or wechat"}
 	}
-	configJSON, err := installConfigJSON(request)
+	configJSON, err := installConfigJSON(request, lifecycleLocale(l))
 	if err != nil {
 		return domain.Result{}, err
 	}
@@ -234,9 +237,19 @@ func definitiveClientError(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Status >= 400 && apiErr.Status < 500 && apiErr.Status != 409
 }
 
-func installConfigJSON(request InstallRequest) ([]byte, error) {
+func lifecycleLocale(l *Lifecycle) string {
+	if l.Locale == nil {
+		return ""
+	}
+	return l.Locale()
+}
+
+func installConfigJSON(request InstallRequest, locale string) ([]byte, error) {
 	ids := append([]int64(nil), request.Config.TelegramUserIDs...)
 	patch := domain.EditablePatch{TelegramUserIDs: &ids}
+	if locale != "" {
+		patch.Locale = &locale
+	}
 	if len(request.Config.ButlerModel) > 0 {
 		raw := append(json.RawMessage(nil), request.Config.ButlerModel...)
 		patch.ButlerModel = &raw

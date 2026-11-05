@@ -161,6 +161,10 @@ func applyPatch(document map[string]any, patch domain.EditablePatch) error {
 		document["mcpServers"] = servers
 	}
 
+	if patch.Locale != nil {
+		document["locale"] = *patch.Locale
+	}
+
 	if patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil {
 		return nil
 	}
@@ -381,7 +385,7 @@ func copyObject(source map[string]any) map[string]any {
 }
 
 func patchIsEmpty(patch domain.EditablePatch) bool {
-	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil && patch.McpServers == nil
+	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil && patch.McpServers == nil && patch.Locale == nil
 }
 
 var (

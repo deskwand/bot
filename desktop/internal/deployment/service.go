@@ -96,6 +96,9 @@ type Service struct {
 	pkg     release.Package
 	clock   func() time.Time
 	locker  *TargetLocker
+	// Locale returns the locale to publish when the change does not set one.
+	// Nil leaves the stored configuration untouched.
+	Locale func() string
 }
 
 // NewService constructs a publish service. clock may be nil; time.Now is used.
@@ -134,6 +137,7 @@ func (s *Service) Preview(ctx context.Context, target domain.Target, change doma
 	if err := s.checkReleaseVersion(snapshot, change.AllowReleaseChange); err != nil {
 		return steps, sanitizeError(err, secretValues(change.Secrets))
 	}
+	s.fillLocale(&change)
 	plan, err := config.Merge(snapshot, change)
 	if err != nil {
 		return steps, sanitizeError(err, secretValues(change.Secrets))
@@ -145,6 +149,16 @@ func (s *Service) Preview(ctx context.Context, target domain.Target, change doma
 		}
 	}
 	return steps, nil
+}
+
+// fillLocale publishes the current language with every change that does not
+// carry one, so a publish from another page cannot silently reset the bot.
+func (s *Service) fillLocale(change *domain.Change) {
+	if change.Patch.Locale != nil || s.Locale == nil {
+		return
+	}
+	locale := s.Locale()
+	change.Patch.Locale = &locale
 }
 
 // checkReleaseVersion prevents an ordinary configuration publish from silently
@@ -231,6 +245,7 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 	if err := s.checkReleaseVersion(snapshot, change.AllowReleaseChange); err != nil {
 		return s.fail(&record, stepStage, err, secretValues(change.Secrets))
 	}
+	s.fillLocale(&change)
 	plan, err := config.Merge(snapshot, change)
 	if err != nil {
 		return s.fail(&record, stepStage, err, secretValues(change.Secrets))

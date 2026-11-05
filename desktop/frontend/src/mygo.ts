@@ -122,6 +122,7 @@ export interface ConfigDTO {
   taskModel: ModelDTO | null;
   customProviders: CustomProviderDTO[];
   mcpServers: unknown;
+  locale: string;
   secrets: SecretNameDTO[];
 }
 
