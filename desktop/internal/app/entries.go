@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/telegram"
 	"github.com/deskwand/bot/desktop/internal/wechat"
@@ -122,6 +123,8 @@ type EntryOptions struct {
 	Credentials platform.CredentialStore
 	Login       func(ctx context.Context, onStatus func(wechat.LoginStatus)) (wechat.Credentials, error)
 	Telegram    func(token string) TelegramAPI
+	// Locale supplies the warning language; nil means zh.
+	Locale func() string
 }
 
 // EntryService implements the message-entry operations.
@@ -132,6 +135,7 @@ type EntryService struct {
 	credentials platform.CredentialStore
 	login       func(ctx context.Context, onStatus func(wechat.LoginStatus)) (wechat.Credentials, error)
 	telegram    func(token string) TelegramAPI
+	locale      func() string
 }
 
 // NewEntryService builds the entry service. Missing optional dependencies get
@@ -157,7 +161,15 @@ func NewEntryService(options EntryOptions) *EntryService {
 		credentials: options.Credentials,
 		login:       options.Login,
 		telegram:    options.Telegram,
+		locale:      options.Locale,
 	}
+}
+
+func (s *EntryService) lang() string {
+	if s.locale == nil {
+		return i18n.ZH
+	}
+	return s.locale()
 }
 
 // ConnectWeChat runs QR login and publishes WECHAT_CREDENTIALS. It never
@@ -315,7 +327,7 @@ func (s *EntryService) SelectEntry(ctx context.Context, target domain.Target, ch
 
 	selection := EntrySelection{Channel: normalized, Configured: configured}
 	if !configured {
-		selection.Warning = "所选入口尚未配置；选择已保存，但不会自动改用另一个入口。"
+		selection.Warning = i18n.T(s.lang(), "app.entryNotConfigured")
 	}
 	result, err := s.selector.SetActiveChannel(ctx, target, normalized)
 	if err != nil {

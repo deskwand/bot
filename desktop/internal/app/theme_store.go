@@ -11,6 +11,7 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 )
 
 // The appearances the client stores. They are mygo.ThemeSource's values, which
@@ -43,6 +44,17 @@ type ThemeStore interface {
 type FileThemeStore struct {
 	path string
 	mu   sync.Mutex
+	// Language supplies the language for validation messages; nil means zh.
+	// It cannot be called Locale: FileThemeStore.Locale already reads the
+	// persisted language source.
+	Language func() string
+}
+
+func (s *FileThemeStore) lang() string {
+	if s.Language == nil {
+		return i18n.ZH
+	}
+	return s.Language()
 }
 
 // preferencesFile is the one preferences file. Theme and Locale share it so a
@@ -86,7 +98,7 @@ func (s *FileThemeStore) Theme() (string, error) {
 func (s *FileThemeStore) SetTheme(source string) error {
 	normalized, ok := normalizeTheme(source)
 	if !ok {
-		return domain.Error{Code: deployment.CodeInvalidRequest, Message: "外观设置无效"}
+		return domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.themeInvalid")}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

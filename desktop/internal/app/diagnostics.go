@@ -8,6 +8,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 )
 
@@ -30,6 +31,8 @@ type DiagnosticsOptions struct {
 	Window time.Duration
 	Kinds  []string
 	Now    func() time.Time
+	// Locale supplies the warning language; nil means zh.
+	Locale func() string
 }
 
 // DiagnosticsReport is the frontend-safe status document. It carries no
@@ -52,6 +55,7 @@ type DiagnosticsService struct {
 	window    time.Duration
 	kinds     []string
 	now       func() time.Time
+	locale    func() string
 }
 
 // NewDiagnosticsService returns a service with production defaults.
@@ -80,7 +84,15 @@ func NewDiagnosticsServiceWithOptions(snapshots DiagnosticsSnapshotReader, event
 		window:    window,
 		kinds:     append([]string(nil), kinds...),
 		now:       now,
+		locale:    options.Locale,
 	}
+}
+
+func (s *DiagnosticsService) lang() string {
+	if s.locale == nil {
+		return i18n.ZH
+	}
+	return s.locale()
 }
 
 // Status reads the current deployment, queries the allowed logs and returns
@@ -123,21 +135,21 @@ func (s *DiagnosticsService) status(ctx context.Context, target domain.Target) (
 	warnings := make([]string, 0)
 
 	if s.events == nil {
-		warnings = append(warnings, "未连接云端日志查询；状态可能为未知")
+		warnings = append(warnings, i18n.T(s.lang(), "app.diagnosticsNoLogsConnection"))
 	} else {
 		cloudEvents, queryErr := s.events.QueryChannelEvents(ctx, target, s.window)
 		switch {
 		case queryErr == nil:
 			evidence = append(evidence, cloudEvents...)
 			if len(cloudEvents) == 0 {
-				warnings = append(warnings, "未找到当前时间窗内的云端日志；缺失证据不表示故障，也不表示实时就绪")
+				warnings = append(warnings, i18n.T(s.lang(), "app.diagnosticsNoLogsFound"))
 			}
 		case cloudflare.IsObservabilityUnavailable(queryErr):
-			warnings = append(warnings, "无法读取云端日志（令牌缺少权限或未开启日志）")
+			warnings = append(warnings, i18n.T(s.lang(), "app.diagnosticsObservabilityUnavailable"))
 		case cloudflare.IsObservabilityUnauthorized(queryErr):
-			warnings = append(warnings, "无法读取云端日志（API 令牌无效或已过期）")
+			warnings = append(warnings, i18n.T(s.lang(), "app.diagnosticsObservabilityUnauthorized"))
 		default:
-			warnings = append(warnings, "无法读取云端日志；状态可能为未知")
+			warnings = append(warnings, i18n.T(s.lang(), "app.diagnosticsReadFailed"))
 		}
 	}
 

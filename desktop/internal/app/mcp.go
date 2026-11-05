@@ -13,6 +13,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/mcpadmin"
 	"github.com/deskwand/bot/desktop/internal/mcpcatalog"
 	"github.com/deskwand/bot/desktop/internal/telemetry"
@@ -20,7 +21,7 @@ import (
 
 // A server published moments ago is unknown to the Worker until the new
 // version takes traffic; probe and OAuth start retry while it says so.
-const mcpServerMissing = "服务不存在"
+const mcpServerMissing = "服务不存在" // i18n-ignore: Worker response text
 
 var (
 	mcpPropagationTimeout  = 30 * time.Second
@@ -149,7 +150,7 @@ func (s *Service) AddMcpServer(input McpAddInput) (ResultDTO, error) {
 	ctx := context.Background()
 	name := strings.TrimSpace(input.Name)
 	if !mcpServerNamePattern.MatchString(name) {
-		return ResultDTO{}, invalidMcpName()
+		return ResultDTO{}, invalidMcpName(s.locale.Current())
 	}
 	cfg, servers, err := s.currentMcpServers(ctx)
 	if err != nil {
@@ -157,7 +158,7 @@ func (s *Service) AddMcpServer(input McpAddInput) (ResultDTO, error) {
 	}
 	for _, raw := range servers {
 		if mcpServerName(raw) == name {
-			return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: "已存在同名服务"}
+			return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.mcpNameExists")}
 		}
 	}
 
@@ -172,11 +173,11 @@ func (s *Service) AddMcpServer(input McpAddInput) (ResultDTO, error) {
 		for _, header := range input.Custom.Headers {
 			values = append(values, header.Value)
 		}
-		server, secrets, err = buildCustomMcpServer(name, *input.Custom)
+		server, secrets, err = buildCustomMcpServer(s.locale.Current(), name, *input.Custom)
 	} else {
 		entry, ok := mcpcatalog.Lookup(strings.TrimSpace(input.CatalogID))
 		if !ok {
-			return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: "服务目录中没有该条目"}
+			return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.mcpCatalogEntryMissing")}
 		}
 		server, secrets, err = mcpcatalog.Build(entry, name, input.Values)
 	}
@@ -207,10 +208,10 @@ func (s *Service) UpdateMcpServer(name string, server json.RawMessage, secrets [
 	}
 	var candidate map[string]any
 	if err := json.Unmarshal(server, &candidate); err != nil {
-		return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: "服务配置不是有效的 JSON 对象"}
+		return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.mcpConfigInvalidJSON")}
 	}
 	if candidateName, _ := candidate["name"].(string); candidateName != name {
-		return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: "更新后的服务名称必须与原名一致"}
+		return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.mcpRenameForbidden")}
 	}
 
 	index := -1
@@ -221,7 +222,7 @@ func (s *Service) UpdateMcpServer(name string, server json.RawMessage, secrets [
 		}
 	}
 	if index < 0 {
-		return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: "服务不存在"}
+		return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.mcpServerNotFound")}
 	}
 	updated := append([]json.RawMessage{}, servers...)
 	updated[index] = append(json.RawMessage(nil), bytes.TrimSpace(server)...)
@@ -250,12 +251,12 @@ func (s *Service) RemoveMcpServer(name string) (ResultDTO, error) {
 		}
 	}
 	if index < 0 {
-		return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: "服务不存在"}
+		return ResultDTO{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.mcpServerNotFound")}
 	}
 
 	var removed map[string]any
 	if err := json.Unmarshal(servers[index], &removed); err != nil {
-		return ResultDTO{}, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "服务配置不是有效的 JSON 对象"}
+		return ResultDTO{}, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: s.t("app.mcpConfigInvalidJSON")}
 	}
 	keptRaw := append(append([]json.RawMessage{}, servers[:index]...), servers[index+1:]...)
 	kept := make([]map[string]any, 0, len(keptRaw))
@@ -362,24 +363,24 @@ func (s *Service) StartMcpOAuth(name string) error {
 		return safeAppError(err)
 	}
 	if authorizeURL == "" {
-		return domain.Error{Code: mcpadmin.CodeRequestFailed, Message: "云端没有返回授权链接"}
+		return domain.Error{Code: mcpadmin.CodeRequestFailed, Message: s.t("app.mcpNoAuthorizeURL")}
 	}
 	opener := s.mcpBrowser
 	if opener == nil {
 		opener = s.browser
 	}
 	if opener == nil {
-		return serviceUnavailable()
+		return s.serviceUnavailable()
 	}
 	if err := opener.Open(authorizeURL); err != nil {
-		return domain.Error{Code: CodeServiceUnavailable, Message: "无法打开浏览器，请检查默认浏览器设置后重试"}
+		return domain.Error{Code: CodeServiceUnavailable, Message: s.t("app.browserOpenFailed")}
 	}
 	return nil
 }
 
 func (s *Service) mcpClient(ctx context.Context, target domain.Target) (*mcpadmin.Client, error) {
 	if s.snapshots == nil || s.publish == nil || s.credentials == nil {
-		return nil, serviceUnavailable()
+		return nil, s.serviceUnavailable()
 	}
 	return mcpadmin.Connect(ctx, mcpadmin.Deps{
 		Token: backup.TokenDeps{
@@ -395,7 +396,7 @@ func (s *Service) currentMcpServers(ctx context.Context) (ConfigDTO, []json.RawM
 	if err != nil {
 		return ConfigDTO{}, nil, err
 	}
-	servers, err := decodeMcpServers(cfg.McpServers)
+	servers, err := decodeMcpServers(s.locale.Current(), cfg.McpServers)
 	if err != nil {
 		return ConfigDTO{}, nil, err
 	}
@@ -433,14 +434,14 @@ func secretDTOValues(secrets []SecretEditDTO) []string {
 	return values
 }
 
-func decodeMcpServers(raw json.RawMessage) ([]json.RawMessage, error) {
+func decodeMcpServers(locale string, raw json.RawMessage) ([]json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return nil, nil
 	}
 	var servers []json.RawMessage
 	if err := json.Unmarshal(trimmed, &servers); err != nil {
-		return nil, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "DESKWAND_CONFIG 中的 mcpServers 不是数组"}
+		return nil, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: i18n.T(locale, "app.mcpServersNotArray")}
 	}
 	return servers, nil
 }
@@ -455,10 +456,10 @@ func mcpServerName(raw json.RawMessage) string {
 	return server.Name
 }
 
-func buildCustomMcpServer(name string, custom McpCustomInput) (map[string]any, []domain.SecretEdit, error) {
+func buildCustomMcpServer(locale, name string, custom McpCustomInput) (map[string]any, []domain.SecretEdit, error) {
 	serverURL := strings.TrimSpace(custom.URL)
 	if serverURL == "" {
-		return nil, nil, domain.Error{Code: deployment.CodeInvalidRequest, Message: "请填写服务 URL"}
+		return nil, nil, domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(locale, "app.mcpURLRequired")}
 	}
 	server := map[string]any{
 		"name":           name,
@@ -475,12 +476,12 @@ func buildCustomMcpServer(name string, custom McpCustomInput) (map[string]any, [
 			continue
 		}
 		if value == "" {
-			return nil, nil, fmt.Errorf("请填写 header %s 的值", headerName)
+			return nil, nil, fmt.Errorf("%s", i18n.T(locale, "app.mcpHeaderValueRequired", headerName))
 		}
 		if header.Secret {
 			secretName := mcpHeaderSecretName(name, headerName)
 			if !mcpSecretNamePattern.MatchString(secretName) {
-				return nil, nil, fmt.Errorf("header 名称 %s 无法用于密钥名", headerName)
+				return nil, nil, fmt.Errorf("%s", i18n.T(locale, "app.mcpHeaderSecretInvalid", headerName))
 			}
 			headers[headerName] = "env:" + secretName
 			secrets = append(secrets, domain.NewSecretEdit(secretName, domain.SecretReplace, value))
@@ -506,9 +507,9 @@ func domainSecrets(secrets []SecretEditDTO) []domain.SecretEdit {
 	return out
 }
 
-func invalidMcpName() error {
+func invalidMcpName(locale string) error {
 	return domain.Error{
 		Code:    deployment.CodeInvalidRequest,
-		Message: "服务名称只能使用小写字母、数字和下划线（1-32 个字符）",
+		Message: i18n.T(locale, "app.mcpNameInvalid"),
 	}
 }

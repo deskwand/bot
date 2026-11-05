@@ -24,6 +24,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/release"
@@ -323,6 +324,11 @@ func NewService(options ServiceOptions) *Service {
 // Name returns the product name for the shell header.
 func (s *Service) Name() string { return "DeskWand Bot" }
 
+// t returns the message for key in the language this run resolves to.
+func (s *Service) t(key string, args ...any) string {
+	return i18n.T(s.locale.Current(), key, args...)
+}
+
 // Theme returns the appearance the client shows: "system", "light" or "dark".
 // ThemeSystem when nothing was chosen yet or the stored value cannot be used.
 func (s *Service) Theme() string {
@@ -343,12 +349,12 @@ func (s *Service) Theme() string {
 func (s *Service) SetTheme(source string) error {
 	normalized, ok := normalizeTheme(source)
 	if !ok {
-		return domain.Error{Code: deployment.CodeInvalidRequest, Message: "外观设置无效"}
+		return domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.themeInvalid")}
 	}
 	if s.theme != nil {
 		if err := s.theme.SetTheme(normalized); err != nil {
 			slog.Error("app: save appearance", "error", err)
-			return domain.Error{Code: CodeThemeSaveFailed, Message: "外观设置未保存"}
+			return domain.Error{Code: CodeThemeSaveFailed, Message: s.t("app.themeSaveFailed")}
 		}
 	}
 	s.applyTheme(normalized)
@@ -369,17 +375,17 @@ func (s *Service) SetLocale(source string) (LocaleDTO, error) { return s.locale.
 // CancelCloudflareLogin; progress arrives through CloudflareLoginEvent.
 func (s *Service) StartCloudflareLogin() (string, error) {
 	if s.auth == nil {
-		return "", serviceUnavailable()
+		return "", s.serviceUnavailable()
 	}
 	operationID, err := s.newOpID()
 	if err != nil {
-		return "", serviceUnavailable()
+		return "", s.serviceUnavailable()
 	}
 
 	s.cfMu.Lock()
 	if s.cfActive {
 		s.cfMu.Unlock()
-		return "", domain.Error{Code: CodeCloudflareLoginInProgress, Message: "已有 Cloudflare 登录正在进行"}
+		return "", domain.Error{Code: CodeCloudflareLoginInProgress, Message: s.t("app.cloudflareLoginInProgress")}
 	}
 	session, err := s.auth.BeginLogin(context.Background())
 	if err != nil {
@@ -394,12 +400,12 @@ func (s *Service) StartCloudflareLogin() (string, error) {
 	if s.browser == nil {
 		s.finishCloudflareLogin(session)
 		session.Cancel()
-		return "", serviceUnavailable()
+		return "", s.serviceUnavailable()
 	}
 	if err := s.browser.Open(session.AuthURL()); err != nil {
 		s.finishCloudflareLogin(session)
 		session.Cancel()
-		return "", safeAppError(&auth.Error{Code: auth.ErrCodeOAuthExchangeFailed, Message: "无法打开浏览器，请检查默认浏览器设置后重试"})
+		return "", safeAppError(&auth.Error{Code: auth.ErrCodeOAuthExchangeFailed, Message: s.t("app.browserOpenFailed")})
 	}
 	s.emitCloudflare(CloudflareLoginDTO{OperationID: operationID, State: "waiting_browser"})
 	go s.runCloudflareLogin(operationID, session)
@@ -458,7 +464,7 @@ func (s *Service) ConfirmCloudflareAccount(accountID string) error {
 	operationID := s.cfOperationID
 	s.cfMu.Unlock()
 	if session == nil {
-		return domain.Error{Code: CodeCloudflareLoginNotFound, Message: "没有等待选择账号的登录"}
+		return domain.Error{Code: CodeCloudflareLoginNotFound, Message: s.t("app.cloudflareLoginWaiting")}
 	}
 	if err := session.Complete(context.Background(), strings.TrimSpace(accountID)); err != nil {
 		return safeAppError(err)
@@ -491,10 +497,10 @@ func (s *Service) CancelCloudflareLogin(opID string) error {
 	operationID := s.cfOperationID
 	s.cfMu.Unlock()
 	if !active || session == nil || operationID != strings.TrimSpace(opID) {
-		return domain.Error{Code: CodeCloudflareLoginNotFound, Message: "登录操作不存在或已结束"}
+		return domain.Error{Code: CodeCloudflareLoginNotFound, Message: s.t("app.loginNotFound")}
 	}
 	if !s.finishCloudflareLogin(session) {
-		return domain.Error{Code: CodeCloudflareLoginNotFound, Message: "登录操作不存在或已结束"}
+		return domain.Error{Code: CodeCloudflareLoginNotFound, Message: s.t("app.loginNotFound")}
 	}
 	session.Cancel()
 	s.emitCloudflare(CloudflareLoginDTO{OperationID: operationID, State: "cancelled"})
@@ -554,7 +560,7 @@ func (s *Service) BootState() (BootStateDTO, error) {
 		return state, nil
 	}
 	if s.store == nil {
-		return BootStateDTO{}, serviceUnavailable()
+		return BootStateDTO{}, s.serviceUnavailable()
 	}
 	target, ok, err := s.store.Load()
 	if err != nil {
@@ -581,7 +587,7 @@ func (s *Service) BootState() (BootStateDTO, error) {
 // DisconnectCloudflare revokes the authorization and removes local credentials.
 func (s *Service) DisconnectCloudflare() error {
 	if s.auth == nil {
-		return serviceUnavailable()
+		return s.serviceUnavailable()
 	}
 	if err := s.auth.Disconnect(context.Background()); err != nil {
 		return err
@@ -601,7 +607,7 @@ func (s *Service) ListWorkers() ([]WorkerDTO, error) {
 		return []WorkerDTO{}, err
 	}
 	if s.scripts == nil {
-		return []WorkerDTO{}, serviceUnavailable()
+		return []WorkerDTO{}, s.serviceUnavailable()
 	}
 	scripts, err := s.scripts.ListScripts(context.Background(), accountID)
 	if err != nil {
@@ -629,10 +635,10 @@ func (s *Service) SelectDeployment(scriptName string) error {
 	}
 	scriptName = strings.TrimSpace(scriptName)
 	if err := cloudflare.ValidateWorkerName(scriptName); err != nil {
-		return domain.Error{Code: deployment.CodeInvalidRequest, Message: "Worker 名称无效"}
+		return domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.workerNameInvalid")}
 	}
 	if s.store == nil {
-		return serviceUnavailable()
+		return s.serviceUnavailable()
 	}
 	return s.store.Save(domain.Target{AccountID: accountID, ScriptName: scriptName})
 }
@@ -645,7 +651,7 @@ func (s *Service) InspectImport() (ImportPreviewDTO, error) {
 		return ImportPreviewDTO{}, err
 	}
 	if s.lifecycle == nil {
-		return ImportPreviewDTO{}, serviceUnavailable()
+		return ImportPreviewDTO{}, s.serviceUnavailable()
 	}
 	preview, err := s.lifecycle.InspectImport(ctx, target)
 	dto := ImportPreviewDTO{
@@ -671,7 +677,7 @@ func (s *Service) InspectImport() (ImportPreviewDTO, error) {
 	}
 	if s.release != nil {
 		if version := s.release.Version(); version != "" {
-			dto.Warnings = append(dto.Warnings, fmt.Sprintf("导入会将云端服务部署到客户端版本 %s", version))
+			dto.Warnings = append(dto.Warnings, s.t("app.importVersionWarning", version))
 		}
 	}
 	return dto, safeAppError(err)
@@ -689,7 +695,7 @@ func (s *Service) ConfirmImport(input ImportInputDTO) (ResultDTO, error) {
 		return ResultDTO{}, err
 	}
 	if s.lifecycle == nil {
-		return ResultDTO{}, serviceUnavailable()
+		return ResultDTO{}, s.serviceUnavailable()
 	}
 	butler, err := optionalModelInput(modelRef(input.ButlerModel))
 	if err != nil {
@@ -727,10 +733,10 @@ func (s *Service) Install(input InstallInputDTO) (ResultDTO, error) {
 	}
 	accountID := connected
 	if requested := strings.TrimSpace(input.AccountID); requested != "" && !strings.EqualFold(requested, connected) {
-		return ResultDTO{}, domain.Error{Code: CodeAccountMismatch, Message: "安装目标必须属于当前连接的 Cloudflare 账户"}
+		return ResultDTO{}, domain.Error{Code: CodeAccountMismatch, Message: s.t("app.installAccountMismatch")}
 	}
 	if s.lifecycle == nil {
-		return ResultDTO{}, serviceUnavailable()
+		return ResultDTO{}, s.serviceUnavailable()
 	}
 	butler, err := modelInput(ModelRefInput{Provider: input.ButlerModel.Provider, ID: input.ButlerModel.ID})
 	if err != nil {
@@ -742,7 +748,7 @@ func (s *Service) Install(input InstallInputDTO) (ResultDTO, error) {
 	}
 	channel := normalizeChannel(input.ActiveChannel)
 	if channel == "" {
-		return ResultDTO{}, domain.Error{Code: CodeInvalidEntryChannel, Message: "ACTIVE_CHANNEL 必须是 telegram 或 wechat"}
+		return ResultDTO{}, domain.Error{Code: CodeInvalidEntryChannel, Message: s.t("app.activeChannelInvalid")}
 	}
 	request := deployment.InstallRequest{
 		AccountID:  accountID,
@@ -762,7 +768,7 @@ func (s *Service) Install(input InstallInputDTO) (ResultDTO, error) {
 		_ = s.store.Save(domain.Target{AccountID: accountID, ScriptName: request.WorkerName})
 	}
 	if len(input.TelegramUserIDs) == 0 {
-		summary.Warnings = append(summary.Warnings, "owner 列表为空：Worker 会忽略所有消息，直到在设置中发布 owner。")
+		summary.Warnings = append(summary.Warnings, s.t("app.ownerMissing"))
 	}
 	// After the save: setup can only be evaluated against the deployment this
 	// install just selected.
@@ -785,7 +791,7 @@ func (s *Service) UpgradeAvailable() (UpgradeDTO, error) {
 		availableVersion = s.release.Version()
 	}
 	if s.snapshots == nil {
-		return UpgradeDTO{}, serviceUnavailable()
+		return UpgradeDTO{}, s.serviceUnavailable()
 	}
 	snapshot, err := s.snapshots.ReadSnapshot(ctx, target)
 	if err != nil {
@@ -851,7 +857,7 @@ func (s *Service) Upgrade() (ResultDTO, error) {
 		return ResultDTO{}, err
 	}
 	if s.lifecycle == nil {
-		return ResultDTO{}, serviceUnavailable()
+		return ResultDTO{}, s.serviceUnavailable()
 	}
 	result, err := s.lifecycle.Upgrade(ctx, target, pkg)
 	failure := safeAppError(err)
@@ -867,7 +873,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		return ConfigDTO{}, err
 	}
 	if s.snapshots == nil {
-		return ConfigDTO{}, serviceUnavailable()
+		return ConfigDTO{}, s.serviceUnavailable()
 	}
 	snapshot, err := s.snapshots.ReadSnapshot(ctx, target)
 	if err != nil {
@@ -901,7 +907,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 			Locale     string          `json:"locale"`
 		}
 		if err := json.Unmarshal(snapshot.ConfigJSON, &document); err != nil {
-			return dto, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "DESKWAND_CONFIG 不是有效的 JSON"}
+			return dto, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: s.t("app.configInvalidJSON")}
 		}
 		if document.Owner.TelegramUserIDs != nil {
 			dto.OwnerUserIDs = document.Owner.TelegramUserIDs
@@ -968,7 +974,7 @@ func (s *Service) PreviewConfig(input ConfigEditDTO) ([]StepDTO, error) {
 		return []StepDTO{}, err
 	}
 	if s.publish == nil {
-		return []StepDTO{}, serviceUnavailable()
+		return []StepDTO{}, s.serviceUnavailable()
 	}
 	change, err := s.changeFromEdit(ctx, target, input)
 	if err != nil {
@@ -995,7 +1001,7 @@ func (s *Service) PublishConfig(input ConfigEditDTO) (ResultDTO, error) {
 		return ResultDTO{}, err
 	}
 	if s.publish == nil {
-		return ResultDTO{}, serviceUnavailable()
+		return ResultDTO{}, s.serviceUnavailable()
 	}
 	change, err := s.changeFromEdit(ctx, target, input)
 	if err != nil {
@@ -1023,7 +1029,7 @@ func (s *Service) ResumeOperation(id string) (ResultDTO, error) {
 		return ResultDTO{}, err
 	}
 	if s.journal == nil {
-		return ResultDTO{}, serviceUnavailable()
+		return ResultDTO{}, s.serviceUnavailable()
 	}
 	operationID := strings.TrimSpace(id)
 	record, err := s.journal.Load(operationID)
@@ -1033,7 +1039,7 @@ func (s *Service) ResumeOperation(id string) (ResultDTO, error) {
 	if record.Target != target {
 		return ResultDTO{OperationID: operationID}, domain.Error{
 			Code:    CodeTargetMismatch,
-			Message: "该操作属于另一个部署；请先选择对应部署再恢复",
+			Message: s.t("app.resumeOtherDeployment"),
 		}
 	}
 	switch record.Kind {
@@ -1043,7 +1049,7 @@ func (s *Service) ResumeOperation(id string) (ResultDTO, error) {
 		return s.resumeUpgrade(ctx, record, target)
 	default:
 		if s.publish == nil {
-			return ResultDTO{}, serviceUnavailable()
+			return ResultDTO{}, s.serviceUnavailable()
 		}
 		result, err := s.publish.Resume(ctx, operationID)
 		return s.summaryFromResult(result, target.ScriptName), safeAppError(err)
@@ -1052,9 +1058,9 @@ func (s *Service) ResumeOperation(id string) (ResultDTO, error) {
 
 func (s *Service) resumeInstall(ctx context.Context, record deployment.OperationRecord, target domain.Target) (ResultDTO, error) {
 	if s.lifecycle == nil {
-		return ResultDTO{}, serviceUnavailable()
+		return ResultDTO{}, s.serviceUnavailable()
 	}
-	request, err := installRequestFromRecord(record)
+	request, err := installRequestFromRecord(s.locale.Current(), record)
 	if err != nil {
 		return s.summaryFromRecord(record, target.ScriptName), safeAppError(err)
 	}
@@ -1072,7 +1078,7 @@ func (s *Service) resumeUpgrade(ctx context.Context, record deployment.Operation
 		return s.summaryFromRecord(record, target.ScriptName), err
 	}
 	if s.snapshots == nil {
-		return ResultDTO{}, serviceUnavailable()
+		return ResultDTO{}, s.serviceUnavailable()
 	}
 	snapshot, err := s.snapshots.ReadSnapshot(ctx, target)
 	if err != nil {
@@ -1101,7 +1107,7 @@ func (s *Service) resumeUpgrade(ctx context.Context, record deployment.Operation
 	}
 	if !record.ScriptUploadAttempted {
 		if s.lifecycle == nil {
-			return ResultDTO{}, serviceUnavailable()
+			return ResultDTO{}, s.serviceUnavailable()
 		}
 		// A new Upgrade would see this unknown record as an unresolved
 		// operation. No upload was sent, so it is safe to close the record as
@@ -1109,7 +1115,7 @@ func (s *Service) resumeUpgrade(ctx context.Context, record deployment.Operation
 		record.State = deployment.StateFailed
 		record.FailureCode = domain.NOT_SENT
 		record.UpdatedAt = s.now()
-		setLastStepNeedsInput(record.Steps, "升级尚未上传；正在重新执行一次")
+		setLastStepNeedsInput(record.Steps, s.t("app.upgradePending"))
 		if saveErr := s.journal.Save(record); saveErr != nil {
 			return s.summaryFromRecord(record, target.ScriptName), safeAppError(saveErr)
 		}
@@ -1130,12 +1136,12 @@ func (s *Service) resumeUpgrade(ctx context.Context, record deployment.Operation
 	}
 	record.State = deployment.StateNeedsInput
 	record.UpdatedAt = s.now()
-	setLastStepNeedsInput(record.Steps, "升级上传结果未知；请核对 Cloudflare 部署后再继续")
+	setLastStepNeedsInput(record.Steps, s.t("app.upgradeUnknown"))
 	if saveErr := s.journal.Save(record); saveErr != nil {
 		return s.summaryFromRecord(record, target.ScriptName), safeAppError(saveErr)
 	}
 	summary := s.summaryFromRecord(record, target.ScriptName)
-	summary.Warnings = append(summary.Warnings, "已上传的升级结果无法确认；客户端不会自动重试。")
+	summary.Warnings = append(summary.Warnings, s.t("app.upgradeUnconfirmed"))
 	return summary, nil
 }
 
@@ -1149,7 +1155,7 @@ func (s *Service) AbandonOperation(id string) (ResultDTO, error) {
 		return ResultDTO{}, err
 	}
 	if s.journal == nil {
-		return ResultDTO{}, serviceUnavailable()
+		return ResultDTO{}, s.serviceUnavailable()
 	}
 	operationID := strings.TrimSpace(id)
 	record, err := s.journal.Load(operationID)
@@ -1159,30 +1165,30 @@ func (s *Service) AbandonOperation(id string) (ResultDTO, error) {
 	if record.Target != target {
 		return ResultDTO{OperationID: operationID}, domain.Error{
 			Code:    CodeTargetMismatch,
-			Message: "该操作属于另一个部署；请先选择对应部署再放弃",
+			Message: s.t("app.abandonOtherDeployment"),
 		}
 	}
 	switch record.Kind {
 	case deployment.KindInstall, deployment.KindUpgrade:
 		if s.lifecycle == nil {
-			return ResultDTO{}, serviceUnavailable()
+			return ResultDTO{}, s.serviceUnavailable()
 		}
 		result, abandonErr := s.lifecycle.Abandon(ctx, operationID)
 		return s.summaryFromResult(result, target.ScriptName), safeAppError(abandonErr)
 	default:
 		if s.publish == nil {
-			return ResultDTO{}, serviceUnavailable()
+			return ResultDTO{}, s.serviceUnavailable()
 		}
 		result, abandonErr := s.publish.Abandon(ctx, operationID)
 		return s.summaryFromResult(result, target.ScriptName), safeAppError(abandonErr)
 	}
 }
 
-func installRequestFromRecord(record deployment.OperationRecord) (deployment.InstallRequest, error) {
+func installRequestFromRecord(locale string, record deployment.OperationRecord) (deployment.InstallRequest, error) {
 	if len(record.ConfigJSON) == 0 {
 		return deployment.InstallRequest{}, domain.Error{
 			Code:    deployment.CodeConfigMissing,
-			Message: "安装操作缺少已保存的配置，无法按原请求继续",
+			Message: i18n.T(locale, "app.installConfigMissing"),
 		}
 	}
 	var document struct {
@@ -1197,7 +1203,7 @@ func installRequestFromRecord(record deployment.OperationRecord) (deployment.Ins
 	if err := json.Unmarshal(record.ConfigJSON, &document); err != nil {
 		return deployment.InstallRequest{}, domain.Error{
 			Code:    domain.UNSUPPORTED_SCHEMA,
-			Message: "安装操作保存的配置不是有效 JSON",
+			Message: i18n.T(locale, "app.installConfigInvalid"),
 		}
 	}
 	config := deployment.InstallConfig{
@@ -1251,7 +1257,7 @@ func (s *Service) summaryFromRecord(record deployment.OperationRecord, workerNam
 // PendingOperations lists unfinished journaled operations, newest first.
 func (s *Service) PendingOperations() ([]OperationDTO, error) {
 	if s.journal == nil {
-		return []OperationDTO{}, serviceUnavailable()
+		return []OperationDTO{}, s.serviceUnavailable()
 	}
 	records, err := s.journal.List()
 	if err != nil {
@@ -1293,18 +1299,18 @@ func (s *Service) StartWeChatLogin() (string, error) {
 		return "", err
 	}
 	if s.entries == nil {
-		return "", serviceUnavailable()
+		return "", s.serviceUnavailable()
 	}
 	operationID, err := s.newOpID()
 	if err != nil {
-		return "", serviceUnavailable()
+		return "", s.serviceUnavailable()
 	}
 	loginCtx, cancel := context.WithCancel(context.Background())
 	s.loginMu.Lock()
 	if s.loginActive {
 		s.loginMu.Unlock()
 		cancel()
-		return "", domain.Error{Code: CodeLoginInProgress, Message: "已有微信登录正在进行"}
+		return "", domain.Error{Code: CodeLoginInProgress, Message: s.t("app.wechatLoginInProgress")}
 	}
 	if s.logins == nil {
 		s.logins = map[string]context.CancelFunc{}
@@ -1346,13 +1352,13 @@ func (s *Service) StartWeChatLogin() (string, error) {
 			s.emitLogin(LoginStatusDTO{
 				OperationID: result.OperationID,
 				State:       "published",
-				Message:     "登录成功，微信凭据已发布",
+				Message:     s.t("app.wechatLoginPublished"),
 			})
 		case result.OperationID != "":
 			code := appErrorCode(loginErr)
-			message := "凭据发布失败；可在恢复操作中继续"
+			message := s.t("app.wechatPublishFailed")
 			if code != "" {
-				message = code + "；可在恢复操作中继续"
+				message = s.t("app.wechatPublishFailedCode", code)
 			}
 			s.emitLogin(LoginStatusDTO{
 				OperationID: result.OperationID,
@@ -1362,11 +1368,11 @@ func (s *Service) StartWeChatLogin() (string, error) {
 			})
 		case errors.Is(loginErr, context.Canceled):
 			if !cancelledEmitted {
-				s.emitLogin(LoginStatusDTO{OperationID: operationID, State: wechat.LoginCancelled, Message: "登录已取消"})
+				s.emitLogin(LoginStatusDTO{OperationID: operationID, State: wechat.LoginCancelled, Message: s.t("app.wechatLoginCancelled")})
 			}
 		default:
 			code := appErrorCode(loginErr)
-			s.emitLogin(LoginStatusDTO{OperationID: operationID, State: "error", Message: "登录失败，请重试", Code: code})
+			s.emitLogin(LoginStatusDTO{OperationID: operationID, State: "error", Message: s.t("app.wechatLoginFailed"), Code: code})
 		}
 	}()
 	return operationID, nil
@@ -1379,7 +1385,7 @@ func (s *Service) CancelWeChatLogin(opID string) error {
 	cancel, ok := s.logins[opID]
 	s.loginMu.Unlock()
 	if !ok {
-		return domain.Error{Code: CodeLoginNotFound, Message: "登录操作不存在或已结束"}
+		return domain.Error{Code: CodeLoginNotFound, Message: s.t("app.loginNotFound")}
 	}
 	cancel()
 	return nil
@@ -1397,7 +1403,7 @@ func (s *Service) ConnectTelegram(token string) (ResultDTO, error) {
 		return ResultDTO{}, err
 	}
 	if s.entries == nil {
-		return ResultDTO{}, serviceUnavailable()
+		return ResultDTO{}, s.serviceUnavailable()
 	}
 	result, err := s.entries.ConnectTelegram(ctx, target, strings.TrimSpace(token))
 	summary := s.summaryFromResult(result, target.ScriptName)
@@ -1422,7 +1428,7 @@ func (s *Service) SelectEntry(channel string) (EntryResultDTO, error) {
 		return EntryResultDTO{}, err
 	}
 	if s.entries == nil {
-		return EntryResultDTO{}, serviceUnavailable()
+		return EntryResultDTO{}, s.serviceUnavailable()
 	}
 	selection, err := s.entries.SelectEntry(ctx, target, channel)
 	dto := EntryResultDTO{
@@ -1449,7 +1455,7 @@ func (s *Service) Status() ([]StatusItemDTO, error) {
 		return []StatusItemDTO{}, err
 	}
 	if s.diagnostics == nil {
-		return []StatusItemDTO{}, serviceUnavailable()
+		return []StatusItemDTO{}, s.serviceUnavailable()
 	}
 	report, err := s.diagnostics.Status(ctx, target)
 	if err != nil {
@@ -1475,7 +1481,7 @@ func (s *Service) ExportDiagnostics() (string, error) {
 		return "", err
 	}
 	if s.diagnostics == nil {
-		return "", serviceUnavailable()
+		return "", s.serviceUnavailable()
 	}
 	data, err := s.diagnostics.ExportDiagnostics(ctx, target)
 	if err != nil {
@@ -1494,7 +1500,7 @@ func (s *Service) ProbeModel(provider, model, key, api, baseURL string) (StatusI
 	}
 	items := diagnostics.Summarize([]string{"model"}, []domain.Evidence{evidence}, "")
 	if len(items) == 0 {
-		return StatusItemDTO{}, domain.Error{Code: CodeServiceUnavailable, Message: "模型探测没有返回状态"}
+		return StatusItemDTO{}, domain.Error{Code: CodeServiceUnavailable, Message: s.t("app.modelProbeNoStatus")}
 	}
 	return statusItemDTO(items[0]), nil
 }
@@ -1529,16 +1535,16 @@ func (s *Service) releaseVersionStep(ctx context.Context, target domain.Target) 
 	}
 	cloudVersion := snapshot.ReleaseVersion
 	if cloudVersion == "" {
-		cloudVersion = "未知"
+		cloudVersion = s.t("app.versionUnknown")
 	}
 	clientVersion := s.release.Version()
 	if clientVersion == "" {
-		clientVersion = "未知"
+		clientVersion = s.t("app.versionUnknown")
 	}
 	return StepDTO{
 		ID:       "release",
 		State:    "info",
-		Message:  fmt.Sprintf("云端版本 %s；客户端版本 %s", cloudVersion, clientVersion),
+		Message:  s.t("app.versionStatus", cloudVersion, clientVersion),
 		Evidence: snapshot.VersionID,
 	}, true
 }
@@ -1555,7 +1561,7 @@ func hasStepID(steps []StepDTO, id string) bool {
 func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, input ConfigEditDTO) (domain.Change, error) {
 	change := domain.Change{BaseFingerprint: strings.TrimSpace(input.BaseFingerprint)}
 	if s.snapshots == nil {
-		return domain.Change{}, serviceUnavailable()
+		return domain.Change{}, s.serviceUnavailable()
 	}
 	snapshot, err := s.snapshots.ReadSnapshot(ctx, target)
 	if err != nil {
@@ -1597,13 +1603,13 @@ func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, inpu
 	edited := make(map[string]bool, len(input.Secrets))
 	for _, secret := range input.Secrets {
 		if strings.TrimSpace(secret.Name) == hiddenSecretName {
-			return domain.Change{}, domain.Error{Code: domain.INVALID_SECRET_EDIT, Message: "ADMIN_TOKEN 由客户端自动管理，不能手动修改"}
+			return domain.Change{}, domain.Error{Code: domain.INVALID_SECRET_EDIT, Message: s.t("app.secretAdminManaged")}
 		}
 		operation := strings.TrimSpace(secret.Operation)
 		switch operation {
 		case domain.SecretKeep, domain.SecretReplace, domain.SecretClear:
 		default:
-			return domain.Change{}, domain.Error{Code: domain.INVALID_SECRET_EDIT, Message: "secret 操作必须是 keep、replace 或 clear"}
+			return domain.Change{}, domain.Error{Code: domain.INVALID_SECRET_EDIT, Message: s.t("app.secretOperationInvalid")}
 		}
 		edited[secret.Name] = true
 		change.Secrets = append(change.Secrets, domain.NewSecretEdit(secret.Name, operation, secret.Value))
@@ -1622,14 +1628,14 @@ func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, inpu
 
 func (s *Service) connectedAccount(ctx context.Context) (string, error) {
 	if s.auth == nil {
-		return "", serviceUnavailable()
+		return "", s.serviceUnavailable()
 	}
 	connection, err := s.auth.Status(ctx)
 	if err != nil && connection.State != auth.StateConnected {
 		return "", safeAppError(err)
 	}
 	if connection.State != auth.StateConnected || connection.AccountID == "" {
-		return "", domain.Error{Code: CodeAuthRequired, Message: "请先连接 Cloudflare 账户"}
+		return "", domain.Error{Code: CodeAuthRequired, Message: s.t("app.authRequired")}
 	}
 	return connection.AccountID, nil
 }
@@ -1640,28 +1646,28 @@ func (s *Service) managedTarget(ctx context.Context) (domain.Target, error) {
 		return domain.Target{}, err
 	}
 	if s.store == nil {
-		return domain.Target{}, serviceUnavailable()
+		return domain.Target{}, s.serviceUnavailable()
 	}
 	target, ok, err := s.store.Load()
 	if err != nil {
 		return domain.Target{}, safeAppError(err)
 	}
 	if !ok {
-		return domain.Target{}, domain.Error{Code: CodeTargetNotSelected, Message: "请先选择一个 Worker 部署"}
+		return domain.Target{}, domain.Error{Code: CodeTargetNotSelected, Message: s.t("app.targetNotSelected")}
 	}
 	if target.AccountID != accountID {
-		return domain.Target{}, domain.Error{Code: CodeAccountMismatch, Message: "已选择的部署属于另一个 Cloudflare 账户；请重新选择"}
+		return domain.Target{}, domain.Error{Code: CodeAccountMismatch, Message: s.t("app.targetAccountMismatch")}
 	}
 	return target, nil
 }
 
 func (s *Service) releasePackage() (release.Package, error) {
 	if s.release == nil {
-		return release.Package{}, domain.Error{Code: CodeReleaseNotBundled, Message: "此客户端未内置 Worker 发布包"}
+		return release.Package{}, domain.Error{Code: CodeReleaseNotBundled, Message: s.t("app.releaseNotBundled")}
 	}
 	pkg, err := s.release.Package()
 	if err != nil {
-		return release.Package{}, releaseError(err)
+		return release.Package{}, s.releaseError(err)
 	}
 	return pkg, nil
 }
@@ -1829,8 +1835,8 @@ func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339)
 }
 
-func serviceUnavailable() error {
-	return domain.Error{Code: CodeServiceUnavailable, Message: "应用服务未完成初始化"}
+func (s *Service) serviceUnavailable() error {
+	return domain.Error{Code: CodeServiceUnavailable, Message: s.t("app.serviceUnavailable")}
 }
 
 func releaseErrorCode(err error) string {
@@ -1841,14 +1847,14 @@ func releaseErrorCode(err error) string {
 	return CodeReleaseUnavailable
 }
 
-func releaseError(err error) error {
+func (s *Service) releaseError(err error) error {
 	switch {
 	case errors.Is(err, release.ErrNotBundled):
-		return domain.Error{Code: CodeReleaseNotBundled, Message: "此客户端未内置 Worker 发布包"}
+		return domain.Error{Code: CodeReleaseNotBundled, Message: s.t("app.releaseNotBundled")}
 	case errors.Is(err, release.ErrUntrusted):
-		return domain.Error{Code: CodeReleaseUntrusted, Message: "内置 Worker 发布包未使用受信任的发布密钥签名"}
+		return domain.Error{Code: CodeReleaseUntrusted, Message: s.t("app.releaseUntrusted")}
 	default:
-		return domain.Error{Code: CodeReleaseUnavailable, Message: "内置 Worker 发布包不可用"}
+		return domain.Error{Code: CodeReleaseUnavailable, Message: s.t("app.releaseUnavailable")}
 	}
 }
 
@@ -1884,6 +1890,15 @@ func randomOperationID() (string, error) {
 type FileTargetStore struct {
 	path string
 	mu   sync.Mutex
+	// Locale supplies the language for validation messages; nil means zh.
+	Locale func() string
+}
+
+func (s *FileTargetStore) lang() string {
+	if s.Locale == nil {
+		return i18n.ZH
+	}
+	return s.Locale()
 }
 
 type targetSettings struct {
@@ -1933,10 +1948,10 @@ func (s *FileTargetStore) Load() (domain.Target, bool, error) {
 // Save writes the target atomically with owner-only permissions.
 func (s *FileTargetStore) Save(target domain.Target) error {
 	if err := cloudflare.ValidateAccountID(target.AccountID); err != nil {
-		return domain.Error{Code: deployment.CodeInvalidRequest, Message: "Cloudflare 账户 ID 无效"}
+		return domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.accountIDInvalid")}
 	}
 	if err := cloudflare.ValidateWorkerName(target.ScriptName); err != nil {
-		return domain.Error{Code: deployment.CodeInvalidRequest, Message: "Worker 名称无效"}
+		return domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.workerNameInvalid")}
 	}
 	data, err := json.MarshalIndent(targetSettings{
 		AccountID:  target.AccountID,

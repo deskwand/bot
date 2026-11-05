@@ -95,7 +95,7 @@ func (s *Service) beginBackupOperation() error {
 	s.backupMu.Lock()
 	defer s.backupMu.Unlock()
 	if s.backupBusy {
-		return domain.Error{Code: backup.CodeMaintenanceBusy, Message: "已有备份或恢复任务在进行"}
+		return domain.Error{Code: backup.CodeMaintenanceBusy, Message: s.t("app.backupBusy")}
 	}
 	s.backupBusy = true
 	return nil
@@ -138,7 +138,7 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 	}
 	defer s.endBackupOperation()
 	if s.backup == nil || s.settings == nil {
-		return nil, serviceUnavailable()
+		return nil, s.serviceUnavailable()
 	}
 	settings, err := s.settings.Settings()
 	if err != nil {
@@ -150,7 +150,7 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureWritableDir(settings.Dir); err != nil {
+	if err := ensureWritableDirIn(s.locale.Current(), settings.Dir); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(settings.Dir, backupFileName(target.ScriptName, s.now()))
@@ -173,7 +173,7 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 // an answer.
 func (s *Service) BackupSettings() (BackupSettingsDTO, error) {
 	if s.settings == nil {
-		return BackupSettingsDTO{}, serviceUnavailable()
+		return BackupSettingsDTO{}, s.serviceUnavailable()
 	}
 	settings, err := s.settings.Settings()
 	if err != nil {
@@ -185,7 +185,7 @@ func (s *Service) BackupSettings() (BackupSettingsDTO, error) {
 // SaveBackupSettings stores the folder and schedule the page edited.
 func (s *Service) SaveBackupSettings(input BackupSettingsEditDTO) (BackupSettingsDTO, error) {
 	if s.settings == nil {
-		return BackupSettingsDTO{}, serviceUnavailable()
+		return BackupSettingsDTO{}, s.serviceUnavailable()
 	}
 	previous, err := s.settings.Settings()
 	if err != nil {
@@ -215,7 +215,7 @@ func (s *Service) forgetSelectionInOtherFolder(before, after string) {
 // cancelled dialog returns the unchanged settings and no error.
 func (s *Service) ChooseBackupDir() (BackupSettingsDTO, error) {
 	if s.settings == nil || s.dialogs == nil {
-		return BackupSettingsDTO{}, serviceUnavailable()
+		return BackupSettingsDTO{}, s.serviceUnavailable()
 	}
 	path, err := s.dialogs.ChooseBackupDir()
 	if err != nil {
@@ -245,17 +245,17 @@ func (s *Service) ChooseBackupDir() (BackupSettingsDTO, error) {
 // click always lands somewhere.
 func (s *Service) OpenBackupFolder() error {
 	if s.settings == nil || s.openPath == nil {
-		return serviceUnavailable()
+		return s.serviceUnavailable()
 	}
 	settings, err := s.settings.Settings()
 	if err != nil {
 		return safeAppError(err)
 	}
-	if err := ensureWritableDir(settings.Dir); err != nil {
+	if err := ensureWritableDirIn(s.locale.Current(), settings.Dir); err != nil {
 		return err
 	}
 	if err := s.openPath(settings.Dir); err != nil {
-		return domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: "无法打开备份目录，请手动打开"}
+		return domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: s.t("app.backupOpenFolderFailed")}
 	}
 	return nil
 }
@@ -275,7 +275,7 @@ func (s *Service) ChooseBackup() (*BackupPreviewDTO, error) {
 		return nil, err
 	}
 	if s.backup == nil || s.dialogs == nil || s.snapshots == nil {
-		return nil, serviceUnavailable()
+		return nil, s.serviceUnavailable()
 	}
 	path, err := s.dialogs.OpenBackup()
 	if err != nil {
@@ -297,19 +297,19 @@ func (s *Service) ChooseBackupAt(path string) (*BackupPreviewDTO, error) {
 	}
 	defer s.endBackupOperation()
 	if s.backup == nil || s.settings == nil || s.snapshots == nil {
-		return nil, serviceUnavailable()
+		return nil, s.serviceUnavailable()
 	}
 	settings, err := s.settings.Settings()
 	if err != nil {
 		return nil, safeAppError(err)
 	}
 	if !insideBackupDir(settings.Dir, path) {
-		return nil, domain.Error{Code: backup.CodeBackupInvalid, Message: "只能恢复备份目录里的备份文件"}
+		return nil, domain.Error{Code: backup.CodeBackupInvalid, Message: s.t("app.backupOutsideFolder")}
 	}
 	// A symlink inside the folder would send Inspect and Restore to whatever it
 	// points at.
 	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
-		return nil, domain.Error{Code: backup.CodeBackupInvalid, Message: "只能恢复备份目录里的备份文件"}
+		return nil, domain.Error{Code: backup.CodeBackupInvalid, Message: s.t("app.backupOutsideFolder")}
 	}
 	ctx, cancel := s.backupContext()
 	defer cancel()
@@ -367,7 +367,7 @@ const maxListedBackups = 50
 // ListBackups lists the backups in the configured folder, newest first.
 func (s *Service) ListBackups() ([]BackupFileDTO, error) {
 	if s.settings == nil {
-		return nil, serviceUnavailable()
+		return nil, s.serviceUnavailable()
 	}
 	settings, err := s.settings.Settings()
 	if err != nil {
@@ -422,7 +422,7 @@ func (s *Service) RestoreData() error {
 		return err
 	}
 	if s.backup == nil {
-		return serviceUnavailable()
+		return s.serviceUnavailable()
 	}
 	// Consume the remembered path: a failed restore leaves a pending record
 	// for RetryRestore instead of allowing an accidental second run.
@@ -431,7 +431,7 @@ func (s *Service) RestoreData() error {
 	s.backupPath = ""
 	s.backupMu.Unlock()
 	if path == "" {
-		return domain.Error{Code: backup.CodeBackupInvalid, Message: "请先选择一个备份文件"}
+		return domain.Error{Code: backup.CodeBackupInvalid, Message: s.t("app.backupNoneSelected")}
 	}
 	restoreErr := safeAppError(s.backup.Restore(ctx, target, path))
 	s.reportAction(telemetry.FeatureRestore, restoreErr)
@@ -467,7 +467,7 @@ func (s *Service) RetryRestore(useSnapshot bool) error {
 	}
 	defer s.endBackupOperation()
 	if s.backup == nil {
-		return serviceUnavailable()
+		return s.serviceUnavailable()
 	}
 	ctx, cancel := s.backupContext()
 	defer cancel()
@@ -483,7 +483,7 @@ func (s *Service) AbandonPendingRestore() error {
 	}
 	defer s.endBackupOperation()
 	if s.backup == nil {
-		return serviceUnavailable()
+		return s.serviceUnavailable()
 	}
 	return safeAppError(s.backup.Abandon())
 }
