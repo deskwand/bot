@@ -760,7 +760,12 @@ export class ButlerDO extends Agent<Env> {
 
   private async reconcileNow(routeKey: string): Promise<void> {
     for (const task of this.repo.list({ active: true })) {
-      let pending: { approvalId: string; tool: string; argsSummary: string }[];
+      let pending: {
+        approvalId: string;
+        tool: string;
+        argsSummary: string;
+        reason?: string;
+      }[];
       try {
         pending = await this.taskFor(task.id).pendingApprovals();
       } catch (error) {
@@ -930,6 +935,7 @@ export class ButlerDO extends Agent<Env> {
       approvalId: string;
       tool: string;
       argsSummary: string;
+      reason?: string;
     },
   ): Promise<boolean> {
     const row = this.repo.get(taskId);
@@ -939,7 +945,7 @@ export class ButlerDO extends Agent<Env> {
     const prefix = row.botId === null ? "" : `🤖 ${bot?.name ?? row.botId} `;
     const label = taskLabel(row);
     const text = clampMessage(
-      `${prefix}🔐 ${label} 请求执行 ${approval.tool}\n${approval.argsSummary}`,
+      `${prefix}🔐 ${label} 请求执行 ${approval.tool}\n${approval.reason ? `⚠️ ${approval.reason}\n` : ""}${approval.argsSummary}`,
     );
     // An owner task with exactly one live approval can take the implicit form.
     // Bot tasks never participate in owner resolution, so they always name the

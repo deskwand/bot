@@ -42,7 +42,12 @@ export type TaskControl = {
   cancel(): Promise<{ ok: boolean; message: string }>;
   retryTask(): Promise<{ ok: boolean; message: string }>;
   pendingApprovals(): Promise<
-    { approvalId: string; tool: string; argsSummary: string }[]
+    {
+      approvalId: string;
+      tool: string;
+      argsSummary: string;
+      reason?: string;
+    }[]
   >;
 };
 

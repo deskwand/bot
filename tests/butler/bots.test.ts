@@ -282,8 +282,9 @@ describe("ButlerDO bot runs", () => {
     });
 
     expect(channel.sent).toHaveLength(1);
-    expect(channel.sent[0]?.text.startsWith("🤖 价格哨兵 ")).toBe(true);
-    expect(channel.sent[0]?.text).toContain("请求执行 web_fetch");
+    expect(channel.sent[0]?.text).toBe(
+      "🤖 价格哨兵 🔐 t1 请求执行 web_fetch\nhttps://example.com",
+    );
     // A bot task has no owner handle: the hint always names the internal id.
     expect(channel.sent[0]?.buttons).toEqual([
       [
@@ -291,6 +292,29 @@ describe("ButlerDO bot runs", () => {
         { label: "❌ 拒绝", data: "a:reject:t1:ap1", hint: "拒绝 t1 ap1" },
       ],
     ]);
+  });
+
+  it("bot task approval shows the review reason", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const stub = butler("bots-approval-reason");
+    await seedBot(stub, "b1", "价格哨兵");
+    await seedTask(stub, { botId: "b1", status: "running" });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "approval_requested",
+      approvalId: "ap1",
+      tool: "web_fetch",
+      argsSummary: "https://example.com",
+      reason: "涉及付款",
+    });
+
+    expect(channel.sent).toHaveLength(1);
+    expect(channel.sent[0]?.text).toBe(
+      "🤖 价格哨兵 🔐 t1 请求执行 web_fetch\n⚠️ 涉及付款\nhttps://example.com",
+    );
   });
 
   it("notifyFromBot prefixes the name", async () => {

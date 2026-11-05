@@ -715,7 +715,12 @@ describe("butler chat", () => {
         cancel: async () => ({ ok: false, message: "" }),
         retryTask: async () => ({ ok: false, message: "" }),
         pendingApprovals: async () => [
-          { approvalId: "ap1", tool: "web_fetch", argsSummary: "https://x" },
+          {
+            approvalId: "ap1",
+            tool: "web_fetch",
+            argsSummary: "https://x",
+            reason: "对外发送",
+          },
         ],
       });
     });
@@ -742,6 +747,9 @@ describe("butler chat", () => {
     await vi.waitFor(() => {
       expect(sends.filter((msg) => msg.text.includes("请求执行"))).toHaveLength(1);
     });
+    expect(sends.some((msg) => msg.text.includes("\n⚠️ 对外发送\n"))).toBe(
+      true,
+    );
     expect(sends.some((msg) => msg.text === "收到")).toBe(true);
   });
 });
