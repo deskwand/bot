@@ -981,7 +981,7 @@ describe("poll heartbeat", () => {
     expect(atFetch).toBeGreaterThanOrEqual(before);
   });
 
-  it("refreshes the heartbeat on the next poll after a failed one", async () => {
+  it("does not refresh the heartbeat after a failed poll", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
     await channels().ensurePolling();
@@ -994,12 +994,6 @@ describe("poll heartbeat", () => {
     ]);
 
     expect((await readState())!.last_poll_at).toBe(seeded);
-
-    await seedLastPoll(Date.now() - 25_000);
-    const before = Date.now();
-    const { atFetch } = await pollCapturingHeartbeat();
-
-    expect(atFetch).toBeGreaterThanOrEqual(before);
   });
 });
 

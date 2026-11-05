@@ -48,17 +48,19 @@ function loadOAuthToken(): string | null {
 }
 
 function resolveAccountId(): string | null {
-  const fromEnv = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
-  if (fromEnv) return fromEnv;
+  // Always run whoami, even with CLOUDFLARE_ACCOUNT_ID set: it refreshes an
+  // expired OAuth token before loadOAuthToken reads it.
+  let fromWhoami: string | null = null;
   try {
     const output = execFileSync("npx", ["wrangler", "whoami"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return /[0-9a-f]{32}/i.exec(output)?.[0] ?? null;
+    fromWhoami = /[0-9a-f]{32}/i.exec(output)?.[0] ?? null;
   } catch {
-    return null;
+    // Fall through to the environment variable.
   }
+  return process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || fromWhoami;
 }
 
 async function graphql<T>(token: string, query: string): Promise<T> {

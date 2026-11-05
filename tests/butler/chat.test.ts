@@ -224,7 +224,9 @@ describe("butler chat", () => {
     );
 
     expect(open).toHaveBeenCalled();
-    expect(open.mock.calls[0][1].settings).toEqual({ progress: PI_PROGRESS });
+    for (const call of open.mock.calls) {
+      expect(call[1].settings).toEqual({ progress: PI_PROGRESS });
+    }
     expect(PI_PROGRESS).toEqual({
       partialIntervalMs: 30_000,
       outputIntervalMs: 30_000,

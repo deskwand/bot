@@ -69,7 +69,7 @@ const WECHAT_GET_UPDATES_TIMEOUT_MS = 40_000;
 const WECHAT_PREPOLL_HEARTBEAT_MS = 20_000;
 // One long poll (40s) plus a skipped pre-poll write (20s) plus the longest
 // backoff (10s) stays under this, so a live chain is never doubled, and a dead
-// one is revived by the per-minute Cron within two minutes.
+// one is revived by the per-minute Cron within about 75s plus one Cron tick.
 const WECHAT_HEARTBEAT_MAX_AGE_MS = 75_000;
 const TELEGRAM_POLL_RUN_MS = 0;
 const TELEGRAM_POLL_BACKOFF_MS = 1_000;
