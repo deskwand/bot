@@ -23,6 +23,7 @@ import {
   modelReadiness,
   resolveModel,
 } from "../llm/models";
+import { PI_PROGRESS } from "../llm/pi-settings";
 import {
   encodeAction,
   type Address,
@@ -275,6 +276,7 @@ export class ButlerDO extends Agent<Env> {
             models: createModelsForEnv(this.env),
             registry: this.registry,
             onWake,
+            settings: { progress: PI_PROGRESS },
           },
           context,
         ),

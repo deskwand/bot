@@ -9,7 +9,7 @@ import {
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import type { Provider } from "@earendil-works/pi-ai/models";
-import type { ToolRegistration } from "@earendil-works/pi-durable";
+import { Harness, type ToolRegistration } from "@earendil-works/pi-durable";
 import { PiHarness, PiSession, type PiModel } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +21,7 @@ import {
   WORKERS_AI_QUOTA_MARKER,
 } from "../../src/llm/model-errors";
 import { registerTestProvider, setModelOverride } from "../../src/llm/models";
+import { PI_PROGRESS } from "../../src/llm/pi-settings";
 import type { AdmittedMessage, OutboundMessage, RouteSnapshot } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
 import { seedOwnerAddress } from "../helpers/channel-ref";
@@ -210,6 +211,24 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([{ chatId: "42", text: "你好！" }]);
+  });
+
+  it("opens the pi harness with the slow progress policy", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ text: "你好！" }]));
+    const open = vi.spyOn(Harness, "open");
+
+    await butler("chat-progress").handleMessage(
+      message({ text: "你好", eventId: "tg:progress" }),
+    );
+
+    expect(open).toHaveBeenCalled();
+    expect(open.mock.calls[0][1].settings).toEqual({ progress: PI_PROGRESS });
+    expect(PI_PROGRESS).toEqual({
+      partialIntervalMs: 30_000,
+      outputIntervalMs: 30_000,
+    });
   });
 
   it("explains an exhausted Workers AI allowance", async () => {

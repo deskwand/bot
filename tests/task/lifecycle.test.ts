@@ -1,4 +1,5 @@
 import { PiHarness, PiSession } from "agents/harness/pi";
+import { Harness } from "@earendil-works/pi-durable";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
@@ -9,6 +10,7 @@ import {
   WORKERS_AI_QUOTA_MARKER,
 } from "../../src/llm/model-errors";
 import { setModelOverride } from "../../src/llm/models";
+import { PI_PROGRESS } from "../../src/llm/pi-settings";
 import type { TaskSpec } from "../../src/protocol";
 import { scriptedModel } from "../helpers/scripted-model";
 import { fakeChannel } from "../helpers/fake-channel";
@@ -123,6 +125,37 @@ describe("TaskDO lifecycle", () => {
     // Starting the same task again is a no-op: same operation, no new events.
     await stub.start(spec(taskId));
     expect(await butler().debugEvents(taskId)).toHaveLength(2);
+  });
+
+  it("opens the pi harness with the slow progress policy", async () => {
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "finish_task", args: { summary: "ok" } }] },
+      ]),
+    );
+    const open = vi.spyOn(Harness, "open");
+    const taskId = "t-progress";
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual([
+          "started",
+          "completed",
+        ]);
+      },
+      { timeout: 10_000 },
+    );
+
+    expect(open).toHaveBeenCalled();
+    expect(open.mock.calls[0][1].settings).toEqual({ progress: PI_PROGRESS });
+    expect(PI_PROGRESS).toEqual({
+      partialIntervalMs: 30_000,
+      outputIntervalMs: 30_000,
+    });
   });
 
   it("uses spec.model on the first run", async () => {
