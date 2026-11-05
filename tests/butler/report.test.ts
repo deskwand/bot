@@ -279,9 +279,10 @@ describe("ButlerDO.report", () => {
 
     await stub.report({ taskId: "t1", seq: 1, type: "started" });
     await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "a" });
+    // `started` assigns a handle to a migrated row without one.
     expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "77", text: "⏳ t1 查天气：a", buttons: [
-        [{ label: "取消", data: "a:cancel:t1" }],
+      { chatId: "42", messageId: "77", text: "⏳ #1 查天气：a", buttons: [
+        [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
       ] },
     ]);
 
@@ -293,7 +294,7 @@ describe("ButlerDO.report", () => {
     await vi.waitFor(() => {
       expect(channel.edits).toHaveLength(2);
     });
-    expect(channel.edits[1]?.text).toBe("⏳ t1 查天气：c");
+    expect(channel.edits[1]?.text).toBe("⏳ #1 查天气：c");
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "running" });
   });
 
@@ -309,7 +310,7 @@ describe("ButlerDO.report", () => {
 
     clock.advance(60_001);
     await vi.waitFor(() => expect(channel.sent).toHaveLength(1));
-    expect(channel.sent[0]?.text).toBe('⏳ t1 查天气：a\n回复"取消 t1"');
+    expect(channel.sent[0]?.text).toBe("⏳ t1 查天气：a");
 
     // Updates inside the next window collapse into one heartbeat.
     await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
@@ -318,7 +319,7 @@ describe("ButlerDO.report", () => {
 
     clock.advance(200_000);
     await vi.waitFor(() => expect(channel.sent).toHaveLength(2));
-    expect(channel.sent[1]?.text).toBe('⏳ t1 查天气：c\n回复"取消 t1"');
+    expect(channel.sent[1]?.text).toBe("⏳ t1 查天气：c");
     expect(channel.edits).toEqual([]);
   });
 
@@ -437,8 +438,8 @@ describe("ButlerDO.report", () => {
         text: "🔐 t1 请求执行 web_fetch\nhttps://example.com",
         buttons: [
           [
-            { label: "✅ 批准", data: "a:approve:t1:ap1" },
-            { label: "❌ 拒绝", data: "a:reject:t1:ap1" },
+            { label: "✅ 批准", data: "a:approve:t1:ap1", hint: "批准" },
+            { label: "❌ 拒绝", data: "a:reject:t1:ap1", hint: "拒绝" },
           ],
         ],
       },
@@ -457,6 +458,75 @@ describe("ButlerDO.report", () => {
         chatId: "42",
         messageId: "1",
         text: "🔐 t1 请求执行 web_fetch\nhttps://example.com\n→ 已批准",
+      },
+    ]);
+  });
+
+  it("writes the full approval hint when another approval is pending", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+
+    const stub = butler("report-approval-multiple");
+    await seedTask(stub);
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`UPDATE tasks SET handle = 1 WHERE id = 't1'`);
+    });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "approval_requested",
+      approvalId: "ap1",
+      tool: "web_fetch",
+      argsSummary: "a",
+    });
+    await stub.report({
+      taskId: "t1",
+      seq: 2,
+      type: "approval_requested",
+      approvalId: "ap2",
+      tool: "web_fetch",
+      argsSummary: "b",
+    });
+
+    // The first request was unambiguous when it was sent.
+    expect(channel.sent[0]?.buttons).toEqual([
+      [
+        { label: "✅ 批准", data: "a:approve:t1:ap1", hint: "批准" },
+        { label: "❌ 拒绝", data: "a:reject:t1:ap1", hint: "拒绝" },
+      ],
+    ]);
+    // With two pending, the hint has to name the handle and approval id.
+    expect(channel.sent[1]?.buttons).toEqual([
+      [
+        { label: "✅ 批准", data: "a:approve:t1:ap2", hint: "批准 #1 ap2" },
+        { label: "❌ 拒绝", data: "a:reject:t1:ap2", hint: "拒绝 #1 ap2" },
+      ],
+    ]);
+  });
+
+  it("shows the reusable handle in the start message", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+
+    const stub = butler("report-spawn-handle");
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { taskFor(id: string): unknown }).taskFor = () => ({
+        start: async () => {},
+      });
+    });
+
+    await stub.spawn("查天气", "查询北京天气");
+
+    expect(channel.sent).toEqual([
+      {
+        chatId: "42",
+        text: "⏳ #1 查天气：已开始",
+        buttons: [
+          [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
+        ],
       },
     ]);
   });
@@ -790,7 +860,6 @@ describe("ButlerDO.report", () => {
       {
         chatId: "42",
         text: "⏳ t1 查天气：b",
-        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
       },
     ]);
   });
@@ -850,7 +919,7 @@ describe("ButlerDO.report", () => {
       {
         chatId: "42",
         messageId: "77",
-        text: "❌ t1 查天气：模型错误\n回复\"重试 t1\"可继续",
+        text: "❌ t1 查天气：模型错误\n回复\"重试\"可继续",
       },
     ]);
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "failed" });
@@ -884,7 +953,7 @@ describe("ButlerDO.report", () => {
     });
     const failure = channel.edits[1]?.text ?? "";
     expect(failure.length).toBeLessThanOrEqual(4096);
-    expect(failure.endsWith("\n回复\"重试 t1\"可继续")).toBe(true);
+    expect(failure.endsWith("\n回复\"重试\"可继续")).toBe(true);
   });
 
   it("marks a cancelled task and its progress message", async () => {
@@ -918,7 +987,6 @@ describe("ButlerDO.report", () => {
       {
         chatId: "42",
         text: "⏳ t1 查天气：a",
-        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
       },
     ]);
 
@@ -936,7 +1004,7 @@ describe("ButlerDO.report", () => {
     const stub = butler("report-edit-unsupported");
     await seedTask(stub);
 
-    const sent: { text: string }[] = [];
+    const sent: OutboundMessage[] = [];
     await runInDurableObject(stub, (instance) => {
       (
         instance as unknown as {
@@ -946,7 +1014,7 @@ describe("ButlerDO.report", () => {
               routeKey: string;
             }>;
             editCurrent(): Promise<boolean>;
-            sendCurrent(msg: { text: string }): Promise<{
+            sendCurrent(msg: OutboundMessage): Promise<{
               channel: "telegram";
               conversationId: string;
               routeKey: string;
@@ -961,7 +1029,7 @@ describe("ButlerDO.report", () => {
         }),
         editCurrent: async () => false,
         sendCurrent: async (msg) => {
-          sent.push({ text: msg.text });
+          sent.push(msg);
           return {
             channel: "telegram",
             conversationId: "42",
@@ -1004,7 +1072,6 @@ describe("ButlerDO.report", () => {
       {
         chatId: "42",
         text: "⏳ t1 查天气：a",
-        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
       },
     ]);
     expect(await progressMessageId(stub, "t1")).toBe("1");

@@ -554,10 +554,10 @@ describe("butler chat", () => {
     const progress = channel.sent[0];
     expect(progress).toMatchObject({
       chatId: "42",
-      text: "⏳ t1 查天气：已开始",
+      text: "⏳ #1 查天气：已开始",
     });
     expect(progress?.buttons).toEqual([
-      [{ label: "取消", data: "a:cancel:t1" }],
+      [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
     ]);
     expect(channel.sent[1]).toEqual({ chatId: "42", text: "已安排" });
 

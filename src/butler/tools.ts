@@ -3,7 +3,7 @@ import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { TaskSpec } from "../protocol";
 import type { MemoryStore } from "./memory";
 import type { ScheduleRow } from "./schedules";
-import type { TasksRepo } from "./tasks-repo";
+import { taskLabel, type TaskRow, type TasksRepo } from "./tasks-repo";
 
 const SpawnTask = Type.Object({
   title: Type.String(),
@@ -82,6 +82,18 @@ function errorText(error: unknown): string {
 }
 
 /**
+ * A task line for the model: an active task with a handle shows both the
+ * display handle and the internal id; every other row keeps the legacy shape.
+ */
+function taskLine(row: TaskRow): string {
+  const active = row.status === "queued" || row.status === "running";
+  if (active && row.handle !== null) {
+    return `#${row.handle}（id ${row.id}）[${row.status}] ${row.title}`;
+  }
+  return `${row.id} [${row.status}] ${row.title}`;
+}
+
+/**
  * The Butler's control tools. Every tool answers the model with text and
  * never throws: a failure is reported to the model, which can explain it.
  */
@@ -95,7 +107,13 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     parameters: SpawnTask,
     async execute({ title, instructions }) {
       try {
-        return output(`已开始任务 ${await deps.spawn(title, instructions)}`);
+        const id = await deps.spawn(title, instructions);
+        const row = repo.get(id);
+        return output(
+          row === null || row.handle === null
+            ? `已开始任务 ${id}`
+            : `已开始任务 ${taskLabel(row)}（id ${id}）`,
+        );
       } catch (error) {
         if (error instanceof SpawnFailedError) {
           return output(`任务 ${error.taskId} 启动失败：${error.reason}`);
@@ -114,9 +132,7 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
       try {
         const rows = repo.list(active ? { active: true } : undefined);
         if (rows.length === 0) return output("没有任务");
-        return output(
-          rows.map((row) => `${row.id} [${row.status}] ${row.title}`).join("\n"),
-        );
+        return output(rows.map(taskLine).join("\n"));
       } catch (error) {
         return output(errorText(error));
       }
@@ -138,7 +154,7 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
         const row = repo.get(id);
         if (!row) return output(`没有任务 ${id}`);
 
-        const lines = [`${row.id} [${row.status}] ${row.title}`];
+        const lines = [taskLine(row)];
         if (row.summary) lines.push(`摘要：${row.summary}`);
         if (row.artifacts.length > 0) {
           lines.push("产物：");

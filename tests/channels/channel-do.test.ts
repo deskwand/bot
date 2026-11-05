@@ -451,6 +451,37 @@ describe("sendCurrent", () => {
     expect(ref).toMatchObject({ channel: "wechat", messageId: null });
   });
 
+  it("prefers a button hint over the encoded task id", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("send-wechat-hint");
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'u1', ?)`,
+        Date.now(),
+      );
+    });
+    const sent: { to: string; msg: OutboundMessage }[] = [];
+    setChannelOverride("wechat", {
+      parseInbound: async () => null,
+      async send(to, msg) {
+        sent.push({ to, msg });
+        return { messageId: "" };
+      },
+      async edit() {},
+      async answerAction() {},
+    });
+
+    await hub.sendCurrent({
+      text: "x",
+      buttons: [[{ label: "取消", data: "a:cancel:t3", hint: "取消 #1" }]],
+    });
+
+    expect(sent).toEqual([
+      { to: "u1", msg: { text: 'x\n回复"取消 #1"' } },
+    ]);
+  });
+
   it("filters unsupported markdown for WeChat and keeps the hints", async () => {
     setEnv({ ACTIVE_CHANNEL: "wechat" });
     const hub = freshChannels("send-wechat-markdown");

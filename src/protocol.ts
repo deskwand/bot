@@ -54,7 +54,7 @@ export type ActionEvent = {
 
 export type InboundEvent = MessageEvent | ActionEvent;
 
-export type Button = { label: string; data: string };
+export type Button = { label: string; data: string; hint?: string };
 export type OutboundMessage = { text: string; buttons?: Button[][] };
 
 export type Artifact = { name: string; url: string };

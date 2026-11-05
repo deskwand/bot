@@ -25,3 +25,9 @@ it("tells the butler to spell out endpoint requirements in instructions", () => 
   expect(prompt).toContain("端点和 HTTP 方法");
   expect(prompt).toContain("执行者看不到当前对话");
 });
+
+it("tells the butler to use display handles and retry without one", () => {
+  const prompt = butlerSystemPrompt([]);
+  expect(prompt).toContain("对主人提到任务时只用 #N 或标题");
+  expect(prompt).toContain("最近失败的那个任务");
+});

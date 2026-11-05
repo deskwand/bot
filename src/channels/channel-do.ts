@@ -143,6 +143,11 @@ function forWechat(msg: OutboundMessage): OutboundMessage {
   const hints: string[] = [];
   for (const row of msg.buttons) {
     for (const button of row) {
+      // The sender knows the display handle, which the encoded data cannot.
+      if (button.hint !== undefined) {
+        hints.push(`回复"${button.hint}"`);
+        continue;
+      }
       const decoded = decodeAction(button.data);
       if (!decoded) continue;
       const approval = decoded.approvalId ? ` ${decoded.approvalId}` : "";

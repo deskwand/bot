@@ -259,6 +259,13 @@ describe("ButlerDO bot runs", () => {
     expect(channel.sent).toHaveLength(1);
     expect(channel.sent[0]?.text.startsWith("🤖 价格哨兵 ")).toBe(true);
     expect(channel.sent[0]?.text).toContain("请求执行 web_fetch");
+    // A bot task has no owner handle: the hint always names the internal id.
+    expect(channel.sent[0]?.buttons).toEqual([
+      [
+        { label: "✅ 批准", data: "a:approve:t1:ap1", hint: "批准 t1 ap1" },
+        { label: "❌ 拒绝", data: "a:reject:t1:ap1", hint: "拒绝 t1 ap1" },
+      ],
+    ]);
   });
 
   it("notifyFromBot prefixes the name", async () => {
@@ -286,8 +293,10 @@ describe("ButlerDO bot runs", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "42",
-        text: "⏳ t1 查天气：已开始",
-        buttons: [[{ label: "取消", data: "a:cancel:t1" }]],
+        text: "⏳ #1 查天气：已开始",
+        buttons: [
+          [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
+        ],
       },
     ]);
     expect(specs[0]).toMatchObject({
