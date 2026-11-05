@@ -480,3 +480,30 @@ test("switching language mid-setup keeps inputs", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByLabel("Service name")).toHaveValue("my-worker");
 });
+
+test("English shell fits the narrow window", async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 600 });
+  await useEnglish(page, "/test.html?fixture=configured");
+
+  const navToggle = page.getByRole("button", { name: "Open navigation" });
+
+  for (const name of [
+    "Overview",
+    "Models",
+    "Services",
+    "Channels",
+    "Diagnostics",
+    "Backup",
+    "Updates",
+  ]) {
+    if (await navToggle.isVisible()) await navToggle.click();
+    await openPage(page, name);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+      `${name} overflows the narrow window`,
+    ).toBe(true);
+    await expectNoChinese(page, "aside");
+  }
+});
