@@ -23,7 +23,7 @@ import (
 
 // appVersion is the client version reported in the Cloudflare User-Agent. Keep
 // it in sync with desktop/mygo.json.
-const appVersion = "0.1.9"
+const appVersion = "0.1.10"
 
 const (
 	credentialService    = "com.deskwand.bot"
