@@ -85,6 +85,8 @@ export type TaskSpec = {
   title: string;
   instructions: string;
   model?: ModelRef;
+  /** Text the reviewer treats as the owner's authorization. */
+  authorization?: string;
   /** Set when the Butler spawned this task for a bot run. */
   botId?: string;
 };

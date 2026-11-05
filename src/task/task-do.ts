@@ -6,7 +6,7 @@ import { getArtifactTool, safeArtifactRef } from "../tools/get-artifact";
 import { nowTool } from "../tools/now";
 import { Agent, type Schedule } from "agents";
 import { PiHarness } from "agents/harness/pi";
-import { Type } from "@earendil-works/pi-ai";
+import { contentText, Type } from "@earendil-works/pi-ai";
 import {
   createRegistry,
   Harness,
@@ -37,8 +37,9 @@ import { loadMcpTools, mcpConnector, mcpExtension } from "../tools/mcp";
 import { webFetchTool } from "../tools/web-fetch";
 import { webSearchTool } from "../tools/web-search";
 import { withProgress } from "../tools/wrap";
-import { ApprovalGate } from "./approvals";
+import { ApprovalGate, ReviewedGate } from "./approvals";
 import { Outbox } from "./outbox";
+import { reviewAction, type ReviewComplete } from "./review";
 import { taskSystemPrompt } from "./prompt";
 
 export type TaskState =
@@ -101,6 +102,8 @@ export class TaskDO extends Agent<Env> {
 
   readonly approvals: ApprovalGate;
 
+  readonly reviewedGate: ReviewedGate;
+
   /** Resolves once MCP tools were loaded and installed on this instance. */
   private mcpTools: Promise<void> | undefined;
 
@@ -141,6 +144,23 @@ export class TaskDO extends Agent<Env> {
 
     this.approvals = new ApprovalGate(this.db, (body) =>
       this.emitProgress(body),
+    );
+    this.reviewedGate = new ReviewedGate(
+      this.approvals,
+      this.db,
+      (tool, args, description, signal) =>
+        reviewAction(
+          {
+            authorization:
+              this.spec?.authorization ?? this.spec?.instructions ?? "",
+            tool,
+            toolDescription: description,
+            args,
+          },
+          this.completeReview,
+          signal,
+        ),
+      (text) => this.emitProgress({ type: "progress", text }),
     );
 
     const finishTask: ToolRegistration<typeof FinishTask> = {
@@ -184,7 +204,7 @@ export class TaskDO extends Agent<Env> {
           (args) => `读取产物：${safeArtifactRef(args.ref)}`,
         ),
         withProgress(
-          httpRequestTool(this.approvals),
+          httpRequestTool(this.reviewedGate),
           emitProgress,
           (args) => `${args.method ?? "GET"} ${safeRequestUrl(args.url)}`,
         ),
@@ -545,6 +565,34 @@ export class TaskDO extends Agent<Env> {
     });
   }
 
+  private readonly completeReview: ReviewComplete = async (
+    system,
+    user,
+    signal,
+  ) => {
+    const models = createModelsForEnv(this.env);
+    const ref = resolveModel(
+      this.spec?.model ?? readRuntimeConfig(this.env).models.task,
+      this.env,
+    );
+    const model = models.getModel(ref.provider, ref.id);
+    if (!model) {
+      throw new Error(`模型 ${ref.provider}/${ref.id} 不可用`);
+    }
+    const result = await models.completeSimple(
+      model,
+      {
+        systemPrompt: system,
+        messages: [{ role: "user", content: user, timestamp: Date.now() }],
+      },
+      { signal },
+    );
+    if (result.stopReason === "error" || result.stopReason === "aborted") {
+      throw new Error(result.errorMessage ?? result.stopReason);
+    }
+    return contentText(result.content);
+  };
+
   private installCodemode(): void {
     let namespaces: NonNullable<Parameters<typeof createCodemodeExtension>[0]["namespaces"]> = [];
     try {
@@ -574,7 +622,7 @@ export class TaskDO extends Agent<Env> {
 
       const loaded = await loadMcpTools(
         servers,
-        { approval: this.approvals, review: this.approvals },
+        { approval: this.approvals, review: this.reviewedGate },
         mcpConnector(this.mcp, this.env, (server) =>
           this.env.MCP_AUTH.get(
             this.env.MCP_AUTH.idFromName("global"),

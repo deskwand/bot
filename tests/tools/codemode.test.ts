@@ -1,6 +1,7 @@
-import type { ToolResultMessage, TranscriptContext } from "@earendil-works/pi-ai";
+import { contentText, type ToolResultMessage, type TranscriptContext } from "@earendil-works/pi-ai";
 import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ButlerDO } from "../../src/butler/butler-do";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import { loadMcpTools } from "../../src/tools/mcp";
@@ -42,7 +43,7 @@ async function script(id: string, code: string, setup?: (stub: Stub) => Promise<
 }
 async function fixtureMcp(stub: Stub) {
   await runInDurableObject(stub,async instance=>{
-    const loaded=await loadMcpTools([{name:"fixture",url:"https://fixture.test/mcp"}],{approval:instance.approvals,review:instance.approvals},async()=>({
+    const loaded=await loadMcpTools([{name:"fixture",url:"https://fixture.test/mcp"}],{approval:instance.approvals,review:instance.reviewedGate},async()=>({
       listTools:async()=>[{name:"echo",description:"Fixture echo",inputSchema:{type:"object",properties:{text:{type:"string"}},required:["text"]}}],
       callTool:async(_name,args)=>({content:[{type:"text",text:`echo:${args.text}`}]}),
     }),async()=>{});
@@ -94,17 +95,72 @@ describe("TaskDO codemode",()=>{
     let result:ToolResultMessage|undefined;
     setModelOverride(scriptedModel([
       {toolCalls:[{name:"codemode",args:{code:'try { const r=await tools.http_request({url:"https://fixture.test/items",method:"POST",body:"{}"});return r.status; } catch(e) { return "caught rejection"; }'}}]},
+      {text:'{"verdict":"ask","reason":"测试需要确认"}'},
       {observe:c=>{result=lastResult(c);},toolCalls:[{name:"finish_task",args:{summary:"approved flow done"}}]},
     ]));
     const id=`t-code-approval-${decision}`,stub=task(id);
     await stub.start({taskId:id,title:id,instructions:"post"});
     let approvalId="";
-    await vi.waitFor(async()=>{const pending=await stub.pendingApprovals();expect(pending).toHaveLength(1);approvalId=pending[0]!.approvalId;},{timeout:10_000});
+    await vi.waitFor(async()=>{const pending=await stub.pendingApprovals();expect(pending).toHaveLength(1);approvalId=pending[0]!.approvalId;expect(pending[0]!.reason).toBe("测试需要确认");},{timeout:10_000});
     expect(sent).toBe(0);expect(result).toBeUndefined();
     await runInDurableObject(stub,instance=>instance.approvals.resolve(approvalId,decision));
     await complete(stub);
     expect(sent).toBe(decision==="approved"?1:0);
     expect(result?.isError).toBe(false);expect(text(result!)).toContain(decision==="approved"?"201":"caught rejection");
+  });
+  it("runs an HTTP POST the reviewer allows",async()=>{
+    let sent=0;vi.spyOn(globalThis,"fetch").mockImplementation(async()=>{sent++;return new Response("created",{status:201,headers:{"content-type":"text/plain"}});});
+    const progress=vi.spyOn(ButlerDO.prototype,"reportTaskProgress");
+    let result:ToolResultMessage|undefined;
+    setModelOverride(scriptedModel([
+      {toolCalls:[{name:"codemode",args:{code:'const r=await tools.http_request({url:"https://fixture.test/items",method:"POST",body:"{}"});return r.status;'}}]},
+      {text:'{"verdict":"allow","reason":"按指令提交"}'},
+      {observe:c=>{result=lastResult(c);},toolCalls:[{name:"finish_task",args:{summary:"allowed flow done"}}]},
+    ]));
+    const id="t-code-review-allow",stub=task(id);
+    await stub.start({taskId:id,title:id,instructions:"post"});
+    await complete(stub);
+    expect(sent).toBe(1);
+    expect(await stub.pendingApprovals()).toEqual([]);
+    expect(progress.mock.calls).toContainEqual([id,"✔️ 自动放行 http_request：按指令提交"]);
+    expect(result?.isError).toBe(false);expect(text(result!)).toContain("201");
+  });
+  it("asks when the reviewer fails",async()=>{
+    let sent=0;vi.spyOn(globalThis,"fetch").mockImplementation(async()=>{sent++;return new Response("created",{status:201,headers:{"content-type":"text/plain"}});});
+    let result:ToolResultMessage|undefined;
+    setModelOverride(scriptedModel([
+      {toolCalls:[{name:"codemode",args:{code:'try { const r=await tools.http_request({url:"https://fixture.test/items",method:"POST",body:"{}"});return r.status; } catch(e) { return "caught rejection"; }'}}]},
+      {error:"boom"},
+      {observe:c=>{result=lastResult(c);},toolCalls:[{name:"finish_task",args:{summary:"failed review done"}}]},
+    ]));
+    const id="t-code-review-failed",stub=task(id);
+    await stub.start({taskId:id,title:id,instructions:"post"});
+    let approvalId="";
+    await vi.waitFor(async()=>{const pending=await stub.pendingApprovals();expect(pending).toHaveLength(1);approvalId=pending[0]!.approvalId;expect(pending[0]!.reason).toBe("自动审查失败，需要你确认");},{timeout:10_000});
+    expect(sent).toBe(0);
+    await runInDurableObject(stub,instance=>instance.approvals.resolve(approvalId,"rejected"));
+    await complete(stub);
+    expect(sent).toBe(0);
+    expect(result?.isError).toBe(false);expect(text(result!)).toContain("caught rejection");
+  });
+  it("reviews against the authorization field",async()=>{
+    let seen:TranscriptContext|undefined;
+    vi.spyOn(globalThis,"fetch").mockImplementation(async()=>new Response("created",{status:201,headers:{"content-type":"text/plain"}}));
+    setModelOverride(scriptedModel([
+      {toolCalls:[{name:"codemode",args:{code:'const r=await tools.http_request({url:"https://fixture.test/items",method:"POST",body:"{}"});return r.status;'}}]},
+      {observe:c=>{seen=c;},text:'{"verdict":"allow","reason":"按指令提交"}'},
+      {toolCalls:[{name:"finish_task",args:{summary:"authorization review done"}}]},
+    ]));
+    const id="t-code-review-auth",stub=task(id);
+    await stub.start({taskId:id,title:id,instructions:"其他内容",authorization:"只允许提交表单"});
+    await complete(stub);
+    expect(seen).toBeDefined();
+    const user=seen!.messages.find(m=>m.role==="user");
+    expect(user).toBeDefined();
+    const userText=contentText(user!.content);
+    expect(userText).toContain("只允许提交表单");expect(userText).not.toContain("其他内容");
+    const tools=seen!.messages.filter(m=>m.role==="system").flatMap(m=>m.toolsAdded??[]);
+    expect(tools).toEqual([]);
   });
   it("calls deferred MCP tools from scripts without loading them into the prompt",async()=>{
     const {result}=await script("t-code-deferred",'return await tools.fixture__echo({text:"from script"});',fixtureMcp);

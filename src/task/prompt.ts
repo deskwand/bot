@@ -16,7 +16,7 @@ export function taskSystemPrompt(spec: TaskSpec): string {
     "has configured. If a capability is missing, say what to configure (such as",
     "an MCP service URL); do not claim the whole environment is incapable.",
     "Use `web_fetch` for readable GET pages. Use `http_request` for custom",
-    "headers or other methods; write methods wait for the owner to approve.",
+    "headers or other methods; write actions are reviewed automatically and only risky ones (money, deletion, permissions, outbound publishing) wait for the owner.",
     "Compose multi-step or repeated work with `codemode` scripts. Error results",
     "reject in scripts; some read tools return failures as text, so inspect those",
     "too. Use Promise.allSettled when partial results matter. Return a summary",
