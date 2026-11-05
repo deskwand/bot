@@ -11,9 +11,10 @@ import {
 } from "react";
 import type { ClientService, Locale, LocaleSource } from "@/services/types";
 import { en } from "./en";
-import { zh, type MessageKey, type Messages } from "./zh";
+import type { MessageKey, Messages } from "./types";
+import { zh } from "./zh";
 
-export type { MessageKey, Messages } from "./zh";
+export type { MessageKey, Messages } from "./types";
 
 const TABLES: Record<Locale, Messages> = { zh, en };
 
@@ -56,6 +57,21 @@ function translate(
   return format(text, params);
 }
 
+export function tryT(
+  key: string,
+  params?: Record<string, string | number>,
+): string | undefined {
+  const text = lookup(TABLES[currentLocale], key) ?? lookup(zh, key);
+  if (text === undefined) return undefined;
+  return format(text, params);
+}
+
+export function formatDateTime(date: Date): string {
+  return date.toLocaleString(currentLocale === "en" ? "en-US" : "zh-CN", {
+    hour12: false,
+  });
+}
+
 export function getT(): (
   key: MessageKey,
   params?: Record<string, string | number>,
@@ -85,9 +101,10 @@ export function LocaleProvider({
   // Only the newest setSource call may apply its response; an older save can
   // resolve (or fail and re-read) after a later click.
   const requestSeq = useRef(0);
-  // getT() must agree with the tree React just committed.
+  // getT()/formatDateTime() must agree with the tree React is rendering.
+  currentLocale = resolved;
   useLayoutEffect(() => {
-    currentLocale = resolved;
+    document.documentElement.lang = resolved === "en" ? "en" : "zh-CN";
   }, [resolved]);
 
   useEffect(() => {

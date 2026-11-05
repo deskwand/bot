@@ -11,6 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/components/app-context";
+import { formatDateTime } from "@/i18n";
 import {
   STATE_LABELS,
   detailLabel,
@@ -162,7 +163,7 @@ export function formatObserved(value?: string): string {
   if (!value) return "未记录观察时间";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return formatDateTime(date);
 }
 
 export function StatusRow({ item }: { item: StatusItemDTO }) {

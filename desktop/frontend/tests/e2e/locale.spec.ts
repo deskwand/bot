@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { expectNoChinese } from "./i18n-helpers";
 
 test("switching to English applies at once and persists", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
@@ -111,4 +112,44 @@ test("sync is blocked while a page has unsaved changes", async ({ page }) => {
   await expect(
     page.getByText("Publish or discard this page's changes first"),
   ).toBeVisible();
+});
+
+test("html lang follows the locale", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+
+  await page
+    .getByRole("group", { name: "语言" })
+    .getByRole("button", { name: "English", exact: true })
+    .click();
+
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+});
+
+test("formatDateTime follows the locale", async ({ page }) => {
+  // Index-based nav keeps working once the shell itself is translated.
+  const backupNav = () =>
+    page.locator("#primary-nav").getByRole("button").nth(5);
+
+  await page.goto("/test.html?fixture=backup");
+  await backupNav().click();
+  await expect(page.getByTestId("backup-file-list")).toContainText(
+    /\d{4}\/\d{1,2}\/\d{1,2}/,
+  );
+
+  await page.goto("/test.html?fixture=backup&locale=en");
+  await backupNav().click();
+  await expect(page.getByTestId("backup-file-list")).toContainText(
+    /\d{1,2}\/\d{1,2}\/\d{4}/,
+  );
+});
+
+test("expectNoChinese ignores marked regions", async ({ page }) => {
+  await page.setContent(
+    "<div>Hello<span data-i18n-ignore>中文</span></div>",
+  );
+  await expectNoChinese(page);
+
+  await page.setContent("<div>中文</div>");
+  await expect(expectNoChinese(page)).rejects.toThrow(/Found Chinese text/);
 });

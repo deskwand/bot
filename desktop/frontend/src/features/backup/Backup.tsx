@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
+import { formatDateTime } from "@/i18n";
 import { useInvalidate } from "@/services/queries";
 import {
   Select,
@@ -74,7 +75,7 @@ function formatExportedAt(value: string): string {
   if (!value) return "未记录";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return formatDateTime(date);
 }
 
 function problemMessage(preview: BackupPreviewDTO): string | null {
