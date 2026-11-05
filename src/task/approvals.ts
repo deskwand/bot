@@ -62,8 +62,8 @@ export function approvalSummary(tool: string, argsJson: string): string {
           text.length > REASON_SUMMARY_LIMIT
             ? `${text.slice(0, REASON_SUMMARY_LIMIT)}…`
             : text;
-        const rules = content.trim() === "" ? "（清空守则）" : content;
-        return `理由：${summary}\n新守则：\n${rules}`;
+        const rules = content.trim();
+        return `理由：${summary}\n新守则：\n${rules.length > 0 ? rules : "（清空守则）"}`;
       }
     }
   }

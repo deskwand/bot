@@ -112,8 +112,9 @@ export function createBotTaskTools(
     parameters: ProposeRules,
     // The approval gate already refuses to wake a tool after a restart.
     async execute({ content, reason }, _api, context) {
+      const trimmed = content.trim();
       // Reject an over-long proposal before asking the owner.
-      const check = checkDocWrite([], RULES_DOC, content, {
+      const check = checkDocWrite([], RULES_DOC, trimmed, {
         allowRules: true,
       });
       if (!check.ok) return output(check.message);
@@ -121,12 +122,12 @@ export function createBotTaskTools(
       const signal = context.abortSignal;
       const decision = await approvals.request(
         PROPOSE_RULES_TOOL,
-        { content, reason },
+        { content: trimmed, reason },
         signal ?? NEVER_ABORTED,
       );
       if (decision === "approved") {
         try {
-          const result = await bot.writeDoc(RULES_DOC, content, {
+          const result = await bot.writeDoc(RULES_DOC, trimmed, {
             allowRules: true,
           });
           return output(result.message);

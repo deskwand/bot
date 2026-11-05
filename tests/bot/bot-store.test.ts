@@ -256,6 +256,33 @@ describe("BotStore", () => {
     expect(result.rows).toEqual([{ content: "喜欢绿茶" }]);
   });
 
+  it("drops an empty legacy memories table without migrating", async () => {
+    const result = await runInDurableObject(
+      bot("b-store-migrate-empty"),
+      (_instance, state) => {
+        state.storage.sql.exec(
+          `CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+          )`,
+        );
+        const store = new BotStore(state.storage.sql);
+        const migrated = store.migrateLegacyMemories(500);
+        const legacy = state.storage.sql
+          .exec<{ name: string }>(
+            `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories'`,
+          )
+          .toArray();
+        return { migrated, docs: store.readDocs(), legacy };
+      },
+    );
+
+    expect(result.migrated).toBe(false);
+    expect(result.docs).toEqual([]);
+    expect(result.legacy).toEqual([]);
+  });
+
   it("reports no migration when the memories table is absent", async () => {
     const result = await runInDurableObject(
       bot("b-store-migrate-missing"),

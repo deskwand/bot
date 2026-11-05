@@ -212,11 +212,12 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     replay: "safe",
     async execute({ id, name, content }) {
       try {
-        const snapshot = await bot(id).snapshot();
-        if (snapshot === null) return output(`没有机器人 ${id}`);
         const result = await bot(id).writeDoc(name, content, {
           allowRules: true,
         });
+        if (!result.ok && result.message === "机器人不存在") {
+          return output(`没有机器人 ${id}`);
+        }
         return output(result.message);
       } catch (error) {
         return output(errorText(error));

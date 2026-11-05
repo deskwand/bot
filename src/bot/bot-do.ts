@@ -100,8 +100,12 @@ export class BotDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = new BotStore(ctx.storage.sql);
-    // A restored pre-docs backup rebuilds this object and migrates here.
-    this.store.migrateLegacyMemories(getClock().now());
+    // Tables restore in name order, so `memories` is fully written before
+    // `meta` gets its row. Migrating mid-restore would fold a partial table
+    // into `记忆` and drop it, breaking the remaining restore pages.
+    if (this.store.readMeta() !== null) {
+      this.store.migrateLegacyMemories(getClock().now());
+    }
     // Bots have no maintenance lease of their own; the Butler holds it.
     this.backup = new BackupRpc(ctx, null);
   }
@@ -272,12 +276,12 @@ export class BotDO extends DurableObject<Env> {
     if (meta.currentTaskId !== null) {
       // The run in flight cannot be preempted: schedule right after it ends.
       meta.nextWakeAt = now + MIN_WAKE_MS;
-      meta.manualWake = true;
+      meta.manualWakeAt = meta.nextWakeAt;
       this.store.writeMeta(meta);
       return "after_run";
     }
     meta.nextWakeAt = now;
-    meta.manualWake = true;
+    meta.manualWakeAt = meta.nextWakeAt;
     this.store.writeMeta(meta);
     await this.ctx.storage.setAlarm(now);
     return "scheduled";
@@ -288,6 +292,7 @@ export class BotDO extends DurableObject<Env> {
     if (meta === null) return;
     meta.status = "paused";
     meta.nextWakeAt = null;
+    meta.manualWakeAt = null;
     this.store.writeMeta(meta);
     await this.ctx.storage.deleteAlarm();
   }
@@ -301,7 +306,7 @@ export class BotDO extends DurableObject<Env> {
     meta.nextWakeAt = wakeNow
       ? now
       : clampWakeAt(now, now + meta.defaultIntervalMs).at;
-    if (wakeNow) meta.manualWake = true;
+    meta.manualWakeAt = wakeNow ? meta.nextWakeAt : null;
     this.store.writeMeta(meta);
     // Pausing deleted the watchdog: check an in-flight run right away so a
     // lost outcome cannot leave the bot stuck on it.
@@ -367,7 +372,17 @@ export class BotDO extends DurableObject<Env> {
     }
     if (meta.status !== "active") return;
 
+    // Keep a manual wake manual when the run ended before the owner's requested
+    // time and the bot did not reschedule: the minimum-interval clamp is not a
+    // schedule change, so move the marker with the wake time.
+    const requestedAt = meta.nextWakeAt;
+    const keepManual =
+      meta.manualWakeAt != null &&
+      meta.manualWakeAt === requestedAt &&
+      requestedAt !== null &&
+      requestedAt > now;
     meta.nextWakeAt = clampWakeAt(now, nextBase(meta, now)).at;
+    if (keepManual) meta.manualWakeAt = meta.nextWakeAt;
     this.store.writeMeta(meta);
     await this.ctx.storage.setAlarm(meta.nextWakeAt);
   }
@@ -435,7 +450,8 @@ export class BotDO extends DurableObject<Env> {
       ownerProfile,
       runs: this.store.recentRuns(3),
       steer: meta.pendingSteer,
-      manualWake: meta.manualWake === true,
+      manualWake:
+        meta.manualWakeAt != null && meta.manualWakeAt === meta.nextWakeAt,
     });
     const consumed = meta.pendingSteer.length;
 
@@ -476,7 +492,7 @@ export class BotDO extends DurableObject<Env> {
       // Keep the run so the cancelled outcome is recorded against it.
       current.wakesCount += 1;
       current.pendingSteer = current.pendingSteer.slice(consumed);
-      current.manualWake = false;
+      current.manualWakeAt = null;
       this.store.insertRun(result.taskId, now);
       current.currentTaskId = result.taskId;
       this.store.writeMeta(current);
@@ -484,7 +500,7 @@ export class BotDO extends DurableObject<Env> {
     }
     current.wakesCount += 1;
     current.pendingSteer = current.pendingSteer.slice(consumed);
-    current.manualWake = false;
+    current.manualWakeAt = null;
     this.store.writeMeta(current);
 
     this.store.insertRun(result.taskId, now);

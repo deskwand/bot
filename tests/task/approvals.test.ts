@@ -596,6 +596,19 @@ describe("rules approval card", () => {
     });
   });
 
+  it("trims leading whitespace from proposed rules", () => {
+    const summary = approvalSummary(
+      PROPOSE_RULES_TOOL,
+      JSON.stringify({
+        content: "\n".repeat(3000) + "x".repeat(2000),
+        reason: "r".repeat(400),
+      }),
+    );
+
+    expect(summary.length).toBeLessThanOrEqual(4000);
+    expect(summary.endsWith("x".repeat(2000))).toBe(true);
+  });
+
   it("shows a deletion marker for empty rules", () => {
     expect(
       approvalSummary(

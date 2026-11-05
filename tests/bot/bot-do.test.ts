@@ -6,6 +6,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFER_MS } from "../../src/admin/maintenance";
 import {
+  BotDO,
   setBotButlerOverride,
   setBotTaskOverride,
   type BotButler,
@@ -869,6 +870,86 @@ describe("BotDO documents", () => {
   });
 });
 
+describe("BotDO legacy memory migration", () => {
+  function seedLegacyMemories(sql: SqlStorage, contents: string[]): void {
+    sql.exec(
+      `CREATE TABLE memories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`,
+    );
+    for (const content of contents) {
+      sql.exec(
+        `INSERT INTO memories (content, created_at) VALUES (?, ?)`,
+        content,
+        1,
+      );
+    }
+  }
+
+  const meta: BotMeta = {
+    botId: "b1",
+    name: "价格哨兵",
+    mission: "盯着价格",
+    status: "active",
+    nextWakeAt: null,
+    defaultIntervalMs: 86_400_000,
+    currentTaskId: null,
+    consecutiveFailures: 0,
+    wakesDay: null,
+    wakesCount: 0,
+    pendingSteer: [],
+  };
+
+  it("leaves a partial memories table alone until meta is restored", async () => {
+    const result = await runInDurableObject(
+      botStub("b-migrate-partial"),
+      (_instance, state) => {
+        const sql = state.storage.sql;
+        seedLegacyMemories(sql, ["喜欢绿茶"]);
+        new BotDO(state, env);
+        return {
+          meta: new BotStore(sql).readMeta(),
+          docs: new BotStore(sql).readDocs(),
+          rows: sql
+            .exec<{ content: string }>(`SELECT content FROM memories`)
+            .toArray(),
+        };
+      },
+    );
+
+    expect(result.meta).toBeNull();
+    expect(result.docs).toEqual([]);
+    expect(result.rows).toEqual([{ content: "喜欢绿茶" }]);
+  });
+
+  it("migrates legacy memories once meta exists", async () => {
+    const result = await runInDurableObject(
+      botStub("b-migrate-complete"),
+      (_instance, state) => {
+        const sql = state.storage.sql;
+        seedLegacyMemories(sql, ["喜欢绿茶", "上次价格 239"]);
+        new BotStore(sql).writeMeta(meta);
+        new BotDO(state, env);
+        return {
+          docs: new BotStore(sql).readDocs(),
+          legacy: sql
+            .exec<{ name: string }>(
+              `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories'`,
+            )
+            .toArray(),
+        };
+      },
+    );
+
+    expect(result.docs).toEqual([
+      { name: "记忆", content: "- 喜欢绿茶\n- 上次价格 239" },
+    ]);
+    expect(result.legacy).toEqual([]);
+  });
+});
+
 describe("BotDO manual wakes", () => {
   it("marks a wakeNow wake and clears it after dispatch", async () => {
     const fake = fakeButler();
@@ -876,13 +957,13 @@ describe("BotDO manual wakes", () => {
     await initBot(stub);
 
     expect(await stub.wakeNow()).toBe("scheduled");
-    expect((await stub.snapshot())?.meta.manualWake).toBe(true);
+    expect((await stub.snapshot())?.meta.manualWakeAt).toBe(now);
 
     await fireAlarm(stub);
     expect(fake.spawns[0]!.instructions).toContain(
       "唤醒原因：主人要求立即唤醒",
     );
-    expect((await stub.snapshot())?.meta.manualWake).toBe(false);
+    expect((await stub.snapshot())?.meta.manualWakeAt).toBeNull();
 
     fake.outcome = { outcome: "completed", summary: "看完了" };
     now += WATCHDOG_MS;
@@ -898,14 +979,64 @@ describe("BotDO manual wakes", () => {
     expect(fake.spawns[1]!.instructions).not.toContain("主人要求立即唤醒");
   });
 
-  it("marks a wake requested during a run", async () => {
+  it("marks a wake requested during a run that ends promptly", async () => {
     const fake = fakeButler();
     const stub = botStub("b-manual-wake-after-run");
     await initBot(stub);
     await fireAlarm(stub);
 
+    now += 60_000;
     expect(await stub.wakeNow()).toBe("after_run");
-    expect((await stub.snapshot())?.meta.manualWake).toBe(true);
+    const requestedAt = now + MIN_WAKE_MS;
+    expect((await stub.snapshot())?.meta.manualWakeAt).toBe(requestedAt);
+
+    fake.outcome = { outcome: "completed", summary: "看完了" };
+    now += 2 * 60_000; // ends well within the 5-minute minimum
+    await fireAlarm(stub);
+    const scheduled = await stub.snapshot();
+    expect(scheduled?.meta.currentTaskId).toBeNull();
+    expect(scheduled?.meta.nextWakeAt).toBe(now + MIN_WAKE_MS);
+
+    now = scheduled!.meta.nextWakeAt!;
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(2);
+    expect(fake.spawns[1]!.instructions).toContain(
+      "唤醒原因：主人要求立即唤醒",
+    );
+  });
+
+  it("treats a wake rescheduled by the run as routine", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-manual-wake-rescheduled");
+    await initBot(stub);
+    await fireAlarm(stub);
+
+    now += 60_000;
+    expect(await stub.wakeNow()).toBe("after_run");
+    await stub.setNextWake({ afterMs: 2 * 3_600_000 });
+
+    fake.outcome = { outcome: "completed", summary: "看完了" };
+    await fireAlarm(stub);
+    const scheduled = await stub.snapshot();
+    expect(scheduled?.meta.currentTaskId).toBeNull();
+
+    now = scheduled!.meta.nextWakeAt!;
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(2);
+    expect(fake.spawns[1]!.instructions).toContain("唤醒原因：按计划唤醒");
+    expect(fake.spawns[1]!.instructions).not.toContain("主人要求立即唤醒");
+  });
+
+  it("treats a slow run's fallback wake as routine", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-manual-wake-slow-run");
+    await initBot(stub);
+    await fireAlarm(stub);
+
+    now += 60_000;
+    expect(await stub.wakeNow()).toBe("after_run");
 
     fake.outcome = { outcome: "completed", summary: "看完了" };
     now += WATCHDOG_MS;
@@ -917,9 +1048,26 @@ describe("BotDO manual wakes", () => {
     await fireAlarm(stub);
 
     expect(fake.spawns).toHaveLength(2);
-    expect(fake.spawns[1]!.instructions).toContain(
-      "唤醒原因：主人要求立即唤醒",
-    );
+    expect(fake.spawns[1]!.instructions).toContain("唤醒原因：按计划唤醒");
+  });
+
+  it("clears a manual wake when the bot is paused and resumed later", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-manual-wake-paused");
+    await initBot(stub);
+    await stub.wakeNow();
+    await stub.pause();
+    expect((await stub.snapshot())?.meta.manualWakeAt).toBeNull();
+
+    await stub.resume(false);
+    const resumed = await stub.snapshot();
+    expect(resumed?.meta.manualWakeAt).toBeNull();
+
+    now = resumed!.meta.nextWakeAt!;
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(1);
+    expect(fake.spawns[0]!.instructions).toContain("唤醒原因：按计划唤醒");
   });
 
   it("marks a resume with an immediate wake", async () => {
@@ -929,7 +1077,7 @@ describe("BotDO manual wakes", () => {
     await stub.pause();
 
     await stub.resume(true);
-    expect((await stub.snapshot())?.meta.manualWake).toBe(true);
+    expect((await stub.snapshot())?.meta.manualWakeAt).toBe(now);
 
     await fireAlarm(stub);
 

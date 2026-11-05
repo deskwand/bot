@@ -14,8 +14,8 @@ export type BotMeta = {
   wakesDay: string | null;
   wakesCount: number;
   pendingSteer: string[];
-  /** Whether the next wake was requested by the owner; absent on older rows. */
-  manualWake?: boolean;
+  /** The wake time the owner asked for; absent on older rows. */
+  manualWakeAt?: number | null;
   /** Why the bot called finish_bot; absent on older rows. */
   finishReason?: string | null;
 };
@@ -123,7 +123,10 @@ export class BotStore {
         `SELECT content FROM memories ORDER BY id ASC`,
       )
       .toArray();
-    if (rows.length === 0) return false;
+    if (rows.length === 0) {
+      this.sql.exec(`DROP TABLE memories`);
+      return false;
+    }
 
     const kept: string[] = [];
     let used = 0;

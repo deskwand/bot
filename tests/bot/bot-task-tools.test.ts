@@ -165,6 +165,48 @@ describe("bot task tools", () => {
     ]);
   });
 
+  it("propose_rules trims content for the card and the write", async () => {
+    const bot = fakeBot();
+    const approval = fakeGate("approved");
+    const tools = toolsFor(bot.control, approval.gate);
+
+    await run(tools, "propose_rules", {
+      content: "\n\n  凌晨不发消息  \n",
+      reason: "吵到主人",
+    });
+
+    expect(approval.requests).toEqual([
+      {
+        tool: "propose_rules",
+        args: { content: "凌晨不发消息", reason: "吵到主人" },
+      },
+    ]);
+    expect(bot.writes).toEqual([
+      {
+        name: "守则",
+        content: "凌晨不发消息",
+        options: { allowRules: true },
+      },
+    ]);
+  });
+
+  it("propose_rules throws when the run is aborted during approval", async () => {
+    const bot = fakeBot();
+    const tools = toolsFor(bot.control, fakeGate("rejected").gate);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      run(
+        tools,
+        "propose_rules",
+        { content: "凌晨不发消息", reason: "吵到主人" },
+        controller.signal,
+      ),
+    ).rejects.toThrow();
+    expect(bot.writes).toEqual([]);
+  });
+
   it.each(["rejected", "expired"] as const)(
     "propose_rules does nothing when %s",
     async (decision) => {
