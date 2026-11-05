@@ -1,3 +1,3 @@
 package i18n
 
-var zh = join(zhLocale, zhApp)
+var zh = join(zhLocale, zhApp, zhDeployment)

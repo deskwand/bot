@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 )
 
 func TestJournalRoundTripsWithoutSecretValues(t *testing.T) {
@@ -20,7 +21,7 @@ func TestJournalRoundTripsWithoutSecretValues(t *testing.T) {
 		OperationID:     "op-test",
 		Target:          domain.Target{AccountID: "0123456789abcdef0123456789abcdef", ScriptName: "deskwand-bot"},
 		State:           StateUnknown,
-		Steps:           applySteps(),
+		Steps:           applySteps(i18n.ZH),
 		BaseFingerprint: "fingerprint",
 		BaseVersionID:   "version-base",
 		StagedVersionID: "version-staged",

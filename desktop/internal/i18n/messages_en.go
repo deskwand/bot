@@ -1,3 +1,3 @@
 package i18n
 
-var en = join(enLocale, enApp)
+var en = join(enLocale, enApp, enDeployment)
