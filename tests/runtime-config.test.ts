@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import cases from "../contracts/fixtures/config-cases.json";
 import validConfig from "../contracts/fixtures/config-valid.json";
+import { configLocale } from "../src/config";
 import { RuntimeConfigError, readRuntimeConfig } from "../src/runtime-config";
 
 declare module "cloudflare:test" {
@@ -89,6 +90,27 @@ describe("readRuntimeConfig", () => {
       }
     });
   }
+
+  it("defaults the locale to Chinese when it is absent", () => {
+    expect(configLocale(readRuntimeConfig(envWith(validConfig)))).toBe("zh");
+  });
+
+  it("reads the published English locale", () => {
+    const cfg = readRuntimeConfig(envWith({ ...validConfig, locale: "en" }));
+    expect(configLocale(cfg)).toBe("en");
+  });
+
+  it("rejects an unsupported locale", () => {
+    let caught: unknown;
+    try {
+      readRuntimeConfig(envWith({ ...validConfig, locale: "fr" }));
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(RuntimeConfigError);
+    expect((caught as RuntimeConfigError).code).toBe("CONFIG_SCHEMA_INVALID");
+  });
 
   it("preserves env:NAME MCP header references and literals", () => {
     const testCase = (cases as ConfigCase[]).find(

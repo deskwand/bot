@@ -209,6 +209,7 @@ func (l *Lifecycle) ConfirmImport(ctx context.Context, target domain.Target, con
 		AllowReleaseChange: true,
 	}
 	service := NewServiceWithLocker(l.api, l.journal, l.creds, l.pkg, l.clock, l.locker)
+	service.Locale = l.Locale
 	result, applyErr := service.Apply(ctx, target, change)
 	return result, sanitizeError(applyErr, values)
 }

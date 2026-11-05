@@ -106,3 +106,28 @@ func TestValidateReportsJSONPointerLocationsOnly(t *testing.T) {
 		t.Fatalf("validation error leaked the invalid value: %v", err)
 	}
 }
+
+func TestSchemaLocale(t *testing.T) {
+	const minimal = `"schemaVersion":1,"owner":{"telegramUserIds":[]},"models":{"butler":{"provider":"opencode-go","id":"m"},"task":{"provider":"opencode-go","id":"m"}},"mcpServers":[]`
+	cases := []struct {
+		name  string
+		extra string
+		valid bool
+	}{
+		{"zh", `,"locale":"zh"`, true},
+		{"en", `,"locale":"en"`, true},
+		{"absent", "", true},
+		{"unknown", `,"locale":"fr"`, false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := Validate([]byte("{" + minimal + testCase.extra + "}"))
+			if testCase.valid && err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+			if !testCase.valid && !errors.Is(err, ErrInvalidSchema) {
+				t.Fatalf("Validate() = %v, want ErrInvalidSchema", err)
+			}
+		})
+	}
+}

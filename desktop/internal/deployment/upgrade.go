@@ -1,6 +1,7 @@
 package deployment
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -199,6 +200,10 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 	for name, value := range freshInspection.PlainVars {
 		plainVars[name] = value
 	}
+	configJSON, err := withLocale(fresh.ConfigJSON, lifecycleLocale(l))
+	if err != nil {
+		return domain.Result{State: StateFailed}, sanitizeError(err, nil)
+	}
 
 	operationID, err := newOperationID()
 	if err != nil {
@@ -224,7 +229,7 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 		return domain.Result{OperationID: operationID}, err
 	}
 
-	_, uploadErr := l.api.UploadScript(ctx, target, pkg.ManifestJSON(), pkg.Modules(), cloudflareScriptPlan(fresh.ConfigJSON, bucketName, plainVars, freshState.LiveTag, "DeskWand Bot upgrade "+pkg.Version()+" "+operationID))
+	_, uploadErr := l.api.UploadScript(ctx, target, pkg.ManifestJSON(), pkg.Modules(), cloudflareScriptPlan(configJSON, bucketName, plainVars, freshState.LiveTag, "DeskWand Bot upgrade "+pkg.Version()+" "+operationID))
 	if uploadErr != nil {
 		if isNotSent(uploadErr) || errCode(uploadErr) == CodeMigrationHistoryMismatch || definitiveClientError(uploadErr) {
 			record.ScriptUploadAttempted = false
@@ -264,8 +269,32 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 	return operationResult(record), nil
 }
 
+// withLocale returns the configuration with its top-level locale replaced. An
+// empty configuration or locale is returned untouched, so an upgrade never
+// fails merely because the live deployment has no locale to rewrite.
+func withLocale(configJSON []byte, locale string) ([]byte, error) {
+	if locale == "" || len(bytes.TrimSpace(configJSON)) == 0 {
+		return configJSON, nil
+	}
+	value, err := domain.DecodeJSON(configJSON)
+	if err != nil {
+		return nil, sanitizeError(err, nil)
+	}
+	document, ok := value.(map[string]any)
+	if !ok {
+		return nil, domain.Error{Code: CodeVerifyFailed, Message: "the live DESKWAND_CONFIG is not a JSON object"}
+	}
+	document["locale"] = locale
+	encoded, err := domain.CanonicalJSON(document)
+	if err != nil {
+		return nil, sanitizeError(err, nil)
+	}
+	return encoded, nil
+}
+
 func (l *Lifecycle) upgradeWithVersion(ctx context.Context, target domain.Target, pkg release.Package, snapshot domain.Snapshot, beforeIdentity resourceIDs) (domain.Result, error) {
 	service := NewServiceWithLocker(l.api, l.journal, l.creds, pkg, l.clock, l.locker)
+	service.Locale = l.Locale
 	result, err := service.Apply(ctx, target, domain.Change{
 		BaseFingerprint:    snapshot.Fingerprint,
 		AllowReleaseChange: true,
@@ -304,7 +333,7 @@ func (l *Lifecycle) verifyUpgradeState(ctx context.Context, target domain.Target
 			Message: "the upgrade changed a Durable Object namespace or R2 bucket binding",
 		}
 	}
-	if !sameJSON(before.ConfigJSON, after.ConfigJSON) {
+	if !sameJSON(before.ConfigJSON, after.ConfigJSON) && !sameConfigWithLocale(before.ConfigJSON, after.ConfigJSON) {
 		return domain.Error{Code: CodeVerifyFailed, Message: "the upgrade changed DESKWAND_CONFIG"}
 	}
 	if after.ReleaseVersion != pkg.Version() {
@@ -328,6 +357,41 @@ func (l *Lifecycle) verifyUpgradeState(ctx context.Context, target domain.Target
 		}
 	}
 	return nil
+}
+
+// sameConfigWithLocale reports whether after is before with only the locale it
+// already carries applied. Every upgrade republishes the current language, so
+// the verify step must accept that one intentional change and nothing else.
+// The locale is read from the verified document instead of the live hook, which
+// may change while an upgrade is in flight.
+func sameConfigWithLocale(before, after []byte) bool {
+	afterValue, err := domain.DecodeJSON(after)
+	if err != nil {
+		return false
+	}
+	afterDocument, ok := afterValue.(map[string]any)
+	if !ok {
+		return false
+	}
+	locale, ok := afterDocument["locale"].(string)
+	if !ok || (locale != "zh" && locale != "en") {
+		return false
+	}
+
+	beforeValue, err := domain.DecodeJSON(before)
+	if err != nil {
+		return false
+	}
+	beforeDocument, ok := beforeValue.(map[string]any)
+	if !ok {
+		return false
+	}
+	beforeDocument["locale"] = locale
+	expected, err := domain.CanonicalJSON(beforeDocument)
+	if err != nil {
+		return false
+	}
+	return sameJSON(expected, after)
 }
 
 func (l *Lifecycle) unresolvedOperation(target domain.Target) (OperationRecord, bool, error) {

@@ -109,6 +109,9 @@ type Lifecycle struct {
 	creds   platform.CredentialStore
 	clock   func() time.Time
 	locker  *TargetLocker
+	// Locale is inherited by the publish service Install, Import and Upgrade
+	// create. Nil publishes no locale.
+	Locale func() string
 }
 
 // NewLifecycle constructs the lifecycle service. The package must already be
@@ -152,7 +155,7 @@ func (l *Lifecycle) Install(ctx context.Context, request InstallRequest) (domain
 	if request.ActiveChannel != ChannelTelegram && request.ActiveChannel != ChannelWeChat {
 		return domain.Result{}, domain.Error{Code: CodeInvalidRequest, Message: "ACTIVE_CHANNEL must be telegram or wechat"}
 	}
-	configJSON, err := installConfigJSON(request)
+	configJSON, err := installConfigJSON(request, lifecycleLocale(l))
 	if err != nil {
 		return domain.Result{}, err
 	}
@@ -234,9 +237,19 @@ func definitiveClientError(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Status >= 400 && apiErr.Status < 500 && apiErr.Status != 409
 }
 
-func installConfigJSON(request InstallRequest) ([]byte, error) {
+func lifecycleLocale(l *Lifecycle) string {
+	if l.Locale == nil {
+		return ""
+	}
+	return l.Locale()
+}
+
+func installConfigJSON(request InstallRequest, locale string) ([]byte, error) {
 	ids := append([]int64(nil), request.Config.TelegramUserIDs...)
 	patch := domain.EditablePatch{TelegramUserIDs: &ids}
+	if locale != "" {
+		patch.Locale = &locale
+	}
 	if len(request.Config.ButlerModel) > 0 {
 		raw := append(json.RawMessage(nil), request.Config.ButlerModel...)
 		patch.ButlerModel = &raw
@@ -287,7 +300,7 @@ func (l *Lifecycle) findInstallRecord(target domain.Target, request InstallReque
 	if latest == nil {
 		return OperationRecord{}, false, nil
 	}
-	if latest.BucketName != request.BucketName || latest.ActiveChannel != request.ActiveChannel || !sameJSON(latest.ConfigJSON, configJSON) {
+	if latest.BucketName != request.BucketName || latest.ActiveChannel != request.ActiveChannel || !sameJSONIgnoringLocale(latest.ConfigJSON, configJSON) {
 		return OperationRecord{}, false, domain.Error{
 			Code:    CodeInstallConflict,
 			Message: "an unfinished install for this Worker uses different settings; finish or cancel it before starting another",
@@ -639,6 +652,36 @@ func sameJSON(a, b []byte) bool {
 		return false
 	}
 	return string(canonicalA) == string(canonicalB)
+}
+
+// sameJSONIgnoringLocale compares two configuration documents without their
+// top-level locale. Resuming an install must tolerate a language change or a
+// record written by a client that did not publish a locale yet; the resumed
+// upload still uses the recorded configuration.
+func sameJSONIgnoringLocale(a, b []byte) bool {
+	left, okLeft := withoutLocale(a)
+	right, okRight := withoutLocale(b)
+	if !okLeft || !okRight {
+		return sameJSON(a, b)
+	}
+	return sameJSON(left, right)
+}
+
+func withoutLocale(raw []byte) ([]byte, bool) {
+	value, err := domain.DecodeJSON(raw)
+	if err != nil {
+		return nil, false
+	}
+	document, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	delete(document, "locale")
+	canonical, err := domain.CanonicalJSON(document)
+	if err != nil {
+		return nil, false
+	}
+	return canonical, true
 }
 
 func errCodeOrDefault(err error, fallback string) string {

@@ -723,3 +723,75 @@ func TestReservedReferenceNamesIncludeAI(t *testing.T) {
 		t.Fatal("AI binding is not reserved for migrated secrets")
 	}
 }
+
+func TestMergeWritesLocale(t *testing.T) {
+	base := baseSnapshot(t)
+	locale := "en"
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{Locale: &locale},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Locale string `json:"locale"`
+	}
+	if err := json.Unmarshal(plan.ConfigJSON, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.Locale != "en" {
+		t.Fatalf("locale = %q, want en", document.Locale)
+	}
+}
+
+func TestMergeKeepsLocaleWhenPatchNil(t *testing.T) {
+	base := baseSnapshot(t)
+	value, err := domain.DecodeJSON(base.ConfigJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("base document is %T", value)
+	}
+	document["locale"] = "en"
+	canonical, err := domain.CanonicalJSON(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.ConfigJSON = canonical
+
+	plan, err := Merge(base, domain.Change{BaseFingerprint: base.Fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Locale string `json:"locale"`
+	}
+	if err := json.Unmarshal(plan.ConfigJSON, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Locale != "en" {
+		t.Fatalf("locale = %q, want en", result.Locale)
+	}
+}
+
+func TestMergeEmptyConfigWithOnlyLocaleReportsMissingConfig(t *testing.T) {
+	base := domain.Snapshot{
+		Target:      domain.Target{AccountID: "account", ScriptName: "worker"},
+		VersionID:   "version-1",
+		Fingerprint: "empty-fingerprint",
+	}
+	locale := "en"
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{Locale: &locale},
+	})
+	if err == nil {
+		t.Fatal("empty config with only a locale patch published")
+	}
+	if !strings.Contains(err.Error(), "DESKWAND_CONFIG is not set") {
+		t.Fatalf("error = %v, want the missing-config hint", err)
+	}
+}

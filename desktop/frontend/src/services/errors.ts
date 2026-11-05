@@ -1,6 +1,8 @@
 // Go errors cross the MyGo bridge as CallError messages in the form
 // "CODE: human readable message" (or just "CODE"). The UI always renders the
-// fixed code next to one actionable Chinese line and never echoes a secret.
+// fixed code next to one actionable line and never echoes a secret.
+import { getT } from "../i18n";
+
 export interface ClientError {
   code: string;
   message: string;
@@ -124,6 +126,11 @@ const FALLBACK_WECHAT = "微信请求失败，请稍后重试。";
 
 export function codeCopy(code: string): CodeCopy {
   if (code.startsWith("WECHAT_ILINK_")) return { short: FALLBACK_WECHAT, known: true };
+  // New errors take their copy from the dictionary so it follows the UI
+  // language; the static table below predates i18n.
+  if (code === "LOCALE_SAVE_FAILED") {
+    return { short: getT()("locale.saveFailed"), known: true };
+  }
   const short = SHORT_COPY[code];
   return short ? { short, known: true } : { short: FALLBACK_CODE_MESSAGE, known: false };
 }

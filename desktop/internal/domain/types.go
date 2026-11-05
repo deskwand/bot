@@ -162,6 +162,7 @@ type EditablePatch struct {
 	TaskModel       *json.RawMessage `json:"taskModel"`
 	CustomProviders *json.RawMessage `json:"customProviders"`
 	McpServers      *json.RawMessage `json:"mcpServers"`
+	Locale          *string          `json:"locale"`
 }
 
 // ConfigReference rewrites one existing JSON string in DESKWAND_CONFIG to an

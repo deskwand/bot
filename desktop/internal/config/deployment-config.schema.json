@@ -23,6 +23,11 @@
       "items": {
         "$ref": "#/$defs/McpServerConfig"
       }
+    },
+    "locale": {
+      "type": "string",
+      "enum": ["zh", "en"],
+      "description": "Language the bot uses for fixed owner-facing text and replies. Absent means zh."
     }
   },
   "additionalProperties": true,

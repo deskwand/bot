@@ -1,7 +1,13 @@
 // Production adapter. This is the only production module that imports the
 // generated MyGo client. Tests use src/testing/fixtures.ts instead.
 import { Service, events } from "../mygo";
-import type { ClientService, ThemeSource } from "./types";
+import type {
+  ClientService,
+  Locale,
+  LocaleDTO,
+  LocaleSource,
+  ThemeSource,
+} from "./types";
 
 export function createProductionClient(): ClientService {
   return {
@@ -10,6 +16,9 @@ export function createProductionClient(): ClientService {
     // anything but the three sources before it can be stored.
     theme: async () => (await Service.theme()) as ThemeSource,
     setTheme: (source) => Service.setTheme(source),
+    // Same trust boundary as the theme: Go only ever returns these values.
+    locale: async () => toLocaleDTO(await Service.locale()),
+    setLocale: async (source) => toLocaleDTO(await Service.setLocale(source)),
     telemetryEnabled: () => Service.telemetryEnabled(),
     setTelemetryEnabled: (enabled) => Service.setTelemetryEnabled(enabled),
     bootState: () => Service.bootState(),
@@ -66,5 +75,12 @@ export function createProductionClient(): ClientService {
     retryRestore: (useSnapshot) => Service.retryRestore(useSnapshot),
     abandonPendingRestore: () => Service.abandonPendingRestore(),
     subscribeBackupProgress: (listener) => events.backupProgress.on(listener),
+  };
+}
+
+function toLocaleDTO(value: { source: string; resolved: string }): LocaleDTO {
+  return {
+    source: value.source as LocaleSource,
+    resolved: value.resolved as Locale,
   };
 }

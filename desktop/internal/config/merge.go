@@ -161,6 +161,10 @@ func applyPatch(document map[string]any, patch domain.EditablePatch) error {
 		document["mcpServers"] = servers
 	}
 
+	if patch.Locale != nil {
+		document["locale"] = *patch.Locale
+	}
+
 	if patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil {
 		return nil
 	}

@@ -18,6 +18,9 @@ import type {
   ImportInputDTO,
   ImportPreviewDTO,
   InstallInputDTO,
+  Locale,
+  LocaleDTO,
+  LocaleSource,
   LoginStatusDTO,
   McpAddInput,
   McpAuthDTO,
@@ -96,6 +99,14 @@ type Scenario =
 interface MockState {
   scenario: Scenario;
   theme: ThemeSource;
+  locale: LocaleDTO;
+  // The OS language. Go resolves "system" against this, not the previous
+  // resolved value.
+  systemLocale: Locale;
+  // What the published config carries. Follows the preference only after a
+  // publish, like Go's deployment hook.
+  publishedLocale: Locale;
+  localeSaveFails: boolean;
   telemetry: boolean;
   connected: boolean;
   accountId: string;
@@ -350,8 +361,40 @@ function scenarioFromLocation(): Scenario {
   }
 }
 
+function storedLocale(): LocaleDTO | null {
+  try {
+    const raw = window.sessionStorage.getItem("fixture-locale");
+    if (!raw) return null;
+    const value = JSON.parse(raw) as { source?: unknown; resolved?: unknown };
+    const source = value.source;
+    const resolved = value.resolved;
+    if (
+      (source === "system" || source === "zh" || source === "en") &&
+      (resolved === "zh" || resolved === "en")
+    ) {
+      return { source, resolved };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function initialLocale(systemLocale: Locale): LocaleDTO {
+  // Mirrors Go: the saved preference survives a reload.
+  const saved = storedLocale();
+  if (saved) return saved;
+  return { source: "system", resolved: systemLocale };
+}
+
+function resolveLocale(source: LocaleSource, systemLocale: Locale): Locale {
+  return source === "system" ? systemLocale : source;
+}
+
 function initialState(): MockState {
   const scenario = scenarioFromLocation();
+  const query = new URLSearchParams(window.location.search);
+  const systemLocale: Locale = query.get("locale") === "en" ? "en" : "zh";
   const configured = scenario === "configured" || scenario === "publish-refetch-fail";
   const shellScenario = [
     "unknown-long-error",
@@ -397,6 +440,10 @@ function initialState(): MockState {
   return {
     scenario,
     theme: "system",
+    locale: initialLocale(systemLocale),
+    systemLocale,
+    publishedLocale: "zh",
+    localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
     connected: shellScenario,
     accountId: "a".repeat(32),
@@ -612,6 +659,7 @@ export function createMockClient(): ClientService {
       taskModel: state.taskModel,
       customProviders: state.customProviders,
       mcpServers: state.mcpServers,
+      locale: state.publishedLocale,
       secrets: Object.keys(state.secrets)
         .sort()
         .map((name) => ({ name, configured: state.secrets[name] === true })),
@@ -687,6 +735,28 @@ export function createMockClient(): ClientService {
         fail("INVALID_REQUEST", "外观设置无效");
       }
       state.theme = next;
+    },
+
+    async locale(): Promise<LocaleDTO> {
+      return state.locale;
+    },
+
+    async setLocale(next: LocaleSource): Promise<LocaleDTO> {
+      if (next !== "system" && next !== "zh" && next !== "en") {
+        fail("INVALID_REQUEST", "语言设置无效");
+      }
+      const value: LocaleDTO = {
+        source: next,
+        resolved: resolveLocale(next, state.systemLocale),
+      };
+      // Go switches in memory first; a rejected disk write still changes this
+      // run and only skips persistence.
+      state.locale = value;
+      if (state.localeSaveFails) {
+        fail("LOCALE_SAVE_FAILED", "语言设置未能保存");
+      }
+      window.sessionStorage.setItem("fixture-locale", JSON.stringify(value));
+      return value;
     },
 
     async telemetryEnabled(): Promise<boolean> {
@@ -1152,6 +1222,7 @@ export function createMockClient(): ClientService {
         fail("MODEL_KEY_MISSING", "缺少模型 key：MODEL_KEY_DEEPSEEK");
       }
       applyEdit(input);
+      state.publishedLocale = state.locale.resolved;
       const result = published(`op-publish-${sequence}`);
       return result;
     },

@@ -1278,3 +1278,54 @@ func TestPendingSecretKeyUsesPassthroughPrefix(t *testing.T) {
 		t.Fatalf("pendingSecretKey = %q, want prefix %q", key, platform.PassthroughKeyPrefix)
 	}
 }
+
+func TestApplyFillsLocaleWhenPatchHasNone(t *testing.T) {
+	f := newPublishFixture(t)
+	f.Service.Locale = func() string { return "en" }
+	ids := []int64{7}
+	change := f.change()
+	change.Patch.TelegramUserIDs = &ids
+
+	result, err := f.Service.Apply(context.Background(), f.target(), change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertState(t, result, StatePublished)
+	if !bytes.Contains(f.API.creates[0].Plan.ConfigJSON, []byte(`"locale":"en"`)) {
+		t.Fatalf("uploaded config has no locale: %s", f.API.creates[0].Plan.ConfigJSON)
+	}
+}
+
+func TestApplyKeepsExplicitLocale(t *testing.T) {
+	f := newPublishFixture(t)
+	f.Service.Locale = func() string { return "en" }
+	locale := "zh"
+	change := f.change()
+	change.Patch.Locale = &locale
+
+	result, err := f.Service.Apply(context.Background(), f.target(), change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertState(t, result, StatePublished)
+	if !bytes.Contains(f.API.creates[0].Plan.ConfigJSON, []byte(`"locale":"zh"`)) {
+		t.Fatalf("explicit locale was overwritten: %s", f.API.creates[0].Plan.ConfigJSON)
+	}
+	if bytes.Contains(f.API.creates[0].Plan.ConfigJSON, []byte(`"locale":"en"`)) {
+		t.Fatalf("explicit locale was overwritten: %s", f.API.creates[0].Plan.ConfigJSON)
+	}
+}
+
+// Preview does not expose the merged document, so an unrepresentable hook value
+// is the observable proof that Preview handed the locale to config.Merge.
+func TestPreviewFillsLocale(t *testing.T) {
+	f := newPublishFixture(t)
+	f.Service.Locale = func() string { return "fr" }
+	_, err := f.Service.Preview(context.Background(), f.target(), f.change())
+	assertCode(t, err, domain.UNSUPPORTED_SCHEMA)
+
+	f.Service.Locale = func() string { return "en" }
+	if _, err := f.Service.Preview(context.Background(), f.target(), f.change()); err != nil {
+		t.Fatalf("valid locale rejected: %v", err)
+	}
+}

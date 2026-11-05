@@ -58,6 +58,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	locale := app.NewLocaleState(themes, nil)
 	cache, err := app.NewFileSnapshotCache(dataDir)
 	if err != nil {
 		log.Fatal(err)
@@ -113,6 +114,8 @@ func main() {
 	locker := deployment.NewTargetLocker()
 	lifecycle := deployment.NewLifecycleWithLocker(api, journal, pkg, credentials, nil, locker)
 	publish := deployment.NewServiceWithLocker(api, journal, credentials, pkg, nil, locker)
+	lifecycle.Locale = locale.Current
+	publish.Locale = locale.Current
 	entries := app.NewEntryService(app.EntryOptions{
 		Publisher:   publish,
 		Snapshots:   api,
@@ -131,6 +134,7 @@ func main() {
 		Journal:     journal,
 		Store:       targets,
 		Theme:       themes,
+		Locale:      locale,
 		Cache:       cache,
 		ApplyTheme:  func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) },
 		Browser:     platform.NewSystemBrowserOpener(),

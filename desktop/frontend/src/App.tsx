@@ -26,6 +26,7 @@ import { AppContext, PAGE_LABELS, type Page } from "@/components/app-context";
 import { CloudflareAccountCard } from "@/components/cloudflare-account";
 import { TelemetryToggle } from "@/components/telemetry-toggle";
 import { ThemeSwitcher } from "@/components/theme-switcher";
+import { LocaleSwitcher } from "@/components/locale-switcher";
 import { ErrorAlert, StepList, StateBadge } from "@/components/feedback";
 import { createAppQueryClient } from "@/services/queries";
 import type { ClientService, OperationDTO } from "@/services/types";
@@ -238,6 +239,7 @@ export function App({ client }: { client: ClientService }) {
               </nav>
               <div className="mt-6 md:mt-auto">
                 <ThemeSwitcher />
+                <LocaleSwitcher dirty={dirty} />
                 <TelemetryToggle />
                 <CloudflareAccountCard
                   dirty={dirty}
