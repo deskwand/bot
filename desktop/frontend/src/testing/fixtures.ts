@@ -100,6 +100,9 @@ interface MockState {
   scenario: Scenario;
   theme: ThemeSource;
   locale: LocaleDTO;
+  // The OS language. Go resolves "system" against this, not the previous
+  // resolved value.
+  systemLocale: Locale;
   // What the published config carries. Follows the preference only after a
   // publish, like Go's deployment hook.
   publishedLocale: Locale;
@@ -377,22 +380,21 @@ function storedLocale(): LocaleDTO | null {
   return null;
 }
 
-function initialLocale(): LocaleDTO {
+function initialLocale(systemLocale: Locale): LocaleDTO {
   // Mirrors Go: the saved preference survives a reload.
   const saved = storedLocale();
   if (saved) return saved;
-  const param = new URLSearchParams(window.location.search).get("locale");
-  if (param === "en" || param === "zh") return { source: "system", resolved: param };
-  return { source: "system", resolved: "zh" };
+  return { source: "system", resolved: systemLocale };
 }
 
-function resolveLocale(source: LocaleSource, current: Locale): Locale {
-  return source === "system" ? current : source;
+function resolveLocale(source: LocaleSource, systemLocale: Locale): Locale {
+  return source === "system" ? systemLocale : source;
 }
 
 function initialState(): MockState {
   const scenario = scenarioFromLocation();
   const query = new URLSearchParams(window.location.search);
+  const systemLocale: Locale = query.get("locale") === "en" ? "en" : "zh";
   const configured = scenario === "configured" || scenario === "publish-refetch-fail";
   const shellScenario = [
     "unknown-long-error",
@@ -438,7 +440,8 @@ function initialState(): MockState {
   return {
     scenario,
     theme: "system",
-    locale: initialLocale(),
+    locale: initialLocale(systemLocale),
+    systemLocale,
     publishedLocale: "zh",
     localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
@@ -744,7 +747,7 @@ export function createMockClient(): ClientService {
       }
       const value: LocaleDTO = {
         source: next,
-        resolved: resolveLocale(next, state.locale.resolved),
+        resolved: resolveLocale(next, state.systemLocale),
       };
       // Go switches in memory first; a rejected disk write still changes this
       // run and only skips persistence.

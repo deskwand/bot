@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 test("switching to English applies at once and persists", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
@@ -72,5 +72,43 @@ test("save failure still switches and warns", async ({ page }) => {
     page
       .getByRole("alert")
       .filter({ hasText: "Language setting was not saved; it will revert on next launch" }),
+  ).toBeVisible();
+});
+
+async function chooseModel(page: Page, label: string, provider: string, model: RegExp) {
+  const providerTrigger = page.getByLabel(`${label}供应商`);
+  const switching = (await providerTrigger.textContent())?.trim() !== provider;
+  await providerTrigger.click();
+  await page.getByRole("option", { name: provider, exact: true }).click();
+  if (!switching) await page.getByLabel(label, { exact: true }).click();
+  await page.getByRole("listbox").getByRole("option", { name: model }).click();
+}
+
+test("switching back to system follows the system language", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured&locale=en");
+
+  const englishGroup = page.getByRole("group", { name: "Language" });
+  await englishGroup.getByRole("button", { name: "中文", exact: true }).click();
+
+  const chineseGroup = page.getByRole("group", { name: "语言" });
+  await chineseGroup.getByRole("button", { name: "跟随系统", exact: true }).click();
+
+  await expect(page.getByRole("group", { name: "Language" })).toBeVisible();
+});
+
+test("sync is blocked while a page has unsaved changes", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await chooseModel(page, "管家模型", "OpenCode Go", /DeepSeek V4 Pro/);
+
+  await page
+    .getByRole("group", { name: "语言" })
+    .getByRole("button", { name: "English", exact: true })
+    .click();
+
+  const sync = page.getByRole("button", { name: "Sync now", exact: true });
+  await expect(sync).toBeDisabled();
+  await expect(
+    page.getByText("Publish or discard this page's changes first"),
   ).toBeVisible();
 });

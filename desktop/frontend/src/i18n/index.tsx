@@ -3,7 +3,9 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -80,9 +82,13 @@ export function LocaleProvider({
   const [source, setSourceState] = useState<LocaleSource>("system");
   const [resolved, setResolved] = useState<Locale>("zh");
   const [saveError, setSaveError] = useState<unknown>(null);
-  // Render with the new language immediately; getT() must agree with the
-  // tree that is being rendered, not the one before the state update.
-  currentLocale = resolved;
+  // Only the newest setSource call may apply its response; an older save can
+  // resolve (or fail and re-read) after a later click.
+  const requestSeq = useRef(0);
+  // getT() must agree with the tree React just committed.
+  useLayoutEffect(() => {
+    currentLocale = resolved;
+  }, [resolved]);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +107,7 @@ export function LocaleProvider({
 
   const setSource = useCallback(
     async (next: LocaleSource) => {
+      const seq = ++requestSeq.current;
       // Go switches in memory even when the write fails, so show the choice
       // at once and keep it if the save is rejected.
       setSourceState(next);
@@ -108,10 +115,22 @@ export function LocaleProvider({
       setSaveError(null);
       try {
         const value = await client.setLocale(next);
+        if (seq !== requestSeq.current) return;
         setSourceState(value.source);
         setResolved(value.resolved);
       } catch (error) {
+        if (seq !== requestSeq.current) return;
         setSaveError(error);
+        // The bridge threw, so its DTO never arrived. Go may have switched in
+        // memory anyway; re-read so the UI does not keep a stale resolution.
+        try {
+          const value = await client.locale();
+          if (seq !== requestSeq.current) return;
+          setSourceState(value.source);
+          setResolved(value.resolved);
+        } catch {
+          // Keep the optimistic choice when even the re-read fails.
+        }
       }
     },
     [client],

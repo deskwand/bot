@@ -10,6 +10,8 @@ export const zh = {
     pendingBot: "下次发布后 bot 使用{lang}",
     syncNow: "立即同步",
     syncing: "同步中…",
+    syncIncomplete: "同步未完成，可在概览页继续。",
+    syncBlockedDirty: "请先发布或放弃当前页面的修改",
   },
 } as const;
 

@@ -17,7 +17,7 @@ const OPTIONS: { source: LocaleSource; label: MessageKey }[] = [
  * preference; the published config keeps its own copy, so a change only reaches
  * the bot after the next publish.
  */
-export function LocaleSwitcher() {
+export function LocaleSwitcher({ dirty = false }: { dirty?: boolean }) {
   const { client } = useApp();
   const { source, resolved, setSource, saveError } = useLocale();
   const t = useT();
@@ -25,17 +25,27 @@ export function LocaleSwitcher() {
   const invalidate = useInvalidate();
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<unknown>(null);
+  const [syncIncomplete, setSyncIncomplete] = useState(false);
 
   const config = configQuery.data;
+  // Old cached configs predate the locale field; Go's zero value is zh.
   const pending =
-    config !== undefined && config.configPresent && config.locale !== resolved;
+    config !== undefined &&
+    config.configPresent &&
+    (config.locale ?? "zh") !== resolved;
 
   const sync = async () => {
     if (!config) return;
     setSyncing(true);
     setSyncError(null);
+    setSyncIncomplete(false);
     try {
-      await client.publishConfig({ baseFingerprint: config.fingerprint });
+      const result = await client.publishConfig({
+        baseFingerprint: config.fingerprint,
+      });
+      if (result.state !== "published" && result.state !== "unchanged") {
+        setSyncIncomplete(true);
+      }
       invalidate.config();
     } catch (error) {
       setSyncError(error);
@@ -81,11 +91,22 @@ export function LocaleSwitcher() {
             type="button"
             size="xs"
             variant="outline"
-            disabled={syncing}
+            disabled={syncing || dirty}
+            title={dirty ? t("locale.syncBlockedDirty") : undefined}
             onClick={() => void sync()}
           >
             {syncing ? t("locale.syncing") : t("locale.syncNow")}
           </Button>
+          {dirty ? (
+            <p className="text-xs text-muted-foreground">
+              {t("locale.syncBlockedDirty")}
+            </p>
+          ) : null}
+          {syncIncomplete ? (
+            <p role="status" className="text-xs text-muted-foreground">
+              {t("locale.syncIncomplete")}
+            </p>
+          ) : null}
         </div>
       ) : null}
       {syncError ? <ErrorAlert error={syncError} /> : null}

@@ -239,7 +239,7 @@ export function App({ client }: { client: ClientService }) {
               </nav>
               <div className="mt-6 md:mt-auto">
                 <ThemeSwitcher />
-                <LocaleSwitcher />
+                <LocaleSwitcher dirty={dirty} />
                 <TelemetryToggle />
                 <CloudflareAccountCard
                   dirty={dirty}
