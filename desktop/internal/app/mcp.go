@@ -76,7 +76,7 @@ type McpFieldDTO struct {
 type McpToolDTO struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Mode        string `json:"mode"` // disabled|approval|auto
+	Mode        string `json:"mode"` // disabled|approval|review|auto
 }
 
 // McpProbeDTO is the connection test shown on a service card.

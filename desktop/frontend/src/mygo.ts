@@ -296,7 +296,7 @@ export interface McpProbeDTO {
 export interface McpToolDTO {
   name: string;
   description: string;
-  /** disabled|approval|auto */
+  /** disabled|approval|review|auto */
   mode: string;
 }
 
