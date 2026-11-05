@@ -50,6 +50,17 @@ describe("findHanLiterals", () => {
       { line: 1, text: "http://例子" },
     ]);
   });
+
+  it("skips hits on lines marked with i18n-ignore", () => {
+    expect(findHanLiterals('x := "中文" // i18n-ignore: folder name', "go")).toEqual([]);
+    expect(findHanLiterals('const a = "中文"; // i18n-ignore', "ts")).toEqual([]);
+  });
+
+  it("still reports the same line without i18n-ignore", () => {
+    expect(findHanLiterals('x := "中文" // folder name', "go")).toEqual([
+      { line: 1, text: "中文" },
+    ]);
+  });
 });
 
 describe("check-i18n CLI", () => {

@@ -87,6 +87,31 @@ func TestTablesHaveSameVerbs(t *testing.T) {
 	}
 }
 
+func TestJoinPanicsOnDuplicate(t *testing.T) {
+	defer func() {
+		got := recover()
+		if got != "i18n: duplicate key a" {
+			t.Fatalf("recover() = %v, want the duplicate key panic", got)
+		}
+	}()
+	join(map[string]string{"a": "1"}, map[string]string{"a": "2"})
+}
+
+func TestLookup(t *testing.T) {
+	if got, ok := Lookup("en", "locale.invalid"); !ok || got != "Invalid language setting" {
+		t.Fatalf("Lookup(en) = %q, %v", got, ok)
+	}
+
+	zh["test.only"] = "只有中文 %d"
+	t.Cleanup(func() { delete(zh, "test.only") })
+	if got, ok := Lookup("en", "test.only", 3); !ok || got != "只有中文 3" {
+		t.Fatalf("Lookup(en fallback) = %q, %v", got, ok)
+	}
+	if got, ok := Lookup("en", "missing.key"); ok || got != "" {
+		t.Fatalf("Lookup(missing) = %q, %v; want empty and false", got, ok)
+	}
+}
+
 func TestTFallsBack(t *testing.T) {
 	zh["test.only"] = "只有中文 %d"
 	t.Cleanup(func() { delete(zh, "test.only") })

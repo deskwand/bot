@@ -159,6 +159,30 @@ test("state badges switch language without reload", async ({ page }) => {
   await expect(page.getByTestId("state-model")).toHaveText("Configured");
 });
 
+test("switching language refetches server text", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await openPage(page, "诊断");
+  await expect(page.getByTestId("status-model")).toBeVisible();
+
+  const statusCalls = () =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __mockCalls?: Record<string, unknown[][]>;
+          }
+        ).__mockCalls?.status?.length ?? 0,
+    );
+
+  const before = await statusCalls();
+  await page
+    .getByRole("group", { name: "语言" })
+    .getByRole("button", { name: "English", exact: true })
+    .click();
+
+  await expect.poll(statusCalls).toBeGreaterThan(before);
+});
+
 test("shell is English", async ({ page }) => {
   await useEnglish(page, "/test.html?fixture=configured");
   await expectNoChinese(page, "aside");

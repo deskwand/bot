@@ -43,17 +43,43 @@ func Resolve(source string, systemLanguage func() (string, error)) string {
 // Chinese table, then the key itself, and formats the result when args are
 // given.
 func T(locale, key string, args ...any) string {
+	format, ok := Lookup(locale, key, args...)
+	if !ok {
+		return key
+	}
+	return format
+}
+
+// Lookup returns the localized text for key from the locale table, falling
+// back to the Chinese table. It reports false, and an empty string, when
+// neither table has the key; it never returns the key itself.
+func Lookup(locale, key string, args ...any) (string, bool) {
 	format, ok := table(locale)[key]
 	if !ok {
 		format, ok = zh[key]
 	}
 	if !ok {
-		format = key
+		return "", false
 	}
 	if len(args) == 0 {
-		return format
+		return format, true
 	}
-	return fmt.Sprintf(format, args...)
+	return fmt.Sprintf(format, args...), true
+}
+
+// join merges area tables into one message table. Duplicate keys mean two
+// areas claimed the same message, which is a programming error.
+func join(tables ...map[string]string) map[string]string {
+	merged := make(map[string]string)
+	for _, table := range tables {
+		for key, value := range table {
+			if _, exists := merged[key]; exists {
+				panic("i18n: duplicate key " + key)
+			}
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 func table(locale string) map[string]string {

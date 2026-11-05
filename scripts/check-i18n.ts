@@ -38,12 +38,13 @@ const EXCLUDED_GLOBS = [
 ];
 
 type Literal = { line: number; text: string };
-type ScanResult = { stripped: string; literals: Literal[] };
+type ScanResult = { stripped: string; literals: Literal[]; ignoreLines: Set<number> };
 
 /** Blanks comments and literals, keeping newlines so line numbers stay valid. */
 function scan(source: string, kind: SourceKind): ScanResult {
   const quotes = kind === "ts" ? ["'", '"', "`"] : ['"', "`"];
   const literals: Literal[] = [];
+  const ignoreLines = new Set<number>();
   let stripped = "";
   let i = 0;
   let line = 1;
@@ -58,7 +59,9 @@ function scan(source: string, kind: SourceKind): ScanResult {
     if (char === "/" && source[i + 1] === "/") {
       const start = i;
       while (i < source.length && source[i] !== "\n") i++;
-      blank(source.slice(start, i));
+      const comment = source.slice(start, i);
+      if (/^\/\/\s*i18n-ignore\b/.test(comment)) ignoreLines.add(line);
+      blank(comment);
       continue;
     }
 
@@ -103,7 +106,7 @@ function scan(source: string, kind: SourceKind): ScanResult {
     i++;
   }
 
-  return { stripped, literals };
+  return { stripped, literals, ignoreLines };
 }
 
 function lineAt(source: string, index: number): number {
@@ -128,7 +131,7 @@ function hanMatches(text: string): RegExpMatchArray[] {
  * string and template literals plus bare text (such as JSX text nodes) count.
  */
 export function findHanLiterals(source: string, kind: SourceKind): HanLiteral[] {
-  const { stripped, literals } = scan(source, kind);
+  const { stripped, literals, ignoreLines } = scan(source, kind);
   const hits: HanLiteral[] = [];
 
   for (const literal of literals) {
@@ -144,7 +147,9 @@ export function findHanLiterals(source: string, kind: SourceKind): HanLiteral[] 
     hits.push({ line: lineAt(stripped, match.index ?? 0), text: truncate(match[0]) });
   }
 
-  return hits.sort((a, b) => a.line - b.line);
+  return hits
+    .filter((hit) => !ignoreLines.has(hit.line))
+    .sort((a, b) => a.line - b.line);
 }
 
 /** Converts a simple glob (`*`, `**`, `?`) into an anchored regular expression. */

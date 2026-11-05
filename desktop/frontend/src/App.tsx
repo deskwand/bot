@@ -29,7 +29,7 @@ import { ThemeSwitcher } from "@/components/theme-switcher";
 import { LocaleChoice } from "@/components/locale-choice";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { ErrorAlert, StepList, StateBadge } from "@/components/feedback";
-import { useT } from "@/i18n";
+import { useLocale, useT } from "@/i18n";
 import { createAppQueryClient } from "@/services/queries";
 import type { ClientService, OperationDTO } from "@/services/types";
 import { useUiStore } from "@/store/ui";
@@ -67,6 +67,7 @@ const NAV: { page: Page; icon: typeof LayoutDashboard }[] = [
 
 export function App({ client }: { client: ClientService }) {
   const t = useT();
+  const { resolved: locale } = useLocale();
   const refreshRef = useRef<(showLoading?: boolean) => Promise<void>>(async () => {});
   const [queryClient] = useState(() => createAppQueryClient(() => void refreshRef.current(false)));
   const scopeRef = useRef<string | null>(null);
@@ -136,6 +137,19 @@ export function App({ client }: { client: ClientService }) {
   useEffect(() => {
     void refresh(true);
   }, [refresh]);
+
+  const lastLocale = useRef<string | null>(null);
+  useEffect(() => {
+    // Server-rendered copy (diagnostics, catalogs, status) is cached by query
+    // key, so a language switch has to fetch it again.
+    if (lastLocale.current === null) {
+      lastLocale.current = locale;
+      return;
+    }
+    if (lastLocale.current === locale) return;
+    lastLocale.current = locale;
+    void queryClient.invalidateQueries();
+  }, [locale, queryClient]);
 
   const navigate = useCallback(
     (next: Page) => {
