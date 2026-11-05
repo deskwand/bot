@@ -173,7 +173,7 @@ async function pollCapturingHeartbeat(
   responses: Array<Reply | Error> = [jsonResponse({})],
 ): Promise<{ atFetch: number | null; calls: RecordedCall[] }> {
   return runInDurableObject(channels(), async (instance, state) => {
-    const calls: RecordedCall[] = [];
+    const scripted = scriptedILink(responses);
     let captured = false;
     let atFetch: number | null = null;
     setILinkFetchOverride((async (input, init) => {
@@ -186,22 +186,7 @@ async function pollCapturingHeartbeat(
             )
             .toArray()[0]?.last_poll_at ?? null;
       }
-      const url = typeof input === "string" ? input : input.toString();
-      calls.push({
-        url,
-        method: init?.method ?? "GET",
-        headers: (init?.headers ?? {}) as Record<string, string>,
-        body:
-          typeof init?.body === "string"
-            ? (JSON.parse(init.body) as Record<string, unknown>)
-            : undefined,
-      });
-      const next = responses.shift() ?? jsonResponse({});
-      if (next instanceof Error) throw next;
-      return new Response(JSON.stringify(next.body), {
-        status: next.status ?? 200,
-        headers: { "content-type": "application/json" },
-      });
+      return scripted.fetchImpl(input, init);
     }) as typeof fetch);
 
     const target = instance as unknown as {
@@ -216,7 +201,7 @@ async function pollCapturingHeartbeat(
     for (const schedule of schedules) {
       await target.cancelSchedule(schedule.id);
     }
-    return { atFetch, calls };
+    return { atFetch, calls: scripted.calls };
   });
 }
 
