@@ -17,6 +17,7 @@ import {
   type RunRow,
 } from "./bot-store";
 import { buildBotInstructions } from "./instructions";
+import { MEMORY_DOC, type BotDoc } from "./docs";
 import {
   CHANNEL_DISABLED_RETRY_MS,
   DAILY_WAKE_LIMIT,
@@ -394,9 +395,12 @@ export class BotDO extends DurableObject<Env> {
     const instructions = buildBotInstructions({
       name: meta.name,
       mission: meta.mission,
-      memories: this.memories.all(),
+      // Task 6 replaces memories with docs; until then render them as one doc.
+      docs: legacyMemoryDocs(this.memories.all()),
+      ownerProfile: "",
       runs: this.store.recentRuns(3),
       steer: meta.pendingSteer,
+      manualWake: false,
     });
     const consumed = meta.pendingSteer.length;
 
@@ -587,4 +591,15 @@ function nextBase(meta: BotMeta, now: number): number {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Temporary adapter until Task 6 moves bots from memories to documents. */
+function legacyMemoryDocs(items: readonly MemoryItem[]): BotDoc[] {
+  if (items.length === 0) return [];
+  return [
+    {
+      name: MEMORY_DOC,
+      content: items.map((item) => `- ${item.content}`).join("\n"),
+    },
+  ];
 }
