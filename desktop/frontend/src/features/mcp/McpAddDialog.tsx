@@ -20,6 +20,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ErrorAlert } from "@/components/feedback";
+import { useT } from "@/i18n";
 import type {
   McpAddInput,
   McpCatalogEntryDTO,
@@ -65,6 +66,7 @@ export function McpAddDialog({
     { name: "", value: "", secret: true },
   ]);
   const [submitting, setSubmitting] = useState(false);
+  const t = useT();
 
   const reset = () => {
     setSelection(null);
@@ -107,9 +109,9 @@ export function McpAddDialog({
 
   const trimmedName = name.trim();
   const nameError = !NAME_PATTERN.test(trimmedName)
-    ? "名称只能用小写字母、数字和下划线（1-32 个字符）"
+    ? t("mcp.namePattern")
     : existingNames.includes(trimmedName)
-      ? "已存在同名服务"
+      ? t("mcp.nameExists")
       : "";
   const missingField =
     selection !== null && selection !== "custom"
@@ -158,10 +160,10 @@ export function McpAddDialog({
 
   const title =
     selection === null
-      ? "添加服务"
+      ? t("mcp.addService")
       : selection === "custom"
-        ? "添加自定义服务"
-        : `添加 ${selection.name}`;
+        ? t("mcp.addCustomService")
+        : t("mcp.addNamed", { name: selection.name });
 
   return (
     <Dialog open={open} onOpenChange={close}>
@@ -170,40 +172,46 @@ export function McpAddDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {selection === null
-              ? "从目录选择服务，或填写一个远程 MCP 地址。"
-              : "保存后写进云端配置，并立即测试连接。"}
+              ? t("mcp.catalogDescription")
+              : t("mcp.formDescription")}
           </DialogDescription>
         </DialogHeader>
 
         {selection === null ? (
           <div className="space-y-5">
-            {grouped.map(([category, entries]) => (
-              <section key={category} aria-label={category}>
-                <h3 className="mb-2 text-sm font-medium">{category}</h3>
+            {grouped.map(([category, entries], groupIndex) => (
+              <section key={category} aria-labelledby={`mcp-category-${groupIndex}`}>
+                <h3
+                  id={`mcp-category-${groupIndex}`}
+                  className="mb-2 text-sm font-medium"
+                  data-i18n-ignore
+                >
+                  {category}
+                </h3>
                 <div className="grid gap-2 sm:grid-cols-2">
                   {entries.map((entry) => (
                     <Card key={entry.id} size="sm">
                       <CardHeader>
                         <CardTitle className="flex items-center gap-2">
-                          {entry.name}
+                          <span data-i18n-ignore>{entry.name}</span>
                           {entry.oauth ? (
                             <span className="text-xs font-normal text-muted-foreground">
-                              登录授权
+                              {t("mcp.loginAuthorization")}
                             </span>
                           ) : null}
                         </CardTitle>
-                        <CardDescription>{entry.description}</CardDescription>
+                        <CardDescription data-i18n-ignore>{entry.description}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
-                          aria-label={`添加 ${entry.name}`}
+                          aria-label={t("mcp.addNamed", { name: entry.name })}
                           onClick={() => choose(entry)}
                         >
                           <Plus aria-hidden />
-                          添加
+                          {t("mcp.addAction")}
                         </Button>
                       </CardContent>
                     </Card>
@@ -211,19 +219,19 @@ export function McpAddDialog({
                 </div>
               </section>
             ))}
-            <section aria-label="自定义">
-              <h3 className="mb-2 text-sm font-medium">自定义</h3>
+            <section aria-label={t("mcp.custom")}>
+              <h3 className="mb-2 text-sm font-medium">{t("mcp.custom")}</h3>
               <Card size="sm">
                 <CardHeader>
-                  <CardTitle>自定义 URL</CardTitle>
+                  <CardTitle>{t("mcp.customUrl")}</CardTitle>
                   <CardDescription>
-                    接入目录之外的远程 MCP 服务。
+                    {t("mcp.customDescription")}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <Button type="button" variant="outline" size="sm" onClick={chooseCustom}>
                     <Plus aria-hidden />
-                    自定义 URL
+                    {t("mcp.customUrl")}
                   </Button>
                 </CardContent>
               </Card>
@@ -232,7 +240,7 @@ export function McpAddDialog({
         ) : (
           <div className="grid gap-4">
             <div className="space-y-2">
-              <Label htmlFor="mcp-name">名称</Label>
+              <Label htmlFor="mcp-name">{t("mcp.name")}</Label>
               <Input
                 id="mcp-name"
                 value={name}
@@ -241,7 +249,7 @@ export function McpAddDialog({
                 spellCheck={false}
               />
               <p className="text-xs text-muted-foreground">
-                用作工具名前缀，例如 {trimmedName || "my_service"}__search。
+                {t("mcp.nameHint", { name: trimmedName || "my_service" })}
               </p>
               {name !== "" && nameError ? (
                 <p className="text-sm text-destructive">{nameError}</p>
@@ -251,7 +259,7 @@ export function McpAddDialog({
             {selection === "custom" ? (
               <>
                 <div className="space-y-2">
-                  <Label htmlFor="mcp-url">服务 URL</Label>
+                  <Label htmlFor="mcp-url">{t("mcp.url")}</Label>
                   <Input
                     id="mcp-url"
                     value={url}
@@ -268,9 +276,9 @@ export function McpAddDialog({
                     onChange={(event) => setOAuth(event.target.checked)}
                   />
                   <span>
-                    需要登录授权
+                    {t("mcp.oauthRequired")}
                     <span className="block text-xs text-muted-foreground">
-                      保存后会用系统浏览器打开授权页。
+                      {t("mcp.oauthHint")}
                     </span>
                   </span>
                 </label>
@@ -289,7 +297,7 @@ export function McpAddDialog({
                       }
                     >
                       <Plus aria-hidden />
-                      添加 header
+                      {t("mcp.addHeader")}
                     </Button>
                   </div>
                   {headers.map((header, index) => (
@@ -298,7 +306,7 @@ export function McpAddDialog({
                       className="grid gap-2 rounded-md border border-border p-2 sm:grid-cols-[1fr_1fr_auto_auto]"
                     >
                       <Input
-                        aria-label={`Header ${index + 1} 名称`}
+                        aria-label={t("mcp.headerNameAria", { index: index + 1 })}
                         value={header.name}
                         onChange={(event) =>
                           setHeaders((current) =>
@@ -313,7 +321,7 @@ export function McpAddDialog({
                         spellCheck={false}
                       />
                       <Input
-                        aria-label={`Header ${index + 1} 值`}
+                        aria-label={t("mcp.headerValueAria", { index: index + 1 })}
                         type={header.secret ? "password" : "text"}
                         value={header.value}
                         onChange={(event) =>
@@ -325,7 +333,7 @@ export function McpAddDialog({
                             ),
                           )
                         }
-                        placeholder={header.secret ? "存为密钥" : "值"}
+                        placeholder={header.secret ? t("mcp.headerSecretPlaceholder") : t("mcp.headerValuePlaceholder")}
                         autoComplete="new-password"
                         spellCheck={false}
                       />
@@ -344,13 +352,13 @@ export function McpAddDialog({
                             )
                           }
                         />
-                        密钥
+                        {t("mcp.secret")}
                       </label>
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
-                        aria-label={`删除 header ${index + 1}`}
+                        aria-label={t("mcp.deleteHeaderAria", { index: index + 1 })}
                         onClick={() =>
                           setHeaders((current) =>
                             current.filter((_, itemIndex) => itemIndex !== index),
@@ -367,7 +375,9 @@ export function McpAddDialog({
               <>
                 {fieldRows(selection).map((field) => (
                   <div key={field.key} className="space-y-2">
-                    <Label htmlFor={`mcp-field-${field.key}`}>{field.label}</Label>
+                    <Label htmlFor={`mcp-field-${field.key}`}>
+                      <span data-i18n-ignore>{field.label}</span>
+                    </Label>
                     <Input
                       id={`mcp-field-${field.key}`}
                       type="password"
@@ -382,7 +392,7 @@ export function McpAddDialog({
                       spellCheck={false}
                     />
                     <p className="text-xs text-muted-foreground">
-                      {field.help}
+                      <span data-i18n-ignore>{field.help}</span>
                       {field.helpUrl ? (
                         <>
                           {" "}
@@ -392,7 +402,7 @@ export function McpAddDialog({
                             target="_blank"
                             rel="noreferrer"
                           >
-                            去哪里获取
+                            {t("mcp.whereToGet")}
                           </a>
                         </>
                       ) : null}
@@ -401,9 +411,9 @@ export function McpAddDialog({
                 ))}
                 {selection.oauth ? (
                   <Alert>
-                    <AlertTitle>保存后登录授权</AlertTitle>
+                    <AlertTitle>{t("mcp.oauthTitle")}</AlertTitle>
                     <AlertDescription>
-                      授权在云端完成，token 不会保存在本机。
+                      {t("mcp.oauthDescription")}
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -418,18 +428,18 @@ export function McpAddDialog({
           {selection !== null ? (
             <Button type="button" variant="ghost" onClick={() => setSelection(null)}>
               <ArrowLeft aria-hidden />
-              返回目录
+              {t("mcp.backToCatalog")}
             </Button>
           ) : null}
           <Button type="button" variant="outline" onClick={() => close(false)}>
-            取消
+            {t("common.cancel")}
           </Button>
           {selection !== null ? (
             <Button type="button" onClick={() => void submit()} disabled={!canSave}>
               {submitting ? (
                 <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
               ) : null}
-              保存
+              {t("common.save")}
             </Button>
           ) : null}
         </DialogFooter>

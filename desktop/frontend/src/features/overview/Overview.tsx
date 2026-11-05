@@ -1,5 +1,5 @@
 import { PageHeader } from "@/components/page-header";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -16,15 +16,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useApp } from "@/components/app-context";
+import { pageLabel, useApp, type Page } from "@/components/app-context";
 import { ErrorAlert, StatusRow, StatusBadge, formatObserved } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
+import { useT, type MessageKey } from "@/i18n";
 import { isCode } from "@/services/errors";
 import { useConfigQuery, useInvalidate, useStatusQuery } from "@/services/queries";
 import type { ConnectionDTO, PendingRestoreDTO } from "@/services/types";
 
 export function Overview() {
   const { client, navigate } = useApp();
+  const t = useT();
   const configQuery = useConfigQuery();
   const statusQuery = useStatusQuery();
   const invalidate = useInvalidate();
@@ -36,7 +38,7 @@ export function Overview() {
   const [pendingError, setPendingError] = useState<unknown>(null);
   const [retrying, setRetrying] = useState<"backup" | "snapshot" | null>(null);
   const [retryError, setRetryError] = useState<unknown>(null);
-  const [retryMessage, setRetryMessage] = useState("");
+  const [retryMessage, setRetryMessage] = useState<MessageKey | null>(null);
   const [abandonOpen, setAbandonOpen] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
   const [abandonError, setAbandonError] = useState<unknown>(null);
@@ -90,10 +92,10 @@ export function Overview() {
   const retryRestore = async (useSnapshot: boolean) => {
     setRetrying(useSnapshot ? "snapshot" : "backup");
     setRetryError(null);
-    setRetryMessage("");
+    setRetryMessage(null);
     try {
       await client.retryRestore(useSnapshot);
-      setRetryMessage("恢复已重新执行。");
+      setRetryMessage("overview.restoreRetried");
       invalidate.configAndStatus();
       await loadLocal();
     } catch (cause) {
@@ -110,7 +112,7 @@ export function Overview() {
       await client.abandonPendingRestore();
       setAbandonOpen(false);
       setRetryError(null);
-      setRetryMessage("已清除本机记录，云端未改动。");
+      setRetryMessage("overview.recordCleared");
       invalidate.configAndStatus();
       await loadLocal();
     } catch (cause) {
@@ -120,9 +122,46 @@ export function Overview() {
     }
   };
 
+  const configRows: { page: Page; description: ReactNode }[] = [
+    {
+      page: "models",
+      description: config?.butlerModel ? (
+        <>
+          {t("overview.butlerModel")}{" "}
+          <span data-i18n-ignore>{config.butlerModel.id}</span>
+          {" · "}
+          {t("overview.taskModel")}{" "}
+          {config.taskModel?.id ? (
+            <span data-i18n-ignore>{config.taskModel.id}</span>
+          ) : (
+            t("common.notSet")
+          )}
+        </>
+      ) : (
+        t("overview.notConfigured")
+      ),
+    },
+    {
+      page: "mcp",
+      description:
+        mcpCount > 0
+          ? t("overview.mcpCount", { count: mcpCount })
+          : t("overview.mcpNone"),
+    },
+    {
+      page: "entries",
+      description:
+        config?.activeChannel === "wechat"
+          ? t("overview.channelWechat")
+          : config?.activeChannel === "telegram"
+            ? t("overview.channelTelegram")
+            : t("overview.channelNone"),
+    },
+  ];
+
   return (
     <div>
-      <PageHeader title="服务概览" actions={<>
+      <PageHeader title={t("shell.pages.overview")} actions={<>
         <SyncStatus
           isFetching={configQuery.isFetching || statusQuery.isFetching}
           isPlaceholder={configQuery.isPlaceholder || statusQuery.isPlaceholder}
@@ -138,22 +177,22 @@ export function Overview() {
         <Card className="mt-4 border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
           <CardContent className="pt-4">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-sm font-semibold">数据恢复未完成</h2>
+              <h2 className="text-sm font-semibold">{t("overview.restorePendingTitle")}</h2>
               <Badge variant="outline">
-                {pendingRestore.state === "running" ? "进行中" : "失败"}
+                {pendingRestore.state === "running" ? t("overview.restoreRunning") : t("states.failed")}
               </Badge>
               {pendingRestore.failureCode ? (
-                <Badge variant="outline">{pendingRestore.failureCode}</Badge>
+                <Badge variant="outline" data-i18n-ignore>{pendingRestore.failureCode}</Badge>
               ) : null}
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {pendingRestore.state === "running"
-                ? "上次恢复没有正常结束。云端可能只写入了一部分。"
-                : "上次恢复中途失败。云端可能只写入了一部分。"}
+                ? t("overview.restorePendingRunning")
+                : t("overview.restorePendingFailed")}
             </p>
             <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-              <p className="break-all">备份：{pendingRestore.backupPath}</p>
-              <p className="break-all">恢复前快照：{pendingRestore.snapshotPath || "无"}</p>
+              <p className="break-all">{t("overview.backupPath")}<span data-i18n-ignore>{pendingRestore.backupPath}</span></p>
+              <p className="break-all">{t("overview.snapshotPath")}{pendingRestore.snapshotPath ? <span data-i18n-ignore>{pendingRestore.snapshotPath}</span> : t("overview.noSnapshot")}</p>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               <Button
@@ -165,7 +204,7 @@ export function Overview() {
                 {retrying === "backup" ? (
                   <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
                 ) : null}
-                重试恢复
+                {t("overview.retryRestore")}
               </Button>
               <Button
                 type="button"
@@ -177,7 +216,7 @@ export function Overview() {
                 {retrying === "snapshot" ? (
                   <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
                 ) : null}
-                回到恢复前快照
+                {t("overview.retryFromSnapshot")}
               </Button>
               <Button
                 type="button"
@@ -186,11 +225,11 @@ export function Overview() {
                 disabled={retrying !== null || abandoning}
                 onClick={() => setAbandonOpen(true)}
               >
-                放弃记录
+                {t("overview.abandonRecord")}
               </Button>
             </div>
             {retryMessage ? (
-              <p className="mt-2 text-xs text-muted-foreground">{retryMessage}</p>
+              <p className="mt-2 text-xs text-muted-foreground">{t(retryMessage)}</p>
             ) : null}
             <ErrorAlert error={retryError} onRetry={() => void retryRestore(false)} />
             <ErrorAlert error={abandonError} />
@@ -201,9 +240,9 @@ export function Overview() {
       {corruptPendingRecord ? (
         <Card className="mt-4 border-amber-300 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
           <CardContent className="pt-4">
-            <h2 className="text-sm font-semibold">本机恢复记录无法读取</h2>
+            <h2 className="text-sm font-semibold">{t("overview.corruptTitle")}</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              记录已损坏，读不出重试需要的信息。放弃只删本机记录，不碰云端数据。
+              {t("overview.corruptDescription")}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <Button
@@ -213,7 +252,7 @@ export function Overview() {
                 disabled={abandoning}
                 onClick={() => setAbandonOpen(true)}
               >
-                放弃记录
+                {t("overview.abandonRecord")}
               </Button>
             </div>
             <ErrorAlert error={abandonError} />
@@ -223,21 +262,21 @@ export function Overview() {
 
       {pendingCheckFailed ? (
         <p className="mt-4 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          暂时无法检查未完成的恢复，请刷新。
+          {t("overview.pendingCheckFailed")}
         </p>
       ) : null}
 
       <Dialog open={abandonOpen} onOpenChange={setAbandonOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>放弃未完成的恢复记录？</DialogTitle>
+            <DialogTitle>{t("overview.abandonTitle")}</DialogTitle>
             <DialogDescription>
-              只删除本机记录，不恢复也不回滚云端数据。
+              {t("overview.abandonDescription")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setAbandonOpen(false)}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -248,7 +287,7 @@ export function Overview() {
               {abandoning ? (
                 <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
               ) : null}
-              确认放弃记录
+              {t("overview.confirmAbandon")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -256,37 +295,33 @@ export function Overview() {
 
       {connection?.state === "reauth_required" ? (
         <Alert className="mt-4">
-          <AlertTitle>授权已过期</AlertTitle>
-          <AlertDescription>重新登录后可继续。</AlertDescription>
+          <AlertTitle>{t("overview.authExpired")}</AlertTitle>
+          <AlertDescription>{t("overview.authExpiredDescription")}</AlertDescription>
         </Alert>
       ) : null}
 
       <div className="grid overflow-hidden rounded-lg border border-border bg-card sm:grid-cols-2">
         <div className="min-w-0 p-5">
-          <p className="text-xs text-muted-foreground">云端服务</p>
-          <h2 className="mt-2 break-all text-xl font-semibold">{config?.workerName || "未读取"}</h2>
-          <p className="mt-2 text-sm text-muted-foreground">发布版本 {config?.releaseVersion || "未知"}</p>
+          <p className="text-xs text-muted-foreground">{t("common.cloudService")}</p>
+          <h2 className="mt-2 break-all text-xl font-semibold">{config?.workerName ? <span data-i18n-ignore>{config.workerName}</span> : t("overview.notRead")}</h2>
+          <p className="mt-2 text-sm text-muted-foreground">{t("overview.releaseVersion")}{" "}{config?.releaseVersion ? <span data-i18n-ignore>{config.releaseVersion}</span> : t("common.unknown")}</p>
         </div>
         <div className="min-w-0 border-t border-border p-5 sm:border-t-0 sm:border-l">
-          <p className="text-xs text-muted-foreground">当前消息入口</p>
+          <p className="text-xs text-muted-foreground">{t("common.currentChannel")}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <h2 className="text-xl font-semibold">{config?.activeChannel ? (config.activeChannel === "wechat" ? "微信" : "Telegram") : "未设置"}</h2>
-            {entryStatus ? <StatusBadge item={entryStatus} /> : <Badge variant="outline">状态未知</Badge>}
+            <h2 className="text-xl font-semibold">{config?.activeChannel ? (config.activeChannel === "wechat" ? t("common.wechat") : t("common.telegram")) : t("common.notSet")}</h2>
+            {entryStatus ? <StatusBadge item={entryStatus} /> : <Badge variant="outline">{t("overview.statusUnknown")}</Badge>}
           </div>
-          <p className="mt-2 text-sm text-muted-foreground">{entryStatus ? formatObserved(entryStatus.observedAt) : "暂无收发验证记录"}</p>
+          <p className="mt-2 text-sm text-muted-foreground">{entryStatus ? formatObserved(entryStatus.observedAt) : t("overview.noVerification")}</p>
         </div>
       </div>
 
       <section className="mt-6" aria-labelledby="overview-config-title">
-        <h2 id="overview-config-title" className="text-base font-medium">配置</h2>
-        {([
-          ["models", "模型", config?.butlerModel ? `管家 ${config.butlerModel.id} · 任务 ${config.taskModel?.id || "未设置"}` : "未配置"],
-          ["mcp", "服务", mcpCount > 0 ? `已接入 ${mcpCount} 个` : "未接入"],
-          ["entries", "消息入口", config?.activeChannel === "wechat" ? "当前使用微信" : config?.activeChannel === "telegram" ? "当前使用 Telegram" : "未选择"],
-        ] as const).map(([page, title, description]) => (
+        <h2 id="overview-config-title" className="text-base font-medium">{t("overview.configuration")}</h2>
+        {configRows.map(({ page, description }) => (
           <div key={page} className="flex items-center justify-between gap-4 border-b border-border py-4 last:border-0">
-            <div className="min-w-0"><h3 className="text-sm font-medium">{title}</h3><p className="mt-1 break-words text-xs text-muted-foreground">{description}</p></div>
-            <Button type="button" size="icon-sm" variant="ghost" aria-label={`管理${title}`} onClick={() => navigate(page)}>
+            <div className="min-w-0"><h3 className="text-sm font-medium">{pageLabel(page)}</h3><p className="mt-1 break-words text-xs text-muted-foreground">{description}</p></div>
+            <Button type="button" size="icon-sm" variant="ghost" aria-label={t("overview.manage", { name: pageLabel(page) })} onClick={() => navigate(page)}>
               <ArrowRight aria-hidden />
             </Button>
           </div>
@@ -294,17 +329,23 @@ export function Overview() {
       </section>
 
       {config && (!modelsConfigured || !config.activeChannel) ? (
-        <section data-testid="overview-todos" className="mt-5 rounded-lg bg-muted/50 p-4" aria-label="待完成设置">
-          <h2 className="mb-2 text-sm font-medium">待完成设置</h2>
-          {!modelsConfigured ? <Button type="button" variant="outline" size="sm" onClick={() => navigate("models")}>配置模型</Button> : null}
-          {!config.activeChannel ? <Button type="button" variant="outline" size="sm" onClick={() => navigate("entries")}>连接消息入口</Button> : null}
+        <section data-testid="overview-todos" className="mt-5 rounded-lg bg-muted/50 p-4" aria-label={t("overview.todosTitle")}>
+          <h2 className="mb-2 text-sm font-medium">{t("overview.todosTitle")}</h2>
+          {!modelsConfigured ? <Button type="button" variant="outline" size="sm" onClick={() => navigate("models")}>{t("overview.configureModels")}</Button> : null}
+          {!config.activeChannel ? <Button type="button" variant="outline" size="sm" onClick={() => navigate("entries")}>{t("overview.connectChannel")}</Button> : null}
         </section>
       ) : null}
 
       <details className="mt-6 min-w-0 border-t border-border pt-4" data-testid="overview-status-details">
-        <summary className="cursor-pointer text-sm text-muted-foreground">详情</summary>
-        {config ? <p className="mt-3 text-xs text-muted-foreground">接收流量：{config.activeVersionCount} 个版本</p> : null}
-        {status.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">暂无状态数据，不代表服务已停止。</p> : status.map((item) => <StatusRow key={item.kind} item={item} />)}
+        <summary className="cursor-pointer text-sm text-muted-foreground">{t("common.details")}</summary>
+        {config ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {config.activeVersionCount === 1
+              ? t("overview.traffic_one", { count: config.activeVersionCount })
+              : t("overview.traffic_other", { count: config.activeVersionCount })}
+          </p>
+        ) : null}
+        {status.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">{t("common.noStatusData")}</p> : status.map((item) => <StatusRow key={item.kind} item={item} />)}
       </details>
 
     </div>

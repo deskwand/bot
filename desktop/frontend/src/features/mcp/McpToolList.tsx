@@ -8,12 +8,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { McpToolDTO } from "@/services/types";
+import { useT, type MessageKey } from "@/i18n";
 
-const MODE_LABELS: Record<string, string> = {
-  review: "智能",
-  auto: "免审",
-  approval: "要审",
-  disabled: "停用",
+const MODE_LABELS: Record<string, MessageKey> = {
+  review: "mcp.modes.review",
+  auto: "mcp.modes.auto",
+  approval: "mcp.modes.approval",
+  disabled: "mcp.modes.disabled",
 };
 
 export function McpToolList({
@@ -34,8 +35,9 @@ export function McpToolList({
   onChange: (name: string, mode: string) => void;
   onSave: () => void;
 }) {
+  const t = useT();
   if (tools.length === 0) {
-    return <p className="text-sm text-muted-foreground">没有可用的工具。</p>;
+    return <p className="text-sm text-muted-foreground">{t("mcp.noTools")}</p>;
   }
   return (
     <div className="space-y-2">
@@ -46,9 +48,9 @@ export function McpToolList({
             className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-2"
           >
             <div className="min-w-0">
-              <p className="break-all font-mono text-xs">{tool.name}</p>
+              <p className="break-all font-mono text-xs"><span data-i18n-ignore>{tool.name}</span></p>
               {tool.description ? (
-                <p className="mt-1 text-xs text-muted-foreground">{tool.description}</p>
+                <p className="mt-1 text-xs text-muted-foreground" data-i18n-ignore>{tool.description}</p>
               ) : null}
             </div>
             <Select
@@ -59,15 +61,15 @@ export function McpToolList({
               <SelectTrigger
                 size="sm"
                 className="w-24"
-                aria-label={`${tool.name} 审批方式`}
+                aria-label={t("mcp.toolModeAria", { name: tool.name })}
               >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {Object.entries(MODE_LABELS).map(([value, label]) =>
+                {Object.entries(MODE_LABELS).map(([value, labelKey]) =>
                   value === "review" && !reviewable.has(tool.name) ? null : (
                     <SelectItem key={value} value={value}>
-                      {label}
+                      {t(labelKey)}
                     </SelectItem>
                   ),
                 )}
@@ -83,7 +85,7 @@ export function McpToolList({
           ) : (
             <Save aria-hidden />
           )}
-          保存
+          {t("common.save")}
         </Button>
       </div>
     </div>

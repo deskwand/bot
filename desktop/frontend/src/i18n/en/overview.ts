@@ -1,0 +1,47 @@
+import type { Messages } from "../types";
+
+export const overview: Messages["overview"] = {
+  configuration: "Configuration",
+  manage: "Manage {name}",
+  restoreRunning: "In progress",
+  restorePendingTitle: "Data restore did not finish",
+  restorePendingRunning:
+    "The last restore did not end normally. The cloud may hold a partial write.",
+  restorePendingFailed:
+    "The last restore failed midway. The cloud may hold a partial write.",
+  backupPath: "Backup: ",
+  snapshotPath: "Pre-restore snapshot: ",
+  noSnapshot: "None",
+  retryRestore: "Retry restore",
+  retryFromSnapshot: "Return to pre-restore snapshot",
+  abandonRecord: "Abandon record",
+  restoreRetried: "The restore was run again.",
+  recordCleared: "Local record cleared; the cloud is unchanged.",
+  abandonTitle: "Abandon the unfinished restore record?",
+  abandonDescription:
+    "Only the local record is deleted; the cloud data is neither restored nor rolled back.",
+  confirmAbandon: "Abandon record",
+  corruptTitle: "The local restore record cannot be read",
+  corruptDescription:
+    "The record is damaged, so the details a retry needs are missing. Abandoning deletes only the local record and leaves the cloud data alone.",
+  pendingCheckFailed: "Could not check for unfinished restores; refresh.",
+  authExpired: "Authorization expired",
+  authExpiredDescription: "Sign in again to continue.",
+  notRead: "Not read",
+  releaseVersion: "Published version",
+  statusUnknown: "Status unknown",
+  noVerification: "No messaging verification yet",
+  butlerModel: "Butler",
+  taskModel: "Task",
+  notConfigured: "Not configured",
+  mcpCount: "{count} connected",
+  mcpNone: "None connected",
+  channelWechat: "Using WeChat",
+  channelTelegram: "Using Telegram",
+  channelNone: "Not chosen",
+  todosTitle: "Setup to finish",
+  configureModels: "Configure models",
+  connectChannel: "Connect channel",
+  traffic_one: "Traffic: {count} version",
+  traffic_other: "Traffic: {count} versions",
+};

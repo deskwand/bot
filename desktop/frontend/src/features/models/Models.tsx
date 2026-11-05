@@ -29,7 +29,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useApp } from "@/components/app-context";
-import { CLOUDFLARE_NEURONS_NOTICE } from "@/lib/copy";
+import { getT, useT, type MessageKey } from "@/i18n";
+import { cloudflareNeuronsNotice } from "@/lib/copy";
 import { ErrorAlert, StateBadge, StatusRow, StepList } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
@@ -79,43 +80,45 @@ function customDraftError(
   catalog: ModelCatalogDTO | null,
   providers: CustomProviderDTO[],
 ): string {
+  const t = getT();
   const id = draft.id.trim();
   if (!PROVIDER_ID_PATTERN.test(id)) {
-    return "ID 只能用小写字母、数字和 -，以字母或数字开头";
+    return t("models.errors.idPattern");
   }
   if (catalog?.providers.some((provider) => provider.id === id)) {
-    return `与内置厂商重名：${id}`;
+    return t("models.errors.builtinName", { id });
   }
   if (providers.some((provider, index) => index !== draft.index && provider.id === id)) {
-    return `端点 ID 重复：${id}`;
+    return t("models.errors.duplicateId", { id });
   }
   if (draft.name.trim().length > 128) {
-    return "名称最多 128 字符";
+    return t("models.errors.nameTooLong");
   }
   if (draft.api !== "openai-completions" && draft.api !== "anthropic-messages") {
-    return "协议必须是 openai-completions 或 anthropic-messages";
+    return t("models.errors.protocol");
   }
   if (!BASE_URL_PATTERN.test(draft.baseUrl.trim())) {
-    return "必须 https://；localhost 可用 http://";
+    return t("models.errors.baseUrl");
   }
   const models = parseModelIDs(draft.models);
   if (models.length === 0) {
-    return "至少一个模型";
+    return t("models.errors.noModels");
   }
   if (models.length > 64) {
-    return "最多 64 个模型";
+    return t("models.errors.tooManyModels");
   }
   if (new Set(models).size !== models.length) {
-    return "模型 ID 不能重复";
+    return t("models.errors.duplicateModels");
   }
   if (draft.index === null && providers.length >= 16) {
-    return "最多 16 个端点";
+    return t("models.errors.tooManyProviders");
   }
   return "";
 }
 
 export function Models() {
   const { client } = useApp();
+  const t = useT();
   const configQuery = useConfigQuery();
   const catalogQuery = useModelCatalogQuery();
   const invalidate = useInvalidate();
@@ -134,7 +137,7 @@ export function Models() {
   const [previewSteps, setPreviewSteps] = useState<ResultDTO["steps"]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [result, setResult] = useState<ResultDTO | null>(null);
-  const [success, setSuccess] = useState("");
+  const [success, setSuccess] = useState<MessageKey | null>(null);
   const [probeOpen, setProbeOpen] = useState(false);
   const [probeTarget, setProbeTarget] = useState<string | null>(null);
   const [probeItem, setProbeItem] = useState<{ provider: string; item: StatusItemDTO } | null>(null);
@@ -207,8 +210,8 @@ export function Models() {
     const ids: string[] = [];
     const roles: Record<string, string[]> = {};
     for (const [role, value] of [
-      ["管家", butler],
-      ["任务", task],
+      ["roleButler", butler],
+      ["roleTask", task],
     ] as const) {
       const provider = parseModelKey(value)?.provider;
       if (!provider) continue;
@@ -380,7 +383,7 @@ export function Models() {
     setRunning("preview");
     setError(null);
     setConflict(false);
-    setSuccess("");
+    setSuccess(null);
     try {
       const steps = await client.previewConfig(edit());
       setPreviewSteps(
@@ -405,8 +408,8 @@ export function Models() {
       setResult(publishedResult);
       setSuccess(
         publishedResult.state === "published"
-          ? "配置已发布。"
-          : "发布未完成，可继续。",
+          ? "models.published"
+          : "models.publishPending",
       );
       setKeyDrafts({});
       setAwaitingFreshConfig(true);
@@ -479,7 +482,7 @@ export function Models() {
     return (
       <div className="flex min-h-[40svh] items-center justify-center gap-2 text-muted-foreground">
         <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
-        正在读取配置…
+        {t("models.loading")}
       </div>
     );
   }
@@ -490,7 +493,7 @@ export function Models() {
 
   return (
     <div>
-      <PageHeader title="模型" actions={<>
+      <PageHeader title={t("shell.pages.models")} actions={<>
         <SyncStatus
           isFetching={configQuery.isFetching}
           isPlaceholder={configQuery.isPlaceholder}
@@ -500,48 +503,48 @@ export function Models() {
         />
         <Badge variant="outline">
           <ShieldCheck aria-hidden />
-          密钥不回显
+          {t("models.keysNeverEchoed")}
         </Badge>
 </>} />
 
       <ErrorAlert error={loadError} onRetry={() => void reload()} />
-      <ErrorAlert error={error} onReload={conflict ? () => void reload() : undefined} reloadLabel="重新加载配置" onRetry={!conflict ? openPreview : undefined} />
+      <ErrorAlert error={error} onReload={conflict ? () => void reload() : undefined} reloadLabel={t("models.reloadConfig")} onRetry={!conflict ? openPreview : undefined} />
       {cloudUpdated ? (
         <Alert className="my-4" role="status">
           <AlertTitle className="flex flex-wrap items-center justify-between gap-2">
-            <span>云端配置已更新</span>
+            <span>{t("models.cloudUpdatedTitle")}</span>
             <Button type="button" size="sm" variant="outline" onClick={loadLatest}>
-              载入最新
+              {t("models.loadLatest")}
             </Button>
           </AlertTitle>
           <AlertDescription>
-            后台刷新发现了新版本，你的修改没有被覆盖。
+            {t("models.cloudUpdatedDescription")}
           </AlertDescription>
         </Alert>
       ) : null}
       {success ? (
         <Alert className="my-4 border-emerald-300 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20">
-          <AlertTitle>已提交</AlertTitle>
-          <AlertDescription>{success}</AlertDescription>
+          <AlertTitle>{t("models.submitted")}</AlertTitle>
+          <AlertDescription>{t(success)}</AlertDescription>
         </Alert>
       ) : null}
       {result ? (
         <Card className="my-4">
           <CardContent className="pt-4">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium">发布结果</span>
+              <span className="text-sm font-medium">{t("models.resultTitle")}</span>
               <StateBadge state={result.state} />
               {result.operationId ? (
-                <span className="text-xs text-muted-foreground">{result.operationId}</span>
+                <span className="text-xs text-muted-foreground" data-i18n-ignore>{result.operationId}</span>
               ) : null}
             </div>
-            {result.state === "published" || result.state === "completed" ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">详情</summary><StepList steps={result.steps ?? []} /></details> : <StepList steps={result.steps ?? []} />}
+            {result.state === "published" || result.state === "completed" ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">{t("common.details")}</summary><StepList steps={result.steps ?? []} /></details> : <StepList steps={result.steps ?? []} />}
             {result.warnings?.length ? (
               <Alert>
                 <AlertDescription>
                   <ul className="list-disc space-y-1 pl-4">
                     {result.warnings.map((warning) => (
-                      <li key={warning}>{warning}</li>
+                      <li key={warning} data-i18n-ignore>{warning}</li>
                     ))}
                   </ul>
                 </AlertDescription>
@@ -550,7 +553,7 @@ export function Models() {
             {result.state === "unknown" || result.state === "needs_input" ? (
               <Button type="button" className="mt-2" onClick={() => void resume()} disabled={running === "publish"}>
                 {running === "publish" ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-                继续
+                {t("common.continue")}
               </Button>
             ) : null}
           </CardContent>
@@ -565,34 +568,34 @@ export function Models() {
         className="m-0 min-w-0 border-0 p-0"
       >
       <section className="mt-5" aria-labelledby="role-models-title">
-        <h2 id="role-models-title" className="mb-4 text-base font-medium">角色模型</h2>
+        <h2 id="role-models-title" className="mb-4 text-base font-medium">{t("models.rolesTitle")}</h2>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="butler-model">管家模型</Label>
-              <ModelSelect id="butler-model" label="管家模型" value={butler} onChange={setButler} options={options} />
+              <Label htmlFor="butler-model">{t("models.butlerModel")}</Label>
+              <ModelSelect id="butler-model" label={t("models.butlerModel")} value={butler} onChange={setButler} options={options} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="task-model">任务模型</Label>
-              <ModelSelect id="task-model" label="任务模型" value={task} onChange={setTask} options={options} />
+              <Label htmlFor="task-model">{t("models.taskModel")}</Label>
+              <ModelSelect id="task-model" label={t("models.taskModel")} value={task} onChange={setTask} options={options} />
             </div>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            找不到供应商？可以在下面加自定义端点。
+            {t("models.customHint")}
           </p>
 
           <section className="mt-5 border-t border-border pt-4" aria-labelledby="provider-keys-title">
-            <h3 id="provider-keys-title" className="text-sm font-medium">供应商密钥</h3>
+            <h3 id="provider-keys-title" className="text-sm font-medium">{t("models.keysTitle")}</h3>
             <p className="mt-1 mb-3 text-xs text-muted-foreground">
-              每个供应商一个密钥，只写入 Cloudflare。
+              {t("models.keysDescription")}
             </p>
             {keylessSelected ? (
               <p className="mb-3 text-sm text-muted-foreground" data-testid="workers-ai-quota-notice">
-                {CLOUDFLARE_NEURONS_NOTICE}
+                {cloudflareNeuronsNotice()}
               </p>
             ) : null}
             {keyProviders.length === 0 ? (
               keylessSelected ? null : (
-                <p className="text-sm text-muted-foreground">请先选择管家模型或任务模型。</p>
+                <p className="text-sm text-muted-foreground">{t("models.chooseModelFirst")}</p>
               )
             ) : (
               <div className="space-y-3">
@@ -613,18 +616,26 @@ export function Models() {
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-sm font-medium">
-                          {provider.option?.label ?? provider.id}
+                          <span data-i18n-ignore>{provider.option?.label ?? provider.id}</span>
                           <span className="ml-2 text-xs font-normal text-muted-foreground">
-                            用于{provider.roles.join("、")}模型
+                            {t("models.roleUsage", {
+                              roles: provider.roles
+                                .map((role) =>
+                                  role === "roleButler"
+                                    ? t("models.roleButler")
+                                    : t("models.roleTask"),
+                                )
+                                .join(t("models.listSeparator")),
+                            })}
                           </span>
                         </p>
                         <Badge variant={configured ? "secondary" : "outline"}>
-                          {configured ? "已配置" : "未配置"}
+                          {configured ? t("models.configured") : t("models.notConfigured")}
                         </Badge>
                       </div>
                       <div className="mt-3 grid gap-4 sm:grid-cols-2">
                         <div className="space-y-2">
-                          <Label htmlFor={`api-key-${provider.id}`}>API 密钥</Label>
+                          <Label htmlFor={`api-key-${provider.id}`}>{t("models.apiKey")}</Label>
                           <Input
                             id={`api-key-${provider.id}`}
                             type="password"
@@ -635,7 +646,7 @@ export function Models() {
                                 ...(event.target.value ? { clear: false } : {}),
                               })
                             }
-                            placeholder={configured ? "已配置；输入新值才会替换" : "输入新密钥"}
+                            placeholder={configured ? t("models.keyPlaceholderConfigured") : t("models.keyPlaceholderNew")}
                             autoComplete="new-password"
                             spellCheck={false}
                           />
@@ -652,7 +663,7 @@ export function Models() {
                             disabled={!draft.value.trim() || running !== null}
                           >
                             <Zap aria-hidden />
-                            测试连接
+                            {t("models.testConnection")}
                           </Button>
                           <Button
                             type="button"
@@ -666,18 +677,18 @@ export function Models() {
                             }
                             disabled={!configured}
                           >
-                            {draft.clear ? "待清除" : "清除已保存密钥"}
+                            {draft.clear ? t("models.pendingClear") : t("models.clearSavedKey")}
                           </Button>
                           {!draft.value.trim() ? (
                             <span className="text-xs text-muted-foreground">
-                              测试需重新输入密钥。
+                              {t("models.testNeedsKey")}
                             </span>
                           ) : null}
                         </div>
                       </div>
                       <details className="mt-3 min-w-0 break-all">
-                        <summary className="cursor-pointer text-xs text-muted-foreground">详情</summary>
-                        <p className="mt-2 text-xs text-muted-foreground">{secret} {configured ? "已配置" : "未配置"}</p>
+                        <summary className="cursor-pointer text-xs text-muted-foreground">{t("common.details")}</summary>
+                        <p className="mt-2 text-xs text-muted-foreground"><span data-i18n-ignore>{secret}</span> {configured ? t("models.configured") : t("models.notConfigured")}</p>
                       </details>
                       {rowProbeError ? (
                         <ErrorAlert
@@ -686,14 +697,14 @@ export function Models() {
                             setProbeTarget(provider.id);
                             setProbeOpen(true);
                           }}
-                          retryLabel="重新测试"
+                          retryLabel={t("models.retest")}
                         />
                       ) : null}
                       {rowProbeItem ? (
                         <div className="mt-3 rounded-md border border-border p-3">
                           <StatusRow item={rowProbeItem} />
                           <p className="mt-2 text-xs text-muted-foreground">
-                            只验证这台机器上的密钥。
+                            {t("models.localOnly")}
                           </p>
                         </div>
                       ) : null}
@@ -704,7 +715,7 @@ export function Models() {
             )}
           </section>
           <p className="mt-4 text-xs text-muted-foreground">
-            未编辑的配置会保留。
+            {t("models.uneditedKept")}
           </p>
       </section>
 
@@ -712,9 +723,9 @@ export function Models() {
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle>自定义端点</CardTitle>
+              <CardTitle>{t("models.customTitle")}</CardTitle>
               <CardDescription>
-                保存后随下一次发布生效。
+                {t("models.customDescription")}
               </CardDescription>
             </div>
             <Button
@@ -725,13 +736,13 @@ export function Models() {
               disabled={customProviders.length >= 16}
             >
               <Plus aria-hidden />
-              添加自定义端点
+              {t("models.addCustom")}
             </Button>
           </div>
         </CardHeader>
         <CardContent>
           {customProviders.length === 0 ? (
-            <p className="text-sm text-muted-foreground">还没有自定义端点。</p>
+            <p className="text-sm text-muted-foreground">{t("models.noCustom")}</p>
           ) : (
             <ul className="space-y-2">
               {customProviders.map((provider, index) => (
@@ -740,13 +751,14 @@ export function Models() {
                   className="flex flex-wrap items-start justify-between gap-2 rounded-md border border-border p-3"
                 >
                   <div className="space-y-1">
-                    <p className="text-sm font-medium">{provider.name || provider.id}</p>
+                    <p className="text-sm font-medium" data-i18n-ignore>{provider.name || provider.id}</p>
                     <p className="text-xs text-muted-foreground">
-                      {provider.id} · {provider.api}
+                      <span data-i18n-ignore>{provider.id}</span> · <span data-i18n-ignore>{provider.api}</span>
                     </p>
-                    <p className="break-all text-xs text-muted-foreground">{provider.baseUrl}</p>
+                    <p className="break-all text-xs text-muted-foreground" data-i18n-ignore>{provider.baseUrl}</p>
                     <p className="text-xs text-muted-foreground">
-                      模型：{provider.models.map((model) => model.id).join("、")}
+                      {t("models.modelsPrefix")}
+                      <span data-i18n-ignore>{provider.models.map((model) => model.id).join(t("models.listSeparator"))}</span>
                     </p>
                   </div>
                   <div className="flex gap-2">
@@ -757,7 +769,7 @@ export function Models() {
                       onClick={() => openCustom(index)}
                     >
                       <Pencil aria-hidden />
-                      编辑
+                      {t("models.edit")}
                     </Button>
                     <Button
                       type="button"
@@ -766,7 +778,7 @@ export function Models() {
                       onClick={() => removeCustom(index)}
                     >
                       <Trash2 aria-hidden />
-                      删除
+                      {t("models.delete")}
                     </Button>
                   </div>
                 </li>
@@ -781,7 +793,7 @@ export function Models() {
       <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button type="button" variant="outline" onClick={() => void reload()} disabled={running !== null}>
           <RefreshCw aria-hidden />
-          重新加载
+          {t("models.reload")}
         </Button>
         <Button
           type="button"
@@ -794,35 +806,35 @@ export function Models() {
           }
         >
           {running === "preview" ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <Save aria-hidden />}
-          {running === "preview" ? "正在生成预览…" : "保存并发布"}
+          {running === "preview" ? t("models.generatingPreview") : t("models.saveAndPublish")}
         </Button>
       </div>
 
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="max-h-[85svh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>确认保存并发布</DialogTitle>
+            <DialogTitle>{t("models.previewTitle")}</DialogTitle>
             <DialogDescription>
-              将按以下步骤修改部署。
+              {t("models.previewDescription")}
             </DialogDescription>
           </DialogHeader>
           <StepList steps={previewSteps ?? []} />
           <Alert>
-            <AlertTitle>已知限制</AlertTitle>
+            <AlertTitle>{t("models.knownLimits")}</AlertTitle>
             <AlertDescription>
-              别人在控制台改过同名密钥的值，本机无法发现。
+              {t("models.knownLimitsDescription")}
             </AlertDescription>
           </Alert>
           <p className="text-xs text-muted-foreground">
-            发布后会重新核对版本。
+            {t("models.reverifyAfterPublish")}
           </p>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setPreviewOpen(false)} disabled={running === "publish"}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button type="button" onClick={() => void publish()} disabled={running === "publish"}>
               {running === "publish" ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-              {running === "publish" ? "正在发布…" : "确认保存并发布"}
+              {running === "publish" ? t("models.publishing") : t("models.previewTitle")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -831,18 +843,18 @@ export function Models() {
       <Dialog open={probeOpen} onOpenChange={setProbeOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>运行模型连接测试？</DialogTitle>
+            <DialogTitle>{t("models.probeTitle")}</DialogTitle>
             <DialogDescription>
-              会真实调用一次模型，可能产生费用。
+              {t("models.probeDescription")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setProbeOpen(false)}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button type="button" onClick={() => void probe(probeTarget)} disabled={running !== null}>
               {running === "probe" ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-              确认测试
+              {t("models.confirmProbe")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -859,17 +871,17 @@ export function Models() {
           <DialogHeader>
             <DialogTitle>
               {customDraft?.index === null || customDraft === null
-                ? "添加自定义端点"
-                : "编辑自定义端点"}
+                ? t("models.addCustom")
+                : t("models.editCustom")}
             </DialogTitle>
             <DialogDescription>
-              端点 ID 决定密钥名 MODEL_KEY_&lt;ID&gt;。
+              {t("models.customIdHint")}
             </DialogDescription>
           </DialogHeader>
           {customDraft ? (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="custom-id">端点 ID</Label>
+                <Label htmlFor="custom-id">{t("models.endpointId")}</Label>
                 <Input
                   id="custom-id"
                   value={customDraft.id}
@@ -883,7 +895,7 @@ export function Models() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="custom-name">显示名称</Label>
+                <Label htmlFor="custom-name">{t("models.displayName")}</Label>
                 <Input
                   id="custom-name"
                   value={customDraft.name}
@@ -892,11 +904,11 @@ export function Models() {
                       current ? { ...current, name: event.target.value } : current,
                     )
                   }
-                  placeholder="可留空"
+                  placeholder={t("models.namePlaceholder")}
                 />
               </div>
               <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="custom-api">协议</Label>
+                <Label htmlFor="custom-api">{t("models.protocol")}</Label>
                 <Select
                   value={customDraft.api}
                   onValueChange={(value) =>
@@ -908,10 +920,10 @@ export function Models() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="openai-completions">
-                      OpenAI 兼容（openai-completions）
+                      {t("models.protocolOpenAI")}
                     </SelectItem>
                     <SelectItem value="anthropic-messages">
-                      Anthropic 兼容（anthropic-messages）
+                      {t("models.protocolAnthropic")}
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -930,11 +942,11 @@ export function Models() {
                   spellCheck={false}
                 />
                 <p className="text-xs text-muted-foreground">
-                  OpenAI 兼容通常带 /v1，Anthropic 不带
+                  {t("models.baseUrlHint")}
                 </p>
               </div>
               <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="custom-models">模型 ID（用逗号分隔）</Label>
+                <Label htmlFor="custom-models">{t("models.modelsLabel")}</Label>
                 <Input
                   id="custom-models"
                   value={customDraft.models}
@@ -961,10 +973,10 @@ export function Models() {
                 setCustomDraft(null);
               }}
             >
-              取消
+              {t("common.cancel")}
             </Button>
             <Button type="button" onClick={saveCustom} disabled={!customDraft || draftError !== ""}>
-              保存端点
+              {t("models.saveEndpoint")}
             </Button>
           </DialogFooter>
         </DialogContent>

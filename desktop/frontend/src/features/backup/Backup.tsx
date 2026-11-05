@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
+import { formatDateTime, getT, useT, type MessageKey } from "@/i18n";
 import { useInvalidate } from "@/services/queries";
 import {
   Select,
@@ -40,22 +41,17 @@ import type {
   Progress,
 } from "@/services/types";
 
-const SENSITIVE_NOTICE =
-  "备份已保存。文件未加密，包含记忆、对话和微信会话上下文，请妥善保管。";
-
-const OVERWRITE_NOTICE =
-  "将清空当前部署的全部业务数据并替换为备份内容；恢复前会自动保存当前数据快照；备份时正在运行的任务恢复后可能重复执行外部动作。";
-
-const PHASE_LABELS: Record<string, string> = {
-  preparing: "准备中",
-  database: "导出数据库",
-  objects: "传输产物",
-  finishing: "收尾",
-  clearing: "清理",
+const PHASE_KEYS: Record<string, MessageKey> = {
+  preparing: "backup.phasePreparing",
+  database: "backup.phaseDatabase",
+  objects: "backup.phaseObjects",
+  finishing: "backup.phaseFinishing",
+  clearing: "backup.phaseClearing",
 };
 
 function phaseLabel(phase: string): string {
-  return PHASE_LABELS[phase] ?? phase;
+  const key = PHASE_KEYS[phase];
+  return key ? getT()(key) : phase;
 }
 
 function formatBytes(bytes: number): string {
@@ -71,22 +67,26 @@ function formatBytes(bytes: number): string {
 }
 
 function formatExportedAt(value: string): string {
-  if (!value) return "未记录";
+  if (!value) return getT()("backup.notRecorded");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return formatDateTime(date);
 }
 
 function problemMessage(preview: BackupPreviewDTO): string | null {
   if (!preview.problem) return null;
   if (preview.problem === "BACKUP_VERSION_MISMATCH") {
-    return `备份来自版本 ${preview.summary.release}，当前部署是 ${preview.currentRelease}。请先把云端升级或降级到 ${preview.summary.release} 再恢复。`;
+    return getT()("backup.versionMismatch", {
+      backup: preview.summary.release,
+      current: preview.currentRelease,
+    });
   }
   return describeCode(preview.problem);
 }
 
 export function Backup() {
   const { client } = useApp();
+  const t = useT();
   const invalidate = useInvalidate();
   const [progress, setProgress] = useState<Progress | null>(null);
   const [exportRunning, setExportRunning] = useState(false);
@@ -306,23 +306,23 @@ export function Backup() {
 
   return (
     <div>
-      <PageHeader title="数据备份" />
+      <PageHeader title={t("shell.pages.backup")} />
 
-      <ErrorAlert error={exportError} onRetry={exportData} retryLabel="重新导出" />
-      <ErrorAlert error={chooseError} onRetry={chooseBackup} retryLabel="重新选择备份" />
-      <ErrorAlert error={settingsError} onRetry={refreshSettings} retryLabel="重新读取备份设置" />
+      <ErrorAlert error={exportError} onRetry={exportData} retryLabel={t("backup.retryExport")} />
+      <ErrorAlert error={chooseError} onRetry={chooseBackup} retryLabel={t("backup.retryChoose")} />
+      <ErrorAlert error={settingsError} onRetry={refreshSettings} retryLabel={t("backup.retrySettings")} />
 
-      <section className="mt-5 border-b border-border pb-5" aria-label="备份位置">
+      <section className="mt-5 border-b border-border pb-5" aria-label={t("backup.position")}>
         <div className="mb-3">
-          <h2 className="text-base font-medium">备份位置</h2>
+          <h2 className="text-base font-medium">{t("backup.position")}</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            每次备份都写到这里。
+            {t("backup.positionDescription")}
           </p>
         </div>
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="min-w-0 break-all font-mono text-xs" data-testid="backup-dir">
-              {settings ? settings.dir : "读取中…"}
+            <p className="min-w-0 break-all font-mono text-xs" data-testid="backup-dir" data-i18n-ignore>
+              {settings ? settings.dir : t("backup.reading")}
             </p>
             <Button
               type="button"
@@ -331,7 +331,7 @@ export function Backup() {
               onClick={() => void openFolder()}
               disabled={folderBusy}
             >
-              打开目录
+              {t("backup.openFolder")}
             </Button>
             <Button
               type="button"
@@ -340,7 +340,7 @@ export function Backup() {
               onClick={() => void changeFolder()}
               disabled={folderBusy}
             >
-              更改…
+              {t("backup.changeFolder")}
             </Button>
           </div>
 
@@ -353,20 +353,22 @@ export function Backup() {
               disabled={!settings || savingSettings}
               onClick={() => void patchSettings({ auto: !settings?.auto })}
             >
-              自动备份：{settings?.auto ? "开" : "关"}
+              {t("backup.autoBackup", {
+                state: settings?.auto ? t("backup.autoOn") : t("backup.autoOff"),
+              })}
             </Button>
             <Select
               value={String(settings?.intervalHours ?? 24)}
               onValueChange={(value) => void patchSettings({ intervalHours: Number(value) })}
               disabled={!settings || savingSettings}
             >
-              <SelectTrigger size="sm" className="w-32" aria-label="备份间隔">
+              <SelectTrigger size="sm" className="w-32" aria-label={t("backup.intervalAria")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="1">每 1 小时</SelectItem>
-                <SelectItem value="6">每 6 小时</SelectItem>
-                <SelectItem value="24">每 24 小时</SelectItem>
+                <SelectItem value="1">{t("backup.interval1")}</SelectItem>
+                <SelectItem value="6">{t("backup.interval6")}</SelectItem>
+                <SelectItem value="24">{t("backup.interval24")}</SelectItem>
               </SelectContent>
             </Select>
             <Select
@@ -374,29 +376,34 @@ export function Backup() {
               onValueChange={(value) => void patchSettings({ keep: Number(value) })}
               disabled={!settings || savingSettings}
             >
-              <SelectTrigger size="sm" className="w-28" aria-label="保留份数">
+              <SelectTrigger size="sm" className="w-28" aria-label={t("backup.keepAria")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="1">保留 1 份</SelectItem>
-                <SelectItem value="5">保留 5 份</SelectItem>
-                <SelectItem value="10">保留 10 份</SelectItem>
+                <SelectItem value="1">{t("backup.keep1")}</SelectItem>
+                <SelectItem value="5">{t("backup.keep5")}</SelectItem>
+                <SelectItem value="10">{t("backup.keep10")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           <p className="text-xs text-muted-foreground">
-            关闭客户端时不会自动备份。
+            {t("backup.noAutoWhenClosed")}
           </p>
 
           <p className="text-xs text-muted-foreground">
-            上次成功：
-            {settings?.lastSuccessAt ? formatExportedAt(settings.lastSuccessAt) : "还没有"}
-            {settings?.lastErrorCode
-              ? ` · 最近失败：${describeCode(settings.lastErrorCode)}${
-                  settings.lastErrorMessage ? `（${settings.lastErrorMessage}）` : ""
-                }`
-              : ""}
+            {t("backup.lastSuccess")}
+            {settings?.lastSuccessAt ? formatExportedAt(settings.lastSuccessAt) : t("backup.never")}
+            {settings?.lastErrorCode ? (
+              <>
+                {` · ${t("backup.lastFailure")}${describeCode(settings.lastErrorCode)}`}
+                {settings.lastErrorMessage ? (
+                  <span data-i18n-ignore>
+                    {t("backup.lastFailureDetail", { message: settings.lastErrorMessage })}
+                  </span>
+                ) : null}
+              </>
+            ) : null}
           </p>
         </div>
       </section>
@@ -404,18 +411,18 @@ export function Backup() {
       <Card className="mt-5">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <CardTitle>导出</CardTitle>
+            <CardTitle>{t("backup.exportTitle")}</CardTitle>
           <Button type="button" onClick={() => void exportData()} disabled={exportRunning}>
             {exportRunning ? (
               <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
             ) : (
               <Download aria-hidden />
             )}
-            立即备份
+            {t("backup.exportNow")}
           </Button>
           </div>
           <CardDescription>
-            不含部署配置和密钥；未加密，请妥善保管。导出期间消息暂停，最长约 15 分钟。
+            {t("backup.exportDescription")}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -425,35 +432,56 @@ export function Backup() {
               data-testid="backup-progress"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{progress.op === "restore" ? "恢复" : "导出"}</Badge>
+                <Badge variant="outline">{progress.op === "restore" ? t("backup.progressRestore") : t("backup.progressExport")}</Badge>
                 <span className="font-medium">{phaseLabel(progress.phase)}</span>
               </div>
               <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-3">
-                <span>表 {progress.tables}</span>
-                <span>行 {progress.rows}</span>
+                <span>{t("backup.progressTables", { count: progress.tables })}</span>
+                <span>{t("backup.progressRows", { count: progress.rows })}</span>
                 <span>
-                  对象 {progress.objects}
+                  {t("backup.progressObjects", { count: progress.objects })}
                   {progress.totalObjects ? ` / ${progress.totalObjects}` : ""}
                 </span>
               </div>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">还没有导出过。</p>
+            <p className="text-sm text-muted-foreground">{t("backup.neverExported")}</p>
           )}
 
           {exportSummary ? (
             <div className="mt-3 space-y-1 text-sm">
-              <p className="font-medium">备份已保存到 {exportSummary.path}</p>
+              <p className="font-medium">
+                {t("backup.exportSavedTo")}
+                <span data-i18n-ignore>{exportSummary.path}</span>
+              </p>
               <p className="text-xs text-muted-foreground">
-                {formatExportedAt(exportSummary.exportedAt)} · 版本 {exportSummary.release || "未知"} ·{" "}
-                {exportSummary.rows} 行 · {exportSummary.tasks} 个任务 · {exportSummary.objects} 个产物 ·{" "}
-                {formatBytes(exportSummary.bytes)}
+                {formatExportedAt(exportSummary.exportedAt)} ·{" "}
+                {t("backup.version", { release: exportSummary.release || t("common.unknown") })} ·{" "}
+                {t(exportSummary.rows === 1 ? "backup.rowsOne" : "backup.rowsOther", {
+                  count: exportSummary.rows,
+                })}{" "}
+                ·{" "}
+                {t(exportSummary.tasks === 1 ? "backup.tasksOne" : "backup.tasksOther", {
+                  count: exportSummary.tasks,
+                })}{" "}
+                ·{" "}
+                {t(exportSummary.objects === 1 ? "backup.objectsOne" : "backup.objectsOther", {
+                  count: exportSummary.objects,
+                })}{" "}
+                · {formatBytes(exportSummary.bytes)}
               </p>
               {exportSummary.oversized.length > 0 ? (
                 <p className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
                   <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-                  {exportSummary.oversized.length} 个产物超过 100 MiB，未导出；这份备份不能直接恢复：
-                  {exportSummary.oversized.join("、")}
+                  {t(
+                    exportSummary.oversized.length === 1
+                      ? "backup.oversizedOne"
+                      : "backup.oversizedOther",
+                    { count: exportSummary.oversized.length },
+                  )}{" "}
+                  <span data-i18n-ignore>
+                    {exportSummary.oversized.join(t("backup.listSeparator"))}
+                  </span>
                 </p>
               ) : null}
             </div>
@@ -461,8 +489,8 @@ export function Backup() {
 
           {exportSummary ? (
             <Alert className="mt-4">
-              <AlertTitle>导出完成</AlertTitle>
-              <AlertDescription>{SENSITIVE_NOTICE}</AlertDescription>
+              <AlertTitle>{t("backup.exportDoneTitle")}</AlertTitle>
+              <AlertDescription>{t("backup.sensitiveNotice")}</AlertDescription>
             </Alert>
           ) : null}
         </CardContent>
@@ -470,15 +498,15 @@ export function Backup() {
 
       <Card className="mt-4">
         <CardHeader>
-          <CardTitle>本地备份</CardTitle>
+          <CardTitle>{t("backup.filesTitle")}</CardTitle>
           <CardDescription>
-            按时间从新到旧。
+            {t("backup.filesDescription")}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ErrorAlert error={filesError} onRetry={refreshFiles} retryLabel="重新读取备份列表" />
+          <ErrorAlert error={filesError} onRetry={refreshFiles} retryLabel={t("backup.retryFiles")} />
           {files.length === 0 ? (
-            <p className="text-sm text-muted-foreground">这个目录里还没有备份。</p>
+            <p className="text-sm text-muted-foreground">{t("backup.filesEmpty")}</p>
           ) : (
             <ul className="space-y-2" data-testid="backup-file-list">
               {files.map((file) => (
@@ -488,7 +516,7 @@ export function Backup() {
                   className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-2"
                 >
                   <div className="min-w-0">
-                    <p className="break-all font-mono text-xs">{file.name}</p>
+                    <p className="break-all font-mono text-xs" data-i18n-ignore>{file.name}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {formatExportedAt(file.modifiedAt)} · {formatBytes(file.bytes)}
                     </p>
@@ -500,7 +528,7 @@ export function Backup() {
                     disabled={choosing || restoreRunning}
                     onClick={() => void restoreFile(file.path)}
                   >
-                    恢复这份
+                    {t("backup.restoreThis")}
                   </Button>
                 </li>
               ))}
@@ -512,7 +540,7 @@ export function Backup() {
       <Card className="mt-4">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <CardTitle>恢复</CardTitle>
+            <CardTitle>{t("backup.restoreTitle")}</CardTitle>
           <Button
             type="button"
             variant="outline"
@@ -524,10 +552,10 @@ export function Backup() {
             ) : (
               <Upload aria-hidden />
             )}
-            从本地恢复
+            {t("backup.restoreFromFile")}
           </Button>          </div>
           <CardDescription>
-            只能恢复到同一版本；开始前自动保存快照。
+            {t("backup.restoreDescription")}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -535,22 +563,31 @@ export function Backup() {
             <div className="space-y-3">
               <div className="rounded-md border border-border p-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium">恢复摘要</span>
-                  <Badge variant="outline">版本 {preview.summary.release || "未知"}</Badge>
-                  {preview.problem ? <Badge variant="destructive">{preview.problem}</Badge> : null}
+                  <span className="text-sm font-medium">{t("backup.summaryTitle")}</span>
+                  <Badge variant="outline">
+                    {t("backup.version", {
+                      release: preview.summary.release || t("common.unknown"),
+                    })}
+                  </Badge>
+                  {preview.problem ? (
+                    <Badge variant="destructive" data-i18n-ignore>{preview.problem}</Badge>
+                  ) : null}
                 </div>
                 <dl className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-                  <div className="break-all sm:col-span-2">{preview.summary.path}</div>
-                  <div>导出时间：{formatExportedAt(preview.summary.exportedAt)}</div>
-                  <div>当前部署版本：{preview.currentRelease || "未知"}</div>
-                  <div>数据行数：{preview.summary.rows}</div>
-                  <div>任务数：{preview.summary.tasks}</div>
-                  <div>产物数：{preview.summary.objects}</div>
-                  <div>文件大小：{formatBytes(preview.summary.bytes)}</div>
+                  <div className="break-all sm:col-span-2" data-i18n-ignore>{preview.summary.path}</div>
+                  <div>{t("backup.exportedAt")}{formatExportedAt(preview.summary.exportedAt)}</div>
+                  <div>{t("backup.currentRelease")}{preview.currentRelease || t("common.unknown")}</div>
+                  <div>{t("backup.dataRows")}{preview.summary.rows}</div>
+                  <div>{t("backup.taskCount")}{preview.summary.tasks}</div>
+                  <div>{t("backup.objectCount")}{preview.summary.objects}</div>
+                  <div>{t("backup.fileSize")}{formatBytes(preview.summary.bytes)}</div>
                 </dl>
                 {preview.summary.oversized.length > 0 ? (
                   <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
-                    备份里有超大产物：{preview.summary.oversized.join("、")}
+                    {t("backup.oversizedPreview")}
+                    <span data-i18n-ignore>
+                      {preview.summary.oversized.join(t("backup.listSeparator"))}
+                    </span>
                   </p>
                 ) : null}
               </div>
@@ -558,7 +595,7 @@ export function Backup() {
               {blocked ? (
                 <Alert variant="destructive">
                   <AlertTriangle />
-                  <AlertTitle>无法恢复这个备份</AlertTitle>
+                  <AlertTitle>{t("backup.blockedTitle")}</AlertTitle>
                   <AlertDescription>{blocked}</AlertDescription>
                 </Alert>
               ) : null}
@@ -573,28 +610,28 @@ export function Backup() {
                   {restoreRunning ? (
                     <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
                   ) : null}
-                  覆盖并恢复
+                  {t("backup.overwriteRestore")}
                 </Button>
                 <span className="text-xs text-muted-foreground">
-                  失败时可回到恢复前快照。
+                  {t("backup.snapshotNote")}
                 </span>
               </div>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              选择一个备份后显示摘要。
+              {t("backup.choosePrompt")}
             </p>
           )}
 
           <ErrorAlert
             error={restoreError}
             onRetry={() => void retryRestore()}
-            retryLabel={pending ? "重试未完成恢复" : "重新选择备份"}
+            retryLabel={pending ? t("backup.retryPending") : t("backup.retryChoose")}
           />
 
           {restoreDone ? (
             <Alert className="mt-4">
-              <AlertTitle>恢复完成</AlertTitle>
+              <AlertTitle>{t("backup.restoreDoneTitle")}</AlertTitle>
             </Alert>
           ) : null}
         </CardContent>
@@ -603,15 +640,15 @@ export function Backup() {
       <Dialog open={restoreOpen} onOpenChange={setRestoreOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>确认覆盖恢复</DialogTitle>
-            <DialogDescription>{OVERWRITE_NOTICE}</DialogDescription>
+            <DialogTitle>{t("backup.confirmRestoreTitle")}</DialogTitle>
+            <DialogDescription>{t("backup.overwriteNotice")}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setRestoreOpen(false)}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button type="button" variant="destructive" onClick={() => void restoreData()}>
-              确认覆盖恢复
+              {t("backup.confirmRestoreTitle")}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -15,6 +15,7 @@ import { useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
+import { useT } from "@/i18n";
 import { toClientError } from "@/services/errors";
 import { useConfigQuery, useInvalidate, useMcpCatalogQuery } from "@/services/queries";
 import type { ConfigDTO, McpAddInput, McpProbeDTO, McpToolDTO } from "@/services/types";
@@ -59,6 +60,7 @@ function isAdminUnavailable(error: unknown): boolean {
 
 export function Mcp() {
   const { client } = useApp();
+  const t = useT();
   const configQuery = useConfigQuery();
   const catalogQuery = useMcpCatalogQuery();
   const invalidate = useInvalidate();
@@ -357,7 +359,7 @@ export function Mcp() {
   };
 
   const header = (
-    <PageHeader title="服务" actions={<>
+    <PageHeader title={t("shell.pages.mcp")} actions={<>
       <SyncStatus
         isFetching={configQuery.isFetching}
         isPlaceholder={configQuery.isPlaceholder}
@@ -371,7 +373,7 @@ export function Mcp() {
         disabled={loading || !catalog.length || !ready}
       >
         <Plus aria-hidden />
-        添加服务
+        {t("mcp.addService")}
       </Button>
 </>} />
   );
@@ -382,7 +384,7 @@ export function Mcp() {
         {header}
         <div className="flex min-h-[30svh] items-center justify-center gap-2 text-muted-foreground">
           <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
-          正在读取服务…
+          {t("mcp.loading")}
         </div>
       </div>
     );
@@ -393,12 +395,12 @@ export function Mcp() {
       <div>
         {header}
         <Alert variant="destructive" className="my-4" data-testid="mcp-admin-unavailable">
-          <AlertTitle>云端管理接口不可用</AlertTitle>
+          <AlertTitle>{t("mcp.adminUnavailable")}</AlertTitle>
           <AlertDescription>
-            <span className="block">{toClientError(adminError).message}</span>
+            <span className="block" data-i18n-ignore>{toClientError(adminError).message}</span>
             <span className="mt-3 flex">
               <Button type="button" size="sm" onClick={() => void reload()}>
-                重试
+                {t("common.retry")}
               </Button>
             </span>
           </AlertDescription>
@@ -417,9 +419,9 @@ export function Mcp() {
       <ErrorAlert error={error} />
       {enabledToolCount > TOOL_WARNING_THRESHOLD ? (
         <Alert className="my-4" data-testid="mcp-tool-warning">
-          <AlertTitle>工具较多</AlertTitle>
+          <AlertTitle>{t("mcp.tooManyToolsTitle")}</AlertTitle>
           <AlertDescription>
-            {`工具过多会拖慢任务、增加费用，建议停用用不到的。`}
+            {t("mcp.tooManyToolsDescription")}
           </AlertDescription>
         </Alert>
       ) : null}
@@ -427,7 +429,7 @@ export function Mcp() {
       {servers.length === 0 ? (
         <Card className="mt-5">
           <CardContent className="py-6 text-sm text-muted-foreground">
-            还没有接入服务。从目录添加，或填自定义 URL。
+            {t("mcp.empty")}
           </CardContent>
         </Card>
       ) : (
@@ -450,16 +452,16 @@ export function Mcp() {
                 Boolean(probe.auth) &&
                 probe.auth !== "ok");
             const status = !enabled
-              ? { label: "已停用", variant: "outline" as const }
+              ? { label: t("mcp.status.disabled"), variant: "outline" as const, failed: false }
               : auth[server.name] === "needs_reauth"
-                ? { label: "需要重新授权", variant: "destructive" as const }
+                ? { label: t("mcp.status.needsReauth"), variant: "destructive" as const, failed: false }
                 : auth[server.name] === "unauthorized"
-                  ? { label: "需要授权", variant: "outline" as const }
+                  ? { label: t("mcp.status.unauthorized"), variant: "outline" as const, failed: false }
                   : probe && !probe.ok
-                    ? { label: "连接失败", variant: "destructive" as const }
+                    ? { label: t("mcp.status.failed"), variant: "destructive" as const, failed: true }
                     : probe?.ok
-                      ? { label: "正常", variant: "secondary" as const }
-                      : { label: "正在测试…", variant: "outline" as const };
+                      ? { label: t("mcp.status.ok"), variant: "secondary" as const, failed: false }
+                      : { label: t("mcp.status.probing"), variant: "outline" as const, failed: false };
             const enabledCount = probe?.ok
               ? probe.tools.filter((tool) => tool.mode !== "disabled").length
               : 0;
@@ -470,19 +472,23 @@ export function Mcp() {
                 <CardHeader>
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <CardTitle className="break-words">{displayName}</CardTitle>
-                      {server.description ? <CardDescription className="break-words">{server.description}</CardDescription> : null}
+                      <CardTitle className="break-words"><span data-i18n-ignore>{displayName}</span></CardTitle>
+                      {server.description ? <CardDescription className="break-words" data-i18n-ignore>{server.description}</CardDescription> : null}
                     </div>
                     <Badge data-testid={`mcp-status-${server.name}`} variant={status.variant}>
                       {status.label}
                     </Badge>
                   </div>
-                  {status.label === "连接失败" ? (
+                  {status.failed ? (
                     <p
                       className="mt-1 break-all text-xs text-muted-foreground"
                       data-testid={`mcp-failure-${server.name}`}
                     >
-                      {probe?.reason || "未知原因"}
+                      {probe?.reason ? (
+                        <span data-i18n-ignore>{probe.reason}</span>
+                      ) : (
+                        t("mcp.unknownReason")
+                      )}
                     </p>
                   ) : null}
                 </CardHeader>
@@ -496,7 +502,9 @@ export function Mcp() {
                       aria-expanded={expanded.includes(server.name)}
                       onClick={() => toggleExpanded(server.name)}
                     >
-                      {tools.length > 0 ? `工具 ${enabledCount}/${tools.length}` : "工具"}
+                      {tools.length > 0
+                        ? t("mcp.toolsCount", { enabled: enabledCount, total: tools.length })
+                        : t("mcp.tools")}
                     </Button>
                     {needsAuth ? (
                       <Button
@@ -506,7 +514,7 @@ export function Mcp() {
                         disabled={!ready || busy === server.name}
                         onClick={() => void relogin(server.name)}
                       >
-                        重新登录
+                        {t("mcp.relogin")}
                       </Button>
                     ) : null}
                     <Button
@@ -515,11 +523,14 @@ export function Mcp() {
                       size="sm"
                       role="switch"
                       aria-checked={enabled}
-                      aria-label={`${enabled ? "停用" : "启用"} ${server.name}`}
+                      aria-label={t("mcp.toggleAria", {
+                        action: enabled ? t("mcp.toggleDisable") : t("mcp.toggleEnable"),
+                        name: server.name,
+                      })}
                       disabled={!ready || busy === server.name}
                       onClick={() => void toggleServer(server)}
                     >
-                      {enabled ? "停用" : "启用"}
+                      {enabled ? t("mcp.toggleDisable") : t("mcp.toggleEnable")}
                     </Button>
                     <Button
                       type="button"
@@ -529,12 +540,12 @@ export function Mcp() {
                       onClick={() => void removeServer(server)}
                     >
                       <Trash2 aria-hidden />
-                      删除
+                      {t("mcp.remove")}
                     </Button>
                   </div>
                   <details className="mt-3 min-w-0 text-xs text-muted-foreground">
-                    <summary className="cursor-pointer">详情</summary>
-                    <p className="mt-2 break-all">{server.url}</p>
+                    <summary className="cursor-pointer">{t("common.details")}</summary>
+                    <p className="mt-2 break-all" data-i18n-ignore>{server.url}</p>
                   </details>
                   {expanded.includes(server.name) ? (
                     <div className="mt-3 border-t border-border pt-3">
@@ -561,7 +572,7 @@ export function Mcp() {
       <div className="mt-5 flex justify-end">
         <Button type="button" variant="outline" onClick={() => void reload()}>
           <RefreshCw aria-hidden />
-          重新加载
+          {t("mcp.reload")}
         </Button>
       </div>
 

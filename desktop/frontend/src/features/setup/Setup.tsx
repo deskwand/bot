@@ -32,10 +32,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ErrorAlert, StateBadge, StepList } from "@/components/feedback";
+import { useT, type MessageKey } from "@/i18n";
 import { useDirty } from "@/components/use-dirty";
 import { toClientError } from "@/services/errors";
 import { useApp } from "@/components/app-context";
-import { CLOUDFLARE_NEURONS_NOTICE } from "@/lib/copy";
+import { cloudflareNeuronsNotice } from "@/lib/copy";
 import { useUiStore } from "@/store/ui";
 import type { AccountDTO, ImportPreviewDTO, ResultDTO, WorkerDTO } from "@/services/types";
 import {
@@ -85,12 +86,14 @@ function useCatalogModelOptions(): {
 export function Setup({
   phase,
   connectionError,
+  connectionAccount,
   onSessionChange,
   onReady,
   initialStep = "welcome",
 }: {
   phase: SetupPhase;
   connectionError?: unknown;
+  connectionAccount?: string;
   onSessionChange: () => void;
   onReady: () => void;
   initialStep?: "welcome" | "deploy" | "import";
@@ -101,6 +104,7 @@ export function Setup({
     return (
       <Welcome
         connectionError={connectionError}
+        connectionAccount={connectionAccount}
         onConnected={onSessionChange}
         onShowDeploy={() => setStep("deploy")}
         onShowImport={() => setStep("import")}
@@ -128,17 +132,20 @@ export function Setup({
 function Welcome({
   connected = false,
   connectionError,
+  connectionAccount,
   onConnected,
   onShowDeploy,
   onShowImport,
 }: {
   connected?: boolean;
   connectionError?: unknown;
+  connectionAccount?: string;
   onConnected: () => void;
   onShowDeploy: () => void;
   onShowImport: () => void;
 }) {
   const { client } = useApp();
+  const t = useT();
   const [accountName, setAccountName] = useState("");
 
   useEffect(() => {
@@ -160,13 +167,17 @@ function Welcome({
 
   return (
     <div className="mx-auto max-w-3xl">
-      <h1 className="text-3xl font-semibold tracking-tight">部署一次，随时管理。</h1>
+      <h1 className="text-3xl font-semibold tracking-tight">{t("setup.title")}</h1>
       <p className="mt-3 max-w-2xl text-muted-foreground">
-        运行在你自己的 Cloudflare 账号里。
+        {t("setup.subtitle")}
       </p>
 
       {!connected ? (
-        <ConnectCard connectionError={connectionError} onConnected={onConnected} />
+        <ConnectCard
+          connectionError={connectionError}
+          connectionAccount={connectionAccount}
+          onConnected={onConnected}
+        />
       ) : (
         <>
           <div className="mt-7 grid gap-4 sm:grid-cols-2">
@@ -174,15 +185,15 @@ function Welcome({
               type="button"
               className="text-left"
               onClick={onShowDeploy}
-              aria-label="部署新服务"
+              aria-label={t("setup.deployTitle")}
             >
               <Card className="h-full transition-colors hover:border-primary/60">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Cloud className="size-4" aria-hidden />
-                    部署新服务
+                    {t("setup.deployTitle")}
                   </CardTitle>
-                  <CardDescription>创建一套新的云端服务。</CardDescription>
+                  <CardDescription>{t("setup.deployDescription")}</CardDescription>
                 </CardHeader>
               </Card>
             </button>
@@ -190,24 +201,27 @@ function Welcome({
               type="button"
               className="text-left"
               onClick={onShowImport}
-              aria-label="连接已有服务"
+              aria-label={t("setup.importTitle")}
             >
               <Card className="h-full transition-colors hover:border-primary/60">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <RefreshCw className="size-4" aria-hidden />
-                    连接已有服务
+                    {t("setup.importTitle")}
                   </CardTitle>
-                  <CardDescription>接管已有部署，保留数据。</CardDescription>
+                  <CardDescription>{t("setup.importDescription")}</CardDescription>
                 </CardHeader>
               </Card>
             </button>
           </div>
           {accountName ? (
-            <p className="mt-4 text-xs text-muted-foreground">已连接 Cloudflare 账号：{accountName}</p>
+            <p className="mt-4 text-xs text-muted-foreground">
+              {t("setup.connectedAccount")}
+              <span data-i18n-ignore>{accountName}</span>
+            </p>
           ) : null}
           <p className="mt-1 text-xs text-muted-foreground">
-            客户端关闭后云端继续运行
+            {t("setup.cloudKeepsRunning")}
           </p>
         </>
       )}
@@ -217,12 +231,15 @@ function Welcome({
 
 function ConnectCard({
   connectionError,
+  connectionAccount,
   onConnected,
 }: {
   connectionError?: unknown;
+  connectionAccount?: string;
   onConnected: () => void;
 }) {
   const { client } = useApp();
+  const t = useT();
   const [state, setState] = useState<"idle" | "waiting" | "select" | "connected">("idle");
   const [accounts, setAccounts] = useState<AccountDTO[]>([]);
   const [selected, setSelected] = useState("");
@@ -324,30 +341,36 @@ function ConnectCard({
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Cloud className="size-4" aria-hidden />
-          连接你的 Cloudflare
+          {t("setup.connectTitle")}
         </CardTitle>
         <CardDescription>
-          Cloudflare 会列出需要授权的权限。
+          {t("setup.connectDescription")}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <ErrorAlert error={connectionError} />
+        {connectionAccount ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            {t("errors.reauthAccount")}
+            <span data-i18n-ignore>{connectionAccount}</span>
+          </p>
+        ) : null}
 
         {showLogin ? (
           <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">浏览器里完成授权，不需要填写 token。</p>
+            <p className="text-sm text-muted-foreground">{t("setup.browserAuth")}</p>
             <Button type="button" onClick={() => void start()}>
               <Cloud aria-hidden />
-              使用 Cloudflare 登录
+              {t("setup.loginWithCloudflare")}
             </Button>
           </div>
         ) : null}
 
         {state === "waiting" ? (
           <div className="space-y-3">
-            <p className="text-sm">已在浏览器打开授权页，完成后自动继续。</p>
+            <p className="text-sm">{t("setup.waitingBrowser")}</p>
             <Button type="button" variant="outline" onClick={cancel}>
-              取消
+              {t("common.cancel")}
             </Button>
           </div>
         ) : null}
@@ -356,37 +379,37 @@ function ConnectCard({
           <div className="space-y-3">
             <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
               <Check className="size-4" aria-hidden />
-              已连接，正在读取云端服务。
+              {t("setup.connectedReading")}
             </p>
             <Button type="button" variant="outline" onClick={() => onConnected()}>
-              重新检查
+              {t("setup.recheck")}
             </Button>
           </div>
         ) : null}
 
         {state === "select" ? (
           <div className="space-y-3">
-            <p className="text-sm">有多个账号，请选择要部署的这一个。</p>
+            <p className="text-sm">{t("setup.multipleAccounts")}</p>
             <RadioGroup value={selected} onValueChange={setSelected}>
               {accounts.map((account) => (
                 <div key={account.id} className="flex items-center gap-2">
                   <RadioGroupItem value={account.id} id={`account-${account.id}`} />
-                  <Label htmlFor={`account-${account.id}`}>{account.name || account.id}</Label>
+                  <Label htmlFor={`account-${account.id}`}><span data-i18n-ignore>{account.name || account.id}</span></Label>
                 </div>
               ))}
             </RadioGroup>
             <div className="flex flex-wrap gap-2">
               <Button type="button" onClick={() => void confirm()} disabled={!selected || confirming}>
-                继续
+                {t("common.continue")}
               </Button>
               <Button type="button" variant="outline" onClick={cancel}>
-                取消
+                {t("common.cancel")}
               </Button>
             </div>
           </div>
         ) : null}
 
-        <ErrorAlert error={error} onRetry={start} retryLabel="重新登录" />
+        <ErrorAlert error={error} onRetry={start} retryLabel={t("setup.retryLogin")} />
       </CardContent>
     </Card>
   );
@@ -395,12 +418,13 @@ function ConnectCard({
 function GuardedBack({
   dirty,
   onBack,
-  label = "返回",
+  label,
 }: {
   dirty: boolean;
   onBack: () => void;
   label?: string;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -412,17 +436,17 @@ function GuardedBack({
         onClick={() => (dirty ? setOpen(true) : onBack())}
       >
         <ArrowLeft aria-hidden />
-        {label}
+        {label ?? t("shell.back")}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>有未保存的更改</DialogTitle>
-            <DialogDescription>返回会丢弃当前表单内容，不会修改云端配置。</DialogDescription>
+            <DialogTitle>{t("shell.unsavedTitle")}</DialogTitle>
+            <DialogDescription>{t("setup.unsavedDescription")}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-              继续编辑
+              {t("shell.keepEditing")}
             </Button>
             <Button
               type="button"
@@ -431,7 +455,7 @@ function GuardedBack({
                 onBack();
               }}
             >
-              放弃更改并返回
+              {t("setup.discardAndBack")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -442,6 +466,7 @@ function GuardedBack({
 
 function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => void }) {
   const { client } = useApp();
+  const t = useT();
   const { options: modelOptions, error: catalogError, reload: reloadCatalog } =
     useCatalogModelOptions();
   const setPage = useUiStore((state) => state.setPage);
@@ -452,7 +477,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   const [butler, setButler] = useState(modelKey(DEFAULT_MODEL));
   const [task, setTask] = useState(modelKey(DEFAULT_MODEL));
   const [resourcesOpen, setResourcesOpen] = useState(false);
-  const [resourceError, setResourceError] = useState("");
+  const [resourceError, setResourceError] = useState<MessageKey | null>(null);
   const [invalidResource, setInvalidResource] = useState<"worker-name" | "bucket-name" | null>(null);
   const workerRef = useRef<HTMLInputElement>(null);
   const bucketRef = useRef<HTMLInputElement>(null);
@@ -476,10 +501,10 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
 
   const checkAndInstall = async () => {
     setError(null);
-    setResourceError("");
+    setResourceError(null);
     setInvalidResource(null);
     if (!workerName.trim() || !bucketName.trim()) {
-      setResourceError("请填写服务名称和存储桶名称。");
+      setResourceError("setup.resourceRequired");
       setInvalidResource(!workerName.trim() ? "worker-name" : "bucket-name");
       setResourcesOpen(true);
       return;
@@ -489,7 +514,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
     try {
       const scripts = await client.listWorkers();
       if (scripts.some((script) => script.name === workerName.trim())) {
-        setResourceError("名称已被占用，请换一个。");
+        setResourceError("setup.nameTaken");
         setInvalidResource("worker-name");
         setResourcesOpen(true);
         return;
@@ -497,7 +522,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
       const butlerModel = parseModelKey(butler);
       const taskModel = parseModelKey(task);
       if (!butlerModel || !taskModel) {
-        setError(new Error("MODELS_REQUIRED: 请选择管家模型和任务模型。"));
+        setError(new Error("MODELS_REQUIRED: "));
         return;
       }
       setProgress(25);
@@ -548,14 +573,14 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   return (
     <div className="mx-auto max-w-3xl">
       <GuardedBack dirty={dirty} onBack={onBack} />
-      <PageHeader title={published ? "服务已部署，接下来设置消息入口" : "部署新服务"} />
+      <PageHeader title={published ? t("setup.deployedNext") : t("setup.deployTitle")} />
 
       {!result ? (
         <section>
             <ErrorAlert
               error={catalogError}
               onRetry={reloadCatalog}
-              retryLabel="重新读取模型目录"
+              retryLabel={t("setup.reloadCatalog")}
             />
             <form
               noValidate
@@ -565,23 +590,23 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                 void checkAndInstall();
               }}
             >
-              <section aria-label="模型">
-                <h2 className="mb-3 text-base font-medium">模型</h2>
+              <section aria-label={t("setup.modelsSection")}>
+                <h2 className="mb-3 text-base font-medium">{t("setup.modelsSection")}</h2>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2"><Label htmlFor="install-butler">管家模型</Label><ModelSelect id="install-butler" label="管家模型" value={butler} onChange={setButler} options={modelOptions} /></div>
-                  <div className="space-y-2"><Label htmlFor="install-task">任务模型</Label><ModelSelect id="install-task" label="任务模型" value={task} onChange={setTask} options={modelOptions} /></div>
+                  <div className="space-y-2"><Label htmlFor="install-butler">{t("models.butlerModel")}</Label><ModelSelect id="install-butler" label={t("models.butlerModel")} value={butler} onChange={setButler} options={modelOptions} /></div>
+                  <div className="space-y-2"><Label htmlFor="install-task">{t("models.taskModel")}</Label><ModelSelect id="install-task" label={t("models.taskModel")} value={task} onChange={setTask} options={modelOptions} /></div>
                 </div>
               </section>
 
               <fieldset className="space-y-2">
-                <legend className="text-sm font-medium">初始消息入口</legend>
+                <legend className="text-sm font-medium">{t("setup.initialChannel")}</legend>
                 <p className="text-xs text-muted-foreground">
-                  选择一个入口，部署后完成连接；故障时需手动切换。
+                  {t("setup.initialChannelHint")}
                 </p>
                 <RadioGroup
                   value={channel}
                   onValueChange={setChannel}
-                  aria-label="初始消息入口"
+                  aria-label={t("setup.initialChannel")}
                   className="grid gap-2 sm:grid-cols-2"
                 >
                   <label className="flex cursor-pointer items-center gap-3 rounded-md border border-border p-3">
@@ -590,46 +615,46 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                   </label>
                   <label className="flex cursor-pointer items-center gap-3 rounded-md border border-border p-3">
                     <RadioGroupItem value="wechat" id="install-channel-wechat" />
-                    <span>微信</span>
+                    <span>{t("common.wechat")}</span>
                   </label>
                 </RadioGroup>
               </fieldset>
 
               {channel === "telegram" ? <div className="space-y-2">
-                <Label htmlFor="install-owners">允许使用的 Telegram 用户 ID</Label>
-                <Input id="install-owners" value={ownerIDs} onChange={(event) => setOwnerIDs(event.target.value)} placeholder="例如 123456789" inputMode="numeric" aria-describedby="install-owner-hint" />
-                <p id="install-owner-hint" className="text-xs text-muted-foreground">留空时不响应 Telegram 消息；部署后还需配置 Bot 令牌。</p>
-              </div> : channel === "wechat" ? <p className="text-sm text-muted-foreground">部署后扫码连接微信。</p> : null}
+                <Label htmlFor="install-owners">{t("setup.ownersLabel")}</Label>
+                <Input id="install-owners" value={ownerIDs} onChange={(event) => setOwnerIDs(event.target.value)} placeholder={t("setup.ownersPlaceholder")} inputMode="numeric" aria-describedby="install-owner-hint" />
+                <p id="install-owner-hint" className="text-xs text-muted-foreground">{t("setup.ownersHint")}</p>
+              </div> : channel === "wechat" ? <p className="text-sm text-muted-foreground">{t("setup.wechatAfterDeploy")}</p> : null}
 
               {parseModelKey(butler)?.provider === "workers-ai" || parseModelKey(task)?.provider === "workers-ai" ? (
                 <details className="text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">模型额度与费用</summary>
-                  <p className="mt-2" data-testid="workers-ai-quota-notice">{CLOUDFLARE_NEURONS_NOTICE}</p>
+                  <summary className="cursor-pointer">{t("setup.quotaSummary")}</summary>
+                  <p className="mt-2" data-testid="workers-ai-quota-notice">{cloudflareNeuronsNotice()}</p>
                 </details>
               ) : null}
 
               <details open={resourcesOpen} onToggle={(event) => setResourcesOpen(event.currentTarget.open)} className="border-t border-border pt-4">
-                <summary className="cursor-pointer text-sm font-medium">资源设置</summary>
+                <summary className="cursor-pointer text-sm font-medium">{t("setup.resources")}</summary>
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="worker-name">服务名称</Label>
+                    <Label htmlFor="worker-name">{t("setup.workerName")}</Label>
                     <Input ref={workerRef} id="worker-name" value={workerName} onChange={(event) => setWorkerName(event.target.value)} required aria-invalid={invalidResource === "worker-name"} aria-describedby={resourceError ? "resource-error" : invalidResource && error ? "install-error" : undefined} />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="bucket-name">R2 存储桶名称</Label>
+                    <Label htmlFor="bucket-name">{t("setup.bucketName")}</Label>
                     <Input ref={bucketRef} id="bucket-name" value={bucketName} onChange={(event) => setBucketName(event.target.value)} required aria-invalid={invalidResource === "bucket-name"} aria-describedby={resourceError ? "resource-error" : invalidResource && error ? "install-error" : undefined} />
                   </div>
                 </div>
-                {resourceError ? <p id="resource-error" role="alert" className="mt-2 text-sm text-destructive">{resourceError}</p> : null}
+                {resourceError ? <p id="resource-error" role="alert" className="mt-2 text-sm text-destructive">{t(resourceError)}</p> : null}
               </details>
 
               <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border pt-4">
                 <div className="text-xs text-muted-foreground">
-                  <p className="flex items-center gap-1"><Check className="size-3" aria-hidden />Cloudflare 已连接</p>
-                  <p className="mt-1">将创建 Worker 和 R2 存储桶，费用按用量计。</p>
+                  <p className="flex items-center gap-1"><Check className="size-3" aria-hidden />{t("shell.accountConnected")}</p>
+                  <p className="mt-1">{t("setup.resourcesCost")}</p>
                 </div>
               <div className="flex flex-wrap justify-end gap-2">
-                <GuardedBack dirty={dirty} onBack={onBack} label="上一步" />
+                <GuardedBack dirty={dirty} onBack={onBack} label={t("setup.previous")} />
                 <Button
                   type="submit"
                   disabled={
@@ -641,7 +666,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                   {checking || running ? (
                     <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
                   ) : null}
-                  {running ? "正在部署…" : checking ? "正在检查…" : "检查并部署"}
+                  {running ? t("setup.deploying") : checking ? t("setup.checking") : t("setup.checkAndDeploy")}
                 </Button>
               </div>
               </div>
@@ -649,9 +674,9 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
 
             {checking || running ? (
               <div className="mt-5" aria-live="polite">
-                <Progress value={progress} aria-label="部署进度" />
+                <Progress value={progress} aria-label={t("setup.deployProgress")} />
                 <p className="mt-2 text-xs text-muted-foreground">
-                  {progress < 30 ? "正在创建资源…" : "正在发布…"}
+                  {progress < 30 ? t("setup.creatingResources") : t("setup.publishing")}
                 </p>
               </div>
             ) : null}
@@ -659,13 +684,13 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               <ErrorAlert
                 error={error}
                 onRetry={installRetryBlocked ? undefined : checkAndInstall}
-                retryLabel="重新检查并部署"
+                retryLabel={t("setup.retryInstall")}
               />
             </div>
         </section>
       ) : (
         <ResultPanel
-          title={published ? "服务已部署" : "部署未完成"}
+          title={published ? t("setup.deployed") : t("setup.deployIncomplete")}
           result={result}
           running={running}
           error={error}
@@ -680,10 +705,10 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                   onReady();
                 }}
               >
-                设置模型 <ArrowRight aria-hidden />
+                {t("setup.setModels")} <ArrowRight aria-hidden />
               </Button>
               <Button type="button" variant="outline" onClick={onReady}>
-                进入管理首页
+                {t("setup.enterHome")}
               </Button>
             </div>
           ) : null}
@@ -695,6 +720,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
 
 function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => void }) {
   const { client } = useApp();
+  const t = useT();
   const { options: modelOptions, error: catalogError, reload: reloadCatalog } =
     useCatalogModelOptions();
   const [workers, setWorkers] = useState<WorkerDTO[]>([]);
@@ -755,7 +781,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
         const butlerModel = parseModelKey(butler);
         const taskModel = parseModelKey(task);
         if (!butlerModel || !taskModel) {
-          throw new Error("MODELS_REQUIRED: 请选择管家模型和任务模型。");
+          throw new Error("MODELS_REQUIRED: ");
         }
         models = { butlerModel, taskModel };
       }
@@ -800,41 +826,41 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   return (
     <div className="mx-auto max-w-3xl">
       <GuardedBack dirty={dirty} onBack={onBack} />
-      <PageHeader title="连接已有服务" />
+      <PageHeader title={t("setup.importTitle")} />
       <p className="mt-2 text-sm text-muted-foreground">
-        接管已有部署，保留数据、文件和密钥。
+        {t("setup.importSubtitle")}
       </p>
 
       <ErrorAlert
         error={catalogError}
         onRetry={reloadCatalog}
-        retryLabel="重新读取模型目录"
+        retryLabel={t("setup.reloadCatalog")}
       />
 
       <Card className="mt-5">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle>可连接的服务</CardTitle>
+              <CardTitle>{t("setup.connectable")}</CardTitle>
               </div>
             <Button type="button" variant="outline" size="sm" onClick={() => void loadWorkers()} disabled={loading}>
               {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-              刷新
+              {t("shell.refresh")}
             </Button>
           </div>
         </CardHeader>
         <CardContent>
           {workers.length === 0 && !loading ? (
-            <p className="text-sm text-muted-foreground">没有可连接的 Worker。</p>
+            <p className="text-sm text-muted-foreground">{t("setup.noWorkers")}</p>
           ) : null}
           <ul className="space-y-2">
             {workers.map((worker) => (
               <li key={worker.name} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-3">
                 <div>
-                  <div className="font-medium">{worker.name}</div>
+                  <div className="font-medium" data-i18n-ignore>{worker.name}</div>
                   <div className="text-xs text-muted-foreground">
-                    {worker.modifiedOn ? `修改于 ${worker.modifiedOn}` : "修改时间未知"}
-                    {worker.migrationTag ? ` · 迁移 ${worker.migrationTag}` : ""}
+                    {worker.modifiedOn ? <>{t("setup.modifiedAt")}<span data-i18n-ignore>{worker.modifiedOn}</span></> : t("setup.modifiedUnknown")}
+                    {worker.migrationTag ? <>{t("setup.migration")}<span data-i18n-ignore>{worker.migrationTag}</span></> : ""}
                   </div>
                 </div>
                 <Button
@@ -844,7 +870,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                   disabled={running}
                   onClick={() => void inspect(worker.name)}
                 >
-                  {selected === worker.name ? "已选择" : "检查并接管"}
+                  {selected === worker.name ? t("setup.selected") : t("setup.inspect")}
                 </Button>
               </li>
             ))}
@@ -857,44 +883,44 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
         <Card className="mt-5">
           <CardHeader>
             <CardTitle className="flex flex-wrap items-center gap-2">
-              {preview.workerName}
-              {preview.legacy ? <Badge variant="outline">需要兼容升级</Badge> : <Badge variant="secondary">配置可读取</Badge>}
+              <span data-i18n-ignore>{preview.workerName}</span>
+              {preview.legacy ? <Badge variant="outline">{t("setup.needsUpgrade")}</Badge> : <Badge variant="secondary">{t("setup.configReadable")}</Badge>}
             </CardTitle>
             <CardDescription>
-              旧版配置需要重新填写；资源和密钥沿用。
+              {t("setup.legacyDescription")}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <details className="min-w-0 break-words"><summary className="cursor-pointer text-sm text-muted-foreground">详情</summary>
+            <details className="min-w-0 break-words"><summary className="cursor-pointer text-sm text-muted-foreground">{t("common.details")}</summary>
             <dl className="grid gap-2 text-sm sm:grid-cols-2">
-              <Info label="当前发布版本" value={preview.releaseVersion || "未知"} />
-              <Info label="DESKWAND_CONFIG" value={preview.configPresent ? "存在" : "不存在"} />
-              <Info label="owner" value={preview.ownerConfigured ? "已配置" : "需重新填写"} />
-              <Info label="角色模型" value={preview.modelsConfigured ? "已配置" : "需重新填写"} />
-              <Info label="ACTIVE_CHANNEL" value={preview.activeChannel || "未设置"} />
-              <Info label="现有 secrets" value={preview.secretNames.join("、") || "无"} />
+              <Info label={t("setup.currentRelease")} value={preview.releaseVersion ? <span data-i18n-ignore>{preview.releaseVersion}</span> : t("common.unknown")} />
+              <Info label="DESKWAND_CONFIG" value={preview.configPresent ? t("setup.present") : t("setup.absent")} />
+              <Info label="owner" value={preview.ownerConfigured ? t("setup.configured") : t("setup.needsRefill")} />
+              <Info label={t("setup.roleModels")} value={preview.modelsConfigured ? t("setup.configured") : t("setup.needsRefill")} />
+              <Info label="ACTIVE_CHANNEL" value={preview.activeChannel ? <span data-i18n-ignore>{preview.activeChannel}</span> : t("common.notSet")} />
+              <Info label={t("setup.existingSecrets")} value={preview.secretNames.length ? <span data-i18n-ignore>{preview.secretNames.join(t("setup.listSeparator"))}</span> : t("setup.none")} />
             </dl>
             </details>
 
             {preview.preserveSecretNames.length > 0 ? (
               <Alert>
                 <ShieldCheck />
-                <AlertTitle>沿用已有 secret</AlertTitle>
+                <AlertTitle>{t("setup.preserveTitle")}</AlertTitle>
                 <AlertDescription>
-                  {preview.preserveSecretNames.join("、")} 保持原值，客户端不读取。
+                  <span data-i18n-ignore>{preview.preserveSecretNames.join(t("setup.listSeparator"))}</span> {t("setup.preserveKeeps")}
                 </AlertDescription>
               </Alert>
             ) : null}
 
             {preview.plaintextSecrets?.length ? (
               <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50/70 p-3 dark:border-amber-900 dark:bg-amber-950/20">
-                <h3 className="text-sm font-medium">发现明文凭据，需要迁移为密钥</h3>
+                <h3 className="text-sm font-medium">{t("setup.plaintextTitle")}</h3>
                 {preview.plaintextSecrets.map((migration) => (
                   <div key={migration.secretName} className="space-y-2">
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs text-muted-foreground" data-i18n-ignore>
                       {migration.field} → {migration.reference}
                     </p>
-                    <Label htmlFor={`migrate-${migration.secretName}`}>{migration.secretName} 的值</Label>
+                    <Label htmlFor={`migrate-${migration.secretName}`}><span data-i18n-ignore>{migration.secretName}</span> {t("setup.secretValueOf")}</Label>
                     <Input
                       id={`migrate-${migration.secretName}`}
                       type="password"
@@ -903,7 +929,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                       onChange={(event) =>
                         setSecrets((current) => ({ ...current, [migration.secretName]: event.target.value }))
                       }
-                      placeholder="只写一次，提交后清空"
+                      placeholder={t("setup.secretPlaceholder")}
                     />
                   </div>
                 ))}
@@ -912,12 +938,12 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
 
             {preview.requiredInputs?.includes("telegramUserIds") || preview.legacy ? (
               <div className="space-y-2">
-                <Label htmlFor="import-owners">允许使用的 Telegram 用户 ID</Label>
+                <Label htmlFor="import-owners">{t("setup.ownersLabel")}</Label>
                 <Input
                   id="import-owners"
                   value={ownerIDs}
                   onChange={(event) => setOwnerIDs(event.target.value)}
-                  placeholder="例如 123456789"
+                  placeholder={t("setup.ownersPlaceholder")}
                   inputMode="numeric"
                 />
               </div>
@@ -926,23 +952,23 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
             {preview.legacy ? (
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="import-butler">管家模型</Label>
-                  <ModelSelect id="import-butler" label="管家模型" value={butler} onChange={setButler} options={modelOptions} />
+                  <Label htmlFor="import-butler">{t("models.butlerModel")}</Label>
+                  <ModelSelect id="import-butler" label={t("models.butlerModel")} value={butler} onChange={setButler} options={modelOptions} />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="import-task">任务模型</Label>
-                  <ModelSelect id="import-task" label="任务模型" value={task} onChange={setTask} options={modelOptions} />
+                  <Label htmlFor="import-task">{t("models.taskModel")}</Label>
+                  <ModelSelect id="import-task" label={t("models.taskModel")} value={task} onChange={setTask} options={modelOptions} />
                 </div>
               </div>
             ) : null}
 
             {preview.warnings?.length ? (
               <Alert>
-                <AlertTitle>说明</AlertTitle>
+                <AlertTitle>{t("setup.notes")}</AlertTitle>
                 <AlertDescription>
                   <ul className="list-disc space-y-1 pl-4">
                     {preview.warnings.map((warning) => (
-                      <li key={warning}>{warning}</li>
+                      <li key={warning} data-i18n-ignore>{warning}</li>
                     ))}
                   </ul>
                 </AlertDescription>
@@ -954,7 +980,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                 <GuardedBack dirty={dirty} onBack={onBack} />
                 <Button type="button" onClick={() => void confirm()} disabled={running}>
                   {running ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-                  {running ? "正在接管…" : "确认配置并接管"}
+                  {running ? t("setup.takingOver") : t("setup.confirmTakeover")}
                 </Button>
               </div>
             ) : null}
@@ -963,11 +989,11 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                 <ErrorAlert
                   error={submitError}
                   onRetry={canRetryImport ? confirm : undefined}
-                  retryLabel="重新确认"
+                  retryLabel={t("setup.retryConfirm")}
                 />
                 {submitError && !canRetryImport ? (
                   <p className="text-xs text-muted-foreground">
-                    请重填上方密钥后再试；已提交的值已清空。
+                    {t("setup.refillSecrets")}
                   </p>
                 ) : null}
               </>
@@ -978,7 +1004,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
 
       {result ? (
         <ResultPanel
-          title={published ? "已有服务已连接" : "接管未完成"}
+          title={published ? t("setup.connected") : t("setup.takeoverIncomplete")}
           result={result}
           running={running}
           error={submitError}
@@ -986,7 +1012,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
         >
           {published ? (
             <Button type="button" className="mt-4" onClick={onReady}>
-              进入管理首页 <ArrowRight aria-hidden />
+              {t("setup.enterHome")} <ArrowRight aria-hidden />
             </Button>
           ) : null}
         </ResultPanel>
@@ -995,7 +1021,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   );
 }
 
-function Info({ label, value }: { label: string; value: string }) {
+function Info({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="rounded-md border border-border p-2">
       <dt className="text-xs text-muted-foreground">{label}</dt>
@@ -1019,6 +1045,7 @@ export function ResultPanel({
   onResume?: () => void;
   children?: React.ReactNode;
 }) {
+  const t = useT();
   return (
     <Card className="mt-5">
       <CardHeader>
@@ -1028,26 +1055,26 @@ export function ResultPanel({
         </CardTitle>
         <CardDescription>
           {result.state === "published"
-            ? "已发布，接着验证收发。"
-            : "继续前会先核对云端状态。"}
+            ? t("setup.publishedHint")
+            : t("shell.pendingDescription")}
         </CardDescription>
       </CardHeader>
       <CardContent>
         {result.state === "published" ? <details>
-          <summary className="cursor-pointer text-xs text-muted-foreground">详情</summary>
-          <p className="mt-2 break-all text-xs text-muted-foreground">操作 ID：{result.operationId}</p>
+          <summary className="cursor-pointer text-xs text-muted-foreground">{t("common.details")}</summary>
+          <p className="mt-2 break-all text-xs text-muted-foreground">{t("setup.operationId")}<span data-i18n-ignore>{result.operationId}</span></p>
           <StepList steps={result.steps ?? []} />
         </details> : <>
-          {result.operationId ? <p className="break-all text-xs text-muted-foreground">操作 ID：{result.operationId}</p> : null}
+          {result.operationId ? <p className="break-all text-xs text-muted-foreground">{t("setup.operationId")}<span data-i18n-ignore>{result.operationId}</span></p> : null}
           <StepList steps={result.steps ?? []} />
         </>}
         {result.warnings?.length ? (
           <Alert className="my-3">
-            <AlertTitle>注意</AlertTitle>
+            <AlertTitle>{t("setup.notice")}</AlertTitle>
             <AlertDescription>
               <ul className="list-disc space-y-1 pl-4">
                 {result.warnings.map((warning) => (
-                  <li key={warning}>{warning}</li>
+                  <li key={warning} data-i18n-ignore>{warning}</li>
                 ))}
               </ul>
             </AlertDescription>
@@ -1056,10 +1083,10 @@ export function ResultPanel({
         {onResume ? (
           <Button type="button" className="mt-2" data-testid="result-resume" onClick={onResume} disabled={running}>
             {running ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-            继续
+            {t("common.continue")}
           </Button>
         ) : null}
-        <ErrorAlert error={error} onRetry={onResume} retryLabel="重试" />
+        <ErrorAlert error={error} onRetry={onResume} retryLabel={t("common.retry")} />
         {children}
       </CardContent>
     </Card>

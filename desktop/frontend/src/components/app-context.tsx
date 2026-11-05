@@ -1,17 +1,12 @@
 import { createContext, useContext } from "react";
+import { tryT } from "@/i18n";
 import type { ClientService } from "@/services/types";
 
 export type Page = "overview" | "models" | "mcp" | "entries" | "diagnostics" | "backup" | "updates";
 
-export const PAGE_LABELS: Record<Page, string> = {
-  overview: "服务概览",
-  models: "模型",
-  mcp: "服务",
-  entries: "消息入口",
-  diagnostics: "诊断",
-  backup: "数据备份",
-  updates: "更新",
-};
+export function pageLabel(page: Page): string {
+  return tryT(`shell.pages.${page}`) ?? page;
+}
 
 export interface AppContextValue {
   client: ClientService;
