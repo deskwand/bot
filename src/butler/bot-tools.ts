@@ -1,9 +1,9 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { BotInit, BotSnapshot } from "../bot/bot-do";
+import { MEMORY_DOC, RULES_DOC, isMethodDoc } from "../bot/docs";
 import { clampWakeAt, parseDuration } from "../bot/wake";
 import type { BotsRepo } from "./bots-repo";
-import { RENDER_LIMIT } from "./memory";
 import { getClock } from "./notifier";
 import type { TaskControl } from "./tools";
 
@@ -142,14 +142,14 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
   const getBot: ToolRegistration<typeof BotId> = {
     name: "get_bot",
     description:
-      "Show one bot's status, mission, recent runs and memories.",
+      "Show one bot's status, mission, rules, method documents, memory and recent runs.",
     parameters: BotId,
     replay: "safe",
     async execute({ id }) {
       try {
         const snapshot = await bot(id).snapshot();
         if (snapshot === null) return output(`没有机器人 ${id}`);
-        const { meta, runs, memories } = snapshot;
+        const { meta, runs, docs } = snapshot;
 
         const lines = [
           `${meta.botId} [${meta.status}] ${meta.name}`,
@@ -163,11 +163,20 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
           lines.push(`- ${run.taskId} ${details.join(" ")}`);
         }
 
-        lines.push("记忆：");
-        if (memories.length === 0) lines.push("无");
-        for (const memory of memories.slice(-RENDER_LIMIT)) {
-          lines.push(`- #${memory.id} ${memory.content}`);
+        const rules = docs.find((doc) => doc.name === RULES_DOC);
+        lines.push("守则：");
+        lines.push(rules?.content ?? "无");
+
+        lines.push("方法：");
+        const methods = docs.filter((doc) => isMethodDoc(doc.name));
+        if (methods.length === 0) lines.push("无");
+        for (const method of methods) {
+          lines.push(`- ${method.name}（${method.content.length} 字）`);
         }
+
+        const memory = docs.find((doc) => doc.name === MEMORY_DOC);
+        lines.push("记忆：");
+        lines.push(memory?.content ?? "无");
         return output(lines.join("\n"));
       } catch (error) {
         return output(errorText(error));

@@ -18,6 +18,7 @@ import {
 } from "../../src/butler/memory";
 import type { ScheduleRow, ScheduleStore } from "../../src/butler/schedules";
 import { setChannelOverride } from "../../src/channels/override";
+import type { BotMeta } from "../../src/bot/bot-store";
 import { MIN_WAKE_MS } from "../../src/bot/wake";
 import { setClockOverride } from "../../src/butler/notifier";
 import { seedOwnerAddress } from "../helpers/channel-ref";
@@ -299,6 +300,80 @@ describe("backup and restore end to end", () => {
     expect(addresses).toEqual([{ channel: "telegram", conversation_id: "42" }]);
   });
 
+  it("migrates a legacy bot backup into the memory document", async () => {
+    const now = Date.UTC(2030, 0, 1, 9, 0, 0);
+    const meta: BotMeta = {
+      botId: "legacy-b1",
+      name: "价格哨兵",
+      mission: "盯着价格",
+      status: "active",
+      nextWakeAt: null,
+      defaultIntervalMs: 86_400_000,
+      currentTaskId: null,
+      consecutiveFailures: 0,
+      wakesDay: null,
+      wakesCount: 0,
+      pendingSteer: [],
+    };
+    const metaTable: TableSchema = {
+      name: "meta",
+      create: `CREATE TABLE meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )`,
+      withoutRowid: false,
+    };
+    const runsTable: TableSchema = {
+      name: "runs",
+      create: `CREATE TABLE runs (
+        task_id TEXT PRIMARY KEY,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        outcome TEXT,
+        summary TEXT,
+        note TEXT
+      )`,
+      withoutRowid: false,
+    };
+    const memoriesTable: TableSchema = {
+      name: "memories",
+      create: `CREATE TABLE memories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`,
+      withoutRowid: false,
+    };
+    const legacyDump: DumpedDo = {
+      schema: {
+        tables: [metaTable, runsTable, memoriesTable],
+        indexes: [],
+      },
+      tables: [
+        {
+          table: metaTable,
+          rows: [{ __rowid: 1, key: "bot", value: JSON.stringify(meta) }],
+        },
+        { table: runsTable, rows: [] },
+        {
+          table: memoriesTable,
+          rows: [{ __rowid: 1, id: 1, content: "喜欢绿茶", created_at: now }],
+        },
+      ],
+    };
+
+    await acquire("restore");
+    await restoreDo({ do: "bot", id: "legacy-b1" }, legacyDump);
+    await release();
+
+    // The restore reset the old instance; the fresh one migrates on construct.
+    const bot = env.BOT.get(env.BOT.idFromName("legacy-b1"));
+    const snapshot = await bot.snapshot();
+    expect(snapshot?.docs).toEqual([
+      { name: "记忆", content: "- 喜欢绿茶" },
+    ]);
+  });
+
   it("bot memory and alarm survive a restore", async () => {
     const now = Date.UTC(2030, 0, 1, 9, 0, 0);
     setClockOverride({
@@ -317,7 +392,7 @@ describe("backup and restore end to end", () => {
         // Already due: the restore must not wake the bot immediately.
         firstWakeAt: now - 60_000,
       });
-      await bot.remember("喜欢绿茶");
+      await bot.writeDoc("记忆", "- 喜欢绿茶", { allowRules: false });
 
       await acquire("export");
       const botDump = await dumpDo({ do: "bot", id: "b1" });
@@ -331,8 +406,8 @@ describe("backup and restore end to end", () => {
       // real request would.
       const botAfter = env.BOT.get(env.BOT.idFromName("b1"));
       const snapshot = await botAfter.snapshot();
-      expect(snapshot?.memories.map((item) => item.content)).toEqual([
-        "喜欢绿茶",
+      expect(snapshot?.docs).toEqual([
+        { name: "记忆", content: "- 喜欢绿茶" },
       ]);
 
       const alarm = await runInDurableObject(

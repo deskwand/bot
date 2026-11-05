@@ -536,6 +536,7 @@ export class TaskDO extends Agent<Env> {
         bot,
         taskId: () => this.currentTaskId() ?? "",
         notify: (text) => butler.notifyFromBot(botId, text),
+        approvals: this.approvals,
       }),
     });
   }

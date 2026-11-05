@@ -14,6 +14,8 @@ export type BotMeta = {
   wakesDay: string | null;
   wakesCount: number;
   pendingSteer: string[];
+  /** Whether the next wake was requested by the owner; absent on older rows. */
+  manualWake?: boolean;
   /** Why the bot called finish_bot; absent on older rows. */
   finishReason?: string | null;
 };

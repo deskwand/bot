@@ -55,7 +55,11 @@ async function seedBot(id: string, name = "价格哨兵"): Promise<BotStub> {
 /** The first run writes memory, a note, a wake time and one notification. */
 function firstRunModel() {
   return scriptedModel([
-    { toolCalls: [{ name: "bot_remember", args: { content: "上次价格 239" } }] },
+    {
+      toolCalls: [
+        { name: "write_doc", args: { name: "记忆", content: "上次价格 239" } },
+      ],
+    },
     { toolCalls: [{ name: "bot_note", args: { text: "明早再看" } }] },
     { toolCalls: [{ name: "set_next_wake", args: { after: "2h" } }] },
     { toolCalls: [{ name: "notify_owner", args: { text: "降价到 199" } }] },
@@ -101,8 +105,9 @@ describe("bot run end to end", () => {
     await runFirstRun(bot);
 
     const snapshot = await bot.snapshot();
-    expect(snapshot?.memories).toHaveLength(1);
-    expect(snapshot?.memories[0]?.content).toBe("上次价格 239");
+    expect(snapshot?.docs).toEqual([
+      { name: "记忆", content: "上次价格 239" },
+    ]);
     expect(snapshot?.runs).toHaveLength(1);
     expect(snapshot?.runs[0]).toMatchObject({
       outcome: "completed",
@@ -134,6 +139,10 @@ describe("bot run end to end", () => {
     setModelOverride(firstRunModel());
     const bot = await seedBot("e2e-b3");
     await runFirstRun(bot);
+    const firstSnapshot = await bot.snapshot();
+    const firstSpec = await storedSpec(firstSnapshot!.runs[0]!.taskId);
+    // The writer of this run must not leak into its own frozen instructions.
+    expect(firstSpec.instructions).not.toContain("上次价格 239");
 
     setModelOverride(scriptedModel([{ text: "done" }]));
     // The first run scheduled a wake two hours out; pull it in for the test.
@@ -178,7 +187,7 @@ describe("bot run end to end", () => {
         .tools()
         .map((entry) => entry.tool.name),
     );
-    expect(tools).not.toContain("bot_remember");
+    expect(tools).not.toContain("write_doc");
     expect(tools).toContain("finish_task");
   });
 });
