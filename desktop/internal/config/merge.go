@@ -385,7 +385,7 @@ func copyObject(source map[string]any) map[string]any {
 }
 
 func patchIsEmpty(patch domain.EditablePatch) bool {
-	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil && patch.McpServers == nil && patch.Locale == nil
+	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil && patch.McpServers == nil
 }
 
 var (

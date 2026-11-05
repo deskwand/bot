@@ -21,4 +21,8 @@ describe("formatTemplate", () => {
   it("keeps unknown placeholders untouched", () => {
     expect(formatTemplate("{x}", {})).toBe("{x}");
   });
+
+  it("does not read prototype properties as parameters", () => {
+    expect(formatTemplate("{toString}", {})).toBe("{toString}");
+  });
 });

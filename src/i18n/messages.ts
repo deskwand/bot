@@ -41,7 +41,7 @@ export function formatTemplate(
   params: Record<string, string | number> = {},
 ): string {
   return template.replace(/\{(\w+)\}/g, (match, name: string) =>
-    name in params ? String(params[name]) : match,
+    Object.hasOwn(params, name) ? String(params[name]) : match,
   );
 }
 

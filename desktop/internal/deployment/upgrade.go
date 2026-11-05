@@ -1,6 +1,7 @@
 package deployment
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -199,6 +200,10 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 	for name, value := range freshInspection.PlainVars {
 		plainVars[name] = value
 	}
+	configJSON, err := withLocale(fresh.ConfigJSON, lifecycleLocale(l))
+	if err != nil {
+		return domain.Result{State: StateFailed}, sanitizeError(err, nil)
+	}
 
 	operationID, err := newOperationID()
 	if err != nil {
@@ -224,7 +229,7 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 		return domain.Result{OperationID: operationID}, err
 	}
 
-	_, uploadErr := l.api.UploadScript(ctx, target, pkg.ManifestJSON(), pkg.Modules(), cloudflareScriptPlan(fresh.ConfigJSON, bucketName, plainVars, freshState.LiveTag, "DeskWand Bot upgrade "+pkg.Version()+" "+operationID))
+	_, uploadErr := l.api.UploadScript(ctx, target, pkg.ManifestJSON(), pkg.Modules(), cloudflareScriptPlan(configJSON, bucketName, plainVars, freshState.LiveTag, "DeskWand Bot upgrade "+pkg.Version()+" "+operationID))
 	if uploadErr != nil {
 		if isNotSent(uploadErr) || errCode(uploadErr) == CodeMigrationHistoryMismatch || definitiveClientError(uploadErr) {
 			record.ScriptUploadAttempted = false
@@ -262,6 +267,29 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 		return operationResult(record), err
 	}
 	return operationResult(record), nil
+}
+
+// withLocale returns the configuration with its top-level locale replaced. An
+// empty configuration or locale is returned untouched, so an upgrade never
+// fails merely because the live deployment has no locale to rewrite.
+func withLocale(configJSON []byte, locale string) ([]byte, error) {
+	if locale == "" || len(bytes.TrimSpace(configJSON)) == 0 {
+		return configJSON, nil
+	}
+	value, err := domain.DecodeJSON(configJSON)
+	if err != nil {
+		return nil, sanitizeError(err, nil)
+	}
+	document, ok := value.(map[string]any)
+	if !ok {
+		return nil, domain.Error{Code: CodeVerifyFailed, Message: "the live DESKWAND_CONFIG is not a JSON object"}
+	}
+	document["locale"] = locale
+	encoded, err := domain.CanonicalJSON(document)
+	if err != nil {
+		return nil, sanitizeError(err, nil)
+	}
+	return encoded, nil
 }
 
 func (l *Lifecycle) upgradeWithVersion(ctx context.Context, target domain.Target, pkg release.Package, snapshot domain.Snapshot, beforeIdentity resourceIDs) (domain.Result, error) {

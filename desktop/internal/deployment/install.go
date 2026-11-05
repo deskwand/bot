@@ -300,7 +300,7 @@ func (l *Lifecycle) findInstallRecord(target domain.Target, request InstallReque
 	if latest == nil {
 		return OperationRecord{}, false, nil
 	}
-	if latest.BucketName != request.BucketName || latest.ActiveChannel != request.ActiveChannel || !sameJSON(latest.ConfigJSON, configJSON) {
+	if latest.BucketName != request.BucketName || latest.ActiveChannel != request.ActiveChannel || !sameJSONIgnoringLocale(latest.ConfigJSON, configJSON) {
 		return OperationRecord{}, false, domain.Error{
 			Code:    CodeInstallConflict,
 			Message: "an unfinished install for this Worker uses different settings; finish or cancel it before starting another",
@@ -652,6 +652,36 @@ func sameJSON(a, b []byte) bool {
 		return false
 	}
 	return string(canonicalA) == string(canonicalB)
+}
+
+// sameJSONIgnoringLocale compares two configuration documents without their
+// top-level locale. Resuming an install must tolerate a language change or a
+// record written by a client that did not publish a locale yet; the resumed
+// upload still uses the recorded configuration.
+func sameJSONIgnoringLocale(a, b []byte) bool {
+	left, okLeft := withoutLocale(a)
+	right, okRight := withoutLocale(b)
+	if !okLeft || !okRight {
+		return sameJSON(a, b)
+	}
+	return sameJSON(left, right)
+}
+
+func withoutLocale(raw []byte) ([]byte, bool) {
+	value, err := domain.DecodeJSON(raw)
+	if err != nil {
+		return nil, false
+	}
+	document, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	delete(document, "locale")
+	canonical, err := domain.CanonicalJSON(document)
+	if err != nil {
+		return nil, false
+	}
+	return canonical, true
 }
 
 func errCodeOrDefault(err error, fallback string) string {

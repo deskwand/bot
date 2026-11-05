@@ -776,3 +776,22 @@ func TestMergeKeepsLocaleWhenPatchNil(t *testing.T) {
 		t.Fatalf("locale = %q, want en", result.Locale)
 	}
 }
+
+func TestMergeEmptyConfigWithOnlyLocaleReportsMissingConfig(t *testing.T) {
+	base := domain.Snapshot{
+		Target:      domain.Target{AccountID: "account", ScriptName: "worker"},
+		VersionID:   "version-1",
+		Fingerprint: "empty-fingerprint",
+	}
+	locale := "en"
+	_, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{Locale: &locale},
+	})
+	if err == nil {
+		t.Fatal("empty config with only a locale patch published")
+	}
+	if !strings.Contains(err.Error(), "DESKWAND_CONFIG is not set") {
+		t.Fatalf("error = %v, want the missing-config hint", err)
+	}
+}
