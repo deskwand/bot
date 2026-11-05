@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expectNoChinese } from "./i18n-helpers";
+import { expectNoChinese, useEnglish } from "./i18n-helpers";
 
 test("switching to English applies at once and persists", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
@@ -142,6 +142,26 @@ test("formatDateTime follows the locale", async ({ page }) => {
   await expect(page.getByTestId("backup-file-list")).toContainText(
     /\d{1,2}\/\d{1,2}\/\d{4}/,
   );
+});
+
+test("state badges switch language without reload", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByTestId("overview-status-details").locator("summary").click();
+
+  const badge = page.getByTestId("state-model");
+  await expect(badge).toHaveText("已配置");
+
+  await page
+    .getByRole("group", { name: "语言" })
+    .getByRole("button", { name: "English", exact: true })
+    .click();
+
+  await expect(page.getByTestId("state-model")).toHaveText("Configured");
+});
+
+test("shell is English", async ({ page }) => {
+  await useEnglish(page, "/test.html?fixture=configured");
+  await expectNoChinese(page, "aside");
 });
 
 test("expectNoChinese ignores marked regions", async ({ page }) => {

@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/components/app-context";
+import { useT, type MessageKey } from "@/i18n";
 import { codeCopy, toClientError } from "@/services/errors";
 import type { ThemeSource } from "@/services/types";
 
-const OPTIONS: { source: ThemeSource; label: string; icon: typeof Sun }[] = [
-  { source: "system", label: "跟随系统", icon: Monitor },
-  { source: "light", label: "浅色", icon: Sun },
-  { source: "dark", label: "深色", icon: Moon },
+const OPTIONS: { source: ThemeSource; label: MessageKey; icon: typeof Sun }[] = [
+  { source: "system", label: "shell.themeSystem", icon: Monitor },
+  { source: "light", label: "shell.themeLight", icon: Sun },
+  { source: "dark", label: "shell.themeDark", icon: Moon },
 ];
 
 /**
@@ -18,6 +19,7 @@ const OPTIONS: { source: ThemeSource; label: string; icon: typeof Sun }[] = [
  */
 export function ThemeSwitcher() {
   const { client } = useApp();
+  const t = useT();
   const [source, setSource] = useState<ThemeSource>("system");
   const [error, setError] = useState<unknown>(null);
 
@@ -52,13 +54,14 @@ export function ThemeSwitcher() {
   return (
     <div className="mb-3">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">主题</span>
+        <span className="text-xs text-muted-foreground">{t("shell.theme")}</span>
         <div
           role="group"
-          aria-label="外观"
+          aria-label={t("shell.appearance")}
           className="flex gap-0.5 rounded-lg border border-border p-0.5"
         >
           {OPTIONS.map(({ source: value, label, icon: Icon }) => (
+            // Labels are looked up at render time so a language switch applies.
             <Button
               key={value}
               type="button"
@@ -67,8 +70,8 @@ export function ThemeSwitcher() {
               // The sidebar is 224px wide; icons alone fit where three
               // labels do not. The name stays for screen readers and hover.
               className="h-6 w-[26px] rounded-md px-0"
-              title={label}
-              aria-label={label}
+              title={t(label)}
+              aria-label={t(label)}
               aria-pressed={source === value}
               onClick={() => void choose(value)}
             >

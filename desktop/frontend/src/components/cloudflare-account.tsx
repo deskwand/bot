@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { ErrorAlert } from "@/components/feedback";
 import { useApp } from "@/components/app-context";
+import { useT } from "@/i18n";
 
 /**
  * Sidebar footer for the connected account. Signing out revokes this client's
@@ -26,6 +27,7 @@ export function CloudflareAccountCard({
   onSignedOut: () => void;
 }) {
   const { client } = useApp();
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -63,7 +65,7 @@ export function CloudflareAccountCard({
 
   return (
     <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
-      <span className="inline-flex items-center gap-1.5" aria-label="Cloudflare 已连接">
+      <span className="inline-flex items-center gap-1.5" aria-label={t("shell.accountConnected")}>
         <span className="size-1.5 rounded-full bg-emerald-600" aria-hidden />Cloudflare
       </span>
       <Button
@@ -76,32 +78,30 @@ export function CloudflareAccountCard({
         onClick={() => change(true)}
       >
         <LogOut aria-hidden />
-        退出登录
+        {t("shell.signOut")}
       </Button>
 
       <Dialog open={open} onOpenChange={change}>
         <DialogContent showCloseButton={!busy} aria-busy={busy}>
           <DialogHeader>
-            <DialogTitle>退出 Cloudflare 账号？</DialogTitle>
-            <DialogDescription>
-              会清除本机授权；云端服务照常运行。重新登录后可继续管理。
-            </DialogDescription>
+            <DialogTitle>{t("shell.signOutTitle")}</DialogTitle>
+            <DialogDescription>{t("shell.signOutDescription")}</DialogDescription>
           </DialogHeader>
           {dirty ? (
             <p className="text-sm text-muted-foreground">
-              未发布的修改会丢弃。
+              {t("shell.unpublishedWillDiscard")}
             </p>
           ) : null}
           <ErrorAlert error={error} />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => change(false)} disabled={busy}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button type="button" variant="destructive" onClick={signOut} disabled={busy}>
               {busy ? (
                 <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
               ) : null}
-              确认退出
+              {t("shell.confirmSignOut")}
             </Button>
           </DialogFooter>
         </DialogContent>

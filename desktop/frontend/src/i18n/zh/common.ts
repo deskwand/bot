@@ -8,4 +8,6 @@ export const common = {
   publish: "发布",
   loading: "加载中…",
   unknown: "未知",
+  cloudflareNeuronsNotice:
+    "Cloudflare 模型每天 10,000 neurons 免费额度，UTC 0 点重置；用尽后免费账号暂停，付费账号计费。",
 } as const;

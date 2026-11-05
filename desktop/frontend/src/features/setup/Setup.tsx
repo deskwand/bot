@@ -35,7 +35,7 @@ import { ErrorAlert, StateBadge, StepList } from "@/components/feedback";
 import { useDirty } from "@/components/use-dirty";
 import { toClientError } from "@/services/errors";
 import { useApp } from "@/components/app-context";
-import { CLOUDFLARE_NEURONS_NOTICE } from "@/lib/copy";
+import { cloudflareNeuronsNotice } from "@/lib/copy";
 import { useUiStore } from "@/store/ui";
 import type { AccountDTO, ImportPreviewDTO, ResultDTO, WorkerDTO } from "@/services/types";
 import {
@@ -604,7 +604,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
               {parseModelKey(butler)?.provider === "workers-ai" || parseModelKey(task)?.provider === "workers-ai" ? (
                 <details className="text-xs text-muted-foreground">
                   <summary className="cursor-pointer">模型额度与费用</summary>
-                  <p className="mt-2" data-testid="workers-ai-quota-notice">{CLOUDFLARE_NEURONS_NOTICE}</p>
+                  <p className="mt-2" data-testid="workers-ai-quota-notice">{cloudflareNeuronsNotice()}</p>
                 </details>
               ) : null}
 

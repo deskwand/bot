@@ -3,6 +3,7 @@ import { Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useApp } from "@/components/app-context";
+import { useT } from "@/i18n";
 import { codeCopy, toClientError } from "@/services/errors";
 
 /**
@@ -13,6 +14,7 @@ import { codeCopy, toClientError } from "@/services/errors";
  */
 export function TelemetryToggle() {
   const { client } = useApp();
+  const t = useT();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -48,13 +50,13 @@ export function TelemetryToggle() {
     <div className="mb-3">
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1">
-          <span className="text-xs text-muted-foreground">匿名统计</span>
+          <span className="text-xs text-muted-foreground">{t("shell.telemetry")}</span>
           <Button
             type="button"
             size="icon-xs"
             variant="ghost"
             className="size-5 text-muted-foreground"
-            aria-label="匿名统计说明"
+            aria-label={t("shell.telemetryInfo")}
             aria-expanded={scopeOpen}
             aria-controls="telemetry-scope"
             onClick={() => setScopeOpen((open) => !open)}
@@ -65,12 +67,12 @@ export function TelemetryToggle() {
         <Switch
           checked={enabled ?? false}
           disabled={enabled === null}
-          aria-label="匿名统计"
+          aria-label={t("shell.telemetry")}
           onCheckedChange={(next) => void choose(next)}
         />
       </div>
       <p id="telemetry-scope" hidden={!scopeOpen} className="mt-1 text-xs text-muted-foreground">
-        只发送匿名设备号、版本、平台和功能使用次数，不包含任何内容。关闭后立即停止上报。
+        {t("shell.telemetryScope")}
       </p>
       {error ? (
         <p role="alert" className="mt-2 text-xs text-destructive">

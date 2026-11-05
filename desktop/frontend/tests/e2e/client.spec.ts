@@ -3,7 +3,8 @@ import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
-import { FALLBACK_CODE_MESSAGE, describeCode } from "../../src/services/errors";
+import { en } from "../../src/i18n/en";
+import { describeCode, fallbackCodeMessage } from "../../src/services/errors";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const SCREENS = fileURLToPath(new URL("../../test-results/screens", import.meta.url));
@@ -101,7 +102,7 @@ test("production bundle contains no fixture router", () => {
 });
 
 
-test("describeCode covers every fixed Go error code", () => {
+function fixedGoErrorCodes(): Set<string> {
   const goRoot = fileURLToPath(new URL("../../../internal", import.meta.url));
   const files = readdirSync(goRoot, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".go") && !entry.name.endsWith("_test.go"))
@@ -121,13 +122,18 @@ test("describeCode covers every fixed Go error code", () => {
       }
     }
   }
+  return codes;
+}
+
+test("describeCode covers every fixed Go error code", () => {
+  const codes = fixedGoErrorCodes();
   expect(codes.size).toBeGreaterThan(30);
   for (const code of codes) {
     expect(describeCode(code), `missing describeCode entry for ${code}`).not.toBe(
-      FALLBACK_CODE_MESSAGE,
+      fallbackCodeMessage(),
     );
   }
-  expect(describeCode("UP_TO_DATE")).not.toBe(FALLBACK_CODE_MESSAGE);
+  expect(describeCode("UP_TO_DATE")).not.toBe(fallbackCodeMessage());
   // The copy budget is a requirement, not a one-off cleanup. The backup notice
   // is pinned verbatim by its own spec and is the only exemption.
   const pinned = new Set(["云端服务尚不支持数据备份，请先在更新页升级。"]);
@@ -136,7 +142,19 @@ test("describeCode covers every fixed Go error code", () => {
     if (pinned.has(line)) continue;
     expect(line.length, `${code} is longer than 22 characters`).toBeLessThanOrEqual(22);
   }
-  expect(describeCode("WECHAT_ILINK_HTTP_500")).not.toBe(FALLBACK_CODE_MESSAGE);
+  expect(describeCode("WECHAT_ILINK_HTTP_500")).not.toBe(fallbackCodeMessage());
+});
+
+test("describeCode covers every fixed Go error code in English", () => {
+  const codes = fixedGoErrorCodes();
+  expect(codes.size).toBeGreaterThan(30);
+  for (const code of codes) {
+    if (code.startsWith("WECHAT_ILINK_")) {
+      expect(en.errors.wechatFallback).toBeTruthy();
+      continue;
+    }
+    expect(Object.hasOwn(en.errors, code), `missing en.errors.${code}`).toBe(true);
+  }
 });
 
 test("匿名统计开关默认打开，可以关掉再打开", async ({ page }) => {

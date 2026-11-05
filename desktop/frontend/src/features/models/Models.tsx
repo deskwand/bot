@@ -29,7 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useApp } from "@/components/app-context";
-import { CLOUDFLARE_NEURONS_NOTICE } from "@/lib/copy";
+import { cloudflareNeuronsNotice } from "@/lib/copy";
 import { ErrorAlert, StateBadge, StatusRow, StepList } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
@@ -587,7 +587,7 @@ export function Models() {
             </p>
             {keylessSelected ? (
               <p className="mb-3 text-sm text-muted-foreground" data-testid="workers-ai-quota-notice">
-                {CLOUDFLARE_NEURONS_NOTICE}
+                {cloudflareNeuronsNotice()}
               </p>
             ) : null}
             {keyProviders.length === 0 ? (

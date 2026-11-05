@@ -70,6 +70,7 @@ export function LocaleSwitcher({ dirty = false }: { dirty?: boolean }) {
               size="xs"
               variant={source === value ? "secondary" : "ghost"}
               className="rounded-md px-1.5"
+              data-i18n-ignore={value === "zh" ? "" : undefined}
               aria-pressed={source === value}
               onClick={() => {
                 if (value !== source) void setSource(value);

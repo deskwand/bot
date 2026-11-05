@@ -11,10 +11,11 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/components/app-context";
-import { formatDateTime } from "@/i18n";
+import { formatDateTime, getT, useLocale, useT } from "@/i18n";
 import {
   STATE_LABELS,
   detailLabel,
+  detailNeedsIgnore,
   sourceLabel,
   stateLabel,
   statusKindLabel,
@@ -28,9 +29,9 @@ export { STATE_LABELS, detailLabel, sourceLabel, stateLabel, statusKindLabel } f
 export function ErrorAlert({
   error,
   onRetry,
-  retryLabel = "重试",
+  retryLabel,
   onReload,
-  reloadLabel = "重新加载",
+  reloadLabel,
 }: {
   error: unknown;
   onRetry?: () => void;
@@ -39,6 +40,7 @@ export function ErrorAlert({
   reloadLabel?: string;
 }) {
   const { navigate, navigateImport } = useApp();
+  const t = useT();
   if (!error) return null;
   const parsed = toClientError(error);
   const { short, known } = codeCopy(parsed.code);
@@ -57,22 +59,22 @@ export function ErrorAlert({
       <AlertTitle className="min-w-0 [overflow-wrap:anywhere]" data-testid="error-short">{line}</AlertTitle>
       <AlertDescription className="min-w-0">
         <details className="mt-2 min-w-0 break-all">
-          <summary className="cursor-pointer text-xs opacity-80">详情</summary>
+          <summary className="cursor-pointer text-xs opacity-80">{t("common.details")}</summary>
           <Badge variant="outline" className="mt-1 font-mono text-[11px]" data-testid="error-code">
             {parsed.code}
           </Badge>
-          {folded ? <span className="mt-1 block text-xs opacity-80" data-testid="error-detail">{folded}</span> : null}
+          {folded ? <span className="mt-1 block text-xs opacity-80" data-testid="error-detail" data-i18n-ignore>{folded}</span> : null}
         </details>
         {onRetry || onReload || goUpdates || importAgain || waitForPending ? (
           <span className="mt-3 flex flex-wrap gap-2">
             {goUpdates ? (
               <Button type="button" size="sm" onClick={() => navigate("updates")}>
-                前往更新页
+                {t("errors.goToUpdates")}
               </Button>
             ) : null}
             {importAgain ? (
               <Button type="button" size="sm" onClick={navigateImport}>
-                重新导入
+                {t("errors.reimport")}
               </Button>
             ) : null}
             {waitForPending ? (
@@ -82,17 +84,17 @@ export function ErrorAlert({
                 variant="outline"
                 onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
               >
-                先用顶部的「继续」处理
+                {t("errors.resolvePendingFirst")}
               </Button>
             ) : null}
             {onReload ? (
               <Button type="button" size="sm" variant="outline" onClick={onReload}>
-                {reloadLabel}
+                {reloadLabel ?? t("errors.reload")}
               </Button>
             ) : null}
             {onRetry ? (
               <Button type="button" size="sm" onClick={onRetry}>
-                {retryLabel}
+                {retryLabel ?? t("common.retry")}
               </Button>
             ) : null}
           </span>
@@ -103,11 +105,12 @@ export function ErrorAlert({
 }
 
 export function StateBadge({ state }: { state: string }) {
-  const entry = STATE_LABELS[state] ?? { label: state, variant: "outline" as const };
-  return <Badge variant={entry.variant}>{entry.label}</Badge>;
+  useLocale();
+  return <Badge variant={STATE_LABELS[state]?.variant ?? "outline"}>{stateLabel(state)}</Badge>;
 }
 
 export function StatusBadge({ item }: { item: StatusItemDTO }) {
+  useLocale();
   const verify = verificationBadge(item);
   return (
     <span data-testid={`status-badge-${item.kind}`}>
@@ -135,6 +138,7 @@ export function StepIcon({ state }: { state: string }) {
 }
 
 export function StepList({ steps, compact = false }: { steps: StepDTO[]; compact?: boolean }) {
+  useLocale();
   if (steps.length === 0) return null;
   return (
     <ol className={compact ? "my-2 space-y-1" : "my-3 space-y-2"} data-testid="step-list">
@@ -144,11 +148,11 @@ export function StepList({ steps, compact = false }: { steps: StepDTO[]; compact
             <StepIcon state={step.state} />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block">{step.message}</span>
+            <span className="block" data-i18n-ignore>{step.message}</span>
             {compact ? null : (
               <span className="block text-xs text-muted-foreground">
                 {stateLabel(step.state)}
-                {step.evidence ? ` · ${step.evidence}` : ""}
+                {step.evidence ? <span data-i18n-ignore>{` · ${step.evidence}`}</span> : null}
               </span>
             )}
           </span>
@@ -160,13 +164,14 @@ export function StepList({ steps, compact = false }: { steps: StepDTO[]; compact
 }
 
 export function formatObserved(value?: string): string {
-  if (!value) return "未记录观察时间";
+  if (!value) return getT()("states.noObservedTime");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return formatDateTime(date);
 }
 
 export function StatusRow({ item }: { item: StatusItemDTO }) {
+  const t = useT();
   const verify = verificationBadge(item);
   return (
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border py-3 last:border-0" data-testid={`status-${item.kind}`}>
@@ -185,10 +190,15 @@ export function StatusRow({ item }: { item: StatusItemDTO }) {
             </Badge>
           ) : null}
         </div>
-        <p className="mt-1 text-sm text-muted-foreground">{detailLabel(item.detail)}</p>
+        <p
+          className="mt-1 text-sm text-muted-foreground"
+          data-i18n-ignore={detailNeedsIgnore(item.detail) ? "" : undefined}
+        >
+          {detailLabel(item.detail)}
+        </p>
       </div>
       <div className="text-right text-xs text-muted-foreground">
-        <div>来源：{sourceLabel(item.source)}</div>
+        <div>{t("states.source", { source: sourceLabel(item.source) })}</div>
         <div>{formatObserved(item.observedAt)}</div>
       </div>
     </div>

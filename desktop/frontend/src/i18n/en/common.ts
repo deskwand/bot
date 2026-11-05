@@ -10,4 +10,6 @@ export const common: Messages["common"] = {
   publish: "Publish",
   loading: "Loading…",
   unknown: "Unknown",
+  cloudflareNeuronsNotice:
+    "Cloudflare models include 10,000 free neurons per day, reset at 00:00 UTC; when exhausted, free accounts pause and paid accounts are billed.",
 };

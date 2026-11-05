@@ -22,12 +22,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { AppContext, PAGE_LABELS, type Page } from "@/components/app-context";
+import { AppContext, pageLabel, type Page } from "@/components/app-context";
 import { CloudflareAccountCard } from "@/components/cloudflare-account";
 import { TelemetryToggle } from "@/components/telemetry-toggle";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { ErrorAlert, StepList, StateBadge } from "@/components/feedback";
+import { getT, useT } from "@/i18n";
 import { createAppQueryClient } from "@/services/queries";
 import type { ClientService, OperationDTO } from "@/services/types";
 import { useUiStore } from "@/store/ui";
@@ -60,6 +61,7 @@ const NAV: { page: Page; icon: typeof LayoutDashboard }[] = [
 ];
 
 export function App({ client }: { client: ClientService }) {
+  const t = useT();
   const refreshRef = useRef<(showLoading?: boolean) => Promise<void>>(async () => {});
   const [queryClient] = useState(() => createAppQueryClient(() => void refreshRef.current(false)));
   const scopeRef = useRef<string | null>(null);
@@ -100,13 +102,15 @@ export function App({ client }: { client: ClientService }) {
           const connectionError =
             connection.state === "unavailable"
               ? new Error(
-                  "CREDENTIAL_STORE_UNAVAILABLE: 钥匙串不可用，未改用明文保存。",
+                  `CREDENTIAL_STORE_UNAVAILABLE: ${getT()("errors.CREDENTIAL_STORE_UNAVAILABLE")}`,
                 )
               : connection.state === "reauth_required"
                 ? new Error(
-                    `AUTH_REAUTH_REQUIRED: Cloudflare 授权已过期，请重新登录${
-                      connection.accountName ? `（${connection.accountName}）` : ""
-                    }。`,
+                    `AUTH_REAUTH_REQUIRED: ${
+                      connection.accountName
+                        ? getT()("errors.reauthWithAccount", { account: connection.accountName })
+                        : getT()("errors.AUTH_REAUTH_REQUIRED")
+                    }`,
                   )
                 : undefined;
           setSession({ kind: "disconnected", connectionError });
@@ -210,7 +214,7 @@ export function App({ client }: { client: ClientService }) {
                   variant="ghost"
                   size="icon"
                   className="md:hidden"
-                  aria-label={navOpen ? "收起导航" : "打开导航"}
+                  aria-label={navOpen ? t("shell.closeNav") : t("shell.openNav")}
                   aria-expanded={navOpen}
                   aria-controls="primary-nav"
                   onClick={() => setNavOpen((open) => !open)}
@@ -221,7 +225,7 @@ export function App({ client }: { client: ClientService }) {
               <nav
                 id="primary-nav"
                 className={`${navOpen ? "flex" : "hidden"} flex-col gap-1 md:flex`}
-                aria-label="主导航"
+                aria-label={t("shell.nav")}
               >
                 {NAV.map(({ page: target, icon: Icon }) => (
                   <Button
@@ -233,7 +237,7 @@ export function App({ client }: { client: ClientService }) {
                     onClick={() => navigate(target)}
                   >
                     <Icon className="size-4" aria-hidden />
-                    {PAGE_LABELS[target]}
+                    {pageLabel(target)}
                   </Button>
                 ))}
               </nav>
@@ -258,7 +262,7 @@ export function App({ client }: { client: ClientService }) {
             {session.kind === "loading" ? (
               <div className="flex min-h-[60svh] items-center justify-center gap-3 text-muted-foreground">
                 <Loader2 className="size-5 animate-spin motion-reduce:animate-none" aria-hidden />
-                正在读取状态…
+                {t("shell.readingStatus")}
               </div>
             ) : shell && setupImport ? (
               <Setup
@@ -289,7 +293,7 @@ export function App({ client }: { client: ClientService }) {
                   {page === "models" ? <Models /> : null}
                   {page === "mcp" ? <Mcp /> : null}
                   {page === "entries" ? (
-                    <Suspense fallback={<PageLoading label="正在加载…" />}>
+                    <Suspense fallback={<PageLoading label={t("shell.pageLoading")} />}>
                       <Entries />
                     </Suspense>
                   ) : null}
@@ -315,17 +319,15 @@ export function App({ client }: { client: ClientService }) {
       <Dialog open={pendingNav !== null} onOpenChange={(open) => !open && setPendingNav(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>有未保存的更改</DialogTitle>
-            <DialogDescription>
-              离开会丢弃未发布的修改，云端不受影响。
-            </DialogDescription>
+            <DialogTitle>{t("shell.unsavedTitle")}</DialogTitle>
+            <DialogDescription>{t("shell.unsavedDescription")}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setPendingNav(null)}>
-              继续编辑
+              {t("shell.keepEditing")}
             </Button>
             <Button type="button" onClick={confirmDiscard}>
-              放弃更改
+              {t("shell.discardChanges")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -355,6 +357,7 @@ function PendingOperations({
   onAbandon: (operation: OperationDTO) => Promise<unknown>;
   onDismiss: (id: string) => void;
 }) {
+  const t = useT();
   const [running, setRunning] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [result, setResult] = useState<{ id: string; state: string; steps: OperationDTO["steps"] } | null>(null);
@@ -388,12 +391,14 @@ function PendingOperations({
       <CardContent className="pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold">有未完成的操作</h2>
+            <h2 className="text-sm font-semibold">{t("shell.pendingTitle")}</h2>
             <p className="text-xs text-muted-foreground">
-              继续前会先核对云端状态。
+              {t("shell.pendingDescription")}
             </p>
           </div>
-          <Badge variant="outline">{operations.length} 项</Badge>
+          <Badge variant="outline">
+            {t("shell.pendingCount", { count: operations.length })}
+          </Badge>
         </div>
         {error ? (
           <ErrorAlert
@@ -416,10 +421,10 @@ function PendingOperations({
         {result ? (
           <div className="my-2 rounded-md border border-border bg-background p-3 text-sm">
             <div className="flex items-center gap-2">
-              <span>操作 {result.id}</span>
+              <span>{t("shell.operationLabel", { id: result.id })}</span>
               <StateBadge state={result.state} />
             </div>
-            {result.state === "published" || result.state === "completed" ? <details className="mt-2"><summary className="cursor-pointer text-xs text-muted-foreground">详情</summary><StepList steps={result.steps ?? []} /></details> : <StepList steps={result.steps ?? []} />}
+            {result.state === "published" || result.state === "completed" ? <details className="mt-2"><summary className="cursor-pointer text-xs text-muted-foreground">{t("common.details")}</summary><StepList steps={result.steps ?? []} /></details> : <StepList steps={result.steps ?? []} />}
           </div>
         ) : null}
         <ul className="mt-3 space-y-3">
@@ -427,17 +432,18 @@ function PendingOperations({
             <li key={operation.operationId} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-background p-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                  <span className="truncate">{operation.workerName || operation.operationId}</span>
+                  <span className="truncate" data-i18n-ignore>{operation.workerName || operation.operationId}</span>
                   <StateBadge state={operation.state} />
                   {operation.kind ? <Badge variant="outline">{operation.kind}</Badge> : null}
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {operation.operationId} · {operation.updatedAt || "时间未知"}
+                  <span data-i18n-ignore>{operation.operationId}</span> ·{" "}
+                  {operation.updatedAt || t("shell.timeUnknown")}
                 </p>
               </div>
               <div className="flex gap-2">
                 <Button type="button" variant="ghost" size="sm" onClick={() => onDismiss(operation.operationId)}>
-                  忽略
+                  {t("shell.ignore")}
                 </Button>
                 <Button
                   type="button"
@@ -446,7 +452,7 @@ function PendingOperations({
                   disabled={running === operation.operationId}
                   onClick={() => setAbandonTarget(operation)}
                 >
-                  放弃
+                  {t("shell.abandon")}
                 </Button>
                 <Button
                   type="button"
@@ -468,7 +474,7 @@ function PendingOperations({
                   {running === operation.operationId ? (
                     <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
                   ) : null}
-                  继续
+                  {t("common.continue")}
                 </Button>
               </div>
             </li>
@@ -479,17 +485,15 @@ function PendingOperations({
     <Dialog open={abandonTarget !== null} onOpenChange={(open) => !open && setAbandonTarget(null)}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>确认放弃操作</DialogTitle>
-          <DialogDescription>
-            只取消本机的待处理记录，云端资源不受影响。
-          </DialogDescription>
+          <DialogTitle>{t("shell.abandonTitle")}</DialogTitle>
+          <DialogDescription>{t("shell.abandonDescription")}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => setAbandonTarget(null)}>
-            返回
+            {t("shell.back")}
           </Button>
           <Button type="button" variant="destructive" onClick={() => void runAbandon()}>
-            确认放弃
+            {t("shell.confirmAbandon")}
           </Button>
         </DialogFooter>
       </DialogContent>
