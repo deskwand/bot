@@ -16,7 +16,7 @@ import {
   type RunOutcome,
   type RunRow,
 } from "./bot-store";
-import { buildBotInstructions } from "./instructions";
+import { buildBotAuthorization, buildBotInstructions } from "./instructions";
 import {
   CHANNEL_DISABLED_RETRY_MS,
   DAILY_WAKE_LIMIT,
@@ -58,6 +58,7 @@ export type BotButler = {
     botId: string,
     title: string,
     instructions: string,
+    authorization?: string,
   ): Promise<SpawnForBotResult>;
   botTaskOutcome(
     taskId: string,
@@ -398,6 +399,11 @@ export class BotDO extends DurableObject<Env> {
       runs: this.store.recentRuns(3),
       steer: meta.pendingSteer,
     });
+    const authorization = buildBotAuthorization({
+      name: meta.name,
+      mission: meta.mission,
+      steer: meta.pendingSteer,
+    });
     const consumed = meta.pendingSteer.length;
 
     let result: SpawnForBotResult;
@@ -406,6 +412,7 @@ export class BotDO extends DurableObject<Env> {
         meta.botId,
         meta.name,
         instructions,
+        authorization,
       );
     } catch (error) {
       const current = this.store.readMeta();

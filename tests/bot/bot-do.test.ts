@@ -42,7 +42,12 @@ function botStub(name: string) {
 }
 
 type FakeState = {
-  spawns: { botId: string; title: string; instructions: string }[];
+  spawns: {
+    botId: string;
+    title: string;
+    instructions: string;
+    authorization?: string;
+  }[];
   notices: { botId: string; text: string }[];
   spawnResult: (index: number) => SpawnForBotResult;
   outcome: { outcome: RunOutcome | null; summary: string };
@@ -68,8 +73,8 @@ function fakeButler(): FakeState {
   };
 
   const butler: BotButler = {
-    async spawnForBot(botId, title, instructions) {
-      state.spawns.push({ botId, title, instructions });
+    async spawnForBot(botId, title, instructions, authorization) {
+      state.spawns.push({ botId, title, instructions, authorization });
       if (state.spawnGate !== null) await state.spawnGate;
       return state.spawnResult(state.spawns.length);
     },
@@ -464,6 +469,19 @@ describe("BotDO lifecycle", () => {
     expect(remembered).toBe(-1);
     expect(await stub.snapshot()).toBeNull();
     expect(await alarmAt(stub)).toBeNull();
+  });
+
+  it("authorizes the review without memories", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-lifecycle-authorization");
+    await initBot(stub);
+    await stub.remember("记忆内容abc");
+
+    await fireAlarm(stub);
+
+    expect(fake.spawns[0]?.instructions).toContain("记忆内容abc");
+    expect(fake.spawns[0]?.authorization).toContain("盯着价格");
+    expect(fake.spawns[0]?.authorization).not.toContain("记忆内容abc");
   });
 
   it("steer is consumed by the next run", async () => {

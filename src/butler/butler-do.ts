@@ -417,6 +417,7 @@ export class ButlerDO extends Agent<Env> {
     botId: string,
     title: string,
     instructions: string,
+    authorization?: string,
   ): Promise<SpawnForBotResult> {
     if (this.lease.current() !== null) {
       return { ok: false, reason: "maintenance", message: "维护中" };
@@ -435,7 +436,13 @@ export class ButlerDO extends Agent<Env> {
     this.repo.insert({ id, title, chatId: null, botId });
 
     try {
-      await this.taskFor(id).start({ taskId: id, title, instructions, botId });
+      await this.taskFor(id).start({
+        taskId: id,
+        title,
+        instructions,
+        botId,
+        ...(authorization === undefined ? {} : { authorization }),
+      });
     } catch (error) {
       const message = errorText(error);
       this.repo.update(id, { status: "failed", summary: message });

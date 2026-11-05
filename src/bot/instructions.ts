@@ -38,6 +38,28 @@ function runLines(runs: readonly RunRow[]): string[] {
 }
 
 /**
+ * What the reviewer treats as the owner's authorization for one bot wake.
+ * Deliberately excludes memories and recent runs: those are the bot's own
+ * records, not something the owner asked for.
+ */
+export function buildBotAuthorization(input: {
+  name: string;
+  mission: string;
+  steer: string[];
+}): string {
+  const lines = [`你是机器人 ${input.name}。`, "", "使命：", input.mission];
+
+  if (input.steer.length > 0) {
+    lines.push("", "主人追加：");
+    for (const text of input.steer) {
+      lines.push(`- ${text}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * Instructions for one bot wake: its mission, the owner's steer, and a fenced
  * block of its own memories and recent runs. The notice keeps the bot's
  * records from being read as owner instructions.

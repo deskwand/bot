@@ -116,6 +116,31 @@ describe("ButlerDO bot runs", () => {
     expect(row).toMatchObject({ botId: "b1", chatId: null, status: "queued" });
   });
 
+  it("spawnForBot passes authorization into the task spec", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const stub = butler("bots-authorization");
+    const specs = await stubStart(stub);
+
+    const result = await stub.spawnForBot(
+      "b1",
+      "价格哨兵",
+      "盯着价格",
+      "授权文本",
+    );
+
+    expect(result).toEqual({ ok: true, taskId: "t1" });
+    expect(specs).toEqual([
+      {
+        taskId: "t1",
+        title: "价格哨兵",
+        instructions: "盯着价格",
+        botId: "b1",
+        authorization: "授权文本",
+      },
+    ]);
+  });
+
   it("spawnForBot reports channel_disabled", async () => {
     const stub = butler("bots-disabled");
     await runInDurableObject(stub, (instance) => {

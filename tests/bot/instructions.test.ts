@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildBotInstructions } from "../../src/bot/instructions";
+import {
+  buildBotAuthorization,
+  buildBotInstructions,
+} from "../../src/bot/instructions";
 import type { RunRow } from "../../src/bot/bot-store";
 import type { MemoryItem } from "../../src/butler/memory";
 
@@ -15,6 +18,31 @@ const runs: RunRow[] = [
     note: "明早再看",
   },
 ];
+
+describe("buildBotAuthorization", () => {
+  it("includes the name, mission and steer", () => {
+    const text = buildBotAuthorization({
+      name: "价格哨兵",
+      mission: "盯着 X 的价格",
+      steer: ["降到 100 以下就告诉我"],
+    });
+
+    expect(text).toContain("价格哨兵");
+    expect(text).toContain("盯着 X 的价格");
+    expect(text).toContain("降到 100 以下就告诉我");
+    expect(text).toContain("主人追加");
+  });
+
+  it("omits the steer heading when there is no steer", () => {
+    const text = buildBotAuthorization({
+      name: "价格哨兵",
+      mission: "盯着 X 的价格",
+      steer: [],
+    });
+
+    expect(text).not.toContain("主人追加");
+  });
+});
 
 describe("buildBotInstructions", () => {
   it("includes mission, memories and runs in the record block", () => {
