@@ -100,6 +100,9 @@ interface MockState {
   scenario: Scenario;
   theme: ThemeSource;
   locale: LocaleDTO;
+  // What the published config carries. Follows the preference only after a
+  // publish, like Go's deployment hook.
+  publishedLocale: Locale;
   localeSaveFails: boolean;
   telemetry: boolean;
   connected: boolean;
@@ -436,6 +439,7 @@ function initialState(): MockState {
     scenario,
     theme: "system",
     locale: initialLocale(),
+    publishedLocale: "zh",
     localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
     connected: shellScenario,
@@ -652,7 +656,7 @@ export function createMockClient(): ClientService {
       taskModel: state.taskModel,
       customProviders: state.customProviders,
       mcpServers: state.mcpServers,
-      locale: "zh",
+      locale: state.publishedLocale,
       secrets: Object.keys(state.secrets)
         .sort()
         .map((name) => ({ name, configured: state.secrets[name] === true })),
@@ -1215,6 +1219,7 @@ export function createMockClient(): ClientService {
         fail("MODEL_KEY_MISSING", "缺少模型 key：MODEL_KEY_DEEPSEEK");
       }
       applyEdit(input);
+      state.publishedLocale = state.locale.resolved;
       const result = published(`op-publish-${sequence}`);
       return result;
     },
