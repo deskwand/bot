@@ -50,6 +50,13 @@ type WorkerDTO struct {
 	MigrationTag string `json:"migrationTag,omitempty"`
 }
 
+// LocaleDTO is the language the UI shows: the stored source and the zh/en
+// locale it resolves to.
+type LocaleDTO struct {
+	Source   string `json:"source"`
+	Resolved string `json:"resolved"`
+}
+
 // ModelDTO is the provider and model id shown in the UI. Provider-specific
 // settings in the stored JSON are preserved but not exposed.
 type ModelDTO struct {

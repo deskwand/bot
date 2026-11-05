@@ -220,6 +220,15 @@ export interface InstallInputDTO {
 }
 
 /**
+ * LocaleDTO is the language the UI shows: the stored source and the zh/en
+ * locale it resolves to.
+ */
+export interface LocaleDTO {
+  source: string;
+  resolved: string;
+}
+
+/**
  * LoginStatusDTO is the only WeChat login state sent to the frontend. It has
  * no credential field.
  */
@@ -589,6 +598,13 @@ export const Service = {
   listWorkers(): Promise<WorkerDTO[]> {
     return call("Service.ListWorkers");
   },
+  /**
+   * Locale returns the language choice: the stored source and the zh/en locale
+   * it resolves to.
+   */
+  locale(): Promise<LocaleDTO> {
+    return call("Service.Locale");
+  },
   /** McpCatalog returns the built-in service catalog. */
   mcpCatalog(): Promise<McpCatalogEntryDTO[]> {
     return call("Service.McpCatalog");
@@ -688,6 +704,14 @@ export const Service = {
    */
   selectEntry(channel: string): Promise<EntryResultDTO> {
     return call("Service.SelectEntry", channel);
+  },
+  /**
+   * SetLocale stores the language and switches this run to it. A store that
+   * refuses the write still switches the run; the error then only says the
+   * choice will revert on the next launch.
+   */
+  setLocale(source: string): Promise<LocaleDTO> {
+    return call("Service.SetLocale", source);
   },
   /**
    * SetTelemetryEnabled stores the switch. Turning it on reports a ping right

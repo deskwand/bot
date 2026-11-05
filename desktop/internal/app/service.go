@@ -53,6 +53,9 @@ const (
 	CodeThemeSaveFailed = "THEME_SAVE_FAILED"
 	// CodeTelemetrySaveFailed reports a telemetry preference the disk refused.
 	CodeTelemetrySaveFailed = "TELEMETRY_SAVE_FAILED"
+	// CodeLocaleSaveFailed reports a language preference the disk refused. The
+	// language still switches for this run; only the save failed.
+	CodeLocaleSaveFailed = "LOCALE_SAVE_FAILED"
 )
 
 // legacyModelSecretNames are the pre-MODEL_KEY_* names. A publish clears any
@@ -176,6 +179,9 @@ type ServiceOptions struct {
 	// Theme is the persisted appearance choice; nil makes SetTheme
 	// appearance-only for this run.
 	Theme ThemeStore
+	// Locale is the language choice shared with publishing; nil follows the
+	// system and keeps this run's choice in memory.
+	Locale *LocaleState
 	// Telemetry reports anonymous feature use. Nil disables reporting.
 	Telemetry TelemetryReporter
 	// TelemetrySettings is the persisted switch and the one-shot facts. Nil
@@ -218,6 +224,7 @@ type Service struct {
 	openPath           func(string) error
 	checkClientUpdates func()
 	theme              ThemeStore
+	locale             *LocaleState
 	telemetry          TelemetryReporter
 	telemetrySettings  TelemetryStore
 	cache              SnapshotCache
@@ -276,6 +283,10 @@ func NewService(options ServiceOptions) *Service {
 	if applyTheme == nil {
 		applyTheme = func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) }
 	}
+	locale := options.Locale
+	if locale == nil {
+		locale = NewLocaleState(nil, nil)
+	}
 	return &Service{
 		auth:               options.Auth,
 		publish:            options.Publish,
@@ -296,6 +307,7 @@ func NewService(options ServiceOptions) *Service {
 		openPath:           openPath,
 		checkClientUpdates: checkClientUpdates,
 		theme:              options.Theme,
+		locale:             locale,
 		telemetry:          options.Telemetry,
 		telemetrySettings:  options.TelemetrySettings,
 		cache:              options.Cache,
@@ -342,6 +354,15 @@ func (s *Service) SetTheme(source string) error {
 	s.applyTheme(normalized)
 	return nil
 }
+
+// Locale returns the language choice: the stored source and the zh/en locale
+// it resolves to.
+func (s *Service) Locale() LocaleDTO { return s.locale.Get() }
+
+// SetLocale stores the language and switches this run to it. A store that
+// refuses the write still switches the run; the error then only says the
+// choice will revert on the next launch.
+func (s *Service) SetLocale(source string) (LocaleDTO, error) { return s.locale.Set(source) }
 
 // StartCloudflareLogin opens Cloudflare's authorization page and waits for the
 // loopback callback in the background. It returns the operation id used by

@@ -45,8 +45,11 @@ type FileThemeStore struct {
 	mu   sync.Mutex
 }
 
+// preferencesFile is the one preferences file. Theme and Locale share it so a
+// save of one never drops the other.
 type preferencesFile struct {
-	Theme string `json:"theme"`
+	Theme  string `json:"theme,omitempty"`
+	Locale string `json:"locale,omitempty"`
 }
 
 // NewFileThemeStore creates the app data directory if needed and returns a
@@ -68,16 +71,9 @@ func NewFileThemeStore(dir string) (*FileThemeStore, error) {
 func (s *FileThemeStore) Theme() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	data, err := os.ReadFile(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return ThemeSystem, nil
-	}
+	file, err := s.readPreferences()
 	if err != nil {
 		return ThemeSystem, fmt.Errorf("app: read preferences: %w", err)
-	}
-	var file preferencesFile
-	if err := json.Unmarshal(data, &file); err != nil {
-		return ThemeSystem, nil
 	}
 	if source, ok := normalizeTheme(file.Theme); ok {
 		return source, nil
@@ -92,12 +88,38 @@ func (s *FileThemeStore) SetTheme(source string) error {
 	if !ok {
 		return domain.Error{Code: deployment.CodeInvalidRequest, Message: "外观设置无效"}
 	}
-	data, err := json.MarshalIndent(preferencesFile{Theme: normalized}, "", "  ")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	file, _ := s.readPreferences()
+	file.Theme = normalized
+	return s.writePreferences(file)
+}
+
+// readPreferences returns the file's contents. A missing file and one that
+// cannot be decoded both yield the zero value: the next save repairs it. The
+// caller holds mu.
+func (s *FileThemeStore) readPreferences() (preferencesFile, error) {
+	data, err := os.ReadFile(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return preferencesFile{}, nil
+	}
+	if err != nil {
+		return preferencesFile{}, err
+	}
+	var file preferencesFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return preferencesFile{}, nil
+	}
+	return file, nil
+}
+
+// writePreferences encodes and atomically replaces the file. The caller holds
+// mu.
+func (s *FileThemeStore) writePreferences(file preferencesFile) error {
+	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return fmt.Errorf("app: encode preferences: %w", err)
 	}
 	data = append(data, '\n')
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return writeFileAtomic(s.path, data)
 }
