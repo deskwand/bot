@@ -215,3 +215,61 @@ test("expectNoChinese ignores marked regions", async ({ page }) => {
   await page.setContent("<div>中文</div>");
   await expect(expectNoChinese(page)).rejects.toThrow(/Found Chinese text/);
 });
+
+test("models is English", async ({ page }) => {
+  // Configured: the model picker, the custom endpoint form and the preview.
+  await useEnglish(page, "/test.html?fixture=configured");
+  await openPage(page, "Models");
+  await expectNoChinese(page, "body");
+
+  await page.getByLabel("Butler model provider").click();
+  await page.getByRole("option", { name: "Anthropic", exact: true }).click();
+  await expect(page.getByPlaceholder("Search models")).toBeVisible();
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await expectNoChinese(page, "body");
+  await page.getByPlaceholder("Search models").fill("no-such-model");
+  await expect(page.getByText("No matching models")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Add custom endpoint" }).click();
+  const custom = page.getByRole("dialog", { name: "Add custom endpoint" });
+  await expect(custom).toBeVisible();
+  await expectNoChinese(page, "body");
+  await custom.getByRole("button", { name: "Cancel" }).click();
+
+  await page
+    .getByTestId("model-key-row-opencode-go")
+    .getByLabel("API key")
+    .fill("sk-en-SENTINEL");
+  await page.getByRole("button", { name: "Save and publish" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Confirm save and publish" }),
+  ).toBeVisible();
+  await expectNoChinese(page, "body");
+
+  // A failed publish keeps its short line and Go detail in English layout.
+  await useEnglish(page, "/test.html?fixture=model-key-missing");
+  await openPage(page, "Models");
+  await page
+    .getByTestId("model-key-row-opencode-go")
+    .getByLabel("API key")
+    .fill("sk-en-SENTINEL");
+  await page.getByRole("button", { name: "Save and publish" }).click();
+  const preview = page.getByRole("dialog", { name: "Confirm save and publish" });
+  await preview
+    .getByRole("button", { name: "Confirm save and publish" })
+    .click();
+  await expect(page.getByTestId("error-alert")).toBeVisible();
+  await expectNoChinese(page, "body");
+
+  // A config conflict shows the reload affordance in English.
+  await useEnglish(page, "/test.html?fixture=config-conflict");
+  await openPage(page, "Models");
+  await page
+    .getByTestId("model-key-row-opencode-go")
+    .getByLabel("API key")
+    .fill("sk-en-SENTINEL");
+  await page.getByRole("button", { name: "Save and publish" }).click();
+  await expect(page.getByTestId("error-alert")).toBeVisible();
+  await expectNoChinese(page, "body");
+});

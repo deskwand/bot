@@ -57,18 +57,16 @@ export function ModelSelect({
     );
   }, [models, query]);
 
-  const modelLabel = (model: ProviderOption["models"][number]): string =>
-    provider?.keyless && !model.imageInput
-      ? `${model.label}（不支持图片）`
-      : model.label;
+  // Provider and model names come from the Go catalog; keep them out of the
+  // translation walk. Only the image-support suffix is ours.
+  const modelName = (model: ProviderOption["models"][number]) => (
+    <>
+      <span data-i18n-ignore>{model.label}</span>
+      {provider?.keyless && !model.imageInput ? t("models.noImage") : null}
+    </>
+  );
 
   const selected = models.find((model) => model.id === current?.id);
-  const selectedModel =
-    current && current.provider === providerID
-      ? selected
-        ? modelLabel(selected)
-        : current.id
-      : null;
 
   const openModels = (next: boolean) => {
     setOpen(next);
@@ -117,7 +115,7 @@ export function ModelSelect({
           }}
         >
           <SelectTrigger id={`${id}-provider`} aria-label={t("models.providerAria", { label })} className="w-full">
-            <SelectValue placeholder="选择供应商">{provider?.label ? <span data-i18n-ignore>{provider.label}</span> : providerID}</SelectValue>
+            <SelectValue placeholder={t("models.selectProvider")}>{provider?.label ? <span data-i18n-ignore>{provider.label}</span> : <span data-i18n-ignore>{providerID}</span>}</SelectValue>
           </SelectTrigger>
           <SelectContent
             onCloseAutoFocus={(event) => {
@@ -129,19 +127,19 @@ export function ModelSelect({
           >
             {custom.length > 0 ? (
               <SelectGroup>
-                <SelectLabel>自定义端点</SelectLabel>
+                <SelectLabel>{t("models.customGroup")}</SelectLabel>
                 {custom.map((option) => (
                   <SelectItem key={option.id} value={option.id}>
-                    {option.label}
+                    <span data-i18n-ignore>{option.label}</span>
                   </SelectItem>
                 ))}
               </SelectGroup>
             ) : null}
             <SelectGroup>
-              {custom.length > 0 ? <SelectLabel>内置供应商</SelectLabel> : null}
+              {custom.length > 0 ? <SelectLabel>{t("models.builtinGroup")}</SelectLabel> : null}
               {builtin.map((option) => (
                 <SelectItem key={option.id} value={option.id}>
-                  {option.label}
+                  <span data-i18n-ignore>{option.label}</span>
                 </SelectItem>
               ))}
             </SelectGroup>
@@ -159,8 +157,14 @@ export function ModelSelect({
               disabled={!provider}
               className="flex h-8 w-full items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap transition-colors outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50"
             >
-              <span className={cn("truncate", !selectedModel && "text-muted-foreground")}>
-                {selectedModel ?? (provider ? "选择模型" : "先选择供应商")}
+              <span className={cn("truncate", !selected && "text-muted-foreground")}>
+                {current && current.provider === providerID ? (
+                  selected ? modelName(selected) : <span data-i18n-ignore>{current.id}</span>
+                ) : provider ? (
+                  t("models.selectModel")
+                ) : (
+                  t("models.selectProviderFirst")
+                )}
               </span>
               <ChevronDownIcon className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
             </button>
@@ -175,14 +179,15 @@ export function ModelSelect({
                 <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   autoFocus
+                  data-i18n-ignore
                   value={query}
                   onChange={(event) => {
                     setQuery(event.target.value);
                     setActive(0);
                   }}
                   onKeyDown={onSearchKey}
-                  placeholder="搜索模型"
-                  aria-label={`搜索${provider?.label ?? ""}模型`}
+                  placeholder={t("models.searchPlaceholder")}
+                  aria-label={t("models.searchAria", { provider: provider?.label ?? "" })}
                   aria-controls={`${id}-list`}
                   aria-activedescendant={matches[active] ? `${id}-option-${active}` : undefined}
                   className="pl-8"
@@ -190,17 +195,19 @@ export function ModelSelect({
                 />
               </div>
               <p className="px-2 pb-1 text-xs text-muted-foreground">
-                {provider?.label} · {models.length} 个模型
+                <span data-i18n-ignore>{provider?.label}</span> ·{" "}
+                {t("models.modelCount", { count: models.length })}
               </p>
               <div
                 ref={listRef}
                 id={`${id}-list`}
                 role="listbox"
-                aria-label={`${provider?.label ?? ""}模型`}
+                aria-label={t("models.listAria", { provider: provider?.label ?? "" })}
+                data-i18n-ignore
                 className="max-h-72 overflow-y-auto"
               >
                 {matches.length === 0 ? (
-                  <p className="px-2 py-3 text-sm text-muted-foreground">没有匹配的模型</p>
+                  <p className="px-2 py-3 text-sm text-muted-foreground">{t("models.noMatchingModels")}</p>
                 ) : (
                   matches.map((model, index) => {
                     const selected = current?.provider === providerID && current.id === model.id;
@@ -218,7 +225,7 @@ export function ModelSelect({
                           index === active && "bg-accent text-accent-foreground",
                         )}
                       >
-                        <span className="truncate">{modelLabel(model)}</span>
+                        <span className="truncate">{modelName(model)}</span>
                         {model.label !== model.id ? (
                           <span className="truncate text-xs text-muted-foreground">{model.id}</span>
                         ) : null}
