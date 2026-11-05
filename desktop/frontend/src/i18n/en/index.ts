@@ -1,6 +1,7 @@
 import type { Messages } from "../types";
 import { common } from "./common";
 import { diagnostics } from "./diagnostics";
+import { entries } from "./entries";
 import { errors } from "./errors";
 import { locale } from "./locale";
 import { mcp } from "./mcp";
@@ -21,4 +22,5 @@ export const en: Messages = {
   updates,
   models,
   mcp,
+  entries,
 };

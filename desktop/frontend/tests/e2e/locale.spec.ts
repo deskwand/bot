@@ -206,6 +206,21 @@ test("updates is English", async ({ page }) => {
   }
 });
 
+test("channels page is English", async ({ page }) => {
+  for (const fixture of [
+    "configured",
+    "telegram-configured",
+    "qr-expired",
+    "qr-publish-failed",
+    "entry-unknown",
+    "user-evidence",
+  ]) {
+    await useEnglish(page, `/test.html?fixture=${fixture}`);
+    await openPage(page, "Channels");
+    await expectNoChinese(page, "main");
+  }
+});
+
 test("expectNoChinese ignores marked regions", async ({ page }) => {
   await page.setContent(
     "<div>Hello<span data-i18n-ignore>中文</span></div>",

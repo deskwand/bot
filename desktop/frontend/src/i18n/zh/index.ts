@@ -1,5 +1,6 @@
 import { common } from "./common";
 import { diagnostics } from "./diagnostics";
+import { entries } from "./entries";
 import { errors } from "./errors";
 import { locale } from "./locale";
 import { mcp } from "./mcp";
@@ -22,4 +23,5 @@ export const zh = {
   updates,
   models,
   mcp,
+  entries,
 } as const;

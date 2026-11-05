@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert, StateBadge, StatusBadge, StatusRow, StepList } from "@/components/feedback";
+import { getT, useT } from "@/i18n";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
 import { describeCode } from "@/services/errors";
@@ -55,6 +56,7 @@ interface PublishFailure {
 
 export function Entries() {
   const { client } = useApp();
+  const t = useT();
   const configQuery = useConfigQuery();
   const statusQuery = useStatusQuery();
   const invalidate = useInvalidate();
@@ -138,7 +140,7 @@ export function Entries() {
           setWechatPublished(true);
           channelTouched.current = false;
           setLoginState("published");
-          setLoginMessage("已发布，等待云端启动。");
+          setLoginMessage(getT()("entries.publishedWaiting"));
           invalidate.configAndStatus();
           break;
         case "publish_failed":
@@ -147,7 +149,7 @@ export function Entries() {
           setLoginState("publish_failed");
           setPublishFailure({
             code: update.code ?? "",
-            message: update.message ?? "凭据发布失败，可在恢复操作中继续。",
+            message: update.message ?? getT()("entries.publishFailedFallback"),
             operationId: update.operationId,
           });
           break;
@@ -166,7 +168,7 @@ export function Entries() {
           setLoginError(
             code
               ? new Error(`${code}: ${describeCode(code)}`)
-              : new Error(update.message ?? "扫码登录失败，请重试。"),
+              : new Error(update.message ?? getT()("entries.loginFailedFallback")),
           );
           break;
         }
@@ -207,7 +209,7 @@ export function Entries() {
     opIDRef.current = "";
     setLoginState("wait");
     setQrContent("");
-    setLoginMessage("正在创建二维码…");
+    setLoginMessage(t("entries.creatingQr"));
     setLoginError(null);
     setPublishFailure(null);
     setWechatPublished(false);
@@ -234,11 +236,13 @@ export function Entries() {
         setWechatPublished(true);
         setLoginState("published");
         setPublishFailure(null);
-        setLoginMessage("已发布，等待云端启动。");
+        setLoginMessage(t("entries.publishedWaiting"));
         invalidate.configAndStatus();
       } else {
         setLoginState("publish_failed");
-        setLoginMessage(`继续后状态：${result.state || "未知"}。`);
+        setLoginMessage(
+          t("entries.resumeState", { state: result.state || t("common.unknown") }),
+        );
         setPublishFailure((current) =>
           current ? { ...current, operationId: result.operationId || current.operationId } : current,
         );
@@ -332,14 +336,14 @@ export function Entries() {
     return (
       <div className="flex min-h-[40svh] items-center justify-center gap-2 text-muted-foreground">
         <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
-        正在读取消息入口…
+        {t("entries.loading")}
       </div>
     );
   }
 
   return (
     <div>
-      <PageHeader title="消息入口" actions={<>
+      <PageHeader title={t("shell.pages.entries")} actions={<>
         <SyncStatus
           isFetching={configQuery.isFetching || statusQuery.isFetching}
           isPlaceholder={configQuery.isPlaceholder || statusQuery.isPlaceholder}
@@ -357,30 +361,30 @@ export function Entries() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Smartphone className="size-4" aria-hidden />
-                微信
+                {t("common.wechat")}
               </CardTitle>
-              {config?.activeChannel === "wechat" ? <Badge variant="outline" data-testid="current-entry-wechat">当前入口</Badge> : null}
+              {config?.activeChannel === "wechat" ? <Badge variant="outline" data-testid="current-entry-wechat">{t("entries.currentEntry")}</Badge> : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {wechatStatus ? <StatusBadge item={wechatStatus} /> : <Badge variant="outline">状态未知</Badge>}
+              {wechatStatus ? <StatusBadge item={wechatStatus} /> : <Badge variant="outline">{t("entries.statusUnknown")}</Badge>}
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">{wechatConfigured ? "凭据已配置" : "扫码登录你的微信"}</p>
-          {wechatStatus ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">详情</summary><StatusRow item={wechatStatus} /></details> : null}
+          <p className="text-sm text-muted-foreground">{wechatConfigured ? t("entries.wechatConfigured") : t("entries.wechatScanPrompt")}</p>
+          {wechatStatus ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">{t("common.details")}</summary><StatusRow item={wechatStatus} /></details> : null}
           {wechatPublished ? (
             <Alert className="mt-3 border-emerald-300 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/20">
-              <AlertTitle>已连接，等待第一条消息</AlertTitle>
+              <AlertTitle>{t("entries.connectedWaitingTitle")}</AlertTitle>
               <AlertDescription>
-                给它发条消息，确认能收到回复。
+                {t("entries.connectedWaitingDescription")}
               </AlertDescription>
             </Alert>
           ) : null}
           <div className="mt-3 flex flex-wrap gap-2">
             <Button type="button" onClick={() => void startLogin()} disabled={qrOpen}>
               <QrCode aria-hidden />
-              {wechatConfigured ? "重新扫码" : "扫码连接"}
+              {wechatConfigured ? t("entries.rescan") : t("entries.scanToConnect")}
             </Button>
           </div>
         </CardContent>
@@ -391,19 +395,19 @@ export function Entries() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle>Telegram</CardTitle>
-              {config?.activeChannel === "telegram" ? <Badge variant="outline">当前入口</Badge> : null}
+              {config?.activeChannel === "telegram" ? <Badge variant="outline">{t("entries.currentEntry")}</Badge> : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {telegramStatus ? <StatusBadge item={telegramStatus} /> : <Badge variant="outline">状态未知</Badge>}
+              {telegramStatus ? <StatusBadge item={telegramStatus} /> : <Badge variant="outline">{t("entries.statusUnknown")}</Badge>}
             </div>
           </div>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">{telegramConfigured ? "令牌已配置" : "填写 BotFather 提供的令牌"}</p>
-            {telegramConfigured ? <Button type="button" size="sm" variant="outline" onClick={() => setEditingTelegram((value) => !value)}>{editingTelegram ? "收起" : "更换令牌"}</Button> : null}
+            <p className="text-sm text-muted-foreground">{telegramConfigured ? t("entries.telegramConfigured") : t("entries.telegramTokenPrompt")}</p>
+            {telegramConfigured ? <Button type="button" size="sm" variant="outline" onClick={() => setEditingTelegram((value) => !value)}>{editingTelegram ? t("entries.collapse") : t("entries.replaceToken")}</Button> : null}
           </div>
-          {telegramStatus ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">详情</summary><StatusRow item={telegramStatus} /></details> : null}
+          {telegramStatus ? <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">{t("common.details")}</summary><StatusRow item={telegramStatus} /></details> : null}
           {!telegramConfigured || editingTelegram ? <div className="mt-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
@@ -413,7 +417,7 @@ export function Entries() {
                 type="password"
                 value={telegramToken}
                 onChange={(event) => setTelegramToken(event.target.value)}
-                placeholder="从 BotFather 获取；提交后清空"
+                placeholder={t("entries.tokenPlaceholder")}
                 autoComplete="new-password"
                 spellCheck={false}
               />
@@ -421,7 +425,7 @@ export function Entries() {
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground">
-              保存不会切换当前入口。
+              {t("entries.saveKeepsChannel")}
             </span>
             <Button
               type="button"
@@ -429,37 +433,37 @@ export function Entries() {
               disabled={telegramRunning || telegramToken.trim().length === 0}
             >
               {telegramRunning ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-              {telegramRunning ? "正在连接…" : "保存并连接"}
+              {telegramRunning ? t("entries.connecting") : t("entries.saveAndConnect")}
             </Button>
           </div>
           </div> : null}
           {telegramResult ? (
             <div className="mt-3 rounded-md border border-border p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">配置结果</span>
+                <span className="text-sm font-medium">{t("entries.telegramResult")}</span>
                 <StateBadge state={telegramResult.state} />
               </div>
               <StepList steps={telegramResult.steps ?? []} />
               {telegramResult.state === "unknown" ? (
                 <Button type="button" size="sm" variant="outline" data-testid="telegram-resume" onClick={() => void resumeTelegram()} disabled={telegramRunning}>
-                  继续
+                  {t("common.continue")}
                 </Button>
               ) : null}
             </div>
           ) : null}
-          <ErrorAlert error={telegramError} onRetry={() => void connectTelegram()} retryLabel="重新连接" />
+          <ErrorAlert error={telegramError} onRetry={() => void connectTelegram()} retryLabel={t("entries.reconnect")} />
         </CardContent>
       </Card>
 
       <Card className="mt-4">
         <CardHeader>
-          <CardTitle>当前消息入口</CardTitle>
+          <CardTitle>{t("common.currentChannel")}</CardTitle>
           <CardDescription>
-            每次使用一个入口；故障时需手动切换。
+            {t("entries.currentChannelDescription")}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="mb-3 text-sm text-muted-foreground">当前：<span data-testid="current-entry">{config?.activeChannel === "wechat" ? "微信" : config?.activeChannel === "telegram" ? "Telegram" : "未设置"}</span></p>
+          <p className="mb-3 text-sm text-muted-foreground">{t("entries.currentPrefix")}<span data-testid="current-entry">{config?.activeChannel === "wechat" ? t("common.wechat") : config?.activeChannel === "telegram" ? t("common.telegram") : t("common.notSet")}</span></p>
           <RadioGroup
             value={channel}
             onValueChange={(next) => {
@@ -467,7 +471,7 @@ export function Entries() {
               setChannel(next);
             }}
             disabled={configQuery.isPlaceholder}
-            aria-label="当前消息入口"
+            aria-label={t("common.currentChannel")}
             className="grid gap-3 sm:grid-cols-2"
           >
             <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border p-4">
@@ -477,28 +481,28 @@ export function Entries() {
                   <span className="block font-medium">Telegram</span>
                 </span>
               </span>
-              {telegramConfigured ? <Badge variant="secondary">已配置</Badge> : <Badge variant="outline">未配置</Badge>}
+              {telegramConfigured ? <Badge variant="secondary">{t("entries.configured")}</Badge> : <Badge variant="outline">{t("entries.notConfigured")}</Badge>}
             </label>
             <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border p-4">
               <span className="flex items-center gap-3">
                 <RadioGroupItem value="wechat" id="current-wechat" />
                 <span>
-                  <span className="block font-medium">微信</span>
+                  <span className="block font-medium">{t("common.wechat")}</span>
                 </span>
               </span>
-              {wechatConfigured ? <Badge variant="secondary">已配置</Badge> : <Badge variant="outline">未配置</Badge>}
+              {wechatConfigured ? <Badge variant="secondary">{t("entries.configured")}</Badge> : <Badge variant="outline">{t("entries.notConfigured")}</Badge>}
             </label>
           </RadioGroup>
           {channel === "wechat" && !wechatConfigured ? (
             <Alert className="mt-3">
-              <AlertTitle>入口未就绪</AlertTitle>
-              <AlertDescription>可以发布，但扫码完成前收不到消息。</AlertDescription>
+              <AlertTitle>{t("entries.notReadyTitle")}</AlertTitle>
+              <AlertDescription>{t("entries.wechatNotReadyDescription")}</AlertDescription>
             </Alert>
           ) : null}
           {channel === "telegram" && !telegramConfigured ? (
             <Alert className="mt-3">
-              <AlertTitle>入口未就绪</AlertTitle>
-              <AlertDescription>可以发布，但缺少令牌前收不到消息。</AlertDescription>
+              <AlertTitle>{t("entries.notReadyTitle")}</AlertTitle>
+              <AlertDescription>{t("entries.telegramNotReadyDescription")}</AlertDescription>
             </Alert>
           ) : null}
           <div className="mt-4 flex flex-wrap justify-end gap-2">
@@ -508,23 +512,23 @@ export function Entries() {
               disabled={channelRunning || !channel || channel === config?.activeChannel}
             >
               {channelRunning ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-              {channelRunning ? "正在发布…" : "保存并发布"}
+              {channelRunning ? t("entries.publishing") : t("entries.saveAndPublish")}
             </Button>
           </div>
           {channelResult ? (
             <div className="mt-3 rounded-md border border-border p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">发布结果</span>
+                <span className="text-sm font-medium">{t("entries.publishResult")}</span>
                 <StateBadge state={channelResult.state ?? ""} />
                 <Badge variant={channelResult.configured ? "secondary" : "outline"}>
-                  {channelResult.configured ? "已配置" : "尚未配置"}
+                  {channelResult.configured ? t("entries.configured") : t("entries.notYetConfigured")}
                 </Badge>
               </div>
               {channelResult.state === "unchanged" ? (
-                <p className="mt-2 text-sm text-muted-foreground">入口未变化。</p>
+                <p className="mt-2 text-sm text-muted-foreground">{t("entries.unchanged")}</p>
               ) : null}
               {channelResult.warning ? (
-                <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">{channelResult.warning}</p>
+                <p className="mt-2 text-sm text-amber-700 dark:text-amber-300" data-i18n-ignore>{channelResult.warning}</p>
               ) : null}
               {(channelResult.state === "unknown" || channelResult.state === "partial") &&
               channelResult.operationId ? (
@@ -540,13 +544,13 @@ export function Entries() {
                   {channelResumeRunning ? (
                     <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
                   ) : null}
-                  继续
+                  {t("common.continue")}
                 </Button>
               ) : null}
             </div>
           ) : null}
-          <ErrorAlert error={channelError} onRetry={() => void publishChannel()} retryLabel="重新发布" />
-          <ErrorAlert error={channelResumeError} onRetry={() => void resumeChannel()} retryLabel="继续" />
+          <ErrorAlert error={channelError} onRetry={() => void publishChannel()} retryLabel={t("entries.republish")} />
+          <ErrorAlert error={channelResumeError} onRetry={() => void resumeChannel()} retryLabel={t("common.continue")} />
         </CardContent>
       </Card>
 
@@ -565,32 +569,32 @@ export function Entries() {
 
           {qrContent &&
           !["expired", "cancelled", "error", "published", "publish_failed"].includes(loginState) ? (
-            <div className="mx-auto rounded-lg border border-border bg-white p-3" data-testid="wechat-qr">
-              <QRCodeSVG value={qrContent} size={188} marginSize={2} aria-label="微信登录二维码" />
+            <div className="mx-auto rounded-lg border border-border bg-white p-3" data-testid="wechat-qr" data-i18n-ignore>
+              <QRCodeSVG value={qrContent} size={188} marginSize={2} aria-label={t("entries.qrAria")} />
             </div>
           ) : null}
           {!qrContent && ["wait", "idle"].includes(loginState) ? (
             <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
-              正在创建二维码…
+              {t("entries.creatingQr")}
             </div>
           ) : null}
-          {loginMessage ? <p className="text-sm text-muted-foreground">{loginMessage}</p> : null}
+          {loginMessage ? <p className="text-sm text-muted-foreground" data-i18n-ignore>{loginMessage}</p> : null}
 
           <StepList steps={loginSteps(loginState)} compact />
 
           {loginState === "published" ? (
             <Alert>
               <Send />
-              <AlertTitle>发送一条真实消息</AlertTitle>
+              <AlertTitle>{t("entries.sendRealMessageTitle")}</AlertTitle>
               <AlertDescription>
-                收到回复即验证通过。
+                {t("entries.sendRealMessageDescription")}
               </AlertDescription>
             </Alert>
           ) : null}
 
           <p className="text-xs text-muted-foreground">
-            二维码过期会自动换，最多 3 张。
+            {t("entries.qrRefreshNote")}
           </p>
           {publishFailure ? (
             <ErrorAlert
@@ -600,31 +604,31 @@ export function Entries() {
                   : new Error(publishFailure.message)
               }
               onRetry={resumePublish}
-              retryLabel="继续"
+              retryLabel={t("common.continue")}
             />
           ) : null}
           {loginResumeRunning ? (
             <p className="flex items-center gap-2 text-sm text-muted-foreground" aria-live="polite">
               <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
-              正在核实远端发布状态…
+              {t("entries.verifyingRemote")}
             </p>
           ) : null}
-          <ErrorAlert error={loginError} onRetry={() => void startLogin()} retryLabel="重新扫码" />
+          <ErrorAlert error={loginError} onRetry={() => void startLogin()} retryLabel={t("entries.rescan")} />
 
           <DialogFooter>
             {loginState === "expired" || loginState === "cancelled" || loginState === "error" ? (
               <Button type="button" onClick={() => void startLogin()}>
-                重新扫码
+                {t("entries.rescan")}
               </Button>
             ) : null}
             {loginState === "published" ? (
               <Button type="button" variant="outline" onClick={refresh}>
                 <RefreshCw aria-hidden />
-                检查状态
+                {t("entries.checkStatus")}
               </Button>
             ) : null}
             <Button type="button" variant="outline" onClick={closeLogin}>
-              关闭
+              {t("common.close")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -634,44 +638,46 @@ export function Entries() {
 }
 
 function loginTitle(state: LoginState): string {
+  const t = getT();
   switch (state) {
     case "scaned":
-      return "请在手机上确认";
+      return t("entries.loginTitleScaned");
     case "confirmed":
-      return "正在发布密钥";
+      return t("entries.loginTitleConfirmed");
     case "published":
-      return "已连接";
+      return t("entries.loginTitlePublished");
     case "publish_failed":
-      return "发布失败";
+      return t("entries.loginTitlePublishFailed");
     case "expired":
-      return "二维码已过期";
+      return t("entries.loginTitleExpired");
     case "cancelled":
-      return "登录已取消";
+      return t("entries.loginTitleCancelled");
     case "error":
-      return "登录失败";
+      return t("entries.loginTitleError");
     default:
-      return "连接微信";
+      return t("entries.loginTitleDefault");
   }
 }
 
 function loginDescription(state: LoginState): string {
+  const t = getT();
   switch (state) {
     case "scaned":
-      return "已扫码，请在手机上确认。";
+      return t("entries.loginDescriptionScaned");
     case "confirmed":
-      return "确认成功，正在发布密钥。";
+      return t("entries.loginDescriptionConfirmed");
     case "published":
-      return "已发布，等待云端启动。";
+      return t("entries.loginDescriptionPublished");
     case "publish_failed":
-      return "发布没完成，可以继续。";
+      return t("entries.loginDescriptionPublishFailed");
     case "expired":
-      return "二维码过期，请重新扫码。";
+      return t("entries.loginDescriptionExpired");
     case "cancelled":
-      return "已取消。";
+      return t("entries.loginDescriptionCancelled");
     case "error":
-      return "登录失败，请重试。";
+      return t("entries.loginDescriptionError");
     default:
-      return "用主人微信扫描下方二维码。";
+      return t("entries.loginDescriptionDefault");
   }
 }
 
@@ -689,13 +695,14 @@ function loginSteps(state: LoginState): StepDTO[] {
         return 0;
     }
   })();
+  const t = getT();
   const labels = [
-    "显示二维码",
-    "手机扫码",
-    "手机确认",
-    "保存并发布密钥",
-    "等待云端启动",
-    "真实消息验证",
+    t("entries.stepShowQr"),
+    t("entries.stepScan"),
+    t("entries.stepConfirm"),
+    t("entries.stepPublish"),
+    t("entries.stepWaitCloud"),
+    t("entries.stepVerifyMessage"),
   ];
   return labels.map((label, index) => ({
     id: `wechat-step-${index}`,
