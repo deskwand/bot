@@ -388,6 +388,7 @@ func (s *Service) mcpClient(ctx context.Context, target domain.Target) (*mcpadmi
 			Publisher:   s.publish,
 			Credentials: s.credentials,
 		},
+		Locale: s.locale.Current,
 	}, target)
 	if err != nil {
 		return nil, err

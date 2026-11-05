@@ -26,15 +26,6 @@ const (
 	CodeRequestFailed    = "MCP_FAILED"
 )
 
-// UnavailableMessage is the Chinese user-facing explanation for a deployment
-// that cannot serve the admin routes.
-var UnavailableMessage = i18n.T(i18n.ZH, "mcpadmin.unavailable")
-
-// NetworkUnreachableMessage is the Chinese explanation for a request that
-// never got an HTTP answer: a timeout or a refused connection points at the
-// network, not the deployment.
-var NetworkUnreachableMessage = i18n.T(i18n.ZH, "mcpadmin.networkUnreachable")
-
 const (
 	probePath       = "/admin/mcp/probe"
 	startPath       = "/admin/mcp/oauth/start"
@@ -72,6 +63,15 @@ type Deps struct {
 	Token        backup.TokenDeps
 	HTTP         *http.Client
 	ReadyTimeout time.Duration
+	// Locale supplies the error language; nil means zh.
+	Locale func() string
+}
+
+func (d Deps) lang() string {
+	if d.Locale == nil {
+		return i18n.ZH
+	}
+	return d.Locale()
 }
 
 // Client calls the MCP admin routes with one deployment's token.
@@ -106,20 +106,21 @@ func Connect(ctx context.Context, deps Deps, target domain.Target) (*Client, err
 	}
 	baseURL := backup.PublicBaseURL(snapshot.SettingsJSON)
 	if baseURL == "" {
-		return nil, unavailable()
+		return nil, domain.Error{Code: CodeAdminUnavailable, Message: i18n.T(deps.lang(), "mcpadmin.unavailable")}
 	}
 	token, published, err := backup.EnsureAdminToken(ctx, deps.Token, target)
 	if err != nil {
 		return nil, err
 	}
 	client := NewClient(baseURL, token, deps.HTTP)
+	client.Locale = deps.Locale
 	if published {
 		// Info is lease-checked, so a 409 already proves the route and token
 		// are live. This reuses the backup flow's propagation window.
 		wait := backup.NewAdminClient(baseURL, token, "", deps.HTTP)
 		waitDeps := backup.Deps{HTTP: deps.HTTP, ReadyTimeout: deps.ReadyTimeout}
 		if err := backup.WaitForAdmin(ctx, waitDeps, wait); err != nil {
-			return nil, unavailable()
+			return nil, client.unavailable()
 		}
 	}
 	return client, nil
@@ -248,16 +249,6 @@ func (c *Client) lang() string {
 
 func (c *Client) t(key string) string {
 	return i18n.T(c.lang(), key)
-}
-
-// unreachable is the Chinese default used before a client's Locale is set.
-func unreachable() error {
-	return domain.Error{Code: CodeAdminUnavailable, Message: NetworkUnreachableMessage}
-}
-
-// unavailable is the Chinese default used before a client's Locale is set.
-func unavailable() error {
-	return domain.Error{Code: CodeAdminUnavailable, Message: UnavailableMessage}
 }
 
 func (c *Client) unreachable() error {

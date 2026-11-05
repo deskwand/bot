@@ -79,6 +79,12 @@ func TestStaleVersionIsUnverifiedNotSuccess(t *testing.T) {
 	if got[0].Source != SourceCloudLogs {
 		t.Fatalf("source = %q", got[0].Source)
 	}
+
+	en := Summarize(i18n.EN, []string{"wechat"}, events, testCurrentVersion)
+	want := "poll_ok from old version version-old is not from the current version; the current state was not determined from it"
+	if en[0].Detail != want {
+		t.Fatalf("en detail = %q, want %q", en[0].Detail, want)
+	}
 }
 
 func TestCloudEvidenceNeedsCurrentVersionID(t *testing.T) {

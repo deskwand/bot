@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -73,18 +74,55 @@ func TestTablesHaveSameKeys(t *testing.T) {
 }
 
 func TestTablesHaveSameVerbs(t *testing.T) {
-	verb := regexp.MustCompile(`%[-+# 0]*[0-9]*(\.[0-9]+)?[a-zA-Z%]`)
 	for key, zhText := range zh {
 		enText, ok := en[key]
 		if !ok {
 			continue
 		}
-		zhVerbs := verb.FindAllString(zhText, -1)
-		enVerbs := verb.FindAllString(enText, -1)
+		zhVerbs := normalizeVerbs(zhText)
+		enVerbs := normalizeVerbs(enText)
 		if !slices.Equal(zhVerbs, enVerbs) {
 			t.Errorf("%q verbs: zh %v, en %v", key, zhVerbs, enVerbs)
 		}
 	}
+}
+
+func TestNormalizeVerbsOrdersByArgumentIndex(t *testing.T) {
+	if got, want := normalizeVerbs("%[2]d in %[1]s"), []string{"%s", "%d"}; !slices.Equal(got, want) {
+		t.Fatalf("indexed verbs = %v, want %v", got, want)
+	}
+	if got, want := normalizeVerbs("%s then %d"), []string{"%s", "%d"}; !slices.Equal(got, want) {
+		t.Fatalf("plain verbs = %v, want %v", got, want)
+	}
+}
+
+var verbPattern = regexp.MustCompile(`%(?:\[([0-9]+)\])?([-+# 0]*[0-9]*(?:\.[0-9]+)?[a-zA-Z%])`)
+
+// normalizeVerbs returns each verb with its argument index removed, ordered by
+// that index. Indexed verbs such as %[2]s therefore compare equal to the
+// unindexed verbs of a translation that uses the same argument order.
+func normalizeVerbs(text string) []string {
+	type indexedVerb struct {
+		index int
+		verb  string
+	}
+	matches := verbPattern.FindAllStringSubmatch(text, -1)
+	verbs := make([]indexedVerb, 0, len(matches))
+	next := 1
+	for _, match := range matches {
+		index := next
+		if match[1] != "" {
+			index, _ = strconv.Atoi(match[1])
+		}
+		next = index + 1
+		verbs = append(verbs, indexedVerb{index: index, verb: "%" + match[2]})
+	}
+	slices.SortStableFunc(verbs, func(a, b indexedVerb) int { return a.index - b.index })
+	out := make([]string, len(verbs))
+	for i, verb := range verbs {
+		out[i] = verb.verb
+	}
+	return out
 }
 
 func TestJoinPanicsOnDuplicate(t *testing.T) {

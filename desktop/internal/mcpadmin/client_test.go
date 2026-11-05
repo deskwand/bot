@@ -110,7 +110,7 @@ func TestClientMapsUnauthorizedAndMissingRouteToUnavailable(t *testing.T) {
 		if code := errorCode(err); code != CodeAdminUnavailable {
 			t.Fatalf("status %d code = %q, want %s (%v)", status, code, CodeAdminUnavailable, err)
 		}
-		if err == nil || !strings.Contains(err.Error(), UnavailableMessage) {
+		if err == nil || !strings.Contains(err.Error(), i18n.T(i18n.ZH, "mcpadmin.unavailable")) {
 			t.Fatalf("status %d error = %v", status, err)
 		}
 	}
@@ -138,6 +138,45 @@ func TestConnectRequiresPublicBaseURL(t *testing.T) {
 	if _, err := Connect(context.Background(), deps, target()); errorCode(err) != CodeAdminUnavailable {
 		t.Fatalf("error = %v, want %s", err, CodeAdminUnavailable)
 	}
+}
+
+func TestConnectErrorsFollowLocale(t *testing.T) {
+	en := func() string { return i18n.EN }
+
+	t.Run("missing public base url", func(t *testing.T) {
+		deps := Deps{
+			Token: backup.TokenDeps{
+				Snapshots:   fixedSnapshots{snapshot: snapshotWithSettings(settingsJSON(""))},
+				Credentials: platform.NewMemoryCredentialStore(),
+			},
+			Locale: en,
+		}
+		_, err := Connect(context.Background(), deps, target())
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		i18ntest.NoHan(t, "missing public base url", err.Error())
+	})
+
+	t.Run("admin token wait timeout", func(t *testing.T) {
+		server := httptest.NewServer(http.NotFoundHandler())
+		defer server.Close()
+
+		deps := Deps{
+			Token: backup.TokenDeps{
+				Snapshots:   fixedSnapshots{snapshot: snapshotWithSettings(settingsJSON(server.URL))},
+				Publisher:   &recordingPublisher{},
+				Credentials: platform.NewMemoryCredentialStore(),
+			},
+			ReadyTimeout: 20 * time.Millisecond,
+			Locale:       en,
+		}
+		_, err := Connect(context.Background(), deps, target())
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		i18ntest.NoHan(t, "admin token wait timeout", err.Error())
+	})
 }
 
 func TestConnectPublishesTokenOnFirstUse(t *testing.T) {
@@ -279,7 +318,7 @@ func TestClientReportsNetworkFailureSeparately(t *testing.T) {
 		if !errors.As(err, &appErr) {
 			t.Fatalf("%s: err = %v, want domain.Error", name, err)
 		}
-		if appErr.Code != CodeAdminUnavailable || appErr.Message != NetworkUnreachableMessage {
+		if appErr.Code != CodeAdminUnavailable || appErr.Message != i18n.T(i18n.ZH, "mcpadmin.networkUnreachable") {
 			t.Fatalf("%s: err = %#v", name, appErr)
 		}
 		if strings.Contains(appErr.Message, testAdminToken) {

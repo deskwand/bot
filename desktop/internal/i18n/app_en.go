@@ -24,7 +24,7 @@ var enApp = map[string]string{
 
 	"app.cloudflareLoginInProgress": "A Cloudflare sign-in is already running",
 	"app.cloudflareLoginWaiting":    "There is no sign-in waiting for an account choice",
-	"app.loginNotFound":             "The sign-in has ended",
+	"app.loginNotFound":             "The sign-in does not exist or has ended",
 	"app.wechatLoginInProgress":     "A WeChat sign-in is already running",
 	"app.wechatLoginPublished":      "Signed in; WeChat credentials published",
 	"app.wechatPublishFailed":       "Publishing the credentials failed; continue from the recovery actions",
