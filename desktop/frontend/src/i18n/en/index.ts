@@ -8,6 +8,7 @@ import { locale } from "./locale";
 import { mcp } from "./mcp";
 import { models } from "./models";
 import { overview } from "./overview";
+import { setup } from "./setup";
 import { shell } from "./shell";
 import { states } from "./states";
 import { updates } from "./updates";
@@ -25,4 +26,5 @@ export const en: Messages = {
   mcp,
   entries,
   backup,
+  setup,
 };

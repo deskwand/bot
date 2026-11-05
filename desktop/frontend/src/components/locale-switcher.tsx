@@ -1,16 +1,10 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ErrorAlert } from "@/components/feedback";
+import { LocaleChoice } from "@/components/locale-choice";
 import { useApp } from "@/components/app-context";
-import { useLocale, useT, type MessageKey } from "@/i18n";
+import { useLocale, useT } from "@/i18n";
 import { useConfigQuery, useInvalidate } from "@/services/queries";
-import type { LocaleSource } from "@/services/types";
-
-const OPTIONS: { source: LocaleSource; label: MessageKey }[] = [
-  { source: "system", label: "locale.system" },
-  { source: "zh", label: "locale.zh" },
-  { source: "en", label: "locale.en" },
-];
 
 /**
  * Sidebar footer control for the language the UI and the bot use. Go owns the
@@ -19,7 +13,7 @@ const OPTIONS: { source: LocaleSource; label: MessageKey }[] = [
  */
 export function LocaleSwitcher({ dirty = false }: { dirty?: boolean }) {
   const { client } = useApp();
-  const { source, resolved, setSource, saveError } = useLocale();
+  const { resolved } = useLocale();
   const t = useT();
   const configQuery = useConfigQuery();
   const invalidate = useInvalidate();
@@ -56,36 +50,12 @@ export function LocaleSwitcher({ dirty = false }: { dirty?: boolean }) {
 
   return (
     <div className="mb-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">{t("locale.label")}</span>
-        <div
-          role="group"
-          aria-label={t("locale.label")}
-          className="flex gap-0.5 rounded-lg border border-border p-0.5"
-        >
-          {OPTIONS.map(({ source: value, label }) => (
-            <Button
-              key={value}
-              type="button"
-              size="xs"
-              variant={source === value ? "secondary" : "ghost"}
-              className="rounded-md px-1.5"
-              data-i18n-ignore={value === "zh" ? "" : undefined}
-              aria-pressed={source === value}
-              onClick={() => {
-                if (value !== source) void setSource(value);
-              }}
-            >
-              {t(label)}
-            </Button>
-          ))}
-        </div>
-      </div>
+      <LocaleChoice />
       {pending ? (
         <div className="mt-2 space-y-1.5">
           <p className="text-xs text-muted-foreground">
             {t("locale.pendingBot", {
-              lang: resolved === "en" ? "English" : "中文",
+              lang: t(resolved === "en" ? "locale.en" : "locale.zh"),
             })}
           </p>
           <Button
@@ -111,11 +81,6 @@ export function LocaleSwitcher({ dirty = false }: { dirty?: boolean }) {
         </div>
       ) : null}
       {syncError ? <ErrorAlert error={syncError} /> : null}
-      {saveError ? (
-        <p role="alert" className="mt-2 text-xs text-destructive">
-          {t("locale.saveFailed")}
-        </p>
-      ) : null}
     </div>
   );
 }

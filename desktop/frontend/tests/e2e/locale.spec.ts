@@ -327,3 +327,156 @@ test("backup page is English", async ({ page }) => {
   await expect(dialog).toBeVisible();
   await expectNoChinese(page, '[role="dialog"]');
 });
+
+test("setup is English", async ({ page }) => {
+  await useEnglish(page, "/test.html");
+  await expect(
+    page.getByRole("heading", { name: "Deploy once, manage anytime." }),
+  ).toBeVisible();
+  await expectNoChinese(page, "body");
+
+  await page.getByRole("button", { name: "Sign in with Cloudflare" }).click();
+  await expect(
+    page.getByRole("button", { name: "Deploy a new cloud service" }),
+  ).toBeVisible();
+  await expectNoChinese(page, "body");
+
+  // New deployment path: form, interrupted install and the result panel.
+  await page
+    .getByRole("button", { name: "Deploy a new cloud service" })
+    .click();
+  await expectNoChinese(page, "body");
+  await page.locator("#install-channel-telegram").click();
+  await page.getByRole("button", { name: "Check and deploy" }).click();
+  await expect(page.getByText("Deployment incomplete")).toBeVisible();
+  await expectNoChinese(page, "body");
+  await page.getByTestId("result-resume").click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Service deployed; set up a channel next",
+    }),
+  ).toBeVisible();
+  await expectNoChinese(page, "body");
+
+  // Existing deployment path: worker list, legacy preview and the result.
+  await useEnglish(page, "/test.html");
+  await page.getByRole("button", { name: "Sign in with Cloudflare" }).click();
+  await page
+    .getByRole("button", { name: "Connect an existing service" })
+    .click();
+  await expect(page.getByText("Connectable services")).toBeVisible();
+  await expectNoChinese(page, "body");
+  const legacy = page.locator("li", { hasText: "my-bot" }).first();
+  await legacy.getByRole("button", { name: "Take over" }).click();
+  await expect(page.getByText("Needs a compatible upgrade")).toBeVisible();
+  await expectNoChinese(page, "body");
+  await page
+    .getByRole("button", { name: "Confirm configuration and take over" })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Go to the dashboard" }),
+  ).toBeVisible();
+  await expectNoChinese(page, "body");
+});
+
+test("setup failures are English", async ({ page }) => {
+  // An install that collides with an operation already in progress.
+  await useEnglish(page, "/test.html?fixture=install-conflict");
+  await page.getByRole("button", { name: "Sign in with Cloudflare" }).click();
+  await page
+    .getByRole("button", { name: "Deploy a new cloud service" })
+    .click();
+  await page.locator("#install-channel-telegram").click();
+  await page.getByRole("button", { name: "Check and deploy" }).click();
+  await expect(page.getByTestId("error-alert")).toBeVisible();
+  await expectNoChinese(page, "body");
+
+  // A takeover whose remote result is unknown, then resumed.
+  await useEnglish(page, "/test.html?fixture=import-resume");
+  await page.getByRole("button", { name: "Sign in with Cloudflare" }).click();
+  await page
+    .getByRole("button", { name: "Connect an existing service" })
+    .click();
+  await page
+    .locator("li", { hasText: "my-bot" })
+    .first()
+    .getByRole("button", { name: "Take over" })
+    .click();
+  await page
+    .getByRole("button", { name: "Confirm configuration and take over" })
+    .click();
+  await expect(page.getByText("Takeover incomplete")).toBeVisible();
+  await expectNoChinese(page, "body");
+  await page.getByTestId("result-resume").click();
+  await expect(
+    page.getByRole("button", { name: "Go to the dashboard" }),
+  ).toBeVisible();
+  await expectNoChinese(page, "body");
+
+  // A takeover that still contains plaintext credentials.
+  await useEnglish(page, "/test.html?fixture=import-secret-retry");
+  await page.getByRole("button", { name: "Sign in with Cloudflare" }).click();
+  await page
+    .getByRole("button", { name: "Connect an existing service" })
+    .click();
+  await page
+    .locator("li", { hasText: "my-bot" })
+    .first()
+    .getByRole("button", { name: "Take over" })
+    .click();
+  await page
+    .getByRole("button", { name: "Confirm configuration and take over" })
+    .click();
+  await expect(page.getByTestId("error-alert")).toBeVisible();
+  await expectNoChinese(page, "body");
+
+  // The account picker and an unavailable credential store.
+  await useEnglish(page, "/test.html?fixture=multi-account");
+  await page.getByRole("button", { name: "Sign in with Cloudflare" }).click();
+  await expect(page.getByText(/several accounts/)).toBeVisible();
+  await expectNoChinese(page, "body");
+  await page.getByRole("radio", { name: "第二个账户" }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Deploy a new cloud service" }),
+  ).toBeVisible();
+  await expectNoChinese(page, "body");
+
+  await useEnglish(page, "/test.html?fixture=store-unavailable");
+  await expect(
+    page.getByRole("heading", { name: "Deploy once, manage anytime." }),
+  ).toBeVisible();
+  await expect(page.getByTestId("error-alert")).toBeVisible();
+  await expectNoChinese(page, "body");
+});
+
+test("language can be chosen before connecting", async ({ page }) => {
+  await page.goto("/test.html");
+
+  const group = page.getByRole("group", { name: "语言" });
+  await expect(group).toBeVisible();
+  await group.getByRole("button", { name: "English", exact: true }).click();
+
+  await expect(page.getByRole("group", { name: "Language" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Deploy once, manage anytime." }),
+  ).toBeVisible();
+});
+
+test("switching language mid-setup keeps inputs", async ({ page }) => {
+  await page.goto("/test.html");
+  await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
+  await page.getByRole("button", { name: "部署新服务" }).click();
+  await page.getByText("资源设置", { exact: true }).click();
+  await page.getByLabel("服务名称").fill("my-worker");
+
+  await page
+    .getByRole("group", { name: "语言" })
+    .getByRole("button", { name: "English", exact: true })
+    .click();
+
+  await expect(
+    page.getByRole("heading", { name: "Deploy a new cloud service" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Service name")).toHaveValue("my-worker");
+});

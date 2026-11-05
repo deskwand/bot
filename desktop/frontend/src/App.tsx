@@ -26,6 +26,7 @@ import { AppContext, pageLabel, type Page } from "@/components/app-context";
 import { CloudflareAccountCard } from "@/components/cloudflare-account";
 import { TelemetryToggle } from "@/components/telemetry-toggle";
 import { ThemeSwitcher } from "@/components/theme-switcher";
+import { LocaleChoice } from "@/components/locale-choice";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { ErrorAlert, StepList, StateBadge } from "@/components/feedback";
 import { getT, useT } from "@/i18n";
@@ -259,6 +260,11 @@ export function App({ client }: { client: ClientService }) {
           ) : null}
 
           <main className="min-w-0 flex-1 px-5 py-6 md:px-8 md:py-8">
+            {!shell ? (
+              <div className="mb-4 flex justify-end">
+                <LocaleChoice />
+              </div>
+            ) : null}
             {session.kind === "loading" ? (
               <div className="flex min-h-[60svh] items-center justify-center gap-3 text-muted-foreground">
                 <Loader2 className="size-5 animate-spin motion-reduce:animate-none" aria-hidden />
