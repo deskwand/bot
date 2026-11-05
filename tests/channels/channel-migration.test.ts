@@ -209,11 +209,13 @@ describe("migration from the previous schema", () => {
     });
 
     expect(channel.edits).toEqual([]);
-    // A newly sent progress message carries no cancel button.
     expect(channel.sent).toEqual([
       {
         chatId: "42",
         text: "⏳ t7 旧任务：继续",
+        buttons: [
+          [{ label: "取消", data: "a:cancel:t7", hint: "取消 t7" }],
+        ],
       },
     ]);
   });

@@ -211,8 +211,24 @@ describe("resolveTextAction", () => {
   });
 
   describe("an approval by handle and approval id", () => {
-    it("acts without checking the pending list", () => {
-      // The Task DO is the final judge: the approval may already be resolved.
+    it("acts when that approval is pending on the task", () => {
+      expect(
+        resolveTextAction(
+          handleCommand("approve", 1, "ap6"),
+          [t1],
+          [pending(t1, "ap6")],
+        ),
+      ).toEqual({
+        kind: "action",
+        taskId: "t1",
+        label: "#1",
+        approvalId: "ap6",
+      });
+    });
+
+    it("replies when that approval is not pending on the task", () => {
+      // Approval ids are per task and handles are reused, so an old
+      // `批准 #1 ap1` must not reach a newer task's ap1.
       expect(
         resolveTextAction(
           handleCommand("approve", 1, "ap6"),
@@ -220,10 +236,8 @@ describe("resolveTextAction", () => {
           [pending(t1, "ap7")],
         ),
       ).toEqual({
-        kind: "action",
-        taskId: "t1",
-        label: "#1",
-        approvalId: "ap6",
+        kind: "reply",
+        text: "#1 没有待审批 ap6",
       });
     });
 

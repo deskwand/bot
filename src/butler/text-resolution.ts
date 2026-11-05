@@ -44,7 +44,15 @@ export function resolveTextAction(
       return act(row);
     }
     if (action.approvalId !== undefined) {
-      return act(row, action.approvalId);
+      // Approval ids are per task and handles are reused, so an explicit ap
+      // must still be pending on this task before it is acted on.
+      const matches = pending.some(
+        (item) =>
+          item.taskId === row.id && item.approvalId === action.approvalId,
+      );
+      return matches
+        ? act(row, action.approvalId)
+        : reply(`#${handle} 没有待审批 ${action.approvalId}`);
     }
     const candidates = pending.filter((item) => item.taskId === row.id);
     if (candidates.length === 0) return reply(`${taskLabel(row)} 没有待审批`);

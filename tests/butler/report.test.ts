@@ -498,11 +498,12 @@ describe("ButlerDO.report", () => {
         { label: "❌ 拒绝", data: "a:reject:t1:ap1", hint: "拒绝" },
       ],
     ]);
-    // With two pending, the hint has to name the handle and approval id.
+    // With two pending, the hint has to name the internal id: approval ids
+    // are per task and handles are reused.
     expect(channel.sent[1]?.buttons).toEqual([
       [
-        { label: "✅ 批准", data: "a:approve:t1:ap2", hint: "批准 #1 ap2" },
-        { label: "❌ 拒绝", data: "a:reject:t1:ap2", hint: "拒绝 #1 ap2" },
+        { label: "✅ 批准", data: "a:approve:t1:ap2", hint: "批准 t1 ap2" },
+        { label: "❌ 拒绝", data: "a:reject:t1:ap2", hint: "拒绝 t1 ap2" },
       ],
     ]);
   });
@@ -529,6 +530,18 @@ describe("ButlerDO.report", () => {
         ],
       },
     ]);
+  });
+
+  it("does not resolve text actions while maintenance is active", async () => {
+    const stub = butler("report-maintenance-resolve");
+    await stub.acquireMaintenance("export", "op1");
+
+    expect(
+      await stub.resolveTextAction({
+        action: "cancel",
+        target: { kind: "implicit" },
+      }),
+    ).toEqual({ kind: "reply", text: "维护中，稍后再试" });
   });
 
   it("derives the pending owner approvals from the event log", async () => {
@@ -860,6 +873,9 @@ describe("ButlerDO.report", () => {
       {
         chatId: "42",
         text: "⏳ t1 查天气：b",
+        buttons: [
+          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
+        ],
       },
     ]);
   });
@@ -987,6 +1003,9 @@ describe("ButlerDO.report", () => {
       {
         chatId: "42",
         text: "⏳ t1 查天气：a",
+        buttons: [
+          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
+        ],
       },
     ]);
 
@@ -1043,14 +1062,31 @@ describe("ButlerDO.report", () => {
     await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
     // The saved reference cannot be edited, so this update is delivered as a
     // new message instead of being dropped until the next event.
-    expect(sent).toEqual([{ text: "⏳ t1 查天气：a" }]);
+    expect(sent).toEqual([
+      {
+        text: "⏳ t1 查天气：a",
+        buttons: [
+          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
+        ],
+      },
+    ]);
     expect(await progressMessageId(stub, "t1")).toBe("99");
 
     fake.advance(3001);
     await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
     expect(sent).toEqual([
-      { text: "⏳ t1 查天气：a" },
-      { text: "⏳ t1 查天气：b" },
+      {
+        text: "⏳ t1 查天气：a",
+        buttons: [
+          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
+        ],
+      },
+      {
+        text: "⏳ t1 查天气：b",
+        buttons: [
+          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
+        ],
+      },
     ]);
     expect(await progressMessageId(stub, "t1")).toBe("99");
   });
@@ -1072,6 +1108,9 @@ describe("ButlerDO.report", () => {
       {
         chatId: "42",
         text: "⏳ t1 查天气：a",
+        buttons: [
+          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
+        ],
       },
     ]);
     expect(await progressMessageId(stub, "t1")).toBe("1");

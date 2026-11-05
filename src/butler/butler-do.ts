@@ -694,6 +694,10 @@ export class ButlerDO extends Agent<Env> {
    * The legacy `t<n>` form already names the task and bypasses resolution.
    */
   async resolveTextAction(action: TextAction): Promise<Resolution> {
+    if (this.lease.current() !== null) {
+      return { kind: "reply", text: "维护中，稍后再试" };
+    }
+
     const target = action.target;
     if (target.kind === "taskId") {
       return action.approvalId === undefined
@@ -857,7 +861,8 @@ export class ButlerDO extends Agent<Env> {
     };
 
     if (row.progressMessageRef !== null) {
-      const outcome = await this.editBestEffort(row.progressMessageRef, message);
+      const previousRef = row.progressMessageRef;
+      const outcome = await this.editBestEffort(previousRef, message);
       if (outcome === "edited") return;
 
       // The reference is useless to us either way. A transient failure keeps
@@ -867,12 +872,20 @@ export class ButlerDO extends Agent<Env> {
       // update, so fall through and send it as a new message.
       this.repo.update(taskId, { progressMessageRef: null });
       if (outcome === "failed") return;
+
+      // WeChat cannot edit messages, so every progress update would repeat the
+      // cancel hint. Only its newly sent progress goes without buttons; the
+      // start message already holds the only hint. Telegram keeps its buttons.
+      if (previousRef.channel === "wechat") {
+        const ref = await this.sendBestEffort({ text: message.text });
+        if (ref !== null) {
+          this.repo.update(taskId, { progressMessageRef: ref });
+        }
+        return;
+      }
     }
 
-    // A newly sent progress message carries no buttons: on WeChat every update
-    // is a new message, and repeating the cancel hint would drown the chat.
-    // The start message already holds the only hint.
-    const ref = await this.sendBestEffort({ text: message.text });
+    const ref = await this.sendBestEffort(message);
     if (ref !== null) {
       this.repo.update(taskId, { progressMessageRef: ref });
     }
@@ -939,7 +952,7 @@ export class ButlerDO extends Agent<Env> {
             }),
             hint: implicit
               ? "批准"
-              : `批准 ${label} ${approval.approvalId}`,
+              : `批准 ${taskId} ${approval.approvalId}`,
           },
           {
             label: "❌ 拒绝",
@@ -950,7 +963,7 @@ export class ButlerDO extends Agent<Env> {
             }),
             hint: implicit
               ? "拒绝"
-              : `拒绝 ${label} ${approval.approvalId}`,
+              : `拒绝 ${taskId} ${approval.approvalId}`,
           },
         ],
       ],
