@@ -29,6 +29,8 @@ const ResumeBot = Type.Object({
 
 const ListBots = Type.Object({});
 
+const RenameBot = Type.Object({ id: Type.String(), name: Type.String() });
+
 /** The Bot DO operations the management tools call. */
 export type BotControl = {
   init(spec: BotInit): Promise<void>;
@@ -37,6 +39,7 @@ export type BotControl = {
   wakeNow(): Promise<"scheduled" | "after_run" | "inactive">;
   pause(): Promise<void>;
   resume(wakeNow: boolean): Promise<void>;
+  rename(name: string): Promise<boolean>;
   destroy(): Promise<void>;
 };
 
@@ -247,6 +250,33 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     },
   };
 
+  const renameBot: ToolRegistration<typeof RenameBot> = {
+    name: "rename_bot",
+    description: "Rename a bot. Its id stays the same.",
+    parameters: RenameBot,
+    async execute({ id, name }) {
+      try {
+        const row = bots.get(id);
+        if (!row) return output(`没有机器人 ${id}`);
+        // Whitespace and format characters (zero-width space, BOM) would make
+        // the bot invisible in list_bots and in the `🤖 <name>：` prefix.
+        if (/^[\s\p{Cf}]*$/u.test(name)) return output("名字不能为空");
+        const trimmed = name.trim();
+        // The index write is local and fails cheaply; the BotDO write is an
+        // RPC, so it comes second and is undone if the DO has no meta.
+        if (!bots.rename(id, trimmed)) return output(`没有机器人 ${id}`);
+        if (!(await bot(id).rename(trimmed))) {
+          // An orphan index row: put the old name back so both stores agree.
+          bots.rename(id, row.name);
+          return output(`没有机器人 ${id}`);
+        }
+        return output(`已将 ${id} 改名为 ${trimmed}`);
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+
   const deleteBot: ToolRegistration<typeof BotId> = {
     name: "delete_bot",
     description:
@@ -276,6 +306,7 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     wakeBot,
     pauseBot,
     resumeBot,
+    renameBot,
     deleteBot,
   ];
 }

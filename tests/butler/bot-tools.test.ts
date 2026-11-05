@@ -308,6 +308,109 @@ describe("butler bot tools", () => {
     expect(listed.text).toBe("没有机器人");
   });
 
+  it("rename_bot trims the name and updates both stores", async () => {
+    // Bot DO names are shared across tests in this file, so start clean.
+    await botStub("b1").destroy();
+    await runTool(
+      "create_bot",
+      { name: "价格哨兵", mission: "盯着价格", default_interval: "2h" },
+      [],
+      "bot-tools-rename",
+    );
+
+    const result = await runTool(
+      "rename_bot",
+      { id: "b1", name: "  早报  " },
+      [],
+      "bot-tools-rename",
+    );
+
+    expect(result.text).toBe("已将 b1 改名为 早报");
+    expect(result.rows).toEqual([
+      { id: "b1", name: "早报", createdAt: expect.any(Number) },
+    ]);
+
+    const snapshot = await botStub("b1").snapshot();
+    expect(snapshot?.meta).toMatchObject({ botId: "b1", name: "早报" });
+  });
+
+  it("rename_bot rejects a blank name", async () => {
+    // Bot DO names are shared across tests in this file, so start clean.
+    await botStub("b1").destroy();
+    await runTool(
+      "create_bot",
+      { name: "价格哨兵", mission: "盯着价格", default_interval: "2h" },
+      [],
+      "bot-tools-rename-blank",
+    );
+
+    const result = await runTool(
+      "rename_bot",
+      { id: "b1", name: "   " },
+      [],
+      "bot-tools-rename-blank",
+    );
+
+    expect(result.text).toBe("名字不能为空");
+    expect(result.rows[0]).toMatchObject({ id: "b1", name: "价格哨兵" });
+    expect((await botStub("b1").snapshot())?.meta.name).toBe("价格哨兵");
+  });
+
+  it("rename_bot rejects a name with no visible characters", async () => {
+    // Bot DO names are shared across tests in this file, so start clean.
+    await botStub("b1").destroy();
+    await runTool(
+      "create_bot",
+      { name: "价格哨兵", mission: "盯着价格", default_interval: "2h" },
+      [],
+      "bot-tools-rename-invisible",
+    );
+
+    const result = await runTool(
+      "rename_bot",
+      { id: "b1", name: "\u200b" },
+      [],
+      "bot-tools-rename-invisible",
+    );
+
+    expect(result.text).toBe("名字不能为空");
+    expect(result.rows[0]).toMatchObject({ id: "b1", name: "价格哨兵" });
+  });
+
+  it("rename_bot reports a missing bot even when the index row survives", async () => {
+    // Bot DO names are shared across tests in this file, so start clean.
+    await botStub("b1").destroy();
+    // A half-finished create can leave the index row without a BotDO meta.
+    await runInDurableObject(
+      butler("bot-tools-rename-orphan"),
+      (_instance, state) => {
+        new BotsRepo(state.storage.sql).insert({ id: "b1", name: "价格哨兵" });
+      },
+    );
+
+    const result = await runTool(
+      "rename_bot",
+      { id: "b1", name: "早报" },
+      [],
+      "bot-tools-rename-orphan",
+    );
+
+    expect(result.text).toBe("没有机器人 b1");
+    expect(result.rows[0]).toMatchObject({ id: "b1", name: "价格哨兵" });
+  });
+
+  it("rename_bot reports an unknown id", async () => {
+    const result = await runTool(
+      "rename_bot",
+      { id: "b9", name: "早报" },
+      [],
+      "bot-tools-rename-missing",
+    );
+
+    expect(result.text).toBe("没有机器人 b9");
+    expect(result.rows).toEqual([]);
+  });
+
   it("list_bots shows a self-paused bot as paused", async () => {
     await runTool(
       "create_bot",

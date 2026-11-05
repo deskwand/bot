@@ -768,3 +768,82 @@ describe("BotDO lifecycle", () => {
     expect(await alarmAt(stub)).toBeNull();
   });
 });
+
+describe("BotDO rename", () => {
+  it("rename keeps status, wake time and the armed alarm", async () => {
+    fakeButler();
+    const stub = botStub("b-rename");
+    await initBot(stub, { firstWakeAt: now + 60_000 });
+    const alarmBefore = await alarmAt(stub);
+
+    const ok = await stub.rename("早报");
+
+    expect(ok).toBe(true);
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta).toMatchObject({
+      botId: "b1",
+      name: "早报",
+      mission: "盯着价格",
+      status: "active",
+      nextWakeAt: now + 60_000,
+      currentTaskId: null,
+    });
+    expect(await alarmAt(stub)).toBe(alarmBefore);
+  });
+
+  it("rename keeps an in-flight run", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-rename-running");
+    await initBot(stub);
+    await fireAlarm(stub);
+    expect(fake.spawns).toHaveLength(1);
+    expect(await alarmAt(stub)).toBe(now + WATCHDOG_MS);
+
+    expect(await stub.rename("早报")).toBe(true);
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta).toMatchObject({
+      name: "早报",
+      currentTaskId: "t1",
+      consecutiveFailures: 0,
+    });
+    expect(fake.spawns).toHaveLength(1);
+    expect(await alarmAt(stub)).toBe(now + WATCHDOG_MS);
+  });
+
+  it("rename puts the new name on the next run", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-rename-next-run");
+    await initBot(stub);
+    await stub.rename("早报");
+
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(1);
+    expect(fake.spawns[0]).toMatchObject({ botId: "b1", title: "早报" });
+    expect(fake.spawns[0]!.instructions).toContain("你是机器人 早报。");
+  });
+
+  it("rename does not re-arm a paused bot", async () => {
+    fakeButler();
+    const stub = botStub("b-rename-paused");
+    await initBot(stub);
+    await stub.pause();
+
+    expect(await stub.rename("早报")).toBe(true);
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta).toMatchObject({
+      name: "早报",
+      status: "paused",
+      nextWakeAt: null,
+    });
+    expect(await alarmAt(stub)).toBeNull();
+  });
+
+  it("rename returns false when the bot has no meta", async () => {
+    const stub = botStub("b-rename-missing");
+
+    expect(await stub.rename("早报")).toBe(false);
+  });
+});

@@ -185,6 +185,18 @@ export class BotDO extends DurableObject<Env> {
   }
 
   /**
+   * Renames the bot. The Butler's index row is updated by the caller; this DO
+   * only owns its own meta, so a rename never changes status, wake time or the
+   * run in flight.
+   */
+  async rename(name: string): Promise<boolean> {
+    const meta = this.store.readMeta();
+    if (meta === null) return false;
+    this.store.writeMeta({ ...meta, name });
+    return true;
+  }
+
+  /**
    * Saves the next wake time. During a run this only updates meta: the
    * watchdog alarm stays armed and the end of the run picks the saved time.
    */

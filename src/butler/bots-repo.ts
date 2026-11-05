@@ -61,6 +61,14 @@ export class BotsRepo {
       .map(toBotIndexRow);
   }
 
+  /** Renames one bot in the index. Returns false when the row is gone. */
+  rename(id: string, name: string): boolean {
+    return (
+      this.sql.exec(`UPDATE bots SET name = ? WHERE id = ?`, name, id)
+        .rowsWritten > 0
+    );
+  }
+
   remove(id: string): boolean {
     return this.sql.exec(`DELETE FROM bots WHERE id = ?`, id).rowsWritten > 0;
   }
