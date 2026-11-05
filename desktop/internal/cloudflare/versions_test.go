@@ -82,6 +82,7 @@ type capturedVersionUpload struct {
 	query    string
 	metadata map[string]any
 	parts    map[string][]byte
+	types    map[string]string
 }
 
 func versionServer(t *testing.T, latest string, uploads *[]capturedVersionUpload) http.Handler {
@@ -96,7 +97,7 @@ func versionServer(t *testing.T, latest string, uploads *[]capturedVersionUpload
 				t.Errorf("content type = %q: %v", r.Header.Get("Content-Type"), err)
 			}
 			reader := multipart.NewReader(r.Body, params["boundary"])
-			upload := capturedVersionUpload{query: r.URL.RawQuery, parts: map[string][]byte{}}
+			upload := capturedVersionUpload{query: r.URL.RawQuery, parts: map[string][]byte{}, types: map[string]string{}}
 			for {
 				part, err := reader.NextPart()
 				if err == io.EOF {
@@ -108,6 +109,7 @@ func versionServer(t *testing.T, latest string, uploads *[]capturedVersionUpload
 				}
 				data, _ := io.ReadAll(part)
 				upload.parts[part.FormName()] = data
+				upload.types[part.FormName()] = part.Header.Get("Content-Type")
 				if part.FormName() == "metadata" {
 					if err := json.Unmarshal(data, &upload.metadata); err != nil {
 						t.Errorf("decode metadata: %v", err)
@@ -222,6 +224,37 @@ func TestCreateVersionBuildsPreservingMetadata(t *testing.T) {
 	}
 	if !bytes.Contains(upload.parts["chunks/extra.js"], []byte("extra")) || !bytes.Contains(upload.parts["index.js"], []byte("export")) {
 		t.Fatalf("module parts = %#v", upload.parts)
+	}
+}
+
+// Workers cannot compile WebAssembly at runtime: a .wasm module must be sent
+// as application/wasm so the platform hands the code a WebAssembly.Module,
+// not the ArrayBuffer an application/octet-stream data module becomes.
+func TestCreateVersionSendsWasmAsCompiledModule(t *testing.T) {
+	var uploads []capturedVersionUpload
+	client, _ := cloudflaretest.NewServerClient(t, versionServer(t, versionBaseID, &uploads))
+	manifestJSON, err := json.Marshal(versionManifest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	modules := map[string][]byte{
+		"index.js":         []byte("export default {};"),
+		"abc-quickjs.wasm": {0x00, 0x61, 0x73, 0x6d},
+	}
+	_, err = client.CreateVersion(context.Background(), versionBase(), manifestJSON, modules,
+		domain.PublishPlan{BaseVersionID: versionBaseID, ConfigJSON: []byte(`{"schemaVersion":1}`)},
+		cloudflare.PreservePolicy{OperationID: "op-wasm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(uploads) != 1 {
+		t.Fatalf("uploads = %d", len(uploads))
+	}
+	if got := uploads[0].types["abc-quickjs.wasm"]; got != "application/wasm" {
+		t.Fatalf("wasm content type = %q", got)
+	}
+	if got := uploads[0].types["index.js"]; got != "application/javascript+module" {
+		t.Fatalf("js content type = %q", got)
 	}
 }
 

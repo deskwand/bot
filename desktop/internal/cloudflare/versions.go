@@ -181,6 +181,11 @@ func moduleContentType(modulePath string) string {
 	switch strings.ToLower(path.Ext(modulePath)) {
 	case ".js", ".mjs":
 		return "application/javascript+module"
+	case ".wasm":
+		// A CompiledWasm module: the Worker imports a WebAssembly.Module.
+		// octet-stream would make it a Data module (an ArrayBuffer), which
+		// Workers cannot compile at runtime.
+		return "application/wasm"
 	default:
 		return "application/octet-stream"
 	}
