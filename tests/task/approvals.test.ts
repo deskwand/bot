@@ -7,7 +7,14 @@ import type {
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
-import { ApprovalGate, withApproval } from "../../src/task/approvals";
+import {
+  ApprovalGate,
+  ReviewedGate,
+  withApproval,
+  type ApprovalGateLike,
+  type ApprovalNote,
+} from "../../src/task/approvals";
+import { REVIEW_FAILED_REASON, type ReviewVerdict } from "../../src/task/review";
 import type { ActionEvent, TaskEventBody, TaskSpec } from "../../src/protocol";
 import { withProgress } from "../../src/tools/wrap";
 import { setModelOverride } from "../../src/llm/models";
@@ -52,6 +59,44 @@ function statusOf(sql: SqlStorage, id: string): string | undefined {
   return sql
     .exec<{ status: string }>(`SELECT status FROM approvals WHERE id = ?`, id)
     .toArray()[0]?.status;
+}
+
+function reviewRows(sql: SqlStorage) {
+  return sql
+    .exec<{
+      tool: string;
+      args_summary: string;
+      verdict: string;
+      reason: string;
+      failed: number;
+    }>(`SELECT tool, args_summary, verdict, reason, failed FROM reviews ORDER BY id`)
+    .toArray();
+}
+
+type FakeInnerRequest = {
+  tool: string;
+  args: unknown;
+  signal: AbortSignal;
+  note?: ApprovalNote;
+};
+
+function fakeInner(decision: "approved" | "rejected" = "approved") {
+  const requests: FakeInnerRequest[] = [];
+  const resolutions: {
+    approvalId: string;
+    decision: "approved" | "rejected";
+  }[] = [];
+  const gate: ApprovalGateLike = {
+    async request(tool, args, signal, note) {
+      requests.push({ tool, args, signal, note });
+      return decision;
+    },
+    async resolve(approvalId, resolution) {
+      resolutions.push({ approvalId, decision: resolution });
+      return { ok: true, message: "ok" };
+    },
+  };
+  return { gate, requests, resolutions };
 }
 
 /** Runs `fn` against a fresh gate installed on a task object's SQLite storage. */
@@ -384,6 +429,347 @@ describe("ApprovalGate", () => {
       "approval_resolved",
       "progress",
     ]);
+  });
+});
+
+describe("ApprovalGate notes", () => {
+  it("carries the reason into the event and pending approvals", async () => {
+    const outcome = await withGate("t-note", async (gate, _sql, events) => {
+      const pending = gate.request(
+        "http_request",
+        { url: "https://example.com" },
+        new AbortController().signal,
+        { reason: "涉及付款" },
+      );
+      await vi.waitFor(() => expect(gate.pending()).toHaveLength(1));
+      const id = gate.pending()[0]!.approvalId;
+      const reason = gate.pending()[0]!.reason;
+      await tick();
+      await gate.resolve(id, "approved");
+      await pending;
+      return {
+        reason,
+        requested: events.find((event) => event.type === "approval_requested"),
+      };
+    }, 5000);
+
+    expect(outcome.reason).toBe("涉及付款");
+    expect(outcome.requested).toMatchObject({ reason: "涉及付款" });
+  });
+
+  it("omits the reason key when no note is given", async () => {
+    const requested = await withGate("t-no-note", async (gate, _sql, events) => {
+      const pending = gate.request(
+        "create_page",
+        {},
+        new AbortController().signal,
+      );
+      await vi.waitFor(() => expect(gate.pending()).toHaveLength(1));
+      const id = gate.pending()[0]!.approvalId;
+      await tick();
+      await gate.resolve(id, "approved");
+      await pending;
+      return events.find((event) => event.type === "approval_requested");
+    }, 5000);
+
+    expect(requested).toBeDefined();
+    expect(requested).not.toHaveProperty("reason");
+  });
+
+  it("adds the reason column to an approvals table created before it", async () => {
+    const stub = taskStub("t-old-approvals-table");
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const sql = sqlOf(instance);
+      sql.exec(`DROP TABLE approvals`);
+      sql.exec(
+        `CREATE TABLE approvals (
+          id TEXT PRIMARY KEY,
+          tool TEXT NOT NULL,
+          args_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        )`,
+      );
+      sql.exec(
+        `INSERT INTO approvals (id, tool, args_json, status, created_at)
+         VALUES ('ap1', 'create_page', '{}', 'expired', ?)`,
+        Date.now(),
+      );
+
+      const gate = new ApprovalGate(sql, async () => {});
+      new ApprovalGate(sql, async () => {});
+      const columns = sql
+        .exec<{ name: string }>(`PRAGMA table_info(approvals)`)
+        .toArray()
+        .map((column) => column.name);
+
+      const pending = gate.request(
+        "create_page",
+        {},
+        new AbortController().signal,
+      );
+      await vi.waitFor(() => expect(gate.pending()).toHaveLength(1));
+      const row = gate.pending()[0]!;
+      const id = row.approvalId;
+      await gate.resolve(id, "approved");
+      await pending;
+
+      return { columns, row };
+    });
+
+    expect(outcome.columns).toContain("reason");
+    expect(outcome.row).not.toHaveProperty("reason");
+  });
+});
+
+describe("ReviewedGate", () => {
+  function reviewedGate(
+    sql: SqlStorage,
+    inner: ApprovalGateLike,
+    review: (
+      tool: string,
+      args: unknown,
+      description: string,
+      signal: AbortSignal,
+    ) => Promise<ReviewVerdict>,
+    emitProgress: (text: string) => Promise<void> = async () => {},
+  ): ReviewedGate {
+    return new ReviewedGate(inner, sql, review, emitProgress);
+  }
+
+  it("allows an in-scope action without asking and records the review", async () => {
+    const stub = taskStub("t-review-allow");
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const sql = sqlOf(instance);
+      const inner = fakeInner();
+      const progress: string[] = [];
+      const gate = reviewedGate(
+        sql,
+        inner.gate,
+        async () => ({
+          verdict: "allow",
+          reason: "按指令保存",
+          failed: false,
+        }),
+        async (text) => {
+          progress.push(text);
+        },
+      );
+
+      const decision = await gate.request(
+        "http_request",
+        { title: "x".repeat(300) },
+        new AbortController().signal,
+      );
+      return {
+        decision,
+        requests: inner.requests,
+        rows: reviewRows(sql),
+        progress,
+      };
+    });
+
+    expect(outcome.decision).toBe("approved");
+    expect(outcome.requests).toEqual([]);
+    expect(outcome.rows).toHaveLength(1);
+    expect(outcome.rows[0]).toMatchObject({
+      tool: "http_request",
+      verdict: "allow",
+      reason: "按指令保存",
+      failed: 0,
+    });
+    expect(outcome.rows[0]!.args_summary).toHaveLength(200);
+    expect(outcome.progress).toEqual([
+      "✔️ 自动放行 http_request：按指令保存",
+    ]);
+  });
+
+  it("asks the owner with the review reason and passes the decision through", async () => {
+    for (const decision of ["approved", "rejected"] as const) {
+      const stub = taskStub(`t-review-ask-${decision}`);
+      const outcome = await runInDurableObject(stub, async (instance) => {
+        const sql = sqlOf(instance);
+        const inner = fakeInner(decision);
+        const gate = reviewedGate(sql, inner.gate, async () => ({
+          verdict: "ask",
+          reason: "涉及付款",
+          failed: false,
+        }));
+
+        const result = await gate.request(
+          "http_request",
+          { method: "POST" },
+          new AbortController().signal,
+        );
+        return { result, requests: inner.requests, rows: reviewRows(sql) };
+      });
+
+      expect(outcome.result).toBe(decision);
+      expect(outcome.requests[0]?.note?.reason).toBe("涉及付款");
+      expect(outcome.rows).toHaveLength(1);
+      expect(outcome.rows[0]).toMatchObject({ verdict: "ask", failed: 0 });
+    }
+  });
+
+  it("marks a failed review and asks with the fixed reason", async () => {
+    const stub = taskStub("t-review-failed");
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const sql = sqlOf(instance);
+      const inner = fakeInner();
+      const gate = reviewedGate(sql, inner.gate, async () => ({
+        verdict: "ask",
+        reason: REVIEW_FAILED_REASON,
+        failed: true,
+      }));
+
+      const result = await gate.request(
+        "http_request",
+        {},
+        new AbortController().signal,
+      );
+      return { result, requests: inner.requests, rows: reviewRows(sql) };
+    });
+
+    expect(outcome.result).toBe("approved");
+    expect(outcome.requests[0]?.note?.reason).toBe(REVIEW_FAILED_REASON);
+    expect(outcome.rows[0]).toMatchObject({
+      verdict: "ask",
+      reason: REVIEW_FAILED_REASON,
+      failed: 1,
+    });
+  });
+
+  it("rejects immediately when the signal already aborted", async () => {
+    const stub = taskStub("t-review-pre-abort");
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const sql = sqlOf(instance);
+      const inner = fakeInner();
+      let reviews = 0;
+      const gate = reviewedGate(sql, inner.gate, async () => {
+        reviews += 1;
+        return { verdict: "allow", reason: "ok", failed: false };
+      });
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await gate.request("http_request", {}, controller.signal);
+      return { result, reviews, requests: inner.requests, rows: reviewRows(sql) };
+    });
+
+    expect(outcome.result).toBe("rejected");
+    expect(outcome.reviews).toBe(0);
+    expect(outcome.requests).toEqual([]);
+    expect(outcome.rows).toEqual([]);
+  });
+
+  it("rejects without a record when the review is interrupted", async () => {
+    const stub = taskStub("t-review-mid-abort");
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const sql = sqlOf(instance);
+      const inner = fakeInner();
+      const controller = new AbortController();
+      const gate = reviewedGate(sql, inner.gate, async () => {
+        controller.abort();
+        throw new Error("aborted");
+      });
+
+      const result = await gate.request(
+        "http_request",
+        {},
+        controller.signal,
+      );
+      return { result, requests: inner.requests, rows: reviewRows(sql) };
+    });
+
+    expect(outcome.result).toBe("rejected");
+    expect(outcome.requests).toEqual([]);
+    expect(outcome.rows).toEqual([]);
+  });
+
+  it("passes the tool description to the review, or an empty string", async () => {
+    const stub = taskStub("t-review-description");
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const sql = sqlOf(instance);
+      const inner = fakeInner();
+      const descriptions: string[] = [];
+      const gate = reviewedGate(sql, inner.gate, async (_tool, _args, description) => {
+        descriptions.push(description);
+        return { verdict: "allow", reason: "ok", failed: false };
+      });
+      const signal = new AbortController().signal;
+
+      await gate.request("http_request", {}, signal, {
+        description: "发起 HTTP 请求",
+      });
+      await gate.request("http_request", {}, signal);
+      return descriptions;
+    });
+
+    expect(outcome).toEqual(["发起 HTTP 请求", ""]);
+  });
+
+  it("keeps the allow verdict when progress cannot be sent", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stub = taskStub("t-review-progress-fails");
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const sql = sqlOf(instance);
+      const inner = fakeInner();
+      const gate = reviewedGate(
+        sql,
+        inner.gate,
+        async () => ({ verdict: "allow", reason: "ok", failed: false }),
+        async () => {
+          throw new Error("channel down");
+        },
+      );
+
+      const result = await gate.request(
+        "http_request",
+        {},
+        new AbortController().signal,
+      );
+      return { result, rows: reviewRows(sql) };
+    });
+
+    expect(outcome.result).toBe("approved");
+    expect(outcome.rows).toHaveLength(1);
+  });
+
+  it("forwards resolve to the inner gate", async () => {
+    const stub = taskStub("t-review-resolve");
+    const resolutions = await runInDurableObject(stub, async (instance) => {
+      const inner = fakeInner();
+      const gate = reviewedGate(
+        sqlOf(instance),
+        inner.gate,
+        async () => ({ verdict: "allow", reason: "ok", failed: false }),
+      );
+      await gate.resolve("ap4", "rejected");
+      return inner.resolutions;
+    });
+
+    expect(resolutions).toEqual([
+      { approvalId: "ap4", decision: "rejected" },
+    ]);
+  });
+
+  it("gives withApproval the tool description", async () => {
+    const stub = taskStub("t-review-with-approval");
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const inner = fakeInner();
+      const counter = { calls: 0 };
+      const wrapped = withApproval(countingTool(counter), inner.gate);
+      const result = await wrapped.execute(
+        {},
+        {} as never,
+        context(new AbortController().signal),
+      );
+      return { result, requests: inner.requests, calls: counter.calls };
+    });
+
+    expect(textOf(outcome.result)).toBe("created");
+    expect(outcome.calls).toBe(1);
+    expect(outcome.requests[0]?.note).toEqual({ description: "Create a page" });
   });
 });
 

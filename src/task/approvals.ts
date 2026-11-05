@@ -1,8 +1,12 @@
 import type { TSchema, Static } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { TaskEventBody } from "../protocol";
+import type { ReviewVerdict } from "./review";
 
 export type ApprovalDecision = "approved" | "rejected" | "expired";
+
+/** Optional context for an approval request, shown to the owner and the reviewer. */
+export type ApprovalNote = { description?: string; reason?: string };
 
 /** Longest argument summary sent to the channel. */
 const ARGS_SUMMARY_LIMIT = 200;
@@ -23,6 +27,7 @@ export interface ApprovalGateLike {
     tool: string,
     args: unknown,
     signal: AbortSignal,
+    note?: ApprovalNote,
   ): Promise<ApprovalDecision>;
   resolve(
     approvalId: string,
@@ -56,24 +61,34 @@ export class ApprovalGate implements ApprovalGateLike {
         tool TEXT NOT NULL,
         args_json TEXT NOT NULL,
         status TEXT NOT NULL,
+        reason TEXT,
         created_at INTEGER NOT NULL
       )`,
     );
+    // Tasks created before reasons existed keep their rows; old rows read NULL.
+    const columns = this.sql
+      .exec<{ name: string }>(`PRAGMA table_info(approvals)`)
+      .toArray();
+    if (!columns.some((column) => column.name === "reason")) {
+      this.sql.exec(`ALTER TABLE approvals ADD COLUMN reason TEXT`);
+    }
   }
 
   async request(
     tool: string,
     args: unknown,
     signal: AbortSignal,
+    note?: ApprovalNote,
   ): Promise<ApprovalDecision> {
     const id = this.nextId();
     const argsJson = JSON.stringify(args ?? null) ?? "null";
     this.sql.exec(
-      `INSERT INTO approvals (id, tool, args_json, status, created_at)
-       VALUES (?, ?, ?, 'pending', ?)`,
+      `INSERT INTO approvals (id, tool, args_json, status, reason, created_at)
+       VALUES (?, ?, ?, 'pending', ?, ?)`,
       id,
       tool,
       argsJson,
+      note?.reason ?? null,
       Date.now(),
     );
 
@@ -101,6 +116,7 @@ export class ApprovalGate implements ApprovalGateLike {
         approvalId: id,
         tool,
         argsSummary: argsJson.slice(0, ARGS_SUMMARY_LIMIT),
+        ...(note?.reason !== undefined ? { reason: note.reason } : {}),
       });
     } catch (error) {
       // The approval row is durable; it expires on its own if the channel
@@ -119,16 +135,22 @@ export class ApprovalGate implements ApprovalGateLike {
    * Pending approvals that are still actionable on this instance: persisted
    * rows alone are not enough, because a restart loses the waiting tool call.
    */
-  pending(): { approvalId: string; tool: string; argsSummary: string }[] {
+  pending(): {
+    approvalId: string;
+    tool: string;
+    argsSummary: string;
+    reason?: string;
+  }[] {
     const now = Date.now();
     return this.sql
       .exec<{
         id: string;
         tool: string;
         args_json: string;
+        reason: string | null;
         created_at: number;
       }>(
-        `SELECT id, tool, args_json, created_at FROM approvals
+        `SELECT id, tool, args_json, reason, created_at FROM approvals
          WHERE status = 'pending' ORDER BY created_at ASC, id ASC`,
       )
       .toArray()
@@ -144,6 +166,7 @@ export class ApprovalGate implements ApprovalGateLike {
         approvalId: row.id,
         tool: row.tool,
         argsSummary: row.args_json.slice(0, ARGS_SUMMARY_LIMIT),
+        ...(row.reason !== null ? { reason: row.reason } : {}),
       }));
   }
 
@@ -236,6 +259,123 @@ export function rejectionText(decision: ApprovalDecision): string {
   return `用户拒绝了此操作（${decision}），请换一种方式或直接向用户说明`;
 }
 
+/** One booked review, kept for troubleshooting. */
+export type ReviewRow = {
+  tool: string;
+  argsSummary: string;
+  verdict: "allow" | "ask";
+  reason: string;
+  failed: boolean;
+};
+
+/**
+ * Reviews write actions before asking the owner.
+ *
+ * In-scope actions are reported and run; risky or failed reviews fall through
+ * to the durable {@link ApprovalGate}, which shows the review's reason.
+ */
+export class ReviewedGate implements ApprovalGateLike {
+  constructor(
+    private readonly inner: ApprovalGateLike,
+    private readonly sql: SqlStorage,
+    private readonly review: (
+      tool: string,
+      args: unknown,
+      description: string,
+      signal: AbortSignal,
+    ) => Promise<ReviewVerdict>,
+    private readonly emitProgress: (text: string) => Promise<void>,
+  ) {
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tool TEXT NOT NULL,
+        args_summary TEXT NOT NULL,
+        verdict TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        failed INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      )`,
+    );
+  }
+
+  async request(
+    tool: string,
+    args: unknown,
+    signal: AbortSignal,
+    note?: ApprovalNote,
+  ): Promise<ApprovalDecision> {
+    if (signal.aborted) return "rejected";
+
+    let verdict: ReviewVerdict;
+    try {
+      verdict = await this.review(
+        tool,
+        args,
+        note?.description ?? "",
+        signal,
+      );
+    } catch (error) {
+      // The task was interrupted while reviewing; do not ask the owner for a
+      // call that no longer runs.
+      if (signal.aborted) return "rejected";
+      throw error;
+    }
+    if (signal.aborted) return "rejected";
+
+    this.record({
+      tool,
+      argsSummary: (JSON.stringify(args ?? null) ?? "null").slice(
+        0,
+        ARGS_SUMMARY_LIMIT,
+      ),
+      verdict: verdict.verdict,
+      reason: verdict.reason,
+      failed: verdict.failed,
+    });
+
+    if (verdict.verdict === "allow") {
+      try {
+        await this.emitProgress(`✔️ 自动放行 ${tool}：${verdict.reason}`);
+      } catch (error) {
+        console.warn(
+          `review progress for ${tool} failed: ${errorMessage(error)}`,
+        );
+      }
+      return "approved";
+    }
+
+    return this.inner.request(tool, args, signal, {
+      description: note?.description,
+      reason: verdict.reason,
+    });
+  }
+
+  resolve(
+    approvalId: string,
+    decision: "approved" | "rejected",
+  ): Promise<{ ok: boolean; message: string }> {
+    return this.inner.resolve(approvalId, decision);
+  }
+
+  private record(row: ReviewRow): void {
+    try {
+      this.sql.exec(
+        `INSERT INTO reviews (tool, args_summary, verdict, reason, failed, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        row.tool,
+        row.argsSummary,
+        row.verdict,
+        row.reason,
+        row.failed ? 1 : 0,
+        Date.now(),
+      );
+    } catch (error) {
+      console.warn(`review record for ${row.tool} failed: ${errorMessage(error)}`);
+    }
+  }
+}
+
 /**
  * Run `tool` only after the user approves its arguments. A refusal (or a
  * timeout) is reported as an error result so scripts can catch it and the model can
@@ -249,7 +389,9 @@ export function withApproval<T extends TSchema>(
     ...tool,
     async execute(args: Static<T>, api, context) {
       const signal = context.abortSignal;
-      const decision = await gate.request(tool.name, args, signal ?? NEVER_ABORTED);
+      const decision = await gate.request(tool.name, args, signal ?? NEVER_ABORTED, {
+        description: tool.description,
+      });
       if (decision === "approved") return tool.execute(args, api, context);
 
       if (signal?.aborted) {

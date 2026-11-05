@@ -405,7 +405,12 @@ export class TaskDO extends Agent<Env> {
 
   /** Read-only projection used by the Butler to re-present approvals. */
   async pendingApprovals(): Promise<
-    { approvalId: string; tool: string; argsSummary: string }[]
+    {
+      approvalId: string;
+      tool: string;
+      argsSummary: string;
+      reason?: string;
+    }[]
   > {
     return this.approvals.pending();
   }

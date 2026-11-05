@@ -62,7 +62,13 @@ export type Artifact = { name: string; url: string };
 export type TaskEventBody =
   | { type: "started" }
   | { type: "progress"; text: string }
-  | { type: "approval_requested"; approvalId: string; tool: string; argsSummary: string }
+  | {
+      type: "approval_requested";
+      approvalId: string;
+      tool: string;
+      argsSummary: string;
+      reason?: string;
+    }
   | {
       type: "approval_resolved";
       approvalId: string;
