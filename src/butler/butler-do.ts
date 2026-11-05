@@ -5,6 +5,7 @@ import { BackupRpc } from "../admin/backup-rpc";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
 import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
 import type { RunOutcome } from "../bot/bot-store";
+import type { TextAction } from "../channels/text-action";
 import type {
   DbSchema,
   DumpPage,
@@ -48,6 +49,11 @@ import {
   ScheduleStore,
 } from "./schedules";
 import { TasksRepo, type TaskRow } from "./tasks-repo";
+import {
+  resolveTextAction as resolveAgainstCandidates,
+  type PendingApproval,
+  type Resolution,
+} from "./text-resolution";
 import { createButlerTools, SpawnFailedError, type TaskControl } from "./tools";
 
 type TaskEventRow = {
@@ -629,6 +635,83 @@ export class ButlerDO extends Agent<Env> {
 
     // A report is an activity point: re-present approvals this route owns.
     this.kickReconcile();
+  }
+
+  /**
+   * Approvals the owner can still act on: a `requested` event without a
+   * matching `resolved` one, for tasks that are active and owned by the owner.
+   * Derived from the log so every Butler instance agrees without asking the
+   * Task DOs.
+   */
+  pendingOwnerApprovals(): PendingApproval[] {
+    const active = this.repo.listActiveOwner();
+    const rows = this.db
+      .exec<{ task_id: string; approval_id: string }>(
+        `SELECT e.task_id AS task_id,
+                json_extract(e.payload_json, '$.approvalId') AS approval_id
+           FROM task_events e
+          WHERE e.type = 'approval_requested'
+            AND json_extract(e.payload_json, '$.approvalId') IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM task_events r
+               WHERE r.task_id = e.task_id
+                 AND r.type = 'approval_resolved'
+                 AND json_extract(r.payload_json, '$.approvalId')
+                     = json_extract(e.payload_json, '$.approvalId')
+            )
+          ORDER BY e.seq ASC`,
+      )
+      .toArray();
+
+    const byTask = new Map<string, string[]>();
+    for (const row of rows) {
+      const list = byTask.get(row.task_id) ?? [];
+      // A re-delivered request event must not appear twice.
+      if (!list.includes(row.approval_id)) list.push(row.approval_id);
+      byTask.set(row.task_id, list);
+    }
+
+    const pending: PendingApproval[] = [];
+    // Active order is handle order, so the candidate list reads #1, #2, …
+    for (const task of active) {
+      for (const approvalId of byTask.get(task.id) ?? []) {
+        pending.push({
+          taskId: task.id,
+          handle: task.handle,
+          approvalId,
+          title: task.title,
+        });
+      }
+    }
+    return pending;
+  }
+
+  /**
+   * Resolves a text command to a concrete action, a candidate list, or chat.
+   * The legacy `t<n>` form already names the task and bypasses resolution.
+   */
+  async resolveTextAction(action: TextAction): Promise<Resolution> {
+    const target = action.target;
+    if (target.kind === "taskId") {
+      return action.approvalId === undefined
+        ? {
+            kind: "action",
+            taskId: target.taskId,
+            label: target.taskId,
+          }
+        : {
+            kind: "action",
+            taskId: target.taskId,
+            label: target.taskId,
+            approvalId: action.approvalId,
+          };
+    }
+
+    return resolveAgainstCandidates(
+      { ...action, target },
+      this.repo.listActiveOwner(),
+      this.pendingOwnerApprovals(),
+    );
   }
 
   /**

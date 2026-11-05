@@ -461,6 +461,78 @@ describe("ButlerDO.report", () => {
     ]);
   });
 
+  it("derives the pending owner approvals from the event log", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+
+    const stub = butler("report-pending-owner");
+    await seedTask(stub, { id: "t1", title: "查天气", status: "running" });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`UPDATE tasks SET handle = 1 WHERE id = 't1'`);
+    });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "approval_requested",
+      approvalId: "ap1",
+      tool: "web_fetch",
+      argsSummary: "a",
+    });
+    await stub.report({
+      taskId: "t1",
+      seq: 2,
+      type: "approval_requested",
+      approvalId: "ap2",
+      tool: "web_fetch",
+      argsSummary: "b",
+    });
+    await stub.report({
+      taskId: "t1",
+      seq: 3,
+      type: "approval_resolved",
+      approvalId: "ap1",
+      decision: "approved",
+    });
+
+    expect(await stub.pendingOwnerApprovals()).toEqual([
+      { taskId: "t1", handle: 1, approvalId: "ap2", title: "查天气" },
+    ]);
+  });
+
+  it("keeps bot approvals out of the pending owner list", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+
+    const stub = butler("report-pending-bot");
+    await seedTask(stub, { id: "t1", title: "查天气", status: "running" });
+    await seedTask(stub, {
+      id: "b1",
+      title: "bot run",
+      status: "running",
+      progressMessageId: null,
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`UPDATE tasks SET handle = 1 WHERE id = 't1'`);
+      state.storage.sql.exec(`UPDATE tasks SET bot_id = 'bot-a' WHERE id = 'b1'`);
+    });
+
+    await stub.report({
+      taskId: "b1",
+      seq: 1,
+      type: "approval_requested",
+      approvalId: "ap1",
+      tool: "web_fetch",
+      argsSummary: "a",
+    });
+
+    expect(await stub.pendingOwnerApprovals()).toEqual([]);
+  });
+
   it("keeps the approval outcome when the request text is long", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
