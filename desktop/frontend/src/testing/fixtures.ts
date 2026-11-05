@@ -169,15 +169,15 @@ const MCP_CATALOG: McpCatalogEntryDTO[] = [
 const MCP_TOOLS: Record<string, McpToolDTO[]> = {
   deepwiki: [
     { name: "read_wiki_structure", description: "读取仓库 wiki 目录", mode: "auto" },
-    { name: "ask_question", description: "向仓库提问", mode: "approval" },
+    { name: "ask_question", description: "向仓库提问", mode: "review" },
   ],
   github: [
     { name: "get_file_contents", description: "读取仓库文件", mode: "auto" },
-    { name: "create_issue", description: "创建 issue", mode: "approval" },
+    { name: "create_issue", description: "创建 issue", mode: "review" },
   ],
   notion: [
     { name: "search_pages", description: "搜索页面", mode: "auto" },
-    { name: "create_page", description: "创建页面", mode: "approval" },
+    { name: "create_page", description: "创建页面", mode: "review" },
   ],
 };
 

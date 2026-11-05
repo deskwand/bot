@@ -315,6 +315,8 @@ export function Mcp() {
     }));
   };
 
+  // The review mode is the default for write tools and is not written to any
+  // list, so only auto, approval and disabled need to be collected here.
   const saveTools = async (server: McpServerConfig) => {
     const tools = drafts[server.name] ?? [];
     const next: McpServerConfig = {

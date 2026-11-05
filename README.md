@@ -38,7 +38,7 @@
 机器人任务**安静运行**：不发「已开始」、不发进度或心跳，也不做完成汇报。主人只会看到三类消息：
 
 - 机器人主动发的 `🤖 <名字>：…`（没有值得说的变化就不发）；
-- 需要审批的按钮（文案带机器人名字）；
+- 需要审批的按钮（文案带机器人名字）——机器人任务里的写操作先经自动审查，只有涉及金钱、删除、权限、对外发送等高风险操作才弹审批；
 - 暂停、每日上限等异常提醒。
 
 唤醒时间受固定限制，不写进配置：最短 5 分钟、最长 30 天；每个 UTC 自然日最多唤醒 48 次（手动唤醒也算），超出后当天剩余唤醒顺延到次日 00:00 UTC，并通知一次。机器人没有安排下次唤醒时，按创建时给的默认间隔。
@@ -141,7 +141,8 @@ cp .dev.vars.example .dev.vars
 - `owner.telegramUserIds`：允许使用该 bot 的 Telegram 用户 ID（正整数）。空数组是合法配置，表示不授权任何人；不存在仓库内置 owner，也不会回退到源码常量。
 - `models`：按角色（`butler` / `task`）配置模型。`workers-ai` 是内置的免 key 厂商（默认）；其他内置厂商和 `models.customProviders` 里的自定义端点按 `MODEL_KEY_<ID>` 读取 key。
 - `mcpServers`：远程 MCP 服务器列表，推荐在桌面端"服务"页从目录添加（GitHub、Notion、Linear、Sentry、高德地图等），不必手写。只支持远程 MCP（Streamable HTTP / SSE），不支持 `npx` 启动的本地 stdio 服务。
-  - 审批：桌面端添加的服务默认"读免审、写要审"（`approvalPolicy: "writes"`，依据工具的 `readOnlyHint`），可逐个工具改为免审、要审或停用（`autoApprove` / `requireApproval` / `disabledTools`）。要审的工具触发时先发 ✅/❌ 审批按钮。
+  - 审批：桌面端添加的服务默认"读免审、写智能"（`approvalPolicy: "writes"`，依据工具的 `readOnlyHint`）：只读工具直接执行，其他写操作先交给审查模型判断，常规操作直接放行，只有涉及金钱、删除、权限、对外发送等高风险操作才发 ✅/❌ 审批按钮，卡片附审查理由。可逐个工具改为智能、免审、要审或停用（`autoApprove` / `requireApproval` / `disabledTools`）。
+  - 老部署：以前在工具页把写工具设成"要审"的服务仍保留在 `requireApproval` 里，升级后不会自动改回智能审查；需要到工具页把写工具改回"智能"并保存。
   - 密钥：header 值写 `env:NAME`，URL 中写 `{env:NAME}` 占位，`NAME` 为 `MCP_` 开头的 Worker secret；引用原样保留，不会把值展开进普通 var。
   - 登录授权（OAuth）：由 Worker 完成，回调地址为 `${PUBLIC_BASE_URL}/mcp/oauth/callback`，token 存在 `McpAuthDO` 并自动续期，不进入本地备份；恢复到新部署后需在"服务"页重新授权。
 - `schemaVersion` 必须为 `1`；未知版本、非整数/越界用户 ID、未知 provider 或非法 JSON 都会以固定错误拒绝，不会猜测或回退。

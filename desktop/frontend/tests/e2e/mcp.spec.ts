@@ -88,6 +88,34 @@ test("tool approval changes publish only after the explicit save", async ({ page
   expect(calls.update[0]?.server.autoApprove).toContain("ask_question");
 });
 
+test("write tools default to 智能 and save outside every list", async ({ page }) => {
+  await openServices(page);
+  const form = await addCatalogEntry(page, "DeepWiki");
+  await form.getByRole("button", { name: "保存", exact: true }).click();
+
+  const card = page.getByTestId("mcp-card-deepwiki");
+  await card.getByRole("button", { name: /工具/ }).click();
+  await expect(page.getByLabel("ask_question 审批方式")).toHaveText("智能");
+
+  await page.getByLabel("read_wiki_structure 审批方式").click();
+  await page.getByRole("option", { name: "停用" }).click();
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect
+    .poll(async () => (await mcpCalls(page)).update.length)
+    .toBe(1);
+  const calls = await mcpCalls(page);
+  const server = calls.update[0]?.server as {
+    autoApprove?: string[];
+    requireApproval?: string[];
+    disabledTools?: string[];
+  };
+  expect(server.disabledTools).toEqual(["read_wiki_structure"]);
+  expect(server.autoApprove ?? []).not.toContain("ask_question");
+  expect(server.requireApproval ?? []).not.toContain("ask_question");
+  expect(server.disabledTools ?? []).not.toContain("ask_question");
+});
+
 test("deleting a service removes its card", async ({ page }) => {
   await openServices(page);
   const form = await addCatalogEntry(page, "DeepWiki");

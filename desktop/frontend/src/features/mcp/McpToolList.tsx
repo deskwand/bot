@@ -10,6 +10,7 @@ import {
 import type { McpToolDTO } from "@/services/types";
 
 const MODE_LABELS: Record<string, string> = {
+  review: "智能",
   auto: "免审",
   approval: "要审",
   disabled: "停用",

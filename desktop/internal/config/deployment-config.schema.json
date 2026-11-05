@@ -195,7 +195,7 @@
         "approvalPolicy": {
           "type": "string",
           "enum": ["writes"],
-          "description": "writes requires approval for tools without a readOnlyHint; requireApproval and autoApprove take precedence."
+          "description": "writes: read-only tools run directly; other tools are reviewed automatically and only risky calls ask the owner. requireApproval and autoApprove take precedence."
         },
         "autoApprove": {
           "type": "array",
