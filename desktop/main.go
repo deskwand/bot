@@ -59,6 +59,8 @@ func main() {
 		log.Fatal(err)
 	}
 	locale := app.NewLocaleState(themes, nil)
+	themes.Language = locale.Current
+	targets.Locale = locale.Current
 	cache, err := app.NewFileSnapshotCache(dataDir)
 	if err != nil {
 		log.Fatal(err)
@@ -77,6 +79,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	backupSettings.Locale = locale.Current
 
 	// Anonymous usage reporting. A development build reports nothing: its runs
 	// would otherwise look like installs, and its version is not a release.
@@ -121,6 +124,7 @@ func main() {
 		Snapshots:   api,
 		Selector:    app.NewActiveChannelSelector(publish, api),
 		Credentials: credentials,
+		Locale:      locale.Current,
 	})
 
 	options := app.ServiceOptions{
@@ -128,7 +132,7 @@ func main() {
 		Publish:     publish,
 		Lifecycle:   lifecycle,
 		Entries:     entries,
-		Diagnostics: app.NewDiagnosticsService(api, api),
+		Diagnostics: app.NewDiagnosticsServiceWithOptions(api, api, app.DiagnosticsOptions{Locale: locale.Current}),
 		Snapshots:   api,
 		Scripts:     api,
 		Journal:     journal,

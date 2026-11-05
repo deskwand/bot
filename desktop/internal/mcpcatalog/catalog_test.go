@@ -2,6 +2,7 @@ package mcpcatalog
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/config"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n/i18ntest"
 )
 
 var (
@@ -29,16 +31,16 @@ func minimalConfig(server map[string]any) map[string]any {
 }
 
 func TestCatalogEntriesBuildValidConfig(t *testing.T) {
-	if len(All()) == 0 {
+	if len(All("zh")) == 0 {
 		t.Fatal("catalog is empty")
 	}
-	for _, entry := range All() {
+	for _, entry := range All("zh") {
 		t.Run(entry.ID, func(t *testing.T) {
 			values := map[string]string{}
 			for _, field := range entry.Fields {
 				values[field.Key] = "placeholder-" + field.Key
 			}
-			server, secrets, err := Build(entry, entry.ID, values)
+			server, secrets, err := Build("zh", entry, entry.ID, values)
 			if err != nil {
 				t.Fatalf("Build() = %v", err)
 			}
@@ -66,7 +68,7 @@ func TestCatalogEntriesBuildValidConfig(t *testing.T) {
 
 func TestCatalogIDsUniqueAndNamesValid(t *testing.T) {
 	seen := map[string]bool{}
-	for _, entry := range All() {
+	for _, entry := range All("zh") {
 		if !entryIDPattern.MatchString(entry.ID) {
 			t.Fatalf("entry ID %q does not match the name pattern", entry.ID)
 		}
@@ -98,11 +100,11 @@ func TestCatalogIDsUniqueAndNamesValid(t *testing.T) {
 }
 
 func TestBuildHeaderPrefixStoresFullValue(t *testing.T) {
-	entry, ok := Lookup("github")
+	entry, ok := Lookup("zh", "github")
 	if !ok {
 		t.Fatal("github entry is missing")
 	}
-	server, secrets, err := Build(entry, "github", map[string]string{"token": "abc"})
+	server, secrets, err := Build("zh", entry, "github", map[string]string{"token": "abc"})
 	if err != nil {
 		t.Fatalf("Build() = %v", err)
 	}
@@ -129,8 +131,8 @@ func TestBuildHeaderPrefixStoresFullValue(t *testing.T) {
 }
 
 func TestBuildTrimsPastedValues(t *testing.T) {
-	entry, _ := Lookup("github")
-	_, secrets, err := Build(entry, "github", map[string]string{"token": "  abc\n"})
+	entry, _ := Lookup("zh", "github")
+	_, secrets, err := Build("zh", entry, "github", map[string]string{"token": "  abc\n"})
 	if err != nil {
 		t.Fatalf("Build() = %v", err)
 	}
@@ -140,11 +142,11 @@ func TestBuildTrimsPastedValues(t *testing.T) {
 }
 
 func TestBuildURLField(t *testing.T) {
-	entry, ok := Lookup("amap")
+	entry, ok := Lookup("zh", "amap")
 	if !ok {
 		t.Fatal("amap entry is missing")
 	}
-	server, secrets, err := Build(entry, "amap", map[string]string{"key": "abc"})
+	server, secrets, err := Build("zh", entry, "amap", map[string]string{"key": "abc"})
 	if err != nil {
 		t.Fatalf("Build() = %v", err)
 	}
@@ -167,17 +169,67 @@ func TestBuildURLField(t *testing.T) {
 }
 
 func TestBuildRejectsMissingValue(t *testing.T) {
-	entry, ok := Lookup("github")
+	entry, ok := Lookup("zh", "github")
 	if !ok {
 		t.Fatal("github entry is missing")
 	}
-	_, _, err := Build(entry, "github", map[string]string{})
+	_, _, err := Build("zh", entry, "github", map[string]string{})
 	if err == nil {
 		t.Fatal("Build() = nil, want an error")
 	}
 	if strings.Contains(err.Error(), "abc") {
 		t.Fatalf("error contains a secret value: %v", err)
 	}
+}
+
+func TestCatalogEveryTextHasBothLanguages(t *testing.T) {
+	for _, entry := range builtin.Entries {
+		check := func(label string, text Text) {
+			t.Helper()
+			if text.Zh == "" || text.En == "" {
+				t.Fatalf("%s is missing a language: %#v", label, text)
+			}
+			i18ntest.NoHan(t, label+" en", text.En)
+		}
+		check(entry.ID+".category", entry.Category)
+		check(entry.ID+".description", entry.Description)
+		for _, field := range entry.Fields {
+			check(entry.ID+"."+field.Key+".label", field.Label)
+			check(entry.ID+"."+field.Key+".help", field.Help)
+		}
+	}
+}
+
+func TestCatalogZhUnchanged(t *testing.T) {
+	raw, err := os.ReadFile("testdata/catalog_zh_baseline.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var baseline struct {
+		SchemaVersion int     `json:"schemaVersion"`
+		Entries       []Entry `json:"entries"`
+	}
+	if err := json.Unmarshal(raw, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	got := All("zh")
+	if !reflect.DeepEqual(got, baseline.Entries) {
+		gotJSON, _ := json.MarshalIndent(got, "", "  ")
+		wantJSON, _ := json.MarshalIndent(baseline.Entries, "", "  ")
+		t.Fatalf("All(\"zh\") changed:\n got: %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+func TestBuildMissingFieldFollowsLocale(t *testing.T) {
+	entry, ok := Lookup("en", "github")
+	if !ok {
+		t.Fatal("github entry is missing")
+	}
+	_, _, err := Build("en", entry, "github", map[string]string{})
+	if err == nil {
+		t.Fatal("Build() = nil, want an error")
+	}
+	i18ntest.NoHan(t, "Build error", err.Error())
 }
 
 func TestOrphanedKeepsSharedSecrets(t *testing.T) {

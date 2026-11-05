@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/release"
 )
 
@@ -99,14 +100,14 @@ func (l *Lifecycle) InspectImport(ctx context.Context, target domain.Target) (Im
 		ActiveChannel:       inspection.ActiveChannel,
 	}
 	if snapshot.ReleaseVersion == "" {
-		preview.Warnings = append(preview.Warnings, "无法读取当前发布版本；升级前需要确认版本。")
+		preview.Warnings = append(preview.Warnings, l.t("deployment.importVersionUnreadable"))
 	}
 	if !inspection.ConfigPresent || len(snapshot.ConfigJSON) == 0 {
 		preview.Legacy = true
 		preview.RequiredInputs = []string{"owner", "models"}
 		preview.Warnings = append(preview.Warnings,
-			"旧版本把 owner 和模型写在源码里，客户端不会执行或解析 Worker 代码；请重新填写 owner 与模型。",
-			"MCP 服务器将从未配置开始；已存在的 secrets 会被保留。",
+			l.t("deployment.importLegacySourceNote"),
+			l.t("deployment.importLegacyMcpNote"),
 		)
 		return preview, nil
 	}
@@ -118,25 +119,25 @@ func (l *Lifecycle) InspectImport(ctx context.Context, target domain.Target) (Im
 	if !preview.ModelsConfigured {
 		preview.RequiredInputs = append(preview.RequiredInputs, "models")
 	}
-	migrations, scanWarnings := scanPlaintextSecrets(snapshot.ConfigJSON, snapshot.SecretNames, template)
+	migrations, scanWarnings := scanPlaintextSecrets(l.lang(), snapshot.ConfigJSON, snapshot.SecretNames, template)
 	preview.Warnings = append(preview.Warnings, scanWarnings...)
 	if len(migrations) > 0 {
 		preview.PlaintextSecrets = migrations
 		preview.RequiredInputs = append(preview.RequiredInputs, "migratedSecrets")
 		preview.Warnings = append(preview.Warnings,
-			"现有 DESKWAND_CONFIG 中含有明文凭据。确认迁移时请为每个条目输入值；值只会写入 Cloudflare secrets，不会写入普通变量或日志。",
+			l.t("deployment.importPlaintextDetected"),
 		)
 		needsBearer := false
 		for _, migration := range migrations {
 			preview.Warnings = append(preview.Warnings,
-				fmt.Sprintf("请轮换已迁移的凭据 %s；旧版本仍保留明文。", migration.SecretName))
+				l.t("deployment.importRotateSecret", migration.SecretName))
 			if strings.EqualFold(pointerLastSegment(migration.Path), "Authorization") {
 				needsBearer = true
 			}
 		}
 		if needsBearer {
 			preview.Warnings = append(preview.Warnings,
-				"Authorization 需要填写完整值（包括 `Bearer ` 前缀）。")
+				l.t("deployment.importAuthorizationFullValue"))
 		}
 		return preview, domain.Error{
 			Code:    CodePlaintextSecretDetected,
@@ -164,7 +165,7 @@ func (l *Lifecycle) ConfirmImport(ctx context.Context, target domain.Target, con
 	if len(migrationState.NewSteps) > 0 {
 		return domain.Result{State: StateNeedsInput}, domain.Error{
 			Code:    CodeUpgradeRequiredFirst,
-			Message: "先导入当前版本再升级",
+			Message: l.t("deployment.importUpgradeFirst"),
 		}
 	}
 	if preview.Legacy {
@@ -305,6 +306,7 @@ func templateHasR2(template release.ResourceTemplate, name string) bool {
 var secretNameCleaner = regexp.MustCompile(`[^A-Z0-9]+`)
 
 type plaintextScanner struct {
+	locale     string
 	used       map[string]bool
 	reserved   map[string]bool
 	migrations []SecretMigration
@@ -313,7 +315,7 @@ type plaintextScanner struct {
 	warned     map[string]bool
 }
 
-func scanPlaintextSecrets(configJSON []byte, existingSecretNames []string, template release.ResourceTemplate) ([]SecretMigration, []string) {
+func scanPlaintextSecrets(locale string, configJSON []byte, existingSecretNames []string, template release.ResourceTemplate) ([]SecretMigration, []string) {
 	if len(configJSON) == 0 {
 		return nil, nil
 	}
@@ -334,6 +336,7 @@ func scanPlaintextSecrets(configJSON []byte, existingSecretNames []string, templ
 		used[name] = true
 	}
 	scanner := &plaintextScanner{
+		locale:   locale,
 		used:     used,
 		reserved: reserved,
 		seen:     map[string]bool{},
@@ -386,7 +389,7 @@ func (s *plaintextScanner) walk(value any, path []string, serverName string) {
 			}
 			if text, ok := child.(string); ok {
 				if isCredentialKey(key) && !isEnvReference(text) {
-					s.warn(fmt.Sprintf("字段 %s 看起来包含凭据，但不在 MCP header 中，未自动迁移；请手动处理并轮换。", jsonPointer(childPath)))
+					s.warn(i18n.T(s.locale, "deployment.scannerCredentialField", jsonPointer(childPath)))
 				}
 				continue
 			}
@@ -411,12 +414,12 @@ func (s *plaintextScanner) walk(value any, path []string, serverName string) {
 
 func (s *plaintextScanner) warnServerFields(server map[string]any, serverName string) {
 	if rawURL, ok := server["url"].(string); ok {
-		if message, found := mcpURLWarning(serverName, rawURL); found {
+		if message, found := mcpURLWarning(s.locale, serverName, rawURL); found {
 			s.warn(message)
 		}
 	}
 	if args, ok := server["args"].([]any); ok && len(args) > 0 {
-		s.warn(fmt.Sprintf("MCP 服务器 %q 的 args 可能包含凭据，未自动迁移；请检查并轮换。", serverName))
+		s.warn(i18n.T(s.locale, "deployment.scannerMCPArgs", serverName))
 	}
 }
 
@@ -485,21 +488,21 @@ func normalizeSecretName(value string) string {
 	return cleaned
 }
 
-func mcpURLWarning(serverName, raw string) (string, bool) {
+func mcpURLWarning(locale, serverName, raw string) (string, bool) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return "", false
 	}
 	if parsed.User != nil {
-		return fmt.Sprintf("MCP 服务器 %q 的 URL 含有用户信息，未自动迁移；请改用 secret 引用并轮换。", serverName), true
+		return i18n.T(locale, "deployment.scannerURLUserInfo", serverName), true
 	}
 	for key, values := range parsed.Query() {
 		if isCredentialKey(key) {
-			return fmt.Sprintf("MCP 服务器 %q 的 URL 查询参数含有凭据，未自动迁移；请改用 secret 引用并轮换。", serverName), true
+			return i18n.T(locale, "deployment.scannerURLQuery", serverName), true
 		}
 		for _, value := range values {
 			if looksLikeSecretValue(value) {
-				return fmt.Sprintf("MCP 服务器 %q 的 URL 查询参数含有凭据，未自动迁移；请改用 secret 引用并轮换。", serverName), true
+				return i18n.T(locale, "deployment.scannerURLQuery", serverName), true
 			}
 		}
 	}

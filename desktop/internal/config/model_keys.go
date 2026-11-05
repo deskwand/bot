@@ -4,13 +4,14 @@ import (
 	"strings"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 )
 
 // CheckModelKeys requires every provider referenced by the butler and task
 // roles to have its MODEL_KEY_* secret either already deployed or written by
 // this publish. A key cleared by the same change does not count.
-func CheckModelKeys(configJSON []byte, existing []string, edits []domain.SecretEdit) error {
+func CheckModelKeys(locale string, configJSON []byte, existing []string, edits []domain.SecretEdit) error {
 	doc, err := modelcatalog.ParseModels(configJSON)
 	if err != nil {
 		return err
@@ -37,8 +38,9 @@ func CheckModelKeys(configJSON []byte, existing []string, edits []domain.SecretE
 	if len(missing) == 0 {
 		return nil
 	}
+	separator := i18n.T(locale, "catalog.keySeparator")
 	return domain.Error{
 		Code:    domain.MODEL_KEY_MISSING,
-		Message: "缺少模型 key：" + strings.Join(missing, "、"),
+		Message: i18n.T(locale, "catalog.missingModelKeys", strings.Join(missing, separator)),
 	}
 }

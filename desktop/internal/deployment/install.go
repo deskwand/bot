@@ -13,6 +13,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/config"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/release"
 )
@@ -133,6 +134,19 @@ func NewLifecycleWithLocker(api LifecycleAPI, journal *Journal, pkg release.Pack
 	return &Lifecycle{api: api, journal: journal, pkg: pkg, creds: creds, clock: clock, locker: locker}
 }
 
+// lang returns the locale used for user-facing text. A missing hook keeps the
+// historical Chinese messages.
+func (l *Lifecycle) lang() string {
+	if l.Locale == nil {
+		return i18n.ZH
+	}
+	return l.Locale()
+}
+
+func (l *Lifecycle) t(key string, args ...any) string {
+	return i18n.T(l.lang(), key, args...)
+}
+
 // Install creates a new deployment. Every step is idempotent and journaled, so
 // a lost response after a create is resolved on the next call instead of
 // creating a second resource.
@@ -180,7 +194,7 @@ func (l *Lifecycle) Install(ctx context.Context, request InstallRequest) (domain
 			Kind:           KindInstall,
 			Target:         target,
 			State:          StatePlanned,
-			Steps:          installSteps(),
+			Steps:          installSteps(l.lang()),
 			ConfigJSON:     configJSON,
 			BucketName:     request.BucketName,
 			ReleaseVersion: l.pkg.Version(),
@@ -222,9 +236,9 @@ func (l *Lifecycle) Abandon(ctx context.Context, operationID string) (domain.Res
 	}
 	record.State = StateCancelled
 	if record.Kind == KindUpgrade {
-		setStep(&record, 1, StateCancelled, "升级已取消；若上传已发出，远端状态需要另行核对", "")
+		setStep(&record, 1, StateCancelled, l.t("deployment.abandonUpgradeCancelled"), "")
 	} else {
-		setStep(&record, installStepPreflight, StateCancelled, "安装已取消；已创建的资源不会被自动删除", "")
+		setStep(&record, installStepPreflight, StateCancelled, l.t("deployment.abandonInstallCancelled"), "")
 	}
 	if err := l.save(&record); err != nil {
 		return operationResult(record), err
@@ -345,27 +359,27 @@ func (l *Lifecycle) installPreflight(ctx context.Context, record *OperationRecor
 	target := record.Target
 	scripts, err := l.api.ListScripts(ctx, target.AccountID)
 	if err != nil {
-		return l.installFailure(record, installStepPreflight, StateFailed, CodeInvalidRequest, "无法列出 Worker 脚本，请检查令牌权限", err)
+		return l.installFailure(record, installStepPreflight, StateFailed, CodeInvalidRequest, l.t("deployment.listScriptsPermission"), err)
 	}
 	buckets, err := l.api.ListR2Buckets(ctx, target.AccountID)
 	if err != nil {
-		return l.installFailure(record, installStepPreflight, StateFailed, CodeInvalidRequest, "无法列出 R2 存储桶，请检查令牌权限", err)
+		return l.installFailure(record, installStepPreflight, StateFailed, CodeInvalidRequest, l.t("deployment.listBucketsPermission"), err)
 	}
 	subdomain, err := l.api.WorkersSubdomain(ctx, target.AccountID)
 	if err != nil {
-		return l.installFailure(record, installStepPreflight, StateFailed, CodeSubdomainUnavailable, "该账户没有可用的 workers.dev 子域，无法生成公开地址", err)
+		return l.installFailure(record, installStepPreflight, StateFailed, CodeSubdomainUnavailable, l.t("deployment.subdomainUnavailable"), err)
 	}
 
 	if scriptExists(scripts, target.ScriptName) && !record.ScriptUploadAttempted {
-		return l.installFailure(record, installStepPreflight, StateFailed, CodeNameTaken, "同名 Worker 已存在；请选择其他名称或使用接管现有服务", nil)
+		return l.installFailure(record, installStepPreflight, StateFailed, CodeNameTaken, l.t("deployment.workerNameTakenTakeover"), nil)
 	}
 	if bucketExists(buckets, record.BucketName) && !record.BucketCreateAttempted {
-		return l.installFailure(record, installStepPreflight, StateFailed, CodeBucketTaken, "同名 R2 存储桶已存在；请选择其他名称或使用接管现有服务", nil)
+		return l.installFailure(record, installStepPreflight, StateFailed, CodeBucketTaken, l.t("deployment.bucketTakenTakeover"), nil)
 	}
 	if record.PublicBaseURL == "" {
 		record.PublicBaseURL = "https://" + target.ScriptName + "." + subdomain + ".workers.dev"
 	}
-	setStep(record, installStepPreflight, StatePublished, "已确认令牌权限、名称可用性和 workers.dev 子域", "")
+	setStep(record, installStepPreflight, StatePublished, l.t("deployment.preflightConfirmed"), "")
 	record.State = StateApplying
 	return l.saveChecked(record)
 }
@@ -374,7 +388,7 @@ func (l *Lifecycle) installBucket(ctx context.Context, record *OperationRecord) 
 	if record.Steps[installStepBucket].State == StatePublished {
 		return nil
 	}
-	setStep(record, installStepBucket, StateApplying, "正在创建 R2 存储桶", "")
+	setStep(record, installStepBucket, StateApplying, l.t("deployment.creatingBucket"), "")
 	record.State = StateApplying
 	if err := l.saveChecked(record); err != nil {
 		return err
@@ -384,7 +398,7 @@ func (l *Lifecycle) installBucket(ctx context.Context, record *OperationRecord) 
 	switch {
 	case err == nil:
 		if !record.BucketCreateAttempted {
-			return l.installFailure(record, installStepBucket, StateFailed, CodeBucketTaken, "同名 R2 存储桶已存在；请选择其他名称", nil)
+			return l.installFailure(record, installStepBucket, StateFailed, CodeBucketTaken, l.t("deployment.bucketTaken"), nil)
 		}
 	case !errors.Is(err, cloudflare.ErrNotFound):
 		return l.installUnknown(record, installStepBucket, err)
@@ -399,19 +413,19 @@ func (l *Lifecycle) installBucket(ctx context.Context, record *OperationRecord) 
 		if createErr := l.api.CreateR2Bucket(ctx, record.Target.AccountID, record.BucketName); createErr != nil {
 			if errors.Is(createErr, cloudflare.ErrAlreadyExists) {
 				if record.BucketCreateAttempted {
-					setStep(record, installStepBucket, StatePublished, "已确认上一步创建的 R2 存储桶", record.BucketName)
+					setStep(record, installStepBucket, StatePublished, l.t("deployment.bucketPreviousConfirmed"), record.BucketName)
 					return l.saveChecked(record)
 				}
-				return l.installFailure(record, installStepBucket, StateFailed, CodeBucketTaken, "同名 R2 存储桶已存在", createErr)
+				return l.installFailure(record, installStepBucket, StateFailed, CodeBucketTaken, l.t("deployment.bucketAlreadyExists"), createErr)
 			}
 			if definitiveClientError(createErr) {
 				record.BucketCreateAttempted = false
-				return l.installFailure(record, installStepBucket, StateFailed, CodeInvalidRequest, "创建 R2 存储桶被拒绝", createErr)
+				return l.installFailure(record, installStepBucket, StateFailed, CodeInvalidRequest, l.t("deployment.bucketCreateRejected"), createErr)
 			}
 			return l.installUnknown(record, installStepBucket, createErr)
 		}
 	}
-	setStep(record, installStepBucket, StatePublished, "R2 存储桶已就绪", record.BucketName)
+	setStep(record, installStepBucket, StatePublished, l.t("deployment.bucketReady"), record.BucketName)
 	return l.saveChecked(record)
 }
 
@@ -419,7 +433,7 @@ func (l *Lifecycle) installScript(ctx context.Context, record *OperationRecord) 
 	if record.Steps[installStepScript].State == StatePublished {
 		return nil
 	}
-	setStep(record, installStepScript, StateApplying, "正在上传 Worker 脚本并应用数据库迁移", "")
+	setStep(record, installStepScript, StateApplying, l.t("deployment.scriptUploading"), "")
 	record.State = StateApplying
 	if err := l.saveChecked(record); err != nil {
 		return err
@@ -427,11 +441,11 @@ func (l *Lifecycle) installScript(ctx context.Context, record *OperationRecord) 
 
 	scripts, err := l.api.ListScripts(ctx, record.Target.AccountID)
 	if err != nil {
-		return l.installFailure(record, installStepScript, StateFailed, CodeInvalidRequest, "无法读取 Worker 脚本列表", err)
+		return l.installFailure(record, installStepScript, StateFailed, CodeInvalidRequest, l.t("deployment.listScriptsFailed"), err)
 	}
 	exists := scriptExists(scripts, record.Target.ScriptName)
 	if exists && !record.ScriptUploadAttempted {
-		return l.installFailure(record, installStepScript, StateFailed, CodeNameTaken, "同名 Worker 已存在；请选择其他名称或使用接管现有服务", nil)
+		return l.installFailure(record, installStepScript, StateFailed, CodeNameTaken, l.t("deployment.workerNameTakenTakeover"), nil)
 	}
 	if exists && record.Steps[installStepScript].State == StatePublished {
 		return nil
@@ -473,11 +487,11 @@ func (l *Lifecycle) installScript(ctx context.Context, record *OperationRecord) 
 			if definitiveClientError(err) {
 				code = CodeUploadRejected
 			}
-			return l.installFailure(record, installStepScript, StateFailed, code, "上传被拒绝", err)
+			return l.installFailure(record, installStepScript, StateFailed, code, l.t("deployment.uploadRejected"), err)
 		}
 		return l.installUnknown(record, installStepScript, err)
 	}
-	setStep(record, installStepScript, StatePublished, "Worker 脚本已上传", result.MigrationTag)
+	setStep(record, installStepScript, StatePublished, l.t("deployment.scriptUploaded"), result.MigrationTag)
 	return l.saveChecked(record)
 }
 
@@ -485,14 +499,14 @@ func (l *Lifecycle) installSubdomain(ctx context.Context, record *OperationRecor
 	if record.Steps[installStepSubdomain].State == StatePublished {
 		return nil
 	}
-	setStep(record, installStepSubdomain, StateApplying, "正在启用 workers.dev 入口", "")
+	setStep(record, installStepSubdomain, StateApplying, l.t("deployment.enablingSubdomain"), "")
 	if err := l.saveChecked(record); err != nil {
 		return err
 	}
 	if err := l.api.EnableWorkersDev(ctx, record.Target); err != nil {
-		return l.installFailure(record, installStepSubdomain, StateFailed, CodeInvalidRequest, "无法启用 workers.dev 入口", err)
+		return l.installFailure(record, installStepSubdomain, StateFailed, CodeInvalidRequest, l.t("deployment.enableSubdomainFailed"), err)
 	}
-	setStep(record, installStepSubdomain, StatePublished, "workers.dev 入口已启用", record.PublicBaseURL)
+	setStep(record, installStepSubdomain, StatePublished, l.t("deployment.subdomainEnabled"), record.PublicBaseURL)
 	return l.saveChecked(record)
 }
 
@@ -502,9 +516,9 @@ func (l *Lifecycle) installPublicURL(record *OperationRecord) error {
 	}
 	parsed, err := url.Parse(record.PublicBaseURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return l.installFailure(record, installStepPublicURL, StateFailed, CodeSubdomainUnavailable, "无法生成有效的公开地址", err)
+		return l.installFailure(record, installStepPublicURL, StateFailed, CodeSubdomainUnavailable, l.t("deployment.publicURLInvalid"), err)
 	}
-	setStep(record, installStepPublicURL, StatePublished, "公开地址已确定", record.PublicBaseURL)
+	setStep(record, installStepPublicURL, StatePublished, l.t("deployment.publicURLConfirmed"), record.PublicBaseURL)
 	return l.saveChecked(record)
 }
 
@@ -515,10 +529,10 @@ func (l *Lifecycle) installCron(ctx context.Context, record *OperationRecord) er
 	crons := append([]string(nil), l.pkg.Manifest().ResourceTemplate.Crons...)
 	current, err := l.api.GetSchedules(ctx, record.Target)
 	if err != nil {
-		return l.installFailure(record, installStepCron, StateFailed, CodeInvalidRequest, "无法读取定时任务", err)
+		return l.installFailure(record, installStepCron, StateFailed, CodeInvalidRequest, l.t("deployment.readSchedulesFailed"), err)
 	}
 	if !sameStrings(current, crons) {
-		setStep(record, installStepCron, StateApplying, "正在写入定时任务", "")
+		setStep(record, installStepCron, StateApplying, l.t("deployment.writingSchedules"), "")
 		if err := l.saveChecked(record); err != nil {
 			return err
 		}
@@ -526,12 +540,12 @@ func (l *Lifecycle) installCron(ctx context.Context, record *OperationRecord) er
 			return l.installUnknown(record, installStepCron, err)
 		}
 	}
-	setStep(record, installStepCron, StatePublished, "定时任务已就绪", strings.Join(crons, ","))
+	setStep(record, installStepCron, StatePublished, l.t("deployment.schedulesReady"), strings.Join(crons, ","))
 	return l.saveChecked(record)
 }
 
 func (l *Lifecycle) installVerify(ctx context.Context, record *OperationRecord) error {
-	setStep(record, installStepVerify, StateApplying, "正在读取部署确认安装结果", "")
+	setStep(record, installStepVerify, StateApplying, l.t("deployment.readingInstallResult"), "")
 	record.State = StateVerifying
 	if err := l.saveChecked(record); err != nil {
 		return err
@@ -544,15 +558,15 @@ func (l *Lifecycle) installVerify(ctx context.Context, record *OperationRecord) 
 		return l.installUnknown(record, installStepVerify, fmt.Errorf("deployment has no single active version"))
 	}
 	if !sameJSON(snapshot.ConfigJSON, record.ConfigJSON) {
-		return l.installFailure(record, installStepVerify, StateUnknown, CodeVerifyFailed, "安装后读取的配置与写入的配置不一致", nil)
+		return l.installFailure(record, installStepVerify, StateUnknown, CodeVerifyFailed, l.t("deployment.installConfigMismatch"), nil)
 	}
 	if snapshot.ReleaseVersion != l.pkg.Version() {
-		return l.installFailure(record, installStepVerify, StateUnknown, CodeVerifyFailed, "安装后读取的版本与发布包版本不一致", nil)
+		return l.installFailure(record, installStepVerify, StateUnknown, CodeVerifyFailed, l.t("deployment.installVersionMismatch"), nil)
 	}
 	record.DeploymentID = snapshot.DeploymentID
 	record.StagedVersionID = snapshot.VersionID
 	record.State = StatePublished
-	setStep(record, installStepVerify, StatePublished, "安装完成并已读取部署确认", snapshot.VersionID)
+	setStep(record, installStepVerify, StatePublished, l.t("deployment.installComplete"), snapshot.VersionID)
 	return l.saveChecked(record)
 }
 
@@ -585,20 +599,20 @@ func (l *Lifecycle) installFailure(record *OperationRecord, step int, state, cod
 
 func (l *Lifecycle) installUnknown(record *OperationRecord, step int, cause error) error {
 	record.State = StateUnknown
-	setStep(record, step, StateUnknown, "结果未知；下次运行会先核对远端资源", errorEvidence(cause))
+	setStep(record, step, StateUnknown, l.t("deployment.unknownResult"), errorEvidence(cause))
 	_ = l.save(record)
 	return sanitizeError(cause, nil)
 }
 
-func installSteps() []domain.Step {
+func installSteps(locale string) []domain.Step {
 	return []domain.Step{
-		{ID: "preflight", State: StatePlanned, Message: "等待检查令牌、名称和 workers.dev 子域"},
-		{ID: "bucket", State: StatePlanned, Message: "等待创建 R2 存储桶"},
-		{ID: "script", State: StatePlanned, Message: "等待上传 Worker 脚本"},
-		{ID: "subdomain", State: StatePlanned, Message: "等待启用 workers.dev 入口"},
-		{ID: "public-url", State: StatePlanned, Message: "等待确定公开地址"},
-		{ID: "cron", State: StatePlanned, Message: "等待写入定时任务"},
-		{ID: "verify", State: StatePlanned, Message: "等待读取部署确认安装"},
+		{ID: "preflight", State: StatePlanned, Message: i18n.T(locale, "deployment.installPreflightWaiting")},
+		{ID: "bucket", State: StatePlanned, Message: i18n.T(locale, "deployment.installBucketWaiting")},
+		{ID: "script", State: StatePlanned, Message: i18n.T(locale, "deployment.installScriptWaiting")},
+		{ID: "subdomain", State: StatePlanned, Message: i18n.T(locale, "deployment.installSubdomainWaiting")},
+		{ID: "public-url", State: StatePlanned, Message: i18n.T(locale, "deployment.installPublicURLWaiting")},
+		{ID: "cron", State: StatePlanned, Message: i18n.T(locale, "deployment.installCronWaiting")},
+		{ID: "verify", State: StatePlanned, Message: i18n.T(locale, "deployment.installVerifyWaiting")},
 	}
 }
 

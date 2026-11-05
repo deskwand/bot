@@ -12,6 +12,18 @@ import (
 	"time"
 )
 
+func TestCallbackPageIsBilingual(t *testing.T) {
+	page := callbackPage()
+	for _, want := range []string{
+		"授权结果已交给 DeskWand Bot，可以关闭这个页面了。",
+		"The authorization result has been sent to DeskWand Bot. You can close this page.",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("callback page is missing %q: %s", want, page)
+		}
+	}
+}
+
 func TestListenLoopbackFallsBackWhenPortIsTaken(t *testing.T) {
 	var tried []int
 	listen := func(port int) (net.Listener, error) {

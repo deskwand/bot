@@ -15,6 +15,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/config"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/release"
 )
@@ -125,6 +126,19 @@ func NewServiceWithLocker(api PublishAPI, journal *Journal, creds platform.Crede
 	}
 }
 
+// lang returns the locale used for user-facing text. A missing hook keeps the
+// historical Chinese messages.
+func (s *Service) lang() string {
+	if s.Locale == nil {
+		return i18n.ZH
+	}
+	return s.Locale()
+}
+
+func (s *Service) t(key string, args ...any) string {
+	return i18n.T(s.lang(), key, args...)
+}
+
 // Preview reads the current snapshot and merges the change without writing
 // anything. The returned steps describe what Apply would do and include the
 // documented race where another actor replaces only a secret value.
@@ -133,7 +147,7 @@ func (s *Service) Preview(ctx context.Context, target domain.Target, change doma
 	if err != nil {
 		return nil, sanitizeError(err, nil)
 	}
-	steps := previewStepsFor(snapshot, s.pkg.Version())
+	steps := s.previewStepsFor(snapshot)
 	if err := s.checkReleaseVersion(snapshot, change.AllowReleaseChange); err != nil {
 		return steps, sanitizeError(err, secretValues(change.Secrets))
 	}
@@ -144,7 +158,7 @@ func (s *Service) Preview(ctx context.Context, target domain.Target, change doma
 	}
 	// Import and upgrade skip this check because keys are entered on the model page afterwards.
 	if !change.AllowReleaseChange {
-		if err := config.CheckModelKeys(plan.ConfigJSON, snapshot.SecretNames, plan.Secrets); err != nil {
+		if err := config.CheckModelKeys(s.lang(), plan.ConfigJSON, snapshot.SecretNames, plan.Secrets); err != nil {
 			return steps, sanitizeError(err, secretValues(change.Secrets))
 		}
 	}
@@ -172,41 +186,42 @@ func (s *Service) checkReleaseVersion(snapshot domain.Snapshot, allowChange bool
 	if snapshot.ReleaseVersion == "" {
 		return domain.Error{
 			Code:    CodeVersionUnknownReimport,
-			Message: "云端版本未知（可能用命令行部署过）；请在“连接已有服务”中重新导入",
+			Message: s.t("deployment.releaseVersionUnknown"),
 		}
 	}
 	if clientVersion == "" {
-		return domain.Error{Code: CodeUpgradeRequired, Message: "请先在“更新”页升级云端服务"}
+		return domain.Error{Code: CodeUpgradeRequired, Message: s.t("deployment.upgradeRequired")}
 	}
 	comparison, comparable := CompareVersions(snapshot.ReleaseVersion, clientVersion)
 	if !comparable {
-		return domain.Error{Code: CodeUpgradeRequired, Message: "请先在“更新”页升级云端服务"}
+		return domain.Error{Code: CodeUpgradeRequired, Message: s.t("deployment.upgradeRequired")}
 	}
 	if comparison > 0 {
-		return domain.Error{Code: CodeDowngradeRejected, Message: "云端版本较新，请先升级客户端"}
+		return domain.Error{Code: CodeDowngradeRejected, Message: s.t("deployment.downgradeRejected")}
 	}
 	if comparison < 0 {
-		return domain.Error{Code: CodeUpgradeRequired, Message: "请先在“更新”页升级云端服务"}
+		return domain.Error{Code: CodeUpgradeRequired, Message: s.t("deployment.upgradeRequired")}
 	}
 	return nil
 }
 
-func previewStepsFor(snapshot domain.Snapshot, clientVersion string) []domain.Step {
+func (s *Service) previewStepsFor(snapshot domain.Snapshot) []domain.Step {
 	cloudVersion := snapshot.ReleaseVersion
 	if cloudVersion == "" {
-		cloudVersion = "未知"
+		cloudVersion = s.t("deployment.versionUnknown")
 	}
+	clientVersion := s.pkg.Version()
 	if clientVersion == "" {
-		clientVersion = "未知"
+		clientVersion = s.t("deployment.versionUnknown")
 	}
-	steps := make([]domain.Step, 0, len(previewSteps())+1)
+	steps := make([]domain.Step, 0, len(previewSteps(s.lang()))+1)
 	steps = append(steps, domain.Step{
 		ID:       "release",
 		State:    "info",
-		Message:  fmt.Sprintf("云端版本 %s；客户端版本 %s", cloudVersion, clientVersion),
+		Message:  s.t("deployment.releaseSummary", cloudVersion, clientVersion),
 		Evidence: snapshot.VersionID,
 	})
-	steps = append(steps, previewSteps()...)
+	steps = append(steps, previewSteps(s.lang())...)
 	return steps
 }
 
@@ -229,7 +244,7 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 		OperationID:        opID,
 		Target:             target,
 		State:              StatePlanned,
-		Steps:              applySteps(),
+		Steps:              applySteps(s.lang()),
 		AllowReleaseChange: change.AllowReleaseChange,
 		CreatedAt:          s.clock(),
 		UpdatedAt:          s.clock(),
@@ -252,7 +267,7 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 	}
 	// Import and upgrade skip this check because keys are entered on the model page afterwards.
 	if !change.AllowReleaseChange {
-		if err := config.CheckModelKeys(plan.ConfigJSON, snapshot.SecretNames, plan.Secrets); err != nil {
+		if err := config.CheckModelKeys(s.lang(), plan.ConfigJSON, snapshot.SecretNames, plan.Secrets); err != nil {
 			return s.fail(&record, stepStage, err, secretValues(change.Secrets))
 		}
 	}
@@ -265,7 +280,7 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 
 	if err := ctx.Err(); err != nil {
 		record.State = StateCancelled
-		setStep(&record, stepStage, StateCancelled, "发布已取消，尚未修改任何远端状态", "")
+		setStep(&record, stepStage, StateCancelled, s.t("deployment.cancelledNoRemoteChange"), "")
 		record.UpdatedAt = s.clock()
 		_ = s.journal.Save(record)
 		return operationResult(record), sanitizeError(err, secretValues(plan.Secrets))
@@ -275,7 +290,7 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 	record.SecretRefs = refs
 	if err != nil {
 		record.State = StateNeedsInput
-		setStep(&record, stepStage, StateNeedsInput, "需要重新输入 secrets：系统凭据库不可用", "")
+		setStep(&record, stepStage, StateNeedsInput, s.t("deployment.secretsUnavailable"), "")
 		record.UpdatedAt = s.clock()
 		_ = s.journal.Save(record)
 		cleanupErr := s.cleanupPending(context.Background(), &record)
@@ -359,7 +374,7 @@ func (s *Service) Resume(ctx context.Context, operationID string) (domain.Result
 		switch {
 		case found && isLatest:
 			record.StagedVersionID = versionID
-			setStep(&record, stepStage, StateApplying, "已确认本操作上传的版本，继续部署", versionID)
+			setStep(&record, stepStage, StateApplying, s.t("deployment.resumedVersionConfirmed"), versionID)
 			record.UpdatedAt = s.clock()
 			if err := s.journal.Save(record); err != nil {
 				return operationResult(record), sanitizeError(err, s.pendingValues(context.Background(), record))
@@ -395,7 +410,7 @@ func (s *Service) Resume(ctx context.Context, operationID string) (domain.Result
 	plan, err := s.planFromJournal(ctx, record)
 	if err != nil {
 		record.State = StateNeedsInput
-		setStep(&record, stepStage, StateNeedsInput, "需要重新输入 secrets：待发布的值已不在系统凭据库中", "")
+		setStep(&record, stepStage, StateNeedsInput, s.t("deployment.secretsExpired"), "")
 		record.UpdatedAt = s.clock()
 		_ = s.journal.Save(record)
 		cleanupErr := s.cleanupPending(context.Background(), &record)
@@ -451,7 +466,7 @@ func (s *Service) Abandon(ctx context.Context, operationID string) (domain.Resul
 	}
 
 	record.State = StateCancelled
-	setStep(&record, stepStage, StateCancelled, "操作已取消", "")
+	setStep(&record, stepStage, StateCancelled, s.t("deployment.operationCancelled"), "")
 	record.UpdatedAt = s.clock()
 	if err := s.journal.Save(record); err != nil {
 		return operationResult(record), sanitizeError(err, s.pendingValues(context.Background(), record))
@@ -463,7 +478,7 @@ func (s *Service) Abandon(ctx context.Context, operationID string) (domain.Resul
 func (s *Service) stage(ctx context.Context, record *OperationRecord, snapshot domain.Snapshot, plan domain.PublishPlan) (string, error) {
 	if err := ctx.Err(); err != nil {
 		record.State = StateCancelled
-		setStep(record, stepStage, StateCancelled, "发布已取消，尚未上传版本", "")
+		setStep(record, stepStage, StateCancelled, s.t("deployment.cancelledNoUpload"), "")
 		record.UpdatedAt = s.clock()
 		_ = s.journal.Save(*record)
 		cleanupErr := s.cleanupPending(context.Background(), record)
@@ -472,7 +487,7 @@ func (s *Service) stage(ctx context.Context, record *OperationRecord, snapshot d
 
 	record.State = StateApplying
 	record.StageAttempted = true
-	setStep(record, stepStage, StateApplying, "正在上传新版本（配置与 secrets）", "")
+	setStep(record, stepStage, StateApplying, s.t("deployment.uploading"), "")
 	record.UpdatedAt = s.clock()
 	if err := s.journal.Save(*record); err != nil {
 		return "", sanitizeError(err, secretValues(plan.Secrets))
@@ -495,13 +510,13 @@ func (s *Service) stage(ctx context.Context, record *OperationRecord, snapshot d
 			record.StageAttempted = false
 			record.State = StateFailed
 			record.FailureCode = domain.NOT_SENT
-			setStep(record, stepStage, StateFailed, "上传未发出，可稍后重试", errorEvidence(err))
+			setStep(record, stepStage, StateFailed, s.t("deployment.uploadNotSent"), errorEvidence(err))
 			record.UpdatedAt = s.clock()
 			_ = s.journal.Save(*record)
 			return "", sanitizeError(err, secretValues(plan.Secrets))
 		default:
 			record.State = StateUnknown
-			setStep(record, stepStage, StateUnknown, "上传结果未知；不会自动重试，请恢复并核对远端版本", errorEvidence(err))
+			setStep(record, stepStage, StateUnknown, s.t("deployment.uploadUnknown"), errorEvidence(err))
 			record.UpdatedAt = s.clock()
 			_ = s.journal.Save(*record)
 			return "", sanitizeError(err, secretValues(plan.Secrets))
@@ -510,14 +525,14 @@ func (s *Service) stage(ctx context.Context, record *OperationRecord, snapshot d
 	if staged == "" {
 		err := fmt.Errorf("deployment: version upload returned no version id")
 		record.State = StateUnknown
-		setStep(record, stepStage, StateUnknown, "上传结果未知；不会自动重试，请恢复并核对远端版本", "")
+		setStep(record, stepStage, StateUnknown, s.t("deployment.uploadUnknown"), "")
 		record.UpdatedAt = s.clock()
 		_ = s.journal.Save(*record)
 		return "", err
 	}
 
 	record.StagedVersionID = staged
-	setStep(record, stepStage, StatePublished, "新版本已上传", staged)
+	setStep(record, stepStage, StatePublished, s.t("deployment.versionUploaded"), staged)
 	record.UpdatedAt = s.clock()
 	if err := s.journal.Save(*record); err != nil {
 		return "", sanitizeError(err, secretValues(plan.Secrets))
@@ -530,14 +545,14 @@ func (s *Service) activateAndVerify(ctx context.Context, record *OperationRecord
 
 	if err := ctx.Err(); err != nil {
 		record.State = StateCancelled
-		setStep(record, stepActivate, StateCancelled, "发布已取消，未创建新部署", "")
+		setStep(record, stepActivate, StateCancelled, s.t("deployment.cancelledNoDeployment"), "")
 		record.UpdatedAt = s.clock()
 		_ = s.journal.Save(*record)
 		cleanupErr := s.cleanupPending(context.Background(), record)
 		return operationResult(*record), errors.Join(sanitizeError(err, values), cleanupErr)
 	}
 
-	setStep(record, stepActivate, StateApplying, "正在将新版本部署到 100% 流量", "")
+	setStep(record, stepActivate, StateApplying, s.t("deployment.activating"), "")
 	record.UpdatedAt = s.clock()
 	if err := s.journal.Save(*record); err != nil {
 		return operationResult(*record), sanitizeError(err, values)
@@ -546,7 +561,7 @@ func (s *Service) activateAndVerify(ctx context.Context, record *OperationRecord
 	activation, err := s.api.ActivateVersion(ctx, record.Target, staged)
 	if err != nil {
 		record.State = StateUnknown
-		setStep(record, stepActivate, StateUnknown, "部署结果未知；不会自动重试，请恢复并核对当前部署", errorEvidence(err))
+		setStep(record, stepActivate, StateUnknown, s.t("deployment.activationUnknown"), errorEvidence(err))
 		record.UpdatedAt = s.clock()
 		_ = s.journal.Save(*record)
 		return operationResult(*record), sanitizeError(err, values)
@@ -554,8 +569,8 @@ func (s *Service) activateAndVerify(ctx context.Context, record *OperationRecord
 
 	record.State = StateVerifying
 	record.DeploymentID = activation.DeploymentID
-	setStep(record, stepActivate, StatePublished, "已创建 100% 部署", activation.DeploymentID)
-	setStep(record, stepVerify, StateApplying, "正在读取部署确认活动版本", "")
+	setStep(record, stepActivate, StatePublished, s.t("deployment.deploymentCreated"), activation.DeploymentID)
+	setStep(record, stepVerify, StateApplying, s.t("deployment.readingActiveVersion"), "")
 	record.UpdatedAt = s.clock()
 	if err := s.journal.Save(*record); err != nil {
 		return operationResult(*record), sanitizeError(err, values)
@@ -564,7 +579,7 @@ func (s *Service) activateAndVerify(ctx context.Context, record *OperationRecord
 	snapshot, err := s.api.ReadSnapshot(ctx, record.Target)
 	if err != nil {
 		record.State = StateUnknown
-		setStep(record, stepVerify, StateUnknown, "无法确认活动版本；不会自动重试", errorEvidence(err))
+		setStep(record, stepVerify, StateUnknown, s.t("deployment.activeVersionUnconfirmed"), errorEvidence(err))
 		record.UpdatedAt = s.clock()
 		_ = s.journal.Save(*record)
 		return operationResult(*record), sanitizeError(err, values)
@@ -572,7 +587,7 @@ func (s *Service) activateAndVerify(ctx context.Context, record *OperationRecord
 	if snapshot.VersionID != staged {
 		err := fmt.Errorf("deployment: active version is not the staged version")
 		record.State = StateUnknown
-		setStep(record, stepVerify, StateUnknown, "活动版本与已上传版本不一致；需要恢复确认", snapshot.VersionID)
+		setStep(record, stepVerify, StateUnknown, s.t("deployment.activeVersionMismatch"), snapshot.VersionID)
 		record.UpdatedAt = s.clock()
 		_ = s.journal.Save(*record)
 		return operationResult(*record), sanitizeError(err, values)
@@ -587,8 +602,8 @@ func (s *Service) markPublished(record *OperationRecord, snapshot domain.Snapsho
 	if snapshot.DeploymentID != "" {
 		record.DeploymentID = snapshot.DeploymentID
 	}
-	setStep(record, stepActivate, StatePublished, "100% 流量已指向新版本", snapshot.DeploymentID)
-	setStep(record, stepVerify, StatePublished, "已读取部署确认活动版本", snapshot.VersionID)
+	setStep(record, stepActivate, StatePublished, s.t("deployment.trafficSwitched"), snapshot.DeploymentID)
+	setStep(record, stepVerify, StatePublished, s.t("deployment.publishConfirmed"), snapshot.VersionID)
 	record.UpdatedAt = s.clock()
 	if err := s.journal.Save(*record); err != nil {
 		return operationResult(*record), sanitizeError(err, s.pendingValues(context.Background(), *record))
@@ -600,7 +615,7 @@ func (s *Service) markPublished(record *OperationRecord, snapshot domain.Snapsho
 func (s *Service) fail(record *OperationRecord, step int, err error, values []string) (domain.Result, error) {
 	record.State = StateFailed
 	record.FailureCode = errCode(err)
-	setStep(record, step, StateFailed, "发布失败", errorEvidence(err))
+	setStep(record, step, StateFailed, s.t("deployment.publishFailed"), errorEvidence(err))
 	record.UpdatedAt = s.clock()
 	_ = s.journal.Save(*record)
 	cleanupErr := s.cleanupPending(context.Background(), record)
@@ -763,20 +778,20 @@ func newOperationID() (string, error) {
 	return "op-" + hex.EncodeToString(random[:]), nil
 }
 
-func previewSteps() []domain.Step {
+func previewSteps(locale string) []domain.Step {
 	return []domain.Step{
-		{ID: "stage", State: "planned", Message: "上传新版本（配置与 secrets）"},
-		{ID: "activate", State: "planned", Message: "将新版本部署到 100% 流量"},
-		{ID: "verify", State: "planned", Message: "读取部署并确认活动版本"},
-		{ID: "conflict-note", State: "info", Message: "注意：Cloudflare 没有条件写入；其他客户端仅替换 secret 值（名称不变）时本客户端无法检测。读取与上传之间仍存在竞争窗口。"},
+		{ID: "stage", State: "planned", Message: i18n.T(locale, "deployment.previewStage")},
+		{ID: "activate", State: "planned", Message: i18n.T(locale, "deployment.previewActivate")},
+		{ID: "verify", State: "planned", Message: i18n.T(locale, "deployment.previewVerify")},
+		{ID: "conflict-note", State: "info", Message: i18n.T(locale, "deployment.previewConflictNote")},
 	}
 }
 
-func applySteps() []domain.Step {
+func applySteps(locale string) []domain.Step {
 	return []domain.Step{
-		{ID: "stage", State: StatePlanned, Message: "等待上传新版本"},
-		{ID: "activate", State: StatePlanned, Message: "等待创建 100% 部署"},
-		{ID: "verify", State: StatePlanned, Message: "等待读取部署确认活动版本"},
+		{ID: "stage", State: StatePlanned, Message: i18n.T(locale, "deployment.applyStageWaiting")},
+		{ID: "activate", State: StatePlanned, Message: i18n.T(locale, "deployment.applyActivateWaiting")},
+		{ID: "verify", State: StatePlanned, Message: i18n.T(locale, "deployment.applyVerifyWaiting")},
 	}
 }
 

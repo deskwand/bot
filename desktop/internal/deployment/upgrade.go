@@ -8,6 +8,7 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/release"
 )
 
@@ -214,7 +215,7 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 		Kind:                  KindUpgrade,
 		Target:                target,
 		State:                 StateApplying,
-		Steps:                 upgradeSteps(),
+		Steps:                 upgradeSteps(l.lang()),
 		BaseFingerprint:       fresh.Fingerprint,
 		BaseVersionID:         fresh.VersionID,
 		ReleaseVersion:        pkg.Version(),
@@ -223,8 +224,8 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 		ScriptUploadAttempted: true,
 		CreatedAt:             l.clock(),
 	}
-	setStep(&record, 0, StatePublished, "已确认迁移历史与单版本部署", freshState.LiveTag)
-	setStep(&record, 1, StateApplying, "正在上传 Worker 脚本并应用数据库迁移", "")
+	setStep(&record, 0, StatePublished, l.t("deployment.upgradePreflightConfirmed"), freshState.LiveTag)
+	setStep(&record, 1, StateApplying, l.t("deployment.scriptUploading"), "")
 	if err := l.save(&record); err != nil {
 		return domain.Result{OperationID: operationID}, err
 	}
@@ -235,11 +236,11 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 			record.ScriptUploadAttempted = false
 			record.State = StateFailed
 			record.FailureCode = errCodeOrDefault(uploadErr, CodeUploadRejected)
-			setStep(&record, 1, StateFailed, "升级上传被拒绝", errorEvidence(uploadErr))
+			setStep(&record, 1, StateFailed, l.t("deployment.upgradeUploadRejected"), errorEvidence(uploadErr))
 			_ = l.save(&record)
 		} else {
 			record.State = StateUnknown
-			setStep(&record, 1, StateUnknown, "升级上传结果未知；下次升级前需要核对远端", errorEvidence(uploadErr))
+			setStep(&record, 1, StateUnknown, l.t("deployment.upgradeUploadUnknown"), errorEvidence(uploadErr))
 			_ = l.save(&record)
 		}
 		return operationResult(record), sanitizeError(uploadErr, nil)
@@ -248,21 +249,21 @@ func (l *Lifecycle) upgradeWithScriptUpload(ctx context.Context, target domain.T
 	upgraded, err := l.api.ReadSnapshot(ctx, target)
 	if err != nil {
 		record.State = StateUnknown
-		setStep(&record, 2, StateUnknown, "无法读取升级后的部署", errorEvidence(err))
+		setStep(&record, 2, StateUnknown, l.t("deployment.upgradeReadFailed"), errorEvidence(err))
 		_ = l.save(&record)
 		return operationResult(record), sanitizeError(err, nil)
 	}
 	if err := l.verifyUpgradeState(ctx, target, pkg, fresh, freshIdentity, upgraded); err != nil {
 		record.State = StateUnknown
-		setStep(&record, 2, StateUnknown, "升级后核对失败；需要人工确认", errorEvidence(err))
+		setStep(&record, 2, StateUnknown, l.t("deployment.upgradeVerifyFailed"), errorEvidence(err))
 		_ = l.save(&record)
 		return operationResult(record), err
 	}
 	record.State = StatePublished
 	record.DeploymentID = upgraded.DeploymentID
 	record.StagedVersionID = upgraded.VersionID
-	setStep(&record, 1, StatePublished, "Worker 脚本与迁移已应用", upgraded.VersionID)
-	setStep(&record, 2, StatePublished, "已核对定时任务与资源标识", upgraded.VersionID)
+	setStep(&record, 1, StatePublished, l.t("deployment.upgradeApplied"), upgraded.VersionID)
+	setStep(&record, 2, StatePublished, l.t("deployment.upgradeVerified"), upgraded.VersionID)
 	if err := l.save(&record); err != nil {
 		return operationResult(record), err
 	}
@@ -415,11 +416,11 @@ func (l *Lifecycle) unresolvedOperation(target domain.Target) (OperationRecord, 
 	return OperationRecord{}, false, nil
 }
 
-func upgradeSteps() []domain.Step {
+func upgradeSteps(locale string) []domain.Step {
 	return []domain.Step{
-		{ID: "preflight", State: StatePlanned, Message: "等待检查迁移历史和部署状态"},
-		{ID: "script", State: StatePlanned, Message: "等待上传带迁移的 Worker 脚本"},
-		{ID: "verify", State: StatePlanned, Message: "等待核对定时任务与资源标识"},
+		{ID: "preflight", State: StatePlanned, Message: i18n.T(locale, "deployment.upgradePreflightWaiting")},
+		{ID: "script", State: StatePlanned, Message: i18n.T(locale, "deployment.upgradeScriptWaiting")},
+		{ID: "verify", State: StatePlanned, Message: i18n.T(locale, "deployment.upgradeVerifyWaiting")},
 	}
 }
 

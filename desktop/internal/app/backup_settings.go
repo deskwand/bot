@@ -13,10 +13,11 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 )
 
 // defaultBackupDirName is the folder the client creates under Documents.
-const defaultBackupDirName = "DeskWand 备份"
+const defaultBackupDirName = "DeskWand 备份" // i18n-ignore: folder name on disk
 
 // The choices the page offers. A hand-edited file cannot pick anything else,
 // so the scheduler can never be made to run every minute.
@@ -87,6 +88,15 @@ type FileBackupSettings struct {
 	path        string
 	fallbackDir string
 	mu          sync.Mutex
+	// Locale supplies the language for validation messages; nil means zh.
+	Locale func() string
+}
+
+func (s *FileBackupSettings) lang() string {
+	if s.Locale == nil {
+		return i18n.ZH
+	}
+	return s.Locale()
 }
 
 // NewFileBackupSettings creates the app data directory if needed and returns a
@@ -123,19 +133,20 @@ func (s *FileBackupSettings) Settings() (BackupSettingsDTO, error) {
 // replace a working one.
 func (s *FileBackupSettings) Save(input BackupSettingsEditDTO) (BackupSettingsDTO, error) {
 	dir := strings.TrimSpace(input.Dir)
+	locale := s.lang()
 	if dir == "" {
-		return BackupSettingsDTO{}, domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: "备份目录不能为空"}
+		return BackupSettingsDTO{}, domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: i18n.T(locale, "app.backupDirRequired")}
 	}
 	if !filepath.IsAbs(dir) {
-		return BackupSettingsDTO{}, domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: "备份目录必须是绝对路径"}
+		return BackupSettingsDTO{}, domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: i18n.T(locale, "app.backupDirNotAbsolute")}
 	}
 	if !slices.Contains(allowedBackupIntervals, input.IntervalHours) {
-		return BackupSettingsDTO{}, domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: "备份间隔只能是 1、6 或 24 小时"}
+		return BackupSettingsDTO{}, domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: i18n.T(locale, "app.backupIntervalInvalid")}
 	}
 	if !slices.Contains(allowedBackupKeep, input.Keep) {
-		return BackupSettingsDTO{}, domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: "保留份数只能是 1、5 或 10"}
+		return BackupSettingsDTO{}, domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: i18n.T(locale, "app.backupKeepInvalid")}
 	}
-	if err := ensureWritableDir(dir); err != nil {
+	if err := ensureWritableDirIn(locale, dir); err != nil {
 		return BackupSettingsDTO{}, err
 	}
 
@@ -247,12 +258,16 @@ func defaultBackupDir(fallbackDir string) string {
 // fixed one could truncate a file the user keeps there (or be a symlink) and
 // would make the folder unusable when a directory happens to have that name.
 func ensureWritableDir(dir string) error {
+	return ensureWritableDirIn(i18n.ZH, dir)
+}
+
+func ensureWritableDirIn(locale, dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: "备份目录不可创建，请换一个目录"}
+		return domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: i18n.T(locale, "app.backupDirNotCreatable")}
 	}
 	probe, err := os.CreateTemp(dir, ".deskwand-write-probe-*")
 	if err != nil {
-		return domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: "备份目录不可写，请换一个目录"}
+		return domain.Error{Code: backup.CodeBackupSettingsInvalid, Message: i18n.T(locale, "app.backupDirNotWritable")}
 	}
 	name := probe.Name()
 	_ = probe.Close()

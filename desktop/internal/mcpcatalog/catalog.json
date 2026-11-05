@@ -4,8 +4,8 @@
     {
       "id": "firecrawl",
       "name": "Firecrawl",
-      "category": "搜索 / 抓取",
-      "description": "Firecrawl：网页抓取、搜索与内容解析（免密额度有限）",
+      "category": {"zh": "搜索 / 抓取", "en": "Search / scraping"},
+      "description": {"zh": "Firecrawl：网页抓取、搜索与内容解析（免密额度有限）", "en": "Firecrawl: web scraping, search and content parsing (limited free quota)"},
       "url": "https://mcp.firecrawl.dev/v2/mcp",
       "oauth": false,
       "fields": []
@@ -13,8 +13,8 @@
     {
       "id": "tavily",
       "name": "Tavily",
-      "category": "搜索 / 抓取",
-      "description": "Tavily：面向 AI 的联网搜索、抓取与研究",
+      "category": {"zh": "搜索 / 抓取", "en": "Search / scraping"},
+      "description": {"zh": "Tavily：面向 AI 的联网搜索、抓取与研究", "en": "Tavily: web search, scraping and research for AI"},
       "url": "https://mcp.tavily.com/mcp",
       "oauth": true,
       "fields": []
@@ -22,15 +22,15 @@
     {
       "id": "github",
       "name": "GitHub",
-      "category": "开发",
-      "description": "GitHub：仓库、issue、PR 与代码检索",
+      "category": {"zh": "开发", "en": "Development"},
+      "description": {"zh": "GitHub：仓库、issue、PR 与代码检索", "en": "GitHub: repositories, issues, pull requests and code search"},
       "url": "https://api.githubcopilot.com/mcp/",
       "oauth": false,
       "fields": [
         {
           "key": "token",
-          "label": "Personal Access Token",
-          "help": "GitHub 个人访问令牌，需包含要访问的仓库与组织权限。",
+          "label": {"zh": "Personal Access Token", "en": "Personal Access Token"},
+          "help": {"zh": "GitHub 个人访问令牌，需包含要访问的仓库与组织权限。", "en": "GitHub personal access token with permission for the repositories and organizations you want to access."},
           "helpUrl": "https://github.com/settings/tokens",
           "placement": "header",
           "headerName": "Authorization",
@@ -41,8 +41,8 @@
     {
       "id": "deepwiki",
       "name": "DeepWiki",
-      "category": "开发",
-      "description": "DeepWiki：GitHub 仓库的 AI 文档与问答",
+      "category": {"zh": "开发", "en": "Development"},
+      "description": {"zh": "DeepWiki：GitHub 仓库的 AI 文档与问答", "en": "DeepWiki: AI docs and Q&A for GitHub repositories"},
       "url": "https://mcp.deepwiki.com/mcp",
       "oauth": false,
       "fields": []
@@ -50,8 +50,8 @@
     {
       "id": "context7",
       "name": "Context7",
-      "category": "开发",
-      "description": "Context7：查询最新的库与框架文档",
+      "category": {"zh": "开发", "en": "Development"},
+      "description": {"zh": "Context7：查询最新的库与框架文档", "en": "Context7: up-to-date library and framework docs"},
       "url": "https://mcp.context7.com/mcp",
       "oauth": false,
       "fields": []
@@ -59,8 +59,8 @@
     {
       "id": "sentry",
       "name": "Sentry",
-      "category": "开发",
-      "description": "Sentry：错误、性能与项目数据",
+      "category": {"zh": "开发", "en": "Development"},
+      "description": {"zh": "Sentry：错误、性能与项目数据", "en": "Sentry: errors, performance and project data"},
       "url": "https://mcp.sentry.dev/mcp",
       "oauth": true,
       "fields": []
@@ -68,8 +68,8 @@
     {
       "id": "vercel",
       "name": "Vercel",
-      "category": "开发",
-      "description": "Vercel：项目、部署与运行日志",
+      "category": {"zh": "开发", "en": "Development"},
+      "description": {"zh": "Vercel：项目、部署与运行日志", "en": "Vercel: projects, deployments and runtime logs"},
       "url": "https://mcp.vercel.com",
       "oauth": true,
       "fields": []
@@ -77,8 +77,8 @@
     {
       "id": "cloudflare",
       "name": "Cloudflare",
-      "category": "开发",
-      "description": "Cloudflare：账户 API 与开发者文档",
+      "category": {"zh": "开发", "en": "Development"},
+      "description": {"zh": "Cloudflare：账户 API 与开发者文档", "en": "Cloudflare: account APIs and developer docs"},
       "url": "https://mcp.cloudflare.com/mcp",
       "oauth": true,
       "fields": []
@@ -86,8 +86,8 @@
     {
       "id": "supabase",
       "name": "Supabase",
-      "category": "开发",
-      "description": "Supabase：项目、数据库与日志",
+      "category": {"zh": "开发", "en": "Development"},
+      "description": {"zh": "Supabase：项目、数据库与日志", "en": "Supabase: projects, databases and logs"},
       "url": "https://mcp.supabase.com/mcp",
       "oauth": true,
       "fields": []
@@ -95,8 +95,8 @@
     {
       "id": "notion",
       "name": "Notion",
-      "category": "文档 / 知识",
-      "description": "Notion：页面、数据库与工作区内容",
+      "category": {"zh": "文档 / 知识", "en": "Docs / knowledge"},
+      "description": {"zh": "Notion：页面、数据库与工作区内容", "en": "Notion: pages, databases and workspace content"},
       "url": "https://mcp.notion.com/mcp",
       "oauth": true,
       "fields": []
@@ -104,8 +104,8 @@
     {
       "id": "atlassian",
       "name": "Atlassian",
-      "category": "文档 / 知识",
-      "description": "Atlassian：Jira 与 Confluence",
+      "category": {"zh": "文档 / 知识", "en": "Docs / knowledge"},
+      "description": {"zh": "Atlassian：Jira 与 Confluence", "en": "Atlassian: Jira and Confluence"},
       "url": "https://mcp.atlassian.com/v2/mcp",
       "oauth": true,
       "fields": []
@@ -113,8 +113,8 @@
     {
       "id": "microsoft_learn",
       "name": "Microsoft Learn",
-      "category": "文档 / 知识",
-      "description": "Microsoft Learn：微软官方文档检索",
+      "category": {"zh": "文档 / 知识", "en": "Docs / knowledge"},
+      "description": {"zh": "Microsoft Learn：微软官方文档检索", "en": "Microsoft Learn: official Microsoft documentation search"},
       "url": "https://learn.microsoft.com/api/mcp",
       "oauth": false,
       "fields": []
@@ -122,8 +122,8 @@
     {
       "id": "huggingface",
       "name": "Hugging Face",
-      "category": "文档 / 知识",
-      "description": "Hugging Face：模型、数据集与 Spaces",
+      "category": {"zh": "文档 / 知识", "en": "Docs / knowledge"},
+      "description": {"zh": "Hugging Face：模型、数据集与 Spaces", "en": "Hugging Face: models, datasets and Spaces"},
       "url": "https://huggingface.co/mcp",
       "oauth": true,
       "fields": []
@@ -131,8 +131,8 @@
     {
       "id": "linear",
       "name": "Linear",
-      "category": "项目 / 协作",
-      "description": "Linear：issue、项目与团队协作",
+      "category": {"zh": "项目 / 协作", "en": "Projects / collaboration"},
+      "description": {"zh": "Linear：issue、项目与团队协作", "en": "Linear: issues, projects and team collaboration"},
       "url": "https://mcp.linear.app/mcp",
       "oauth": true,
       "fields": []
@@ -140,8 +140,8 @@
     {
       "id": "stripe",
       "name": "Stripe",
-      "category": "支付 / 商业",
-      "description": "Stripe：客户、支付与账单",
+      "category": {"zh": "支付 / 商业", "en": "Payments / commerce"},
+      "description": {"zh": "Stripe：客户、支付与账单", "en": "Stripe: customers, payments and billing"},
       "url": "https://mcp.stripe.com",
       "oauth": true,
       "fields": []
@@ -149,8 +149,8 @@
     {
       "id": "paypal",
       "name": "PayPal",
-      "category": "支付 / 商业",
-      "description": "PayPal：发票、订单与交易",
+      "category": {"zh": "支付 / 商业", "en": "Payments / commerce"},
+      "description": {"zh": "PayPal：发票、订单与交易", "en": "PayPal: invoices, orders and transactions"},
       "url": "https://mcp.paypal.com/mcp",
       "oauth": true,
       "fields": []
@@ -158,15 +158,15 @@
     {
       "id": "zapier",
       "name": "Zapier",
-      "category": "自动化桥接",
-      "description": "Zapier：通过 Zap 调用数千个应用的 action",
+      "category": {"zh": "自动化桥接", "en": "Automation bridge"},
+      "description": {"zh": "Zapier：通过 Zap 调用数千个应用的 action", "en": "Zapier: call thousands of app actions through Zaps"},
       "url": "https://mcp.zapier.com/api/mcp/mcp",
       "oauth": false,
       "fields": [
         {
           "key": "token",
-          "label": "连接令牌",
-          "help": "在 Zapier MCP 服务器的 Settings 页生成 API token。",
+          "label": {"zh": "连接令牌", "en": "Connection token"},
+          "help": {"zh": "在 Zapier MCP 服务器的 Settings 页生成 API token。", "en": "Generate an API token on the Settings page of the Zapier MCP server."},
           "helpUrl": "https://mcp.zapier.com",
           "placement": "header",
           "headerName": "Authorization",
@@ -177,15 +177,15 @@
     {
       "id": "amap",
       "name": "高德地图",
-      "category": "国内服务",
-      "description": "高德地图：地理编码、路线与周边搜索",
+      "category": {"zh": "国内服务", "en": "China services"},
+      "description": {"zh": "高德地图：地理编码、路线与周边搜索", "en": "Amap: geocoding, routing and nearby search"},
       "url": "https://mcp.amap.com/sse?key={field:key}",
       "oauth": false,
       "fields": [
         {
           "key": "key",
-          "label": "API Key",
-          "help": "高德开放平台的 Web 服务 API Key。",
+          "label": {"zh": "API Key", "en": "API Key"},
+          "help": {"zh": "高德开放平台的 Web 服务 API Key。", "en": "Web service API key from the Amap open platform."},
           "helpUrl": "https://console.amap.com/dev/key/app",
           "placement": "url"
         }
@@ -194,15 +194,15 @@
     {
       "id": "baidu",
       "name": "百度地图",
-      "category": "国内服务",
-      "description": "百度地图：地理编码、路线与地点检索",
+      "category": {"zh": "国内服务", "en": "China services"},
+      "description": {"zh": "百度地图：地理编码、路线与地点检索", "en": "Baidu Maps: geocoding, routing and place search"},
       "url": "https://mcp.map.baidu.com/mcp?ak={field:ak}",
       "oauth": false,
       "fields": [
         {
           "key": "ak",
-          "label": "服务端 AK",
-          "help": "百度地图开放平台的服务器端 AK，并勾选 MCP 服务。",
+          "label": {"zh": "服务端 AK", "en": "Server-side AK"},
+          "help": {"zh": "百度地图开放平台的服务器端 AK，并勾选 MCP 服务。", "en": "Server-side AK from the Baidu Maps open platform; enable the MCP service for it."},
           "helpUrl": "https://lbsyun.baidu.com/apiconsole/key",
           "placement": "url"
         }

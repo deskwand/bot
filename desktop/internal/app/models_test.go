@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 )
 
@@ -40,6 +41,36 @@ type countBody struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	} `json:"messages"`
+}
+
+func TestModelCatalogProviderNameFollowsLocale(t *testing.T) {
+	original, ok := modelcatalog.LookupBuiltin("workers-ai")
+	if !ok {
+		t.Fatal("workers-ai is missing from the catalog")
+	}
+	for _, locale := range []string{i18n.ZH, i18n.EN} {
+		t.Run(locale, func(t *testing.T) {
+			fixture := newServiceFixture(t)
+			setServiceLocale(fixture.service, locale)
+			catalog, err := fixture.service.ModelCatalog()
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := ""
+			for _, provider := range catalog.Providers {
+				if provider.ID == "workers-ai" {
+					name = provider.Name
+				}
+			}
+			want := original.Name
+			if locale == i18n.EN {
+				want = "Cloudflare Workers AI (free tier)"
+			}
+			if name != want {
+				t.Fatalf("workers-ai name = %q, want %q", name, want)
+			}
+		})
+	}
 }
 
 func TestProbeModelAnthropicUsesMinimalRequest(t *testing.T) {

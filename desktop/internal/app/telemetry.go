@@ -109,11 +109,11 @@ func (s *Service) TelemetryEnabled() bool {
 // away, so the dashboard sees the client without waiting for the heartbeat.
 func (s *Service) SetTelemetryEnabled(enabled bool) error {
 	if s.telemetrySettings == nil {
-		return serviceUnavailable()
+		return s.serviceUnavailable()
 	}
 	if err := s.telemetrySettings.SetTelemetryEnabled(enabled); err != nil {
 		slog.Error("app: save telemetry preference", "error", err)
-		return domain.Error{Code: CodeTelemetrySaveFailed, Message: "匿名统计设置未保存"}
+		return domain.Error{Code: CodeTelemetrySaveFailed, Message: s.t("app.telemetrySaveFailed")}
 	}
 	if enabled && s.telemetry != nil {
 		s.telemetry.Ping()

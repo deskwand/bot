@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/deskwand/bot/desktop/internal/i18n"
+	"github.com/deskwand/bot/desktop/internal/i18n/i18ntest"
 )
 
 func readRepositoryFile(t *testing.T, path string) []byte {
@@ -58,7 +61,7 @@ func validModelsDoc() ModelsDoc {
 }
 
 func TestValidateModelsAcceptsBuiltinAndCustomReferences(t *testing.T) {
-	if err := ValidateModels(validModelsDoc(), true); err != nil {
+	if err := ValidateModels(i18n.ZH, validModelsDoc(), true); err != nil {
 		t.Fatalf("ValidateModels() = %v, want nil", err)
 	}
 }
@@ -110,7 +113,7 @@ func TestValidateModelsRejectsInvalidReferences(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			doc := validModelsDoc()
 			testCase.edit(&doc)
-			err := ValidateModels(doc, true)
+			err := ValidateModels(i18n.ZH, doc, true)
 			if err == nil {
 				t.Fatal("ValidateModels() = nil, want an error")
 			}
@@ -124,8 +127,28 @@ func TestValidateModelsRejectsInvalidReferences(t *testing.T) {
 func TestValidateModelsAcceptsBuiltinModelWhenNotCheckingCatalog(t *testing.T) {
 	doc := validModelsDoc()
 	doc.Butler = RoleRef{Provider: "deepseek", ID: "not-in-catalog"}
-	if err := ValidateModels(doc, false); err != nil {
+	if err := ValidateModels(i18n.ZH, doc, false); err != nil {
 		t.Fatalf("ValidateModels() = %v, want nil", err)
+	}
+}
+
+func TestUnavailableModelErrorFollowsLocale(t *testing.T) {
+	doc := validModelsDoc()
+	doc.Butler = RoleRef{Provider: "deepseek", ID: "not-in-catalog"}
+	for _, locale := range []string{i18n.ZH, i18n.EN} {
+		t.Run(locale, func(t *testing.T) {
+			err := ValidateModels(locale, doc, true)
+			if err == nil {
+				t.Fatal("ValidateModels() = nil, want an error")
+			}
+			if locale == i18n.EN {
+				i18ntest.NoHan(t, "unavailable model", err.Error())
+				return
+			}
+			if want := "模型 deepseek/not-in-catalog 不可用，请在桌面端模型页重新选择"; err.Error() != want {
+				t.Fatalf("error = %q, want %q", err.Error(), want)
+			}
+		})
 	}
 }
 

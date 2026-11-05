@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/deskwand/bot/desktop/internal/i18n"
 )
 
 // The embedded copy is asserted byte-identical to the repository contract by
@@ -130,7 +132,7 @@ func ParseModels(configJSON []byte) (ModelsDoc, error) {
 // ValidateModels applies the semantic rules that JSON schema cannot express.
 // checkBuiltinModels is false during import and upgrade, when a configuration
 // written against a newer pi-ai catalog must still be publishable.
-func ValidateModels(doc ModelsDoc, checkBuiltinModels bool) error {
+func ValidateModels(locale string, doc ModelsDoc, checkBuiltinModels bool) error {
 	custom := make(map[string]map[string]bool, len(doc.CustomProviders))
 	for _, provider := range doc.CustomProviders {
 		if _, ok := LookupBuiltin(provider.ID); ok {
@@ -149,13 +151,13 @@ func ValidateModels(doc ModelsDoc, checkBuiltinModels bool) error {
 		custom[provider.ID] = models
 	}
 
-	if err := validateRole("butler", doc.Butler, custom, checkBuiltinModels); err != nil {
+	if err := validateRole(locale, "butler", doc.Butler, custom, checkBuiltinModels); err != nil {
 		return err
 	}
-	return validateRole("task", doc.Task, custom, checkBuiltinModels)
+	return validateRole(locale, "task", doc.Task, custom, checkBuiltinModels)
 }
 
-func validateRole(role string, ref RoleRef, custom map[string]map[string]bool, checkBuiltinModels bool) error {
+func validateRole(locale, role string, ref RoleRef, custom map[string]map[string]bool, checkBuiltinModels bool) error {
 	if models, ok := custom[ref.Provider]; ok {
 		if !models[ref.ID] {
 			return fmt.Errorf("models.%s references model %q that custom provider %q does not declare", role, ref.ID, ref.Provider)
@@ -174,7 +176,7 @@ func validateRole(role string, ref RoleRef, custom map[string]map[string]bool, c
 			return nil
 		}
 	}
-	return fmt.Errorf("模型 %s/%s 不可用，请在桌面端模型页重新选择", ref.Provider, ref.ID)
+	return fmt.Errorf("%s", i18n.T(locale, "catalog.modelUnavailable", ref.Provider, ref.ID))
 }
 
 // RequiredSecretNames returns the sorted, deduplicated MODEL_KEY_* names the

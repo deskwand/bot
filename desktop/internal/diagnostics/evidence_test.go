@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
+	"github.com/deskwand/bot/desktop/internal/i18n/i18ntest"
 )
 
 const (
@@ -14,7 +16,7 @@ const (
 )
 
 func TestMissingLogsAreUnknown(t *testing.T) {
-	got := Summarize([]string{"wechat"}, nil, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"wechat"}, nil, testCurrentVersion)
 	if len(got) != 1 {
 		t.Fatalf("got %d items, want 1", len(got))
 	}
@@ -41,7 +43,7 @@ func TestOneItemPerRequestedKindAndKindIsolation(t *testing.T) {
 		{Kind: "telegram", Source: SourceCloudLogs, ObservedAt: "2026-11-02T10:01:00Z", Detail: "send_ok", VersionID: testCurrentVersion},
 	}
 
-	got := Summarize([]string{"wechat", "telegram", "wechat"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"wechat", "telegram", "wechat"}, events, testCurrentVersion)
 	if len(got) != 2 {
 		t.Fatalf("got %d items, want 2", len(got))
 	}
@@ -61,7 +63,7 @@ func TestStaleVersionIsUnverifiedNotSuccess(t *testing.T) {
 		{Kind: "wechat", Source: SourceCloudLogs, ObservedAt: "2026-11-02T10:00:00Z", Detail: "poll_ok", VersionID: testOldVersion},
 	}
 
-	got := Summarize([]string{"wechat"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"wechat"}, events, testCurrentVersion)
 	if len(got) != 1 {
 		t.Fatalf("got %d items, want 1", len(got))
 	}
@@ -77,6 +79,12 @@ func TestStaleVersionIsUnverifiedNotSuccess(t *testing.T) {
 	if got[0].Source != SourceCloudLogs {
 		t.Fatalf("source = %q", got[0].Source)
 	}
+
+	en := Summarize(i18n.EN, []string{"wechat"}, events, testCurrentVersion)
+	want := "poll_ok from old version version-old is not from the current version; the current state was not determined from it"
+	if en[0].Detail != want {
+		t.Fatalf("en detail = %q, want %q", en[0].Detail, want)
+	}
 }
 
 func TestCloudEvidenceNeedsCurrentVersionID(t *testing.T) {
@@ -84,7 +92,7 @@ func TestCloudEvidenceNeedsCurrentVersionID(t *testing.T) {
 		{Kind: "telegram", Source: SourceCloudLogs, ObservedAt: "2026-11-02T10:00:00Z", Detail: "webhook_ok"},
 	}
 
-	got := Summarize([]string{"telegram"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"telegram"}, events, testCurrentVersion)
 	if got[0].State != StateUnverified || !strings.Contains(got[0].Detail, "旧版本") {
 		t.Fatalf("missing version id became current: %#v", got[0])
 	}
@@ -95,7 +103,7 @@ func TestCurrentVersionCloudSuccessIsVerified(t *testing.T) {
 		{Kind: "wechat", Source: SourceCloudLogs, ObservedAt: "2026-11-02T10:00:00Z", Detail: "poll_ok", VersionID: testCurrentVersion},
 	}
 
-	got := Summarize([]string{"wechat"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"wechat"}, events, testCurrentVersion)
 	if got[0].State != StateVerified {
 		t.Fatalf("state = %q, want verified", got[0].State)
 	}
@@ -123,7 +131,7 @@ func TestPollExpiredAndErrorHaveDistinctStates(t *testing.T) {
 			Detail:     tc.detail,
 			VersionID:  testCurrentVersion,
 		}}
-		got := Summarize([]string{"wechat"}, events, testCurrentVersion)
+		got := Summarize(i18n.ZH, []string{"wechat"}, events, testCurrentVersion)
 		if got[0].State != tc.want {
 			t.Errorf("%s state = %q, want %q", tc.detail, got[0].State, tc.want)
 		}
@@ -136,12 +144,12 @@ func TestWebhookRejectedIsIgnoredWhenChoosingState(t *testing.T) {
 		{Kind: "telegram", Source: SourceCloudLogs, ObservedAt: "2026-11-02T10:05:00Z", Detail: "webhook_rejected", VersionID: testCurrentVersion},
 	}
 
-	got := Summarize([]string{"telegram"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"telegram"}, events, testCurrentVersion)
 	if got[0].State != StateVerified || got[0].Detail != "webhook_ok" {
 		t.Fatalf("rejected webhook changed the state: %#v", got[0])
 	}
 
-	onlyRejected := Summarize([]string{"telegram"}, events[1:], testCurrentVersion)
+	onlyRejected := Summarize(i18n.ZH, []string{"telegram"}, events[1:], testCurrentVersion)
 	if onlyRejected[0].State != StateUnknown {
 		t.Fatalf("rejected webhook alone became a failure: %#v", onlyRejected[0])
 	}
@@ -152,7 +160,7 @@ func TestUnknownSourceIsForcedUnverified(t *testing.T) {
 		{Kind: "wechat", Source: "mystery-source", ObservedAt: "2026-11-02T10:00:00Z", Detail: "poll_ok"},
 	}
 
-	got := Summarize([]string{"wechat"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"wechat"}, events, testCurrentVersion)
 	if got[0].State != StateUnverified {
 		t.Fatalf("unknown source became %q, want unverified", got[0].State)
 	}
@@ -163,7 +171,7 @@ func TestUnknownSourceIsForcedUnverified(t *testing.T) {
 
 func TestClassifyMatchesExactEventNames(t *testing.T) {
 	for _, detail := range []string{"looks_ok_to_me", "not_poll_error", "webhookish"} {
-		state, _ := classify(detail)
+		state, _ := classify(i18n.ZH, detail)
 		if state == StateVerified || state == StateUnavailable {
 			t.Errorf("%q classified as %q", detail, state)
 		}
@@ -175,7 +183,7 @@ func TestHeartbeatIsNotSuccessfulPoll(t *testing.T) {
 		{Kind: "wechat", Source: SourceCloudLogs, ObservedAt: "2026-11-02T10:00:00Z", Detail: "heartbeat", VersionID: testCurrentVersion},
 	}
 
-	got := Summarize([]string{"wechat"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"wechat"}, events, testCurrentVersion)
 	if got[0].State == StateVerified {
 		t.Fatalf("heartbeat became a verified poll: %#v", got[0])
 	}
@@ -189,7 +197,7 @@ func TestLocalModelProbeIsNotCloudVerification(t *testing.T) {
 		{Kind: "model", Source: SourceLocal, ObservedAt: "2026-11-02T10:00:00Z", Detail: "probe_ok"},
 	}
 
-	got := Summarize([]string{"model"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"model"}, events, testCurrentVersion)
 	if got[0].Source != SourceLocal {
 		t.Fatalf("source = %q, want local", got[0].Source)
 	}
@@ -209,7 +217,7 @@ func TestUserConfirmationIsLabelledUser(t *testing.T) {
 		{Kind: "telegram", Source: SourceUser, ObservedAt: "2026-11-02T10:00:00Z", Detail: "user_confirmed"},
 	}
 
-	got := Summarize([]string{"telegram"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"telegram"}, events, testCurrentVersion)
 	if got[0].Source != SourceUser {
 		t.Fatalf("source = %q, want user", got[0].Source)
 	}
@@ -226,12 +234,31 @@ func TestConfiguredWithoutCurrentLogsStaysConfigured(t *testing.T) {
 		{Kind: "wechat", Source: SourceConfig, ObservedAt: "2026-11-02T10:00:00Z", Detail: "configured"},
 	}
 
-	got := Summarize([]string{"wechat"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"wechat"}, events, testCurrentVersion)
 	if got[0].State != StateConfigured {
 		t.Fatalf("state = %q, want configured", got[0].State)
 	}
 	if !strings.Contains(got[0].Detail, "尚无") {
 		t.Fatalf("detail = %q, want configured-without-logs wording", got[0].Detail)
+	}
+}
+
+func TestSummarizeFollowsLocale(t *testing.T) {
+	events := []domain.Evidence{
+		{Kind: "stale", Source: SourceCloudLogs, ObservedAt: "2026-11-02T10:00:00Z", Detail: "poll_ok", VersionID: testOldVersion},
+		{Kind: "user", Source: SourceUser, ObservedAt: "2026-11-02T10:00:00Z", Detail: "user_confirmed"},
+		{Kind: "local", Source: SourceLocal, ObservedAt: "2026-11-02T10:00:00Z", Detail: "probe_ok"},
+		{Kind: "unknown", Source: "mystery-source", ObservedAt: "2026-11-02T10:00:00Z", Detail: "poll_ok"},
+		{Kind: "configured", Source: SourceConfig, ObservedAt: "2026-11-02T10:00:00Z", Detail: "configured"},
+		{Kind: "heartbeat", Source: SourceCloudLogs, ObservedAt: "2026-11-02T10:00:00Z", Detail: "heartbeat", VersionID: testCurrentVersion},
+	}
+
+	got := Summarize(i18n.EN, []string{"stale", "user", "local", "unknown", "configured", "empty", "heartbeat"}, events, testCurrentVersion)
+	if len(got) != 7 {
+		t.Fatalf("got %d items, want 7", len(got))
+	}
+	for _, item := range got {
+		i18ntest.NoHan(t, item.Kind, item.Detail)
 	}
 }
 
@@ -242,7 +269,7 @@ func TestCurrentCloudEvidenceWinsOverLocalAndConfigured(t *testing.T) {
 		{Kind: "model", Source: SourceCloudLogs, ObservedAt: "2026-11-02T10:00:00Z", Detail: "poll_ok", VersionID: testCurrentVersion},
 	}
 
-	got := Summarize([]string{"model"}, events, testCurrentVersion)
+	got := Summarize(i18n.ZH, []string{"model"}, events, testCurrentVersion)
 	if got[0].Source != SourceCloudLogs || got[0].State != StateVerified {
 		t.Fatalf("cloud evidence did not win: %#v", got[0])
 	}

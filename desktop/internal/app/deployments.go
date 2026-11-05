@@ -14,6 +14,7 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/release"
 )
 
@@ -172,6 +173,15 @@ type DeploymentsService struct {
 	lifecycle DeploymentLifecycle
 	journal   OperationReader
 	pkg       release.Package
+	// Locale supplies the language for warnings; nil means zh.
+	Locale func() string
+}
+
+func (s *DeploymentsService) lang() string {
+	if s.Locale == nil {
+		return i18n.ZH
+	}
+	return s.Locale()
 }
 
 // NewDeploymentsService constructs the app service with the verified package
@@ -206,8 +216,7 @@ func (s *DeploymentsService) InstallDeployment(ctx context.Context, input Instal
 		return summary, safeDeploymentError(err)
 	}
 	if len(input.TelegramUserIDs) == 0 {
-		summary.Warnings = append(summary.Warnings,
-			"owner 列表为空：Worker 会忽略所有消息，直到在设置中发布 owner。")
+		summary.Warnings = append(summary.Warnings, i18n.T(s.lang(), "app.ownerMissing"))
 	}
 	return summary, nil
 }
