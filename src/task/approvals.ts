@@ -1,7 +1,7 @@
 import type { TSchema, Static } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { TaskEventBody } from "../protocol";
-import type { ReviewVerdict } from "./review";
+import { REVIEW_FAILED_REASON, type ReviewVerdict } from "./review";
 
 export type ApprovalDecision = "approved" | "rejected" | "expired";
 
@@ -319,7 +319,9 @@ export class ReviewedGate implements ApprovalGateLike {
       // The task was interrupted while reviewing; do not ask the owner for a
       // call that no longer runs.
       if (signal.aborted) return "rejected";
-      throw error;
+      // Any other failure must not block the tool or slip it through: ask.
+      console.warn(`review for ${tool} failed: ${errorMessage(error)}`);
+      verdict = { verdict: "ask", reason: REVIEW_FAILED_REASON, failed: true };
     }
     if (signal.aborted) return "rejected";
 

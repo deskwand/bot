@@ -686,6 +686,28 @@ describe("ReviewedGate", () => {
     expect(outcome.rows).toEqual([]);
   });
 
+  it("asks the owner when the review throws without an abort", async () => {
+    const stub = taskStub("t-review-throws");
+    const outcome = await runInDurableObject(stub, async (instance) => {
+      const sql = sqlOf(instance);
+      const inner = fakeInner();
+      const gate = reviewedGate(sql, inner.gate, async () => {
+        throw new Error("config unreadable");
+      });
+
+      const result = await gate.request(
+        "http_request",
+        {},
+        new AbortController().signal,
+      );
+      return { result, requests: inner.requests, rows: reviewRows(sql) };
+    });
+
+    expect(outcome.requests).toHaveLength(1);
+    expect(outcome.rows).toHaveLength(1);
+    expect(outcome.rows[0]).toMatchObject({ verdict: "ask", failed: 1 });
+  });
+
   it("passes the tool description to the review, or an empty string", async () => {
     const stub = taskStub("t-review-description");
     const outcome = await runInDurableObject(stub, async (instance) => {
