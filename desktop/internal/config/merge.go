@@ -90,7 +90,7 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 			Message: "the merged configuration has unreadable model settings",
 		}
 	}
-	if err := modelcatalog.ValidateModels(modelsDoc, !change.AllowReleaseChange); err != nil {
+	if err := modelcatalog.ValidateModels(mergeLocale(change), modelsDoc, !change.AllowReleaseChange); err != nil {
 		return domain.PublishPlan{}, domain.Error{
 			Code:    domain.UNSUPPORTED_SCHEMA,
 			Message: err.Error(),
@@ -103,6 +103,16 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 		Secrets:       cloneSecretEdits(change.Secrets),
 		Vars:          cloneVars(change.Vars),
 	}, nil
+}
+
+// mergeLocale is the language the deployment is set to speak. Callers that
+// publish fill the patch locale from the desktop language before merging, so a
+// validation error reads in the same language as the rest of the UI.
+func mergeLocale(change domain.Change) string {
+	if change.Patch.Locale == nil {
+		return ""
+	}
+	return *change.Patch.Locale
 }
 
 func schemaLocations(err error) []string {

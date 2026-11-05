@@ -1508,16 +1508,21 @@ func (s *Service) ProbeModel(provider, model, key, api, baseURL string) (StatusI
 // ModelCatalog returns the built-in providers and models shared with the
 // Worker and the desktop client.
 func (s *Service) ModelCatalog() (ModelCatalogDTO, error) {
+	locale := s.locale.Current()
 	builtin := modelcatalog.Builtin()
 	providers := make([]ModelProviderDTO, 0, len(builtin))
 	for _, provider := range builtin {
+		name := provider.Name
+		if localized, ok := i18n.Lookup(locale, "catalog.provider."+provider.ID); ok {
+			name = localized
+		}
 		models := make([]ModelEntryDTO, 0, len(provider.Models))
 		for _, model := range provider.Models {
 			models = append(models, ModelEntryDTO{ID: model.ID, Name: model.Name, Input: model.Input})
 		}
 		providers = append(providers, ModelProviderDTO{
 			ID:      provider.ID,
-			Name:    provider.Name,
+			Name:    name,
 			Keyless: provider.Keyless,
 			Models:  models,
 		})

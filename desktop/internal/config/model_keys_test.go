@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/i18n"
+	"github.com/deskwand/bot/desktop/internal/i18n/i18ntest"
 )
 
 const modelKeyConfig = `{
@@ -19,7 +21,7 @@ const modelKeyConfig = `{
 }`
 
 func TestCheckModelKeysReportsMissingSecrets(t *testing.T) {
-	err := CheckModelKeys([]byte(modelKeyConfig), []string{"TELEGRAM_BOT_TOKEN"}, nil)
+	err := CheckModelKeys(i18n.ZH, []byte(modelKeyConfig), []string{"TELEGRAM_BOT_TOKEN"}, nil)
 	if err == nil {
 		t.Fatal("CheckModelKeys() = nil, want an error")
 	}
@@ -34,14 +36,14 @@ func TestCheckModelKeysReportsMissingSecrets(t *testing.T) {
 
 func TestCheckModelKeysAcceptsAKeyReplacedThisPublish(t *testing.T) {
 	edits := []domain.SecretEdit{domain.NewSecretEdit("MODEL_KEY_DEEPSEEK", domain.SecretReplace, "value")}
-	if err := CheckModelKeys([]byte(modelKeyConfig), nil, edits); err != nil {
+	if err := CheckModelKeys(i18n.ZH, []byte(modelKeyConfig), nil, edits); err != nil {
 		t.Fatalf("CheckModelKeys() = %v, want nil", err)
 	}
 }
 
 func TestCheckModelKeysRejectsAClearedKey(t *testing.T) {
 	edits := []domain.SecretEdit{domain.NewSecretEdit("MODEL_KEY_DEEPSEEK", domain.SecretClear, "")}
-	err := CheckModelKeys([]byte(modelKeyConfig), []string{"MODEL_KEY_DEEPSEEK"}, edits)
+	err := CheckModelKeys(i18n.ZH, []byte(modelKeyConfig), []string{"MODEL_KEY_DEEPSEEK"}, edits)
 	if err == nil {
 		t.Fatal("CheckModelKeys() = nil, want an error")
 	}
@@ -78,13 +80,13 @@ const keylessModelKeyConfig = `{
 }`
 
 func TestCheckModelKeysAllowsKeyless(t *testing.T) {
-	if err := CheckModelKeys([]byte(keylessModelKeyConfig), nil, nil); err != nil {
+	if err := CheckModelKeys(i18n.ZH, []byte(keylessModelKeyConfig), nil, nil); err != nil {
 		t.Fatalf("CheckModelKeys() = %v, want nil", err)
 	}
 }
 
 func TestCheckModelKeysRequiresCustomProviderKey(t *testing.T) {
-	err := CheckModelKeys([]byte(customModelKeyConfig), nil, nil)
+	err := CheckModelKeys(i18n.ZH, []byte(customModelKeyConfig), nil, nil)
 	var coded domain.Error
 	if !errors.As(err, &coded) || coded.Code != domain.MODEL_KEY_MISSING {
 		t.Fatalf("error = %v, want %s", err, domain.MODEL_KEY_MISSING)
@@ -118,7 +120,7 @@ func TestCheckModelKeysUsesTheLastEditForTheSameName(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			err := CheckModelKeys([]byte(modelKeyConfig), []string{"MODEL_KEY_DEEPSEEK"}, testCase.edits)
+			err := CheckModelKeys(i18n.ZH, []byte(modelKeyConfig), []string{"MODEL_KEY_DEEPSEEK"}, testCase.edits)
 			if testCase.wantErr {
 				if err == nil {
 					t.Fatal("CheckModelKeys() = nil, want an error")
@@ -133,11 +135,33 @@ func TestCheckModelKeysUsesTheLastEditForTheSameName(t *testing.T) {
 }
 
 func TestCheckModelKeysListsEachProviderOnce(t *testing.T) {
-	err := CheckModelKeys([]byte(modelKeyConfig), nil, nil)
+	err := CheckModelKeys(i18n.ZH, []byte(modelKeyConfig), nil, nil)
 	if err == nil {
 		t.Fatal("CheckModelKeys() = nil, want an error")
 	}
 	if count := strings.Count(err.Error(), "MODEL_KEY_DEEPSEEK"); count != 1 {
 		t.Fatalf("message %q mentions the key %d times, want once", err.Error(), count)
+	}
+}
+
+func TestMissingModelKeysFollowsLocale(t *testing.T) {
+	for _, locale := range []string{i18n.ZH, i18n.EN} {
+		t.Run(locale, func(t *testing.T) {
+			err := CheckModelKeys(locale, []byte(modelKeyConfig), nil, nil)
+			var coded domain.Error
+			if !errors.As(err, &coded) || coded.Code != domain.MODEL_KEY_MISSING {
+				t.Fatalf("error = %v, want %s", err, domain.MODEL_KEY_MISSING)
+			}
+			if locale == i18n.EN {
+				i18ntest.NoHan(t, "missing model keys", coded.Message)
+				if !strings.Contains(coded.Message, "MODEL_KEY_DEEPSEEK") {
+					t.Fatalf("message = %q, want it to list the missing key", coded.Message)
+				}
+				return
+			}
+			if want := "缺少模型 key：MODEL_KEY_DEEPSEEK"; coded.Message != want {
+				t.Fatalf("message = %q, want %q", coded.Message, want)
+			}
+		})
 	}
 }

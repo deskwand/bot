@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/deskwand/bot/desktop/internal/i18n"
 )
 
 // LoginTimeout bounds how long a started login waits for the browser.
@@ -54,11 +57,17 @@ type callbackOutcome struct {
 	ErrorDescription string
 }
 
-const callbackPageHTML = `<!doctype html><html lang="zh"><meta charset="utf-8">
+// callbackPage is shown in the browser once the authorization code has been
+// delivered. It carries both languages because the browser follows the system
+// language, which may differ from the client's chosen one.
+func callbackPage() string {
+	return `<!doctype html><html lang="mul"><meta charset="utf-8">
 <title>DeskWand Bot</title>
 <body style="font:16px/1.6 -apple-system,system-ui,sans-serif;padding:48px;color:#111">
-<p>授权结果已交给 DeskWand Bot，可以关闭这个页面了。</p>
+<p>` + html.EscapeString(i18n.T(i18n.ZH, "auth.callbackDone")) + `</p>
+<p lang="en">` + html.EscapeString(i18n.T(i18n.EN, "auth.callbackDone")) + `</p>
 </body></html>`
+}
 
 // awaitCallback serves exactly one callback request and then closes ln. It
 // returns ctx.Err() when the caller gives up first.
@@ -74,7 +83,7 @@ func awaitCallback(ctx context.Context, ln net.Listener) (callbackOutcome, error
 		values := r.URL.Query()
 		w.Header().Set("content-type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, callbackPageHTML)
+		_, _ = io.WriteString(w, callbackPage())
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}

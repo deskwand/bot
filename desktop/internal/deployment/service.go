@@ -158,7 +158,7 @@ func (s *Service) Preview(ctx context.Context, target domain.Target, change doma
 	}
 	// Import and upgrade skip this check because keys are entered on the model page afterwards.
 	if !change.AllowReleaseChange {
-		if err := config.CheckModelKeys(plan.ConfigJSON, snapshot.SecretNames, plan.Secrets); err != nil {
+		if err := config.CheckModelKeys(s.lang(), plan.ConfigJSON, snapshot.SecretNames, plan.Secrets); err != nil {
 			return steps, sanitizeError(err, secretValues(change.Secrets))
 		}
 	}
@@ -267,7 +267,7 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 	}
 	// Import and upgrade skip this check because keys are entered on the model page afterwards.
 	if !change.AllowReleaseChange {
-		if err := config.CheckModelKeys(plan.ConfigJSON, snapshot.SecretNames, plan.Secrets); err != nil {
+		if err := config.CheckModelKeys(s.lang(), plan.ConfigJSON, snapshot.SecretNames, plan.Secrets); err != nil {
 			return s.fail(&record, stepStage, err, secretValues(change.Secrets))
 		}
 	}
