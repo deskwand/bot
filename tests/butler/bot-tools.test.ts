@@ -147,6 +147,93 @@ describe("butler bot tools", () => {
     });
   });
 
+  it("create_bot writes the initial rules", async () => {
+    await botStub("b1").destroy();
+    const result = await runTool(
+      "create_bot",
+      {
+        name: "价格哨兵",
+        mission: "盯着价格",
+        default_interval: "2h",
+        rules: "凌晨不发消息",
+      },
+      [],
+      "bot-tools-create-rules",
+    );
+
+    expect(result.text).toContain("已创建机器人 b1");
+    expect((await botStub("b1").snapshot())?.docs).toContainEqual({
+      name: "守则",
+      content: "凌晨不发消息",
+    });
+  });
+
+  it("create_bot rejects over-limit rules before creating the bot", async () => {
+    await botStub("b1").destroy();
+    const result = await runTool(
+      "create_bot",
+      {
+        name: "价格哨兵",
+        mission: "盯着价格",
+        default_interval: "2h",
+        rules: "x".repeat(2001),
+      },
+      [],
+      "bot-tools-create-rules-long",
+    );
+
+    expect(result.text).toBe("超过上限：写入后 2001/2000 字，请先精简");
+    expect(result.rows).toEqual([]);
+    expect(await botStub("b1").snapshot()).toBeNull();
+  });
+
+  it("edit_bot_doc writes and deletes a document directly", async () => {
+    await botStub("b1").destroy();
+    await runTool(
+      "create_bot",
+      {
+        name: "价格哨兵",
+        mission: "盯着价格",
+        default_interval: "2h",
+      },
+      [],
+      "bot-tools-edit-doc",
+    );
+
+    const written = await runTool(
+      "edit_bot_doc",
+      { id: "b1", name: "守则", content: "每天只发一次" },
+      [],
+      "bot-tools-edit-doc",
+    );
+    expect(written.text).toContain("已写入「守则」");
+    expect((await botStub("b1").snapshot())?.docs).toContainEqual({
+      name: "守则",
+      content: "每天只发一次",
+    });
+
+    const deleted = await runTool(
+      "edit_bot_doc",
+      { id: "b1", name: "守则", content: "  " },
+      [],
+      "bot-tools-edit-doc",
+    );
+    expect(deleted.text).toBe("已删除「守则」");
+    expect((await botStub("b1").snapshot())?.docs).toEqual([]);
+  });
+
+  it("edit_bot_doc reports an unknown id", async () => {
+    await botStub("b9").destroy();
+    const result = await runTool(
+      "edit_bot_doc",
+      { id: "b9", name: "守则", content: "每天只发一次" },
+      [],
+      "bot-tools-edit-doc-missing",
+    );
+
+    expect(result.text).toBe("没有机器人 b9");
+  });
+
   it("get_bot shows rules, methods and memory", async () => {
     await runTool(
       "create_bot",

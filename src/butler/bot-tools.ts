@@ -1,7 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { BotInit, BotSnapshot } from "../bot/bot-do";
-import { MEMORY_DOC, RULES_DOC, isMethodDoc } from "../bot/docs";
+import { MEMORY_DOC, RULES_DOC, checkDocWrite, isMethodDoc } from "../bot/docs";
 import { clampWakeAt, parseDuration } from "../bot/wake";
 import type { BotsRepo } from "./bots-repo";
 import { getClock } from "./notifier";
@@ -16,6 +16,7 @@ const CreateBot = Type.Object({
   mission: Type.String(),
   default_interval: Type.String(),
   first_wake_after: Type.Optional(Type.String()),
+  rules: Type.Optional(Type.String()),
 });
 
 const BotId = Type.Object({ id: Type.String() });
@@ -31,6 +32,12 @@ const ListBots = Type.Object({});
 
 const RenameBot = Type.Object({ id: Type.String(), name: Type.String() });
 
+const EditBotDoc = Type.Object({
+  id: Type.String(),
+  name: Type.String(),
+  content: Type.String(),
+});
+
 /** The Bot DO operations the management tools call. */
 export type BotControl = {
   init(spec: BotInit): Promise<void>;
@@ -40,6 +47,11 @@ export type BotControl = {
   pause(): Promise<void>;
   resume(wakeNow: boolean): Promise<void>;
   rename(name: string): Promise<boolean>;
+  writeDoc(
+    name: string,
+    content: string,
+    options: { allowRules: boolean },
+  ): Promise<{ ok: boolean; message: string }>;
   destroy(): Promise<void>;
 };
 
@@ -77,10 +89,17 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     description:
       "Create a long-lived bot that keeps working on a recurring mission and wakes itself up.",
     parameters: CreateBot,
-    async execute({ name, mission, default_interval, first_wake_after }) {
+    async execute({ name, mission, default_interval, first_wake_after, rules }) {
       try {
         const intervalMs = parseDuration(default_interval);
         if (intervalMs === null) return output(durationError(default_interval));
+
+        if (rules !== undefined) {
+          const check = checkDocWrite([], RULES_DOC, rules, {
+            allowRules: true,
+          });
+          if (!check.ok) return output(check.message);
+        }
 
         const now = getClock().now();
         let firstWakeAt = now;
@@ -100,6 +119,7 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
             mission,
             defaultIntervalMs,
             firstWakeAt,
+            ...(rules === undefined ? {} : { rules }),
           });
         } catch (error) {
           // Do not leave an index row pointing at a bot that never started.
@@ -178,6 +198,26 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
         lines.push("记忆：");
         lines.push(memory?.content ?? "无");
         return output(lines.join("\n"));
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+
+  const editBotDoc: ToolRegistration<typeof EditBotDoc> = {
+    name: "edit_bot_doc",
+    description:
+      "Write one of a bot's documents (`守则` rules, `记忆` memory, or a method) as the owner, without approval. Empty content deletes it.",
+    parameters: EditBotDoc,
+    replay: "safe",
+    async execute({ id, name, content }) {
+      try {
+        const snapshot = await bot(id).snapshot();
+        if (snapshot === null) return output(`没有机器人 ${id}`);
+        const result = await bot(id).writeDoc(name, content, {
+          allowRules: true,
+        });
+        return output(result.message);
       } catch (error) {
         return output(errorText(error));
       }
@@ -311,6 +351,7 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     createBot,
     listBots,
     getBot,
+    editBotDoc,
     steerBot,
     wakeBot,
     pauseBot,
