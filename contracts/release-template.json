@@ -37,7 +37,7 @@
     "ADMIN_TOKEN"
   ],
   "plainVars": ["ACTIVE_CHANNEL", "PUBLIC_BASE_URL"],
-  "crons": ["*/5 * * * *"],
+  "crons": ["* * * * *"],
   "vars": [
     { "name": "PUBLIC_BASE_URL", "parameterKey": "PUBLIC_BASE_URL" }
   ],

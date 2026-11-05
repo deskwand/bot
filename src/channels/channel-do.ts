@@ -56,16 +56,22 @@ import {
 } from "./wechat/ilink";
 import type { WeChatImageRef } from "./wechat/media";
 
-const WECHAT_POLL_RUN_MS = 600_000;
+// One long poll per alarm, then a hand-off to the next alarm. A long run in
+// one alarm survives a deploy on the superseded isolate: observed in production,
+// the old run stalled for minutes before the platform reset it, and no poll ran
+// meanwhile. A short alarm lets the next poll start on the new code.
+const WECHAT_POLL_RUN_MS = 0;
 const WECHAT_POLL_BACKOFF_MS = 1_000;
 const WECHAT_POLL_MAX_BACKOFF_MS = 10_000;
 const WECHAT_GET_UPDATES_TIMEOUT_MS = 40_000;
-const WECHAT_HEARTBEAT_MAX_AGE_MS = 120_000;
-const TELEGRAM_POLL_RUN_MS = 600_000;
+// Longer than one long poll plus the longest backoff, so a live chain is never
+// doubled, and short enough that the per-minute Cron revives a dead one fast.
+const WECHAT_HEARTBEAT_MAX_AGE_MS = 60_000;
+const TELEGRAM_POLL_RUN_MS = 0;
 const TELEGRAM_POLL_BACKOFF_MS = 1_000;
 const TELEGRAM_POLL_MAX_BACKOFF_MS = 10_000;
 const TELEGRAM_GET_UPDATES_TIMEOUT_MS = 35_000;
-const TELEGRAM_HEARTBEAT_MAX_AGE_MS = 120_000;
+const TELEGRAM_HEARTBEAT_MAX_AGE_MS = 60_000;
 /** How many drains a rejected message survives before it is given up on. */
 const OUTBOUND_MAX_ATTEMPTS = 5;
 type WeChatState = {
@@ -170,6 +176,14 @@ export class ChannelDO extends Agent<Env> {
     hash: string;
     routeKey: string;
   } | null = null;
+
+  /**
+   * Error backoff carried across alarms: each alarm makes one poll, so the
+   * doubling would otherwise restart at the base delay every time.
+   */
+  private weChatBackoffMs: number | null = null;
+
+  private telegramBackoffMs: number | null = null;
   /** Cached for the lifetime of this instance: its environment is immutable. */
   private routePromise: Promise<RouteSnapshot> | undefined;
 
@@ -859,7 +873,6 @@ export class ChannelDO extends Agent<Env> {
       });
       const startedAt = Date.now();
       const retry: TelegramWebhookRetry = { attempted: false };
-      let backoffMs = timing.baseBackoffMs;
 
       do {
         if (!(await ownsRun())) return;
@@ -903,8 +916,12 @@ export class ChannelDO extends Agent<Env> {
           console.error(
             `channel: telegram poll failed: ${errorMessage(error)}`,
           );
+          const backoffMs = this.telegramBackoffMs ?? timing.baseBackoffMs;
           await sleep(backoffMs);
-          backoffMs = Math.min(backoffMs * 2, TELEGRAM_POLL_MAX_BACKOFF_MS);
+          this.telegramBackoffMs = Math.min(
+            backoffMs * 2,
+            TELEGRAM_POLL_MAX_BACKOFF_MS,
+          );
           continue;
         }
 
@@ -924,7 +941,7 @@ export class ChannelDO extends Agent<Env> {
           if (outcome === "maintenance") return;
           this.updateTelegramState({ offset: update.update_id + 1 });
         }
-        backoffMs = timing.baseBackoffMs;
+        this.telegramBackoffMs = null;
       } while (Date.now() - startedAt < timing.runMs);
 
       if (!(await ownsRun())) return;
@@ -968,7 +985,6 @@ export class ChannelDO extends Agent<Env> {
         fetch: getILinkFetchOverride() ?? undefined,
       });
       const startedAt = Date.now();
-      let backoffMs = timing.baseBackoffMs;
 
       do {
         if (!(await ownsRun())) return;
@@ -998,7 +1014,7 @@ export class ChannelDO extends Agent<Env> {
             credentials,
             run.routeKey,
           );
-          backoffMs = timing.baseBackoffMs;
+          this.weChatBackoffMs = null;
         } catch (error) {
           if (!(await ownsRun())) return;
           if (isSessionExpired(error)) {
@@ -1018,8 +1034,12 @@ export class ChannelDO extends Agent<Env> {
           console.error(
             `channel: wechat poll failed: ${errorMessage(error)}`,
           );
+          const backoffMs = this.weChatBackoffMs ?? timing.baseBackoffMs;
           await sleep(backoffMs);
-          backoffMs = Math.min(backoffMs * 2, WECHAT_POLL_MAX_BACKOFF_MS);
+          this.weChatBackoffMs = Math.min(
+            backoffMs * 2,
+            WECHAT_POLL_MAX_BACKOFF_MS,
+          );
         }
       } while (Date.now() - startedAt < timing.runMs);
 

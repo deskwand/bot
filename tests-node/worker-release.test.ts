@@ -136,7 +136,7 @@ describe("Worker release manifest", () => {
       "^MCP_[A-Z0-9_]{1,64}$",
     ]);
     expect(manifest.resourceTemplate.plainVars).toEqual(["ACTIVE_CHANNEL", "PUBLIC_BASE_URL"]);
-    expect(manifest.resourceTemplate.crons).toEqual(["*/5 * * * *"]);
+    expect(manifest.resourceTemplate.crons).toEqual(["* * * * *"]);
     expect(manifest.resourceTemplate.installParameters.map((parameter) => parameter.key)).toEqual([
       "workerName",
       "r2BucketName",

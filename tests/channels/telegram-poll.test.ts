@@ -361,6 +361,30 @@ describe("ensurePolling", () => {
 });
 
 describe("pollTelegram", () => {
+  it("makes one long poll per invocation and hands off, so a redeploy is never stranded in an old run", async () => {
+    await channels().ensurePolling();
+    await cancelSchedules();
+    // Production timing: no runMs override.
+    setPollTimingOverride(null);
+
+    let polls = 0;
+    setTelegramFetchOverride((async () => {
+      polls += 1;
+      // A second long poll in the same invocation means the run kept going.
+      // Rotate the token so that run ends instead of spinning.
+      if (polls > 1) setEnv({ TELEGRAM_BOT_TOKEN: `${telegramToken}-rotated` });
+      return new Response(JSON.stringify({ ok: true, result: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch);
+
+    const scheduled = await pollThroughDO();
+
+    expect(polls).toBe(1);
+    expect(scheduled).toBe(1);
+  });
+
   it("dispatches owner messages and stores the offset", async () => {
     const lines = captureConsole();
     const noise: string[] = [];

@@ -954,6 +954,34 @@ describe("WeChat text actions", () => {
   });
 });
 
+describe("poll run length", () => {
+  it("makes one long poll per invocation and hands off, so a redeploy is never stranded in an old run", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    // Production timing: no runMs override.
+    setPollTimingOverride(null);
+
+    const calls: string[] = [];
+    setILinkFetchOverride((async () => {
+      calls.push("getupdates");
+      // A second long poll in the same invocation means the run kept going.
+      // Withdraw the credentials so that run ends instead of spinning.
+      if (calls.length > 1) setWeChatCredentialsOverride(null);
+      return new Response(
+        JSON.stringify({ get_updates_buf: `cursor-${calls.length}`, msgs: [] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch);
+
+    const scheduled = await pollThroughDO();
+
+    expect(calls).toHaveLength(1);
+    expect(scheduled).toBe(1);
+    expect(await readState()).toMatchObject({ cursor: "cursor-1" });
+  });
+});
+
 describe("poll ownership", () => {
   it("ignores overlapping callback invocations while a poll is awaiting updates", async () => {
     setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
