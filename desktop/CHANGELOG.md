@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.11
+
+- 修复重新部署后微信、Telegram 停摆几分钟：轮询改为每次 alarm 一次长轮询接力，Cron 改为一分钟一次、心跳 60 秒，断链一两分钟内自愈。
+- 修复 codemode 报「Wasm code generation disallowed by embedder」：wasm 模块按 application/wasm 上传，不再被当成 Data 模块。
+
 ## 0.1.10
 
 - 修复微信图片连续失败：解码器出错后自动重建，失败时会说明图片在哪一步被丢弃。
