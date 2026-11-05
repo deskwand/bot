@@ -18,6 +18,9 @@ import type {
   ImportInputDTO,
   ImportPreviewDTO,
   InstallInputDTO,
+  Locale,
+  LocaleDTO,
+  LocaleSource,
   LoginStatusDTO,
   McpAddInput,
   McpAuthDTO,
@@ -96,6 +99,8 @@ type Scenario =
 interface MockState {
   scenario: Scenario;
   theme: ThemeSource;
+  locale: LocaleDTO;
+  localeSaveFails: boolean;
   telemetry: boolean;
   connected: boolean;
   accountId: string;
@@ -350,8 +355,41 @@ function scenarioFromLocation(): Scenario {
   }
 }
 
+function storedLocale(): LocaleDTO | null {
+  try {
+    const raw = window.sessionStorage.getItem("fixture-locale");
+    if (!raw) return null;
+    const value = JSON.parse(raw) as { source?: unknown; resolved?: unknown };
+    const source = value.source;
+    const resolved = value.resolved;
+    if (
+      (source === "system" || source === "zh" || source === "en") &&
+      (resolved === "zh" || resolved === "en")
+    ) {
+      return { source, resolved };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function initialLocale(): LocaleDTO {
+  // Mirrors Go: the saved preference survives a reload.
+  const saved = storedLocale();
+  if (saved) return saved;
+  const param = new URLSearchParams(window.location.search).get("locale");
+  if (param === "en" || param === "zh") return { source: "system", resolved: param };
+  return { source: "system", resolved: "zh" };
+}
+
+function resolveLocale(source: LocaleSource, current: Locale): Locale {
+  return source === "system" ? current : source;
+}
+
 function initialState(): MockState {
   const scenario = scenarioFromLocation();
+  const query = new URLSearchParams(window.location.search);
   const configured = scenario === "configured" || scenario === "publish-refetch-fail";
   const shellScenario = [
     "unknown-long-error",
@@ -397,6 +435,8 @@ function initialState(): MockState {
   return {
     scenario,
     theme: "system",
+    locale: initialLocale(),
+    localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
     connected: shellScenario,
     accountId: "a".repeat(32),
@@ -688,6 +728,28 @@ export function createMockClient(): ClientService {
         fail("INVALID_REQUEST", "外观设置无效");
       }
       state.theme = next;
+    },
+
+    async locale(): Promise<LocaleDTO> {
+      return state.locale;
+    },
+
+    async setLocale(next: LocaleSource): Promise<LocaleDTO> {
+      if (next !== "system" && next !== "zh" && next !== "en") {
+        fail("INVALID_REQUEST", "语言设置无效");
+      }
+      const value: LocaleDTO = {
+        source: next,
+        resolved: resolveLocale(next, state.locale.resolved),
+      };
+      // Go switches in memory first; a rejected disk write still changes this
+      // run and only skips persistence.
+      state.locale = value;
+      if (state.localeSaveFails) {
+        fail("LOCALE_SAVE_FAILED", "语言设置未能保存");
+      }
+      window.sessionStorage.setItem("fixture-locale", JSON.stringify(value));
+      return value;
     },
 
     async telemetryEnabled(): Promise<boolean> {

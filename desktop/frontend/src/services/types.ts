@@ -115,6 +115,17 @@ export type ImportInputDTO = Omit<GeneratedImportInputDTO, "secrets"> & {
 /** The appearance the client stores. Go rejects anything else. */
 export type ThemeSource = "system" | "light" | "dark";
 
+/** The language preference the client stores. Go rejects anything else. */
+export type LocaleSource = "system" | "zh" | "en";
+
+/** The language the UI shows. */
+export type Locale = "zh" | "en";
+
+export interface LocaleDTO {
+  source: LocaleSource;
+  resolved: Locale;
+}
+
 /**
  * The narrow application-service surface consumed by the UI. It mirrors the
  * bound Service methods exactly, so a Go DTO change only requires updating this
@@ -124,6 +135,8 @@ export interface ClientService {
   name(): Promise<string>;
   theme(): Promise<ThemeSource>;
   setTheme(source: ThemeSource): Promise<void>;
+  locale(): Promise<LocaleDTO>;
+  setLocale(source: LocaleSource): Promise<LocaleDTO>;
   telemetryEnabled(): Promise<boolean>;
   setTelemetryEnabled(enabled: boolean): Promise<void>;
   bootState(): Promise<BootStateDTO>;
