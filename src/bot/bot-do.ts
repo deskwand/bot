@@ -110,8 +110,8 @@ export class BotDO extends DurableObject<Env> {
 
   private readonly backup: BackupRpc;
 
-  /** True while the alarm handler runs; heal() must not interfere with it. */
-  private alarmInFlight = false;
+  /** Alarm handlers currently running; heal() must not interfere with any. */
+  private alarmsInFlight = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -256,9 +256,12 @@ export class BotDO extends DurableObject<Env> {
 
     const now = getClock().now();
     meta.defaultIntervalMs = ms;
+    const dailyLimitDeferred =
+      meta.wakesDay === utcDay(now) && meta.wakesCount >= DAILY_WAKE_LIMIT;
     if (
       meta.status === "active" &&
       meta.currentTaskId === null &&
+      !dailyLimitDeferred &&
       meta.nextWakeAt !== null &&
       meta.nextWakeAt > now + ms
     ) {
@@ -462,7 +465,7 @@ export class BotDO extends DurableObject<Env> {
    */
   async heal(): Promise<"ok" | "healed" | "skipped"> {
     const meta = this.store.readMeta();
-    if (meta === null || meta.status !== "active" || this.alarmInFlight) {
+    if (meta === null || meta.status !== "active" || this.alarmsInFlight > 0) {
       return "skipped";
     }
 
@@ -497,7 +500,7 @@ export class BotDO extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
-    this.alarmInFlight = true;
+    this.alarmsInFlight += 1;
     try {
       const now = getClock().now();
 
@@ -618,16 +621,23 @@ export class BotDO extends DurableObject<Env> {
         // recorded the run. Re-arm in case that report raced this alarm.
         const ended = this.store.readMeta();
         if (ended !== null && ended.status === "active") {
-          const at = clampWakeAt(
-            now,
-            nextBase(ended, now),
-            wakeCeilingMs(ended.defaultIntervalMs),
-          ).at;
-          if (ended.nextWakeAt !== at) {
-            ended.nextWakeAt = at;
-            this.store.writeMeta(ended);
+          if (ended.nextWakeAt !== null && ended.nextWakeAt > now) {
+            // A run that failed before spawn returned already saved its
+            // backoff; re-arming must not clamp that retry down to the
+            // cadence ceiling.
+            await this.ctx.storage.setAlarm(ended.nextWakeAt);
+          } else {
+            const at = clampWakeAt(
+              now,
+              nextBase(ended, now),
+              wakeCeilingMs(ended.defaultIntervalMs),
+            ).at;
+            if (ended.nextWakeAt !== at) {
+              ended.nextWakeAt = at;
+              this.store.writeMeta(ended);
+            }
+            await this.ctx.storage.setAlarm(at);
           }
-          await this.ctx.storage.setAlarm(at);
         }
         return;
       }
@@ -638,7 +648,7 @@ export class BotDO extends DurableObject<Env> {
       this.store.writeMeta(current);
       await this.ctx.storage.setAlarm(now + WATCHDOG_MS);
     } finally {
-      this.alarmInFlight = false;
+      this.alarmsInFlight -= 1;
     }
   }
 

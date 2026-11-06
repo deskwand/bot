@@ -319,6 +319,24 @@ describe("BotDO lifecycle", () => {
     expect(await alarmAt(stub)).toBeNull();
   });
 
+  it("setDefaultInterval keeps a daily-limit defer", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-lifecycle-interval-daily-cap");
+    await initBot(stub, { defaultIntervalMs: 86_400_000 });
+    await patchMeta(stub, { wakesDay: utcDay(now), wakesCount: 48 });
+
+    await fireAlarm(stub);
+    expect(fake.notices).toHaveLength(1);
+
+    await stub.setDefaultInterval(3_600_000);
+
+    expect((await stub.snapshot())?.meta.nextWakeAt).toBe(
+      nextUtcMidnight(now),
+    );
+    expect(await alarmAt(stub)).toBe(nextUtcMidnight(now));
+    expect(fake.notices).toHaveLength(1);
+  });
+
   it("setNextWake is clamped", async () => {
     fakeButler();
     const stub = botStub("b-lifecycle-clamp");
@@ -798,6 +816,28 @@ describe("BotDO lifecycle", () => {
     expect(snapshot?.meta.currentTaskId).toBeNull();
     expect(snapshot?.runs).toHaveLength(1);
     expect(await alarmAt(stub)).toBe(now + snapshot!.meta.defaultIntervalMs);
+  });
+
+  it("a fast failure during dispatch keeps the failure retry", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-fails-during-dispatch");
+    await initBot(stub, { defaultIntervalMs: 3_600_000 });
+    await patchMeta(stub, { consecutiveFailures: 2 });
+    const gate = deferred();
+    fake.spawnGate = gate.promise;
+
+    const fired = runDurableObjectAlarm(stub);
+    await waitUntil(() => fake.spawns.length === 1);
+    await stub.onRunEnded("t1", "failed", "boom");
+    gate.resolve();
+    await fired;
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.consecutiveFailures).toBe(3);
+    expect(snapshot?.meta.nextWakeAt).toBe(now + 21_600_000);
+    expect(await alarmAt(stub)).toBe(now + 21_600_000);
+    expect(fake.notices).toHaveLength(1);
+    expect(fake.notices[0]?.text).toContain("6h");
   });
 
   it("a paused bot whose run ended during dispatch is released on resume", async () => {
