@@ -2,7 +2,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { BotInit, BotSnapshot } from "../bot/bot-do";
 import { MEMORY_DOC, RULES_DOC, checkDocWrite, isMethodDoc } from "../bot/docs";
-import { clampWakeAt, parseDuration } from "../bot/wake";
+import { clampWakeAt, parseDuration, wakeCeilingMs } from "../bot/wake";
 import type { BotsRepo } from "./bots-repo";
 import { getClock } from "./notifier";
 import type { TaskControl } from "./tools";
@@ -102,13 +102,17 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
         }
 
         const now = getClock().now();
+        const defaultIntervalMs = clampWakeAt(now, now + intervalMs).at - now;
         let firstWakeAt = now;
         if (first_wake_after !== undefined) {
           const afterMs = parseDuration(first_wake_after);
           if (afterMs === null) return output(durationError(first_wake_after));
-          firstWakeAt = clampWakeAt(now, now + afterMs).at;
+          firstWakeAt = clampWakeAt(
+            now,
+            now + afterMs,
+            wakeCeilingMs(defaultIntervalMs),
+          ).at;
         }
-        const defaultIntervalMs = clampWakeAt(now, now + intervalMs).at - now;
 
         const id = bots.nextId();
         bots.insert({ id, name });

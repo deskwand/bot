@@ -7,6 +7,7 @@ import {
   nextUtcMidnight,
   parseDuration,
   utcDay,
+  wakeCeilingMs,
 } from "../../src/bot/wake";
 
 describe("wake rules", () => {
@@ -33,6 +34,25 @@ describe("wake rules", () => {
       at: now + MAX_WAKE_MS,
       clamped: true,
     });
+  });
+
+  it("clamps to a custom max", () => {
+    expect(clampWakeAt(0, 10 * 3_600_000, 3_600_000)).toEqual({
+      at: 3_600_000,
+      clamped: true,
+    });
+  });
+
+  it("clamp with max equal to min", () => {
+    expect(clampWakeAt(0, 3_600_000, 300_000)).toEqual({
+      at: 300_000,
+      clamped: true,
+    });
+  });
+
+  it("wakeCeilingMs caps at 30 days", () => {
+    expect(wakeCeilingMs(86_400_000)).toBe(86_400_000);
+    expect(wakeCeilingMs(40 * 86_400_000)).toBe(2_592_000_000);
   });
 
   it("backs off failures", () => {

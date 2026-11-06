@@ -185,7 +185,7 @@ export function createBotTaskTools(
   const setNextWake: ToolRegistration<typeof SetNextWake> = {
     name: "set_next_wake",
     description:
-      "Schedule the next run, either after a duration such as `2h` or at a UTC ISO time.",
+      "Schedule the next run, either after a duration such as `2h` or at a UTC ISO time. The latest allowed time is one default interval from now; to sleep longer, wake up and schedule again.",
     parameters: SetNextWake,
     replay: "safe",
     async execute({ after, at }) {

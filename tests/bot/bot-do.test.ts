@@ -258,6 +258,33 @@ describe("BotDO lifecycle", () => {
     expect(await alarmAt(stub)).toBe(now + 300_000);
   });
 
+  it("setNextWake caps at the default interval", async () => {
+    fakeButler();
+    const stub = botStub("b-lifecycle-interval-cap");
+    await initBot(stub);
+
+    const result = await stub.setNextWake({ afterMs: 3 * 86_400_000 });
+
+    expect(result).toEqual({ at: now + 86_400_000, clamped: true });
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.nextWakeAt).toBe(now + 86_400_000);
+    expect(await alarmAt(stub)).toBe(now + 86_400_000);
+  });
+
+  it("a run that scheduled past the interval wakes at the interval", async () => {
+    fakeButler();
+    const stub = botStub("b-lifecycle-interval-cap-run");
+    await initBot(stub);
+    await fireAlarm(stub);
+
+    await stub.setNextWake({ at: now + 10 * 86_400_000 });
+    await stub.onRunEnded("t1", "completed", "ok");
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.nextWakeAt).toBe(now + 86_400_000);
+    expect(await alarmAt(stub)).toBe(now + 86_400_000);
+  });
+
   it("onRunEnded is idempotent", async () => {
     fakeButler();
     const stub = botStub("b-lifecycle-idempotent");
@@ -420,6 +447,22 @@ describe("BotDO lifecycle", () => {
     expect(fake.notices[0]?.text).toBe(
       "⏸ 价格哨兵 今日唤醒已达 48 次，推迟到明天 00:00 UTC",
     );
+  });
+
+  it("daily cap defer is not capped by the interval", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-lifecycle-cap-interval");
+    await initBot(stub, { defaultIntervalMs: 3_600_000 });
+    await patchMeta(stub, { wakesDay: utcDay(now), wakesCount: 48 });
+
+    await fireAlarm(stub);
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(0);
+    expect((await stub.snapshot())?.meta.nextWakeAt).toBe(
+      nextUtcMidnight(now),
+    );
+    expect(await alarmAt(stub)).toBe(nextUtcMidnight(now));
   });
 
   it("daily counter resets at UTC midnight", async () => {

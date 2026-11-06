@@ -41,13 +41,19 @@ export function parseDuration(text: string): number | null {
   return total;
 }
 
+/** The longest a bot's own schedule may stretch, given its cadence. */
+export function wakeCeilingMs(defaultIntervalMs: number): number {
+  return Math.min(MAX_WAKE_MS, defaultIntervalMs);
+}
+
 /** Keeps a requested wake time inside the allowed window around `now`. */
 export function clampWakeAt(
   now: number,
   at: number,
+  maxMs: number = MAX_WAKE_MS,
 ): { at: number; clamped: boolean } {
   const min = now + MIN_WAKE_MS;
-  const max = now + MAX_WAKE_MS;
+  const max = now + Math.max(MIN_WAKE_MS, Math.min(maxMs, MAX_WAKE_MS));
   if (at < min) return { at: min, clamped: true };
   if (at > max) return { at: max, clamped: true };
   return { at, clamped: false };

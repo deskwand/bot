@@ -35,6 +35,7 @@ import {
   failureDelayMs,
   nextUtcMidnight,
   utcDay,
+  wakeCeilingMs,
 } from "./wake";
 
 export type BotInit = {
@@ -249,7 +250,11 @@ export class BotDO extends DurableObject<Env> {
 
     const now = getClock().now();
     const requested = req.at ?? now + (req.afterMs ?? 0);
-    const { at, clamped } = clampWakeAt(now, requested);
+    const { at, clamped } = clampWakeAt(
+      now,
+      requested,
+      wakeCeilingMs(meta.defaultIntervalMs),
+    );
     meta.nextWakeAt = at;
     if (meta.status === "finished") {
       // Only the bot itself finishes. Scheduling again afterwards means it
@@ -348,7 +353,11 @@ export class BotDO extends DurableObject<Env> {
       meta.currentTaskId = null;
       this.store.writeMeta(meta);
       if (meta.status !== "active") return;
-      meta.nextWakeAt = clampWakeAt(now, nextBase(meta, now)).at;
+      meta.nextWakeAt = clampWakeAt(
+        now,
+        nextBase(meta, now),
+        wakeCeilingMs(meta.defaultIntervalMs),
+      ).at;
       this.store.writeMeta(meta);
       await this.ctx.storage.setAlarm(meta.nextWakeAt);
       return;
@@ -389,7 +398,11 @@ export class BotDO extends DurableObject<Env> {
       meta.manualWakeAt === requestedAt &&
       requestedAt !== null &&
       requestedAt > now;
-    meta.nextWakeAt = clampWakeAt(now, nextBase(meta, now)).at;
+    meta.nextWakeAt = clampWakeAt(
+      now,
+      nextBase(meta, now),
+      wakeCeilingMs(meta.defaultIntervalMs),
+    ).at;
     if (keepManual) meta.manualWakeAt = meta.nextWakeAt;
     this.store.writeMeta(meta);
     await this.ctx.storage.setAlarm(meta.nextWakeAt);
@@ -523,7 +536,11 @@ export class BotDO extends DurableObject<Env> {
       // recorded the run. Re-arm in case that report raced this alarm.
       const ended = this.store.readMeta();
       if (ended !== null && ended.status === "active") {
-        const at = clampWakeAt(now, nextBase(ended, now)).at;
+        const at = clampWakeAt(
+          now,
+          nextBase(ended, now),
+          wakeCeilingMs(ended.defaultIntervalMs),
+        ).at;
         if (ended.nextWakeAt !== at) {
           ended.nextWakeAt = at;
           this.store.writeMeta(ended);

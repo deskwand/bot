@@ -147,6 +147,27 @@ describe("butler bot tools", () => {
     });
   });
 
+  it("create_bot caps the first wake at the interval", async () => {
+    await botStub("b1").destroy();
+    const result = await runTool(
+      "create_bot",
+      {
+        name: "价格哨兵",
+        mission: "盯着价格",
+        default_interval: "1h",
+        first_wake_after: "3d",
+      },
+      [],
+      "bot-tools-create-cap",
+    );
+
+    const firstWakeAt = START + 3_600_000;
+    expect(result.text).toBe(
+      `已创建机器人 b1 价格哨兵，首次唤醒：${new Date(firstWakeAt).toISOString()}`,
+    );
+    expect((await botStub("b1").snapshot())?.meta.nextWakeAt).toBe(firstWakeAt);
+  });
+
   it("create_bot writes the initial rules", async () => {
     await botStub("b1").destroy();
     const result = await runTool(
