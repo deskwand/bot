@@ -154,7 +154,7 @@ export function webFetchTool(
             name,
             mimeType: file.mimeType,
             kind: file.kind,
-            header: `${mime} · ${bytes.byteLength} 字节\n\n`,
+            header: `${file.mimeType} · ${bytes.byteLength} 字节\n\n`,
           },
           {
             convert,

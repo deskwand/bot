@@ -85,7 +85,7 @@ export function getArtifactTool(
     name: "get_artifact",
     description:
       "Read a saved file by its key (`<taskId>/<fileId>/<name>`). Text comes back as text, " +
-      "PDF and Office files as Markdown, images as images.",
+      "PDF and Office files as Markdown, images as images. Only files saved by this task can be read.",
     parameters: GetArtifact,
     replay: "safe",
     async execute({ ref }, api, context): Promise<ToolExecutionResult> {
@@ -167,7 +167,7 @@ export function getArtifactTool(
       // A small octet-stream can still be a PDF or an image; a truncated read
       // would only hand the converter half a file.
       if (!capped.truncated) {
-        const sniffed = classifyFile(bytes, "application/octet-stream", name);
+        const sniffed = classifyFile(bytes, contentType, name);
         if (sniffed.kind === "image" || sniffed.kind === "document") {
           return render(bytes, sniffed.kind, sniffed.mimeType);
         }

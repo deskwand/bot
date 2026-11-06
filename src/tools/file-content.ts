@@ -38,6 +38,24 @@ const DOCUMENT_EXTENSION_TYPES: Record<string, string> = {
   odp: "application/vnd.oasis.opendocument.presentation",
 };
 
+/** Reverse of the tables above: the name handed to the converter needs its extension. */
+const MIME_EXTENSIONS: Record<string, string> = {
+  "application/pdf": "pdf",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.ms-excel": "xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.ms-powerpoint": "ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+  "application/vnd.oasis.opendocument.text": "odt",
+  "application/vnd.oasis.opendocument.spreadsheet": "ods",
+  "application/vnd.oasis.opendocument.presentation": "odp",
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d]; // "%PDF-"
 
 function normalizeType(contentType: string): string {
@@ -50,6 +68,22 @@ function looksLikePdf(bytes: Uint8Array): boolean {
 
 function extensionOf(name: string): string | undefined {
   return /\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase();
+}
+
+/** Extension for a document or image mime type; undefined for anything else. */
+export function extensionForMime(mime: string): string | undefined {
+  return MIME_EXTENSIONS[normalizeType(mime)];
+}
+
+/** Text-like bodies (including JSON and XML) stay raw and are never converted. */
+function isTextLike(mime: string): boolean {
+  return (
+    mime.startsWith("text/") ||
+    mime === "application/json" ||
+    mime.endsWith("+json") ||
+    mime === "application/xml" ||
+    mime.endsWith("+xml")
+  );
 }
 
 /**
@@ -73,6 +107,10 @@ export function classifyFile(
 
   if (declared.startsWith("image/")) return { kind: "image", mimeType: declared };
   if (DOCUMENT_MIME_TYPES.has(declared)) return { kind: "document", mimeType: declared };
+
+  // A text/* body named report.pdf is still text; the extension must not
+  // send it to the document converter.
+  if (isTextLike(declared)) return { kind: "other", mimeType: declared };
 
   const extension = extensionOf(name);
   const fromExtension = extension === undefined ? undefined : DOCUMENT_EXTENSION_TYPES[extension];
@@ -130,9 +168,14 @@ export async function renderFile(
         isError: true,
       };
     }
+    const extension = extensionForMime(input.mimeType);
+    const converterName =
+      extension && extensionOf(input.name) !== extension
+        ? `${input.name}.${extension}`
+        : input.name;
     const converted = await deps.convert({
-      name: input.name,
-      blob: new Blob([input.bytes]),
+      name: converterName,
+      blob: new Blob([input.bytes], { type: input.mimeType }),
     });
     if (!converted.ok) {
       return {

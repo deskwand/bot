@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import { MAX_ARTIFACT_BYTES } from "../artifact";
+import { classifyFile, extensionForMime } from "./file-content";
 import { withAbort } from "./http-body";
 import { isBlockedHost } from "./http-request";
 
@@ -18,6 +19,7 @@ const DOWNLOAD_CONTENT_TYPE = "application/octet-stream";
 const DOWNLOAD_TIMEOUT_MS = 60_000;
 const MAX_REDIRECTS = 5;
 const TOO_LARGE = "文件超过 15 MB，无法作为产物发送；请拆分成多个文件或只保留摘要";
+const DOWNLOAD_TOO_LARGE = "远程文件超过 15 MB，无法下载";
 
 // ASCII letters/digits plus the CJK/Hangul/kana ranges; everything else
 // becomes "_" so a filename cannot escape its key prefix.
@@ -87,7 +89,7 @@ async function readBody(
       total += value.byteLength;
       if (total > MAX_ARTIFACT_BYTES) {
         await reader.cancel().catch(() => {});
-        return { error: TOO_LARGE };
+        return { error: DOWNLOAD_TOO_LARGE };
       }
       chunks.push(value);
     }
@@ -120,7 +122,7 @@ export function saveArtifactTool(
   return {
     name: "save_artifact",
     description:
-      "Save a file so it can be shared with the user. Pass `content` to write text or base64, or `url` to download a file (up to 15 MB) without reading it into the conversation.",
+      "Save a file so it can be shared with the user. Pass `content` to write text or base64, or `url` to download a file (up to 15 MB) without reading it into the conversation. The returned key can be read back with get_artifact; use url for web files over 2 MB.",
     parameters: SaveArtifact,
     async execute({ filename, content, url, contentType, encoding }, _api, context) {
       const hasContent = content !== undefined;
@@ -223,7 +225,7 @@ export function saveArtifactTool(
           const length = Number(declared);
           if (Number.isFinite(length) && length > MAX_ARTIFACT_BYTES) {
             await response.body?.cancel().catch(() => {});
-            return fail(TOO_LARGE);
+            return fail(DOWNLOAD_TOO_LARGE);
           }
         }
 
@@ -238,12 +240,34 @@ export function saveArtifactTool(
           return fail(`下载失败：${reason}`);
         }
 
-        name = filename ?? filenameFromResponse(response, current);
-        resolvedType =
-          contentType ??
-          response.headers.get("content-type") ??
-          DOWNLOAD_CONTENT_TYPE;
+        name = filename || filenameFromResponse(response, current);
+        const responseType = response.headers.get("content-type");
+        const file = classifyFile(body, responseType ?? "", name);
+        const declaredType = (responseType ?? "").split(";")[0]!.trim().toLowerCase();
+        resolvedType = contentType ?? responseType ?? DOWNLOAD_CONTENT_TYPE;
+
+        // A generic octet-stream hides the real type; trust the bytes instead.
+        if (
+          !contentType &&
+          (file.kind === "document" || file.kind === "image") &&
+          (declaredType === "" || declaredType === DOWNLOAD_CONTENT_TYPE)
+        ) {
+          resolvedType = file.mimeType;
+        }
+
+        // The name is what a later get_artifact uses to classify the object,
+        // so a sniffed document or image must carry its extension.
+        if (file.kind === "document" || file.kind === "image") {
+          const extension = extensionForMime(resolvedType);
+          if (extension && !name.toLowerCase().endsWith(`.${extension}`)) {
+            name = `${name}.${extension}`;
+          }
+        }
       }
+
+      // The export may have started while we were downloading; re-check the
+      // lease so this write cannot slip past it.
+      if (hasUrl && guard) await guard();
 
       const finalName = sanitizeFilename(name);
       const fileId = crypto.randomUUID();

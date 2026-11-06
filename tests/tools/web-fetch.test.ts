@@ -140,8 +140,21 @@ describe("webFetchTool", () => {
     expect(textOf(result)).toContain("save_artifact");
   });
 
-  it("returns an image response as an image", async () => {
+  it("labels the output with the sniffed type, not octet-stream", async () => {
     const fakeFetch = (async () =>
+      new Response(new TextEncoder().encode("%PDF-1.4 x"), {
+        headers: { "content-type": "application/octet-stream" },
+      })) as typeof fetch;
+    const result = await webFetchTool(fakeFetch, async () => ({
+      ok: true,
+      markdown: "# 论文",
+    })).execute({ url: "https://example.test/p" }, {} as never, context());
+    const text = textOf(result);
+    expect(text).toContain("application/pdf ·");
+    expect(text).not.toContain("application/octet-stream");
+  });
+
+  it("returns an image response as an image", async () => {    const fakeFetch = (async () =>
       new Response(bytes(PNG_B64), {
         headers: { "content-type": "image/png" },
       })) as typeof fetch;

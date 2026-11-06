@@ -231,6 +231,82 @@ describe("saveArtifactTool url intake", () => {
     expect(cancelled).toBe(true);
     expect((await env.ARTIFACTS.list({ prefix: "t1/" })).objects.length).toBe(before);
   });
+
+  it("sniffs a PDF delivered as octet-stream and fixes both type and extension", async () => {
+    const pdf = new TextEncoder().encode("%PDF-1.7\n...");
+    const f = (async () => new Response(pdf, {
+      headers: { "content-type": "application/octet-stream" },
+    })) as typeof fetch;
+    const key = textOf(
+      await tool(f).execute({ url: "https://example.test/dl?id=1" }, {} as never, context()),
+    ).replace("已保存：", "");
+    expect(key.endsWith(".pdf")).toBe(true);
+    expect((await env.ARTIFACTS.get(key))?.httpMetadata?.contentType).toBe("application/pdf");
+  });
+
+  it("gives a sniffed image its extension and mime type", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const f = (async () => new Response(png)) as typeof fetch;
+    const key = textOf(
+      await tool(f).execute({ url: "https://example.test/render?id=2" }, {} as never, context()),
+    ).replace("已保存：", "");
+    expect(key.endsWith(".png")).toBe(true);
+    expect((await env.ARTIFACTS.get(key))?.httpMetadata?.contentType).toBe("image/png");
+  });
+
+  it("falls back to the response name when filename is an empty string", async () => {
+    const f = (async () => new Response(new Uint8Array([1, 2, 3]), {
+      headers: {
+        "content-type": "application/pdf",
+        "content-disposition": "attachment; filename=\"from-header.pdf\"",
+      },
+    })) as typeof fetch;
+    const key = textOf(
+      await tool(f).execute(
+        { url: "https://example.test/dl?id=1", filename: "" },
+        {} as never,
+        context(),
+      ),
+    ).replace("已保存：", "");
+    expect(key.endsWith("/from-header.pdf")).toBe(true);
+  });
+
+  it("re-checks the backup lease before writing a download", async () => {
+    let calls = 0;
+    const guard = async () => {
+      calls++;
+      if (calls > 1) throw new Error("lease lost");
+    };
+    const f = (async () => new Response(new Uint8Array([1, 2, 3]), {
+      headers: { "content-type": "application/pdf" },
+    })) as typeof fetch;
+    const before = (await env.ARTIFACTS.list({ prefix: "t-guard/" })).objects.length;
+    await expect(
+      saveArtifactTool(env.ARTIFACTS, () => "t-guard", guard, f).execute(
+        { url: "https://example.test/x.pdf" },
+        {} as never,
+        context(),
+      ),
+    ).rejects.toThrow("lease lost");
+    expect((await env.ARTIFACTS.list({ prefix: "t-guard/" })).objects.length).toBe(before);
+  });
+
+  it("uses the download-specific message when a remote file is too large", async () => {
+    const f = (async () => new Response(null, {
+      headers: { "content-length": String(MAX_ARTIFACT_BYTES + 1) },
+    })) as typeof fetch;
+    const result = await tool(f).execute({ url: "https://example.test/x" }, {} as never, context());
+    expect(textOf(result)).toContain("远程文件超过 15 MB，无法下载");
+  });
+});
+
+describe("saveArtifactTool description", () => {
+  it("points the model at get_artifact and url downloads", () => {
+    const tool = saveArtifactTool(env.ARTIFACTS, () => "t1");
+    expect(tool.description).toContain(
+      "The returned key can be read back with get_artifact; use url for web files over 2 MB.",
+    );
+  });
 });
 
 it.each([

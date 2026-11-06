@@ -42,6 +42,11 @@ describe("artifactKeyFromRef", () => {
 });
 
 describe("getArtifactTool", () => {
+  it("tells the model it can only read this task's files", () => {
+    const tool = getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1" });
+    expect(tool.description).toContain("Only files saved by this task can be read.");
+  });
+
   it("returns the stored bytes unchanged", async () => {
     const key = "t1/file-1/report.md";
     await env.ARTIFACTS.put(key, "# 标题\n\n正文 **粗体**", {
@@ -149,6 +154,20 @@ it("returns a stored image to a vision model", async () => {
   const result = await getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1" })
     .execute({ ref: "t1/id/shot.png" }, fakeApi(true), context());
   expect(result.output?.some((item) => item.type === "image")).toBe(true);
+});
+
+it("returns text/* raw even when the artifact name has a document extension", async () => {
+  await env.ARTIFACTS.put("t1/id/report.pdf", "# plain text", { httpMetadata: { contentType: "text/markdown" } });
+  let converted = false;
+  const result = await getArtifactTool(env.ARTIFACTS, BASE, {
+    taskId: () => "t1",
+    convert: async () => {
+      converted = true;
+      return { ok: true, markdown: "# 不该出现" };
+    },
+  }).execute({ ref: "t1/id/report.pdf" }, {} as never, context());
+  expect(converted).toBe(false);
+  expect(textOf(result)).toContain("# plain text");
 });
 
 it("keeps a declared image that cannot be sniffed as binary", async () => {

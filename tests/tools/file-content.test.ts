@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyFile,
   documentConverterFromAi,
+  extensionForMime,
   renderFile,
 } from "../../src/tools/file-content";
 import { PNG_B64, bytes } from "../helpers/images";
@@ -35,6 +36,20 @@ describe("classifyFile", () => {
   it("trusts a declared image type before bytes are read", () => {
     expect(classifyFile(undefined, "image/jpeg", "a").kind).toBe("image");
   });
+  it("keeps text/* raw even when the name looks like a document", () => {
+    expect(classifyFile(undefined, "text/markdown", "report.pdf").kind).toBe("other");
+  });
+});
+
+describe("extensionForMime", () => {
+  it("maps documents and images back to their extensions", () => {
+    expect(extensionForMime("application/pdf")).toBe("pdf");
+    expect(extensionForMime("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+      .toBe("docx");
+    expect(extensionForMime("IMAGE/PNG")).toBe("png");
+    expect(extensionForMime("image/webp")).toBe("webp");
+    expect(extensionForMime("text/plain")).toBeUndefined();
+  });
 });
 
 describe("documentConverterFromAi", () => {
@@ -61,6 +76,22 @@ describe("renderFile", () => {
     );
     expect(textOf(result)).toBe(header + "# 正文");
     expect(result.isError).toBeFalsy();
+  });
+  it("appends the mime extension when the name has none", async () => {
+    let seen: { name: string; blob: Blob } | undefined;
+    const result = await renderFile(
+      { bytes: new Uint8Array([1, 2, 3]), name: "download", mimeType: "application/pdf", kind: "document", header },
+      {
+        convert: async (doc) => {
+          seen = doc;
+          return { ok: true, markdown: "# 正文" };
+        },
+        acceptsImages: async () => true,
+      },
+    );
+    expect(result.isError).toBeFalsy();
+    expect(seen?.name.endsWith(".pdf")).toBe(true);
+    expect(seen?.blob.type).toBe("application/pdf");
   });
   it("reports a missing converter as an error", async () => {
     const result = await renderFile(
