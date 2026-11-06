@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import {
+  FINISH_BOT_TOOL,
   PROPOSE_RULES_TOOL,
   rejectionText,
   type ApprovalGateLike,
@@ -246,18 +247,39 @@ export function createBotTaskTools(
   };
 
   const finishBot: ToolRegistration<typeof FinishBot> = {
-    name: "finish_bot",
+    name: FINISH_BOT_TOOL,
     description:
-      "Permanently retire this bot: it never wakes again until the owner resumes it. Only call when the whole mission is done for good. Do NOT call it to end this run (use finish_task) and never for recurring missions.",
+      "Ask the owner to permanently retire this bot. Nothing changes unless they approve. Do NOT call it to end this run (use finish_task) and never for recurring missions.",
     parameters: FinishBot,
-    // Changes the bot's lifecycle; must not replay after a restart.
-    async execute({ reason }) {
-      try {
-        await bot.finish(reason);
-        return output("已结束机器人");
-      } catch (error) {
-        return output(errorText(error));
+    // The approval gate already refuses to wake a tool after a restart.
+    async execute({ reason }, _api, context) {
+      const signal = context.abortSignal;
+      const decision = await approvals.request(
+        FINISH_BOT_TOOL,
+        { reason },
+        signal ?? NEVER_ABORTED,
+      );
+      if (decision === "approved") {
+        try {
+          await bot.finish(reason);
+          return output("已结束机器人");
+        } catch (error) {
+          return output(errorText(error));
+        }
       }
+
+      if (signal?.aborted) {
+        throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      }
+      return {
+        isError: true,
+        output: [
+          {
+            type: "text",
+            text: rejectionText(decision),
+          },
+        ],
+      };
     },
   };
 

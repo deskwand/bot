@@ -10,6 +10,7 @@ import {
   cancelNotStartedText,
   cancelOkText,
   clearedRulesText,
+  finishBotText,
   missingApprovalIdText,
   parkedTaskText,
   progressArtifactText,
@@ -172,6 +173,33 @@ describe("approval copy", () => {
     expect(approvalSummary("propose_rules", enArgs, "en")).toContain(
       clearedRulesText("en"),
     );
+  });
+
+  it("localizes the finish bot summary", () => {
+    expect(finishBotText("zh", "完成")).toBe("申请永久结束机器人\n理由：完成");
+    expect(
+      approvalSummary("finish_bot", JSON.stringify({ reason: "完成" }), "zh"),
+    ).toBe("申请永久结束机器人\n理由：完成");
+
+    const en = approvalSummary(
+      "finish_bot",
+      JSON.stringify({ reason: "done" }),
+      "en",
+    );
+    expectEnglish(en);
+    expect(en).toContain("Reason: done");
+  });
+
+  it("truncates a long finish reason", () => {
+    const reason = "x".repeat(400);
+    const summary = approvalSummary(
+      "finish_bot",
+      JSON.stringify({ reason }),
+      "zh",
+    );
+
+    expect(summary).toContain(`${"x".repeat(300)}…`);
+    expect(summary).not.toContain("x".repeat(301));
   });
 
   it("approval card is English", () => {

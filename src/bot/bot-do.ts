@@ -288,12 +288,6 @@ export class BotDO extends DurableObject<Env> {
       wakeCeilingMs(meta.defaultIntervalMs),
     );
     meta.nextWakeAt = at;
-    if (meta.status === "finished") {
-      // Only the bot itself finishes. Scheduling again afterwards means it
-      // took finish_bot for "end this run": the later call wins.
-      meta.status = "active";
-      meta.finishReason = null;
-    }
     this.store.writeMeta(meta);
     if (meta.currentTaskId === null && meta.status === "active") {
       await this.ctx.storage.setAlarm(at);

@@ -35,6 +35,7 @@ export const task: Messages["task"] = {
   },
   approval: {
     proposeRules: "Reason: {reason}\nNew rules:\n{rules}",
+    finishBot: "Requests to retire this bot for good\nReason: {reason}",
     clearedRules: "(clear the rules)",
     handled: "This approval was already handled or has expired",
     expired: "This approval has expired",

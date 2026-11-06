@@ -33,6 +33,7 @@ export const task = {
   },
   approval: {
     proposeRules: "理由：{reason}\n新守则：\n{rules}",
+    finishBot: "申请永久结束机器人\n理由：{reason}",
     clearedRules: "（清空守则）",
     handled: "该审批已处理或已失效",
     expired: "该审批已失效",

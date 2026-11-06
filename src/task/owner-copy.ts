@@ -147,3 +147,8 @@ export function proposedRulesText(
 export function clearedRulesText(locale: Locale): string {
   return t(locale, "task.approval.clearedRules");
 }
+
+/** Summary shown on a request to retire the bot for good. */
+export function finishBotText(locale: Locale, reason: string): string {
+  return t(locale, "task.approval.finishBot", { reason });
+}

@@ -8,6 +8,7 @@ import {
   approvalHandledText,
   autoApprovedText,
   clearedRulesText,
+  finishBotText,
   proposedRulesText,
 } from "./owner-copy";
 import { REVIEW_FAILED_REASON, type ReviewVerdict } from "./review";
@@ -23,6 +24,8 @@ export type ApprovalNote = {
 };
 
 export const PROPOSE_RULES_TOOL = "propose_rules";
+
+export const FINISH_BOT_TOOL = "finish_bot";
 
 /** Longest argument summary sent to the channel. */
 const ARGS_SUMMARY_LIMIT = 200;
@@ -60,14 +63,15 @@ function errorMessage(error: unknown): string {
 
 /**
  * Card text for one approval. A proposed rules change shows its reason and the
- * full new text; other tools keep the bounded JSON snippet.
+ * full new text; a bot retirement request shows its reason; other tools keep
+ * the bounded JSON snippet.
  */
 export function approvalSummary(
   tool: string,
   argsJson: string,
   locale: Locale = "zh",
 ): string {
-  if (tool === PROPOSE_RULES_TOOL) {
+  if (tool === PROPOSE_RULES_TOOL || tool === FINISH_BOT_TOOL) {
     let args: unknown;
     try {
       args = JSON.parse(argsJson);
@@ -79,12 +83,17 @@ export function approvalSummary(
         content?: unknown;
         reason?: unknown;
       };
+      const text = typeof reason === "string" ? reason : "";
+      const summary =
+        text.length > REASON_SUMMARY_LIMIT
+          ? `${text.slice(0, REASON_SUMMARY_LIMIT)}…`
+          : text;
+
+      if (tool === FINISH_BOT_TOOL) {
+        return finishBotText(locale, summary);
+      }
+
       if (typeof content === "string") {
-        const text = typeof reason === "string" ? reason : "";
-        const summary =
-          text.length > REASON_SUMMARY_LIMIT
-            ? `${text.slice(0, REASON_SUMMARY_LIMIT)}…`
-            : text;
         const rules = content.trim();
         return proposedRulesText(
           locale,

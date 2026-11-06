@@ -911,22 +911,21 @@ describe("BotDO lifecycle", () => {
     expect(snapshot?.runs).toHaveLength(0);
     expect(await alarmAt(stub)).toBe(now + DEFER_MS);
   });
-  it("set_next_wake after finish_bot in the same run keeps the bot waking", async () => {
+  it("a finished bot stays finished when the run schedules again", async () => {
     const fake = fakeButler();
     const stub = botStub("b-finish-then-wake");
     await initBot(stub);
     await fireAlarm(stub);
 
-    // A model that mistakes finish_bot for finish_task, then schedules itself.
     await stub.finish("本次检查完成");
-    const result = await stub.setNextWake({ afterMs: 7_200_000 });
+    await stub.setNextWake({ afterMs: 7_200_000 });
     await stub.onRunEnded("t1", "completed", "看完了");
 
     const snapshot = await stub.snapshot();
-    expect(snapshot?.meta.status).toBe("active");
-    expect(snapshot?.meta.nextWakeAt).toBe(result.at);
-    expect(await alarmAt(stub)).toBe(result.at);
-    expect(fake.notices).toHaveLength(0);
+    expect(snapshot?.meta.status).toBe("finished");
+    expect(await alarmAt(stub)).toBeNull();
+    expect(fake.notices).toHaveLength(1);
+    expect(fake.notices[0]!.text).toContain("本次检查完成");
   });
 
   it("a finished bot tells the owner when its last run ends", async () => {

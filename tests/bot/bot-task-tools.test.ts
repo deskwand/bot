@@ -10,6 +10,10 @@ import {
   type ApprovalGateLike,
 } from "../../src/task/approvals";
 
+// Bot tools get the raw ApprovalGate from TaskDO (`src/task/task-do.ts` passes
+// `this.approvals`), not the `taskGates` wrapper, so the autonomous approval
+// mode does not auto-approve `finish_bot`: it always asks the owner.
+
 type WriteCall = {
   name: string;
   content: string;
@@ -21,15 +25,18 @@ type FakeBot = {
   writes: WriteCall[];
   searches: string[];
   runs: RunRow[];
+  finishes: string[];
 };
 
 function fakeBot(): FakeBot {
   const writes: WriteCall[] = [];
   const searches: string[] = [];
+  const finishes: string[] = [];
   const state: FakeBot = {
     writes,
     searches,
     runs: [],
+    finishes,
     control: {
       async writeDoc(name, content, options) {
         writes.push({ name, content, options });
@@ -43,7 +50,9 @@ function fakeBot(): FakeBot {
         return { at: 0, clamped: false };
       },
       async note() {},
-      async finish() {},
+      async finish(reason) {
+        finishes.push(reason);
+      },
     },
   };
   return state;
@@ -223,6 +232,46 @@ describe("bot task tools", () => {
       expect(bot.writes).toEqual([]);
     },
   );
+
+  it("finish_bot finishes after approval", async () => {
+    const bot = fakeBot();
+    const approval = fakeGate("approved");
+    const tools = toolsFor(bot.control, approval.gate);
+
+    const result = await run(tools, "finish_bot", { reason: "降到目标价" });
+
+    expect(text(result)).toBe("已结束机器人");
+    expect(approval.requests).toEqual([
+      { tool: "finish_bot", args: { reason: "降到目标价" } },
+    ]);
+    expect(bot.finishes).toEqual(["降到目标价"]);
+  });
+
+  it.each(["rejected", "expired"] as const)(
+    "finish_bot keeps the bot on %s",
+    async (decision) => {
+      const bot = fakeBot();
+      const tools = toolsFor(bot.control, fakeGate(decision).gate);
+
+      const result = await run(tools, "finish_bot", { reason: "降到目标价" });
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).toBe(rejectionText(decision));
+      expect(bot.finishes).toEqual([]);
+    },
+  );
+
+  it("finish_bot throws when the run is aborted during approval", async () => {
+    const bot = fakeBot();
+    const tools = toolsFor(bot.control, fakeGate("rejected").gate);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      run(tools, "finish_bot", { reason: "降到目标价" }, controller.signal),
+    ).rejects.toThrow();
+    expect(bot.finishes).toEqual([]);
+  });
 
   it("propose_rules rejects an over-long proposal without asking", async () => {
     const bot = fakeBot();
