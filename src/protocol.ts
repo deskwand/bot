@@ -57,7 +57,7 @@ export type InboundEvent = MessageEvent | ActionEvent;
 export type Button = { label: string; data: string; hint?: string };
 export type OutboundMessage = { text: string; buttons?: Button[][] };
 
-export type Artifact = { name: string; url: string };
+export type Artifact = { name: string; key: string };
 
 export type TaskEventBody =
   | { type: "started" }

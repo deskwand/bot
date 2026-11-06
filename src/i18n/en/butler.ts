@@ -26,10 +26,12 @@ export const butler: Messages["butler"] = {
     retryHint: 'Reply "retry" to continue',
     cancelButton: "Cancel",
     missing: "Task not found",
+    artifactFailed: "⚠️ Artifact “{name}” was not delivered ({reason})",
   },
   notice: {
     maintenance: "Under maintenance",
     maintenanceRetry: "Under maintenance, try again later",
+    sendFailed: "send failed",
     noChannel: "No channel available",
     error: "Something went wrong, try again later",
     imageUnavailable:

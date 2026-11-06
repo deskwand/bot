@@ -10,7 +10,7 @@ import {
 import { prepareInboundImage } from "./media";
 import { transcribeVoice, type VoiceAi } from "./voice";
 import { renderForTelegram } from "./telegram-render";
-import { ChannelError, type ChannelAdapter } from "./types";
+import { ChannelError, type ChannelAdapter, type OutboundArtifact } from "./types";
 
 const API_BASE = "https://api.telegram.org";
 
@@ -115,6 +115,48 @@ export function createTelegramAdapter(
       );
     }
 
+    return json;
+  }
+
+  const CAPTION_LIMIT = 1024;
+
+  /** Multipart upload for the media methods; the JSON helpers cannot carry bytes. */
+  async function postMedia(
+    method: string,
+    field: string,
+    chatId: string,
+    file: OutboundArtifact,
+    fallbackName: string,
+  ): Promise<TelegramResponse> {
+    if (!opts.token) throw new ChannelError("telegram not configured", 0);
+
+    const form = new FormData();
+    form.set("chat_id", chatId);
+    const caption = file.name.slice(0, CAPTION_LIMIT);
+    if (caption.length > 0) form.set("caption", caption);
+    form.set(
+      field,
+      new File([file.bytes], file.name || fallbackName, {
+        type: file.contentType,
+      }),
+    );
+
+    const response = await fetchImpl(`${API_BASE}/bot${opts.token}/${method}`, {
+      method: "POST",
+      body: form,
+    });
+    let json: TelegramResponse | null = null;
+    try {
+      json = (await response.json()) as TelegramResponse;
+    } catch {
+      json = null;
+    }
+    if (!response.ok || json === null || json.ok !== true) {
+      throw new ChannelError(
+        json?.description ?? `Telegram ${method} failed (${response.status})`,
+        response.status,
+      );
+    }
     return json;
   }
 
@@ -283,6 +325,32 @@ export function createTelegramAdapter(
       }
 
       return { messageId };
+    },
+
+    async sendArtifact(chatId: string, file: OutboundArtifact): Promise<void> {
+      const mime = file.contentType.split(";")[0]!.trim().toLowerCase();
+      const photo =
+        mime === "image/jpeg" || mime === "image/png" || mime === "image/webp";
+
+      // 图片和动图都可能被 Bot API 拒绝（尺寸、解码、超 10 MB），
+      // 退回 document 保证主人一定能拿到文件。
+      if (photo) {
+        try {
+          await postMedia("sendPhoto", "photo", chatId, file, "photo");
+          return;
+        } catch (error) {
+          if (!(error instanceof ChannelError) || error.status !== 400) throw error;
+        }
+      } else if (mime === "image/gif") {
+        try {
+          await postMedia("sendAnimation", "animation", chatId, file, "animation");
+          return;
+        } catch (error) {
+          if (!(error instanceof ChannelError) || error.status !== 400) throw error;
+        }
+      }
+
+      await postMedia("sendDocument", "document", chatId, file, "artifact");
     },
 
     async edit(

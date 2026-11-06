@@ -20,17 +20,7 @@ function setup(
 }
 
 describe("GET /a/<key>", () => {
-  it("returns 404 for a missing artifact", async () => {
-    const h = setup();
-
-    const response = await h.gateway.fetch(
-      new Request("https://example.com/a/missing"),
-    );
-
-    expect(response.status).toBe(404);
-  });
-
-  it("serves an allowlisted artifact inline with hardening headers", async () => {
+  it("no longer serves the former public artifact path", async () => {
     await env.ARTIFACTS.put("t1/u/r.md", "hi", {
       httpMetadata: { contentType: "text/markdown; charset=utf-8" },
     });
@@ -40,38 +30,8 @@ describe("GET /a/<key>", () => {
       new Request("https://example.com/a/t1/u/r.md"),
     );
 
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe("hi");
-    expect(response.headers.get("content-type")).toBe(
-      "text/markdown; charset=utf-8",
-    );
-    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(response.headers.get("content-security-policy")).toBe("sandbox");
-    expect(response.headers.get("content-disposition")).toBeNull();
+    expect(response.status).toBe(404);
   });
-
-  it.each(["text/html", "image/svg+xml"])(
-    "forces a %s artifact to download as octet-stream",
-    async (contentType) => {
-      const key = `t1/u/${contentType.replace("/", "-")}`;
-      await env.ARTIFACTS.put(key, "<script>alert(1)</script>", {
-        httpMetadata: { contentType },
-      });
-      const h = setup();
-
-      const response = await h.gateway.fetch(
-        new Request(`https://example.com/a/${key}`),
-      );
-
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toBe(
-        "application/octet-stream",
-      );
-      expect(response.headers.get("content-disposition")).toBe("attachment");
-      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-      expect(response.headers.get("content-security-policy")).toBe("sandbox");
-    },
-  );
 });
 
 describe("GET /mcp/oauth/callback", () => {
@@ -118,23 +78,14 @@ describe("worker entry", () => {
     expect(response.status).toBe(404);
   });
 
-  it("serves artifacts while DESKWAND_CONFIG is missing", async () => {
-    const runtime = env as unknown as Record<string, unknown>;
-    const saved = runtime.DESKWAND_CONFIG;
-    delete runtime.DESKWAND_CONFIG;
+  it("answers 404 for the former public artifact path", async () => {
+    await env.ARTIFACTS.put("cfg/missing/r.md", "still served", {
+      httpMetadata: { contentType: "text/markdown" },
+    });
+    const response = await SELF.fetch(
+      "https://example.com/a/cfg/missing/r.md",
+    );
 
-    try {
-      await env.ARTIFACTS.put("cfg/missing/r.md", "still served", {
-        httpMetadata: { contentType: "text/markdown" },
-      });
-      const response = await SELF.fetch(
-        "https://example.com/a/cfg/missing/r.md",
-      );
-
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("still served");
-    } finally {
-      runtime.DESKWAND_CONFIG = saved;
-    }
+    expect(response.status).toBe(404);
   });
 });

@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import { readCapped, truncate } from "./http-body";
+import { artifactKeySegments } from "../artifact";
 
 const GetArtifact = Type.Object({
   ref: Type.String(),
@@ -51,18 +52,16 @@ export function artifactKeyFromRef(ref: string, baseUrl: string): string | null 
     return null;
   }
 
-  let segments: string[];
-  try {
-    // Bare keys are already literal R2 keys; only URLs are percent-encoded.
-    segments = path.split("/").map((segment) => isUrl ? decodeURIComponent(segment) : segment);
-  } catch {
-    return null;
+  // Bare keys are already literal R2 keys; only URL paths are percent-encoded.
+  let decoded = path;
+  if (isUrl) {
+    try {
+      decoded = path.split("/").map((segment) => decodeURIComponent(segment)).join("/");
+    } catch {
+      return null;
+    }
   }
-
-  if (segments.length !== 3 || segments.some((segment) =>
-    segment === "" || segment === "." || segment === ".." || /[/\\\x00-\x1f\x7f]/.test(segment)
-  )) return null;
-  return segments.join("/");
+  return artifactKeySegments(decoded) === null ? null : decoded;
 }
 
 /**
@@ -78,8 +77,8 @@ export function getArtifactTool(
   return {
     name: "get_artifact",
     description:
-      "Read a file previously saved with `save_artifact`. Pass its public URL " +
-      "or its key (`<taskId>/<fileId>/<name>`).",
+      "Read a file previously saved with `save_artifact`. Pass its key " +
+      "(`<taskId>/<fileId>/<name>`).",
     parameters: GetArtifact,
     replay: "safe",
     async execute({ ref }): Promise<ToolExecutionResult> {

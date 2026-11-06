@@ -139,6 +139,15 @@ export function taskFailedText(
   return t(locale, "butler.task.failed", { label, title, reason });
 }
 
+/** 一个产物没送到时补发的告知；reason 只放稳定短语，不放原始错误。 */
+export function artifactFailedText(
+  locale: Locale,
+  name: string,
+  reason: string,
+): string {
+  return t(locale, "butler.task.artifactFailed", { name, reason });
+}
+
 /** The retry line under a failed task, or an empty string when it cannot retry. */
 export function retryHint(locale: Locale, retryable: boolean): string {
   return retryable ? `\n${t(locale, "butler.task.retryHint")}` : "";

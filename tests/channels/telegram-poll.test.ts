@@ -262,6 +262,7 @@ function fakeAdapter(
     parseInbound: parse,
     send: async () => ({ messageId: "" }),
     edit: async () => {},
+    async sendArtifact() {},
     answerAction: async () => {},
   };
 }
@@ -602,6 +603,7 @@ describe("pollTelegram", () => {
       },
       send: async () => ({ messageId: "" }),
       edit: async () => {},
+      async sendArtifact() {},
       answerAction: async (actionId, text) => {
         answered.push({ actionId, ...(text === undefined ? {} : { text }) });
       },

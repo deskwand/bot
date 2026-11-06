@@ -6,6 +6,7 @@ import {
   setWeChatCredentialsOverride,
 } from "../../src/channels/override";
 import type { ChannelAdapter } from "../../src/channels/types";
+import { ILinkError } from "../../src/channels/wechat/ilink";
 import { readRuntimeConfig } from "../../src/runtime-config";
 import type {
   ActionEvent,
@@ -51,6 +52,7 @@ function fakeAdapter(parse: (update: unknown) => Promise<InboundEvent | null>) {
   const sent: Sent[] = [];
   const edits: Edited[] = [];
   const answered: Answered[] = [];
+  const artifacts: { to: string; name: string; contentType: string }[] = [];
 
   const adapter: ChannelAdapter = {
     parseInbound: parse,
@@ -61,12 +63,15 @@ function fakeAdapter(parse: (update: unknown) => Promise<InboundEvent | null>) {
     async edit(to, messageId, msg) {
       edits.push({ to, messageId, msg });
     },
+    async sendArtifact(to, file) {
+      artifacts.push({ to, name: file.name, contentType: file.contentType });
+    },
     async answerAction(actionId, text) {
       answered.push({ actionId, ...(text === undefined ? {} : { text }) });
     },
   };
 
-  return { adapter, sent, edits, answered };
+  return { adapter, sent, edits, answered, artifacts };
 }
 
 function fakeTelegram(inbound: InboundEvent | null) {
@@ -435,6 +440,7 @@ describe("sendCurrent", () => {
         return { messageId: "" };
       },
       async edit() {},
+      async sendArtifact() {},
       async answerAction() {},
     });
 
@@ -469,6 +475,7 @@ describe("sendCurrent", () => {
         return { messageId: "" };
       },
       async edit() {},
+      async sendArtifact() {},
       async answerAction() {},
     });
 
@@ -592,6 +599,7 @@ describe("sendCurrent", () => {
         return { messageId: "" };
       },
       async edit() {},
+      async sendArtifact() {},
       async answerAction() {},
     });
 
@@ -713,5 +721,135 @@ describe("editCurrent", () => {
 
     expect(edited).toBe(false);
     expect(tg.edits).toEqual([]);
+  });
+});
+
+describe("sendArtifact", () => {
+  it("refuses a key that is not an artifact key", async () => {
+    setChannelOverride("telegram", fakeTelegram(null).adapter);
+
+    // Assert inside the object: an RPC-level rejection also surfaces as an
+    // unhandled rejection, which vitest reports as a run error.
+    await runInDurableObject(channels(), async (instance) => {
+      await expect(
+        instance.sendArtifact("t1/../../etc/passwd"),
+      ).rejects.toMatchObject({ status: 400 });
+    });
+  });
+
+  it("refuses a missing artifact", async () => {
+    setChannelOverride("telegram", fakeTelegram(null).adapter);
+
+    await runInDurableObject(channels(), async (instance) => {
+      await expect(
+        instance.sendArtifact("t1/f1/none.md"),
+      ).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  it("sends the stored bytes through the current adapter", async () => {
+    const tg = fakeTelegram(null);
+    setChannelOverride("telegram", tg.adapter);
+    await env.ARTIFACTS.put("t1/f1/report.md", "# body", {
+      httpMetadata: { contentType: "text/markdown" },
+    });
+
+    await channels().sendArtifact("t1/f1/report.md");
+
+    expect(tg.artifacts).toEqual([
+      { to: String(OWNER_ID), name: "report.md", contentType: "text/markdown" },
+    ]);
+  });
+});
+
+describe("sendArtifact retries and missing prerequisites", () => {
+  it("attempts a WeChat 4xx rejection exactly once", async () => {
+    setEnv({
+      ACTIVE_CHANNEL: "wechat",
+      WECHAT_CREDENTIALS: JSON.stringify({
+        token: "token-a",
+        baseUrl: "https://ilinkai.weixin.qq.com",
+        accountId: "bot-a",
+        userId: "bot-user",
+      }),
+    });
+    const hub = freshChannels("artifact-wechat-4xx");
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'wx-owner', ?)`,
+        Date.now(),
+      );
+      state.storage.sql.exec(
+        `INSERT INTO wechat_contexts (user_id, context_token, updated_at)
+         VALUES ('wx-owner', 'ctx-1', ?)`,
+        Date.now(),
+      );
+    });
+    await env.ARTIFACTS.put("t1/f1/report.md", "# body");
+
+    let calls = 0;
+    setChannelOverride("wechat", {
+      parseInbound: async () => null,
+      async send() {
+        return { messageId: "" };
+      },
+      async sendArtifact() {
+        calls += 1;
+        throw new ILinkError("rejected", -2, 403);
+      },
+      async edit() {},
+      async answerAction() {},
+    });
+
+    await runInDurableObject(hub, async (instance) => {
+      await expect(instance.sendArtifact("t1/f1/report.md")).rejects.toBeInstanceOf(
+        ILinkError,
+      );
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("refuses to send an artifact when no channel is selected", async () => {
+    setEnv({ ACTIVE_CHANNEL: "slack" });
+    const hub = freshChannels("artifact-no-channel");
+    await env.ARTIFACTS.put("t2/f1/report.md", "# body");
+
+    const outcome = await runInDurableObject(hub, (instance) =>
+      instance.sendArtifact("t2/f1/report.md").then(
+        () => "sent",
+        (error: Error) => error.message,
+      ),
+    );
+    expect(outcome).toBe("channel selection disabled");
+  });
+
+  it("refuses to send on WeChat without a stored context token", async () => {
+    setEnv({
+      ACTIVE_CHANNEL: "wechat",
+      WECHAT_CREDENTIALS: JSON.stringify({
+        token: "token-a",
+        baseUrl: "https://ilinkai.weixin.qq.com",
+        accountId: "bot-a",
+        userId: "bot-user",
+      }),
+    });
+    const hub = freshChannels("artifact-no-context");
+    await runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'wx-owner', ?)`,
+        Date.now(),
+      );
+    });
+    await env.ARTIFACTS.put("t3/f1/report.md", "# body");
+
+    const outcome = await runInDurableObject(hub, (instance) =>
+      instance.sendArtifact("t3/f1/report.md").then(
+        () => "sent",
+        (error: Error & { status?: number }) => `${error.message}/${error.status}`,
+      ),
+    );
+    expect(outcome).toBe("wechat context missing/0");
   });
 });

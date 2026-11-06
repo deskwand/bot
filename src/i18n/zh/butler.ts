@@ -24,10 +24,12 @@ export const butler = {
     retryHint: '回复"重试"可继续',
     cancelButton: "取消",
     missing: "任务不存在",
+    artifactFailed: "⚠️ 产物「{name}」未能送达（{reason}）",
   },
   notice: {
     maintenance: "维护中",
     maintenanceRetry: "维护中，稍后再试",
+    sendFailed: "发送失败",
     noChannel: "没有可用渠道",
     error: "出错了，稍后再试",
     imageUnavailable: "收到了图片，但没能取到图片内容，请稍后再发一次",

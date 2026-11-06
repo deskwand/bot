@@ -40,6 +40,11 @@ import type {
 } from "../protocol";
 import { saveArtifactTool } from "../tools/artifacts";
 import {
+  MAX_ARTIFACT_BYTES,
+  artifactKeySegments,
+  artifactNameFromKey,
+} from "../artifact";
+import {
   loadMcpTools,
   mcpConnector,
   mcpExtension,
@@ -94,7 +99,7 @@ const ABORT_TIMEOUT_MS = 10_000;
 const FinishTask = Type.Object({
   summary: Type.String(),
   artifacts: Type.Optional(
-    Type.Array(Type.Object({ name: Type.String(), url: Type.String() })),
+    Type.Array(Type.Object({ key: Type.String() })),
   ),
 });
 
@@ -224,7 +229,14 @@ export class TaskDO extends Agent<Env> {
       callers: ["model"],
       // Has side effects (reports completion); must not replay after a restart.
       execute: async ({ summary, artifacts }) => {
-        await this.finish(summary, artifacts ?? []);
+        const resolved = await this.resolveArtifacts(artifacts ?? []);
+        if (!Array.isArray(resolved)) {
+          return {
+            output: [{ type: "text", text: resolved.error }],
+            isError: true,
+          };
+        }
+        await this.finish(summary, resolved);
         return { output: [{ type: "text", text: "Task finished." }] };
       },
     };
@@ -290,7 +302,6 @@ export class TaskDO extends Agent<Env> {
           saveArtifactTool(
             this.env.ARTIFACTS,
             () => this.currentTaskId() ?? "",
-            this.env.PUBLIC_BASE_URL,
             () => this.assertNoMaintenance(),
           ),
           emitProgress,
@@ -815,6 +826,32 @@ export class TaskDO extends Agent<Env> {
       return;
     }
     await this.finish(summary, []);
+  }
+
+  /**
+   * 把模型给的 key 解析成产物。任何一条不合法都整体拒绝：宁可让模型改正，
+   * 也不要发出一个本任务之外的、或者根本不存在的文件。
+   */
+  private async resolveArtifacts(
+    entries: { key: string }[],
+  ): Promise<Artifact[] | { error: string }> {
+    const taskId = this.currentTaskId();
+    if (!taskId) return { error: "任务尚未开始" }; // i18n-ignore: model-facing
+
+    const resolved: Artifact[] = [];
+    for (const { key } of entries) {
+      const segments = artifactKeySegments(key);
+      if (segments === null || segments[0] !== taskId) {
+        return { error: `产物 key 不合法：${key}` }; // i18n-ignore: model-facing
+      }
+      const object = await this.env.ARTIFACTS.head(key);
+      if (!object) return { error: `产物不存在：${key}` }; // i18n-ignore: model-facing
+      if (object.size > MAX_ARTIFACT_BYTES) {
+        return { error: `产物超过 15 MB：${key}` }; // i18n-ignore: model-facing
+      }
+      resolved.push({ name: artifactNameFromKey(key), key });
+    }
+    return resolved;
   }
 
   private async finish(summary: string, artifacts: Artifact[]): Promise<void> {

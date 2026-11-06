@@ -324,6 +324,7 @@ describe("migration from the previous schema", () => {
       async edit(_to, _messageId, msg) {
         edits.push(msg);
       },
+      async sendArtifact() {},
       async answerAction() {},
     });
 

@@ -7,6 +7,12 @@ export type SentMessage = {
   buttons?: Button[][];
 };
 
+export type SentArtifact = {
+  chatId: string;
+  name: string;
+  contentType: string;
+};
+
 export type EditedMessage = {
   chatId: string;
   messageId: string;
@@ -19,9 +25,11 @@ export function fakeChannel(): {
   adapter: ChannelAdapter;
   sent: SentMessage[];
   edits: EditedMessage[];
+  artifacts: SentArtifact[];
 } {
   const sent: SentMessage[] = [];
   const edits: EditedMessage[] = [];
+  const artifacts: SentArtifact[] = [];
 
   const adapter: ChannelAdapter = {
     parseInbound: async (): Promise<InboundEvent | null> => null,
@@ -41,8 +49,11 @@ export function fakeChannel(): {
         ...(msg.buttons === undefined ? {} : { buttons: msg.buttons }),
       });
     },
+    async sendArtifact(chatId, file) {
+      artifacts.push({ chatId, name: file.name, contentType: file.contentType });
+    },
     async answerAction() {},
   };
 
-  return { adapter, sent, edits };
+  return { adapter, sent, edits, artifacts };
 }

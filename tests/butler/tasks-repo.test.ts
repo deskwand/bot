@@ -111,3 +111,29 @@ describe("TasksRepo handles", () => {
     expect(state).toEqual({ t1: 2, t2: 1, b1: null });
   });
 });
+
+describe("TasksRepo artifacts", () => {
+  it("converts legacy artifact URLs into keys and drops junk", async () => {
+    const artifacts = await runInDurableObject(
+      butler("artifacts-legacy"),
+      (_instance, state) => {
+        state.storage.sql.exec(
+          `INSERT INTO tasks
+             (id, title, status, created_at, updated_at, chat_id, artifacts_json, last_seq)
+           VALUES ('t1', 'a', 'completed', 0, 0, NULL, ?, 0)`,
+          JSON.stringify([
+            { name: "a.md", url: "https://example.com/a/t1/f1/a.md" },
+            { name: "b.md", url: "not a url" },
+            { name: "c.md", key: "t1/f2/c.md" },
+          ]),
+        );
+        return new TasksRepo(state.storage.sql).get("t1")?.artifacts;
+      },
+    );
+
+    expect(artifacts).toEqual([
+      { name: "a.md", key: "t1/f1/a.md" },
+      { name: "c.md", key: "t1/f2/c.md" },
+    ]);
+  });
+});

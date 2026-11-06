@@ -1,3 +1,4 @@
+import { artifactKeySegments, artifactNameFromKey } from "../artifact";
 import type { Artifact, ChannelMessageRef } from "../protocol";
 
 export type TaskStatus =
@@ -273,10 +274,35 @@ function parseMessageRef(json: string | null): ChannelMessageRef | null {
 
 function parseArtifacts(json: string | null): Artifact[] {
   if (!json) return [];
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as Artifact[]) : [];
+    parsed = JSON.parse(json);
   } catch {
     return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const artifacts: Artifact[] = [];
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const key =
+      typeof record.key === "string" ? record.key : keyFromLegacyUrl(record.url);
+    // 长度不是三段的 key 不可能是产物；丢弃而不是让它在发送时爆炸。
+    if (key === null || artifactKeySegments(key) === null) continue;
+    artifacts.push({ name: artifactNameFromKey(key), key });
+  }
+  return artifacts;
+}
+
+/** 旧记录只有公开 URL：能还原出 key 就还原，其余丢弃。 */
+function keyFromLegacyUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = /^https?:\/\/[^/?#]+\/a\/([^?#]+)$/.exec(value);
+  if (!match) return null;
+  try {
+    return match[1]!.split("/").map((segment) => decodeURIComponent(segment)).join("/");
+  } catch {
+    return null;
   }
 }

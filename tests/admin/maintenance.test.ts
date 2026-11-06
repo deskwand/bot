@@ -282,6 +282,7 @@ describe("maintenance lease pauses", () => {
         return { messageId: "" };
       },
       async edit() {},
+      async sendArtifact() {},
       async answerAction() {},
     });
     const captured = await captureButlerMessages();

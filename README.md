@@ -1,6 +1,6 @@
 # 多渠道管家 Bot（Cloudflare Workers）
 
-一个部署在 Cloudflare Workers 上的单人助手：管家负责对话、记忆、任务派发与通知，每个任务由独立的 Durable Object 执行，结果（含产物链接）统一由管家经当前选中渠道回传。同一时刻只启用一个业务渠道，由 Worker 环境变量 `ACTIVE_CHANNEL` 选择（`telegram` 或 `wechat`）。
+一个部署在 Cloudflare Workers 上的单人助手：管家负责对话、记忆、任务派发与通知，每个任务由独立的 Durable Object 执行，结果（含产物文件）统一由管家经当前选中渠道回传。同一时刻只启用一个业务渠道，由 Worker 环境变量 `ACTIVE_CHANNEL` 选择（`telegram` 或 `wechat`）。
 
 - 渠道层：`ChannelDO`（Telegram 长轮询与微信 iLink 轮询，单实例）
 - 控制链路：`ButlerDO`（全局单实例，Pi agent + SQLite 业务表）
@@ -8,7 +8,7 @@
 - 自主机器人：`BotDO`（每个机器人一个实例，独立记忆，自己决定下次唤醒，执行仍交给 TaskDO）
 - 外部服务：`McpAuthDO`（全局单实例，远程 MCP 的 OAuth 注册、token 保管与续期，以及桌面端"测试连接"）
 - 定时任务：通过 Agents SDK `Agent.schedule` 注册 cron（渠道轮询保活另用每 5 分钟一次的 Cron Trigger），cron 按 **UTC** 解释
-- 产物：写入 R2，通过 `${PUBLIC_BASE_URL}/a/<key>` 访问
+- 产物：写入 R2，任务完成时由渠道以文件/图片本体直接送达（不进公开 URL）。单文件上限 15MB，超过在 `save_artifact` 阶段即被拒绝
 
 ## 消息格式
 
@@ -106,7 +106,7 @@ cp .dev.vars.example .dev.vars
 | `MODEL_KEY_<ID>` | secret | 模型调用；`<ID>` 是厂商 id 转大写、`-` 换 `_`（如 `MODEL_KEY_OPENCODE_GO`、`MODEL_KEY_DEEPSEEK`）；缺失时只影响该厂商的模型 |
 | `TELEGRAM_BOT_TOKEN` | secret | BotFather 提供的 token |
 | `WECHAT_CREDENTIALS` | secret | 可选；微信 iLink 登录凭据，由 `npm run wechat-login` 写入 |
-| `PUBLIC_BASE_URL` | var | 产物链接前缀，填部署后的公开地址 |
+| `PUBLIC_BASE_URL` | var | 部署后的公开地址（MCP OAuth 回调使用） |
 | `DESKWAND_CONFIG` | var | 非敏感业务配置（owner、模型、MCP），结构见 `contracts/deployment-config.schema.json` |
 | `ACTIVE_CHANNEL` | var | 业务渠道选择：`telegram` 或 `wechat`。生产模板不声明，由发布配置提供 |
 
@@ -175,7 +175,7 @@ cp .dev.vars.example .dev.vars
 
 渠道选择不在 `DESKWAND_CONFIG` 里：`ACTIVE_CHANNEL` 是唯一权威，缺省为 `telegram`（兼容旧部署）；显式写成其他值时业务收发全部关闭并记录固定配置错误，不会悄悄回退到 Telegram。
 
-编辑 `wrangler.jsonc` 的 `vars.PUBLIC_BASE_URL`，填入部署后的公开地址，例如 `https://bot.<your-subdomain>.workers.dev` 或自定义域名。产物链接依赖该值；如果还不确定地址，可以先部署一次拿到 URL，回填后再部署一次。
+编辑 `wrangler.jsonc` 的 `vars.PUBLIC_BASE_URL`，填入部署后的公开地址，例如 `https://bot.<your-subdomain>.workers.dev` 或自定义域名。MCP 授权回调依赖该值；如果还不确定地址，可以先部署一次拿到 URL，回填后再部署一次。
 
 Telegram 用户 ID 可通过 [@userinfobot](https://t.me/userinfobot) 获取。
 
@@ -226,11 +226,11 @@ npm run wechat-login
 
 ```bash
 npm run dev                 # wrangler dev，默认 http://localhost:8787
-# 可选：需要在本地访问产物链接时
+# 可选：需要让外部服务回调到本地（MCP 授权）时
 cloudflared tunnel --url http://localhost:8787
 ```
 
-Telegram 由 Worker 主动长轮询收消息，本地调试不需要公网地址。注意：同一个 bot token 同一时间只能有一个轮询方，本地调试请使用单独的测试 bot，否则会和线上部署抢消息。若需要在本机验证产物链接，可把 `.dev.vars` 中的 `PUBLIC_BASE_URL` 填成隧道地址。
+Telegram 由 Worker 主动长轮询收消息，本地调试不需要公网地址。注意：同一个 bot token 同一时间只能有一个轮询方，本地调试请使用单独的测试 bot，否则会和线上部署抢消息。若需要让外部服务回调到本机（例如 MCP 授权），可把 `.dev.vars` 中的 `PUBLIC_BASE_URL` 填成隧道地址。
 
 ## 从源码常量迁移到 DESKWAND_CONFIG
 
@@ -292,7 +292,7 @@ npm run typecheck    # tsc --noEmit
 3. 新任务进行中发送「t1 只看英文资料」→ 后续进度体现新方向。
 4. 新任务进行中点击「取消」→ 进度消息变为已取消。
 5. 配置一个带 `requireApproval` 的 MCP 工具并触发 → 收到 ✅/❌ 审批按钮；批准后工具执行，拒绝后 agent 改道；重复点击提示「已处理」。
-6. 任务完成后收到管家汇报，以及可打开的产物链接（`${PUBLIC_BASE_URL}/a/...`）。
+6. 任务完成后收到管家汇报，以及以附件形式送达的产物文件（图片直接在聊天里可见，不再有链接）。
 7. 发送「列出任务」→ 显示各任务状态。
 8. 发送「每天早上 9 点给我汇总 X」→ 次日（或先在配置中改成临近时间测试）自动产生任务。注意 cron 按 UTC 解释：北京时间 9 点对应 `0 1 * * *`。
 9. 发送图片 → 回复「目前只支持文字消息」。
@@ -304,7 +304,7 @@ npm run typecheck    # tsc --noEmit
 
 ```
 src/
-  index.ts              # Worker 入口 + Gateway 路由（/a/<key>）
+  index.ts              # Worker 入口 + Gateway 路由（/admin/*、MCP 回调）
   gateway.ts            # 产物路由
   channels/             # ChannelDO、Telegram 与微信 iLink 适配器
   butler/               # Butler DO：对话、记忆、任务索引、定时任务、通知节流

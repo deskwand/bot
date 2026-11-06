@@ -7,6 +7,7 @@ import type {
   DumpRow,
   TableSchema,
 } from "../admin/sql-dump";
+import { MAX_ARTIFACT_BYTES, artifactKeySegments, artifactNameFromKey } from "../artifact";
 import { actionHint } from "../butler/owner-copy";
 import { isOwner } from "../config";
 import { ownerLocale, t, type Locale } from "../i18n";
@@ -45,7 +46,8 @@ import {
   type TelegramUpdateBatch,
 } from "./telegram-poll";
 import { parseTextAction, textHint, type TextAction } from "./text-action";
-import { ChannelError, type ChannelAdapter } from "./types";
+import { ChannelError, type ChannelAdapter, type OutboundArtifact } from "./types";
+import { withRetry } from "./retry";
 import { toWeChatText } from "./wechat/markdown";
 import {
   createILinkClient,
@@ -441,6 +443,50 @@ export class ChannelDO extends Agent<Env> {
     }
 
     return this.sendOnRoute(route.channel, route.routeKey, message);
+  }
+
+  /**
+   * 发送一个产物。产物不进 outbound 队列：15MB 的对象既不该进队列行，
+   * 也不该把"文本能不能及时送达"绑在"这个文件能不能传上去"上。
+   */
+  async sendArtifact(key: string): Promise<void> {
+    const route = await this.currentRoute();
+    if (route.channel === null) {
+      throw new ChannelError("channel selection disabled", 0);
+    }
+    if (artifactKeySegments(key) === null) {
+      throw new ChannelError("invalid artifact key", 400);
+    }
+
+    const object = await this.env.ARTIFACTS.get(key);
+    if (!object) throw new ChannelError("artifact missing", 404);
+    if (object.size > MAX_ARTIFACT_BYTES) {
+      throw new ChannelError("artifact too large", 413);
+    }
+
+    const channel = route.channel;
+    const file: OutboundArtifact = {
+      name: artifactNameFromKey(key),
+      contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
+      bytes: await object.arrayBuffer(),
+    };
+
+    try {
+      await withRetry(async () => {
+        await this.adapter(channel).sendArtifact(
+          this.currentAddress(channel),
+          file,
+        );
+      });
+      emitChannelEvent(this.env, { channel, event: "send_ok" });
+    } catch (error) {
+      emitChannelEvent(this.env, {
+        channel,
+        event: "send_error",
+        errorCode: channelErrorCode(error),
+      });
+      throw error;
+    }
   }
 
   /** Edits only a reference owned by this instance's current route. */
@@ -1437,6 +1483,21 @@ export class ChannelDO extends Agent<Env> {
         await client.sendText(credentials, chatId, context, msg.text);
         emitChannelEvent(hub.env, { channel: "wechat", event: "send_ok" });
         return { messageId: "" };
+      },
+      sendArtifact: async (chatId, file) => {
+        const credentials = hub.parseWeChatCredentials();
+        if (!credentials) throw new ChannelError("wechat not configured", 0);
+
+        const context = hub.db
+          .exec<{ context_token: string }>(
+            `SELECT context_token FROM wechat_contexts WHERE user_id = ?`,
+            chatId,
+          )
+          .toArray()[0]?.context_token;
+        if (!context) throw new ChannelError("wechat context missing", 0);
+
+        await client.sendMedia(credentials, chatId, context, file);
+        emitChannelEvent(hub.env, { channel: "wechat", event: "send_ok" });
       },
       edit: async () => {},
       answerAction: async () => {},

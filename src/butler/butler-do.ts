@@ -6,7 +6,7 @@ import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
 import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
 import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
-import { ownerLocale } from "../i18n";
+import { ownerLocale, t, type Locale } from "../i18n";
 import type { TextAction } from "../channels/text-action";
 import type {
   DbSchema,
@@ -38,6 +38,7 @@ import {
 } from "../protocol";
 import {
   actionHint,
+  artifactFailedText,
   approvalButtonLabel,
   approvalCardText,
   botNoticeText,
@@ -1150,7 +1151,7 @@ export class ButlerDO extends Agent<Env> {
     if (artifacts.length > 0) {
       lines.push("产物："); // i18n-ignore: model-facing
       for (const artifact of artifacts) {
-        lines.push(`- ${artifact.name}: ${artifact.url}`);
+        lines.push(`- ${artifact.name}`);
       }
     }
     lines.push("请向用户简要汇报结果。"); // i18n-ignore: model-facing
@@ -1184,9 +1185,32 @@ export class ButlerDO extends Agent<Env> {
       await this.sendBestEffort({
         text: clampMessage(taskCompletedText(locale, label, row.title, body)),
       });
+      await this.deliverArtifacts(artifacts, locale);
       return;
     }
     if (text.length > 0) await this.sendBestEffort({ text });
+    await this.deliverArtifacts(artifacts, locale);
+  }
+
+  /** 逐个下发产物；一个失败只影响它自己，主人会收到一句告知。 */
+  private async deliverArtifacts(
+    artifacts: Artifact[],
+    locale: Locale,
+  ): Promise<void> {
+    for (const artifact of artifacts) {
+      try {
+        await this.channels().sendArtifact(artifact.key);
+      } catch (error) {
+        console.error("butler artifact send failed:", error);
+        await this.sendBestEffort({
+          text: artifactFailedText(
+            locale,
+            artifact.name,
+            t(locale, "butler.notice.sendFailed"),
+          ),
+        });
+      }
+    }
   }
 
   private async handleFailed(

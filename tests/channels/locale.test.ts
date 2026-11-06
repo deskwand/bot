@@ -51,6 +51,7 @@ function recordingWechat() {
       return { messageId: "" };
     },
     async edit() {},
+    async sendArtifact() {},
     async answerAction() {},
   };
   return { adapter, sent };
@@ -127,6 +128,7 @@ describe("channel sends the owner's language", () => {
         return { messageId: "1" };
       },
       async edit() {},
+      async sendArtifact() {},
       async answerAction(actionId, text) {
         answered.push({
           actionId,

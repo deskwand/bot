@@ -451,3 +451,105 @@ describe("splitWeChatText", () => {
     expect(chunks.map((chunk) => chunk.length)).toEqual([2000, 2000, 1]);
   });
 });
+
+describe("sendMedia", () => {
+  const bytes = new TextEncoder().encode("hello world").buffer as ArrayBuffer;
+
+  function cdnResponse(param: string | null) {
+    return new Response(new Uint8Array(16), {
+      status: 200,
+      headers: param === null ? {} : { "x-encrypted-param": param },
+    });
+  }
+
+  it("uploads an encrypted image and sends it as image_item", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      jsonResponse({ upload_param: "up-param" }),
+      cdnResponse("dl-param"),
+      jsonResponse({ message_id: 7 }),
+    ]);
+
+    await client(fetchImpl).sendMedia(CREDS, "owner-user", "ctx-1", {
+      name: "shot.png",
+      contentType: "image/png",
+      bytes,
+    });
+
+    const upload = calls[0]!;
+    expect(upload.url).toContain("/ilink/bot/getuploadurl");
+    expect(upload.body).toMatchObject({
+      media_type: 1,
+      to_user_id: "owner-user",
+      rawsize: 11,
+      no_need_thumb: true,
+    });
+    expect(upload.body.filesize).toBe(16);
+    expect(upload.body.aeskey).toMatch(/^[0-9a-f]{32}$/);
+
+    const cdn = calls[1]!;
+    expect(cdn.url).toContain("encrypted_query_param=up-param");
+    expect(cdn.url).toContain("filekey=");
+
+    const send = calls[2]!;
+    expect(send.body.msg.context_token).toBe("ctx-1");
+    expect(send.body.msg.message_type).toBe(2);
+    expect(send.body.msg.message_state).toBe(2);
+    const item = send.body.msg.item_list[0];
+    expect(item.type).toBe(2);
+    expect(item.image_item.mid_size).toBe(16);
+    expect(item.image_item.media.encrypt_query_param).toBe("dl-param");
+    expect(item.image_item.media.encrypt_type).toBe(1);
+    // base64(hex) —— 32 个十六进制字符，不是 16 个原始字节
+    expect(atob(item.image_item.media.aes_key)).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it("sends other content types as file_item", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      jsonResponse({ upload_param: "up-param" }),
+      cdnResponse("dl-param"),
+      jsonResponse({ message_id: 8 }),
+    ]);
+
+    await client(fetchImpl).sendMedia(CREDS, "owner-user", "ctx-1", {
+      name: "report.md",
+      contentType: "text/markdown",
+      bytes,
+    });
+
+    expect(calls[0]!.body.media_type).toBe(3);
+    const item = calls[2]!.body.msg.item_list[0];
+    expect(item.type).toBe(4);
+    expect(item.file_item.file_name).toBe("report.md");
+    expect(item.file_item.len).toBe("11");
+  });
+
+  it("fails when the CDN omits the encrypted param", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({ upload_param: "up-param" }),
+      cdnResponse(null),
+    ]);
+
+    await expect(
+      client(fetchImpl).sendMedia(CREDS, "owner-user", "ctx-1", {
+        name: "a.txt",
+        contentType: "text/plain",
+        bytes,
+      }),
+    ).rejects.toBeInstanceOf(ILinkError);
+  });
+
+  it("does not retry a 4xx from getuploadurl", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      jsonResponse({ ret: -2, errmsg: "prepare failed" }, 400),
+    ]);
+
+    await expect(
+      client(fetchImpl).sendMedia(CREDS, "owner-user", "ctx-1", {
+        name: "a.txt",
+        contentType: "text/plain",
+        bytes,
+      }),
+    ).rejects.toBeInstanceOf(ILinkError);
+    expect(calls).toHaveLength(1);
+  });
+});

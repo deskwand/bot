@@ -477,3 +477,77 @@ describe("TaskDO lifecycle", () => {
     ]);
   });
 });
+
+describe("TaskDO artifacts", () => {
+  it("records the artifacts saved by this task", async () => {
+    await env.ARTIFACTS.put("t-art-ok/file-1/report.md", "# body", {
+      httpMetadata: { contentType: "text/markdown" },
+    });
+    setModelOverride(
+      scriptedModel([
+        {
+          toolCalls: [
+            {
+              name: "finish_task",
+              args: {
+                summary: "done",
+                artifacts: [{ key: "t-art-ok/file-1/report.md" }],
+              },
+            },
+          ],
+        },
+      ]),
+    );
+    const taskId = "t-art-ok";
+    await task(taskId).start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events[1]?.payload).toMatchObject({
+          type: "completed",
+          artifacts: [{ name: "report.md", key: "t-art-ok/file-1/report.md" }],
+        });
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  it("rejects an artifact key from another task and keeps running", async () => {
+    await env.ARTIFACTS.put("other-task/file-9/secret.md", "nope");
+    setModelOverride(
+      scriptedModel([
+        {
+          toolCalls: [
+            {
+              name: "finish_task",
+              args: {
+                summary: "stolen",
+                artifacts: [{ key: "other-task/file-9/secret.md" }],
+              },
+            },
+          ],
+        },
+        { toolCalls: [{ name: "finish_task", args: { summary: "ok" } }] },
+      ]),
+    );
+    const taskId = "t-art-cross";
+    await task(taskId).start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual([
+          "started",
+          "completed",
+        ]);
+        expect(events[1]?.payload).toMatchObject({
+          type: "completed",
+          summary: "ok",
+          artifacts: [],
+        });
+      },
+      { timeout: 10_000 },
+    );
+  });
+});

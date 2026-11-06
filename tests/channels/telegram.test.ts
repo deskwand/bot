@@ -648,3 +648,109 @@ describe("answerAction", () => {
     expect(calls[0].body).toEqual({ callback_query_id: "cb-1" });
   });
 });
+
+describe("sendArtifact", () => {
+  it("sends an artifact as a document", async () => {
+    const posts: { url: string; form: FormData }[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      posts.push({ url: String(input), form: init?.body as FormData });
+      return new Response(
+        JSON.stringify({ ok: true, result: { message_id: 9 } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const adapter = createTelegramAdapter({ token: TOKEN, fetch: fetchImpl });
+    const bytes = new TextEncoder().encode("# body").buffer as ArrayBuffer;
+
+    await adapter.sendArtifact("42", {
+      name: "report.md",
+      contentType: "text/markdown",
+      bytes,
+    });
+
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.url.endsWith("/sendDocument")).toBe(true);
+    expect(posts[0]!.form.get("chat_id")).toBe("42");
+    expect(posts[0]!.form.get("caption")).toBe("report.md");
+    const document = posts[0]!.form.get("document") as File;
+    expect(document.name).toBe("report.md");
+    expect(await document.text()).toBe("# body");
+  });
+});
+
+describe("sendArtifact media routing", () => {
+  function recordingFetch(statuses: number[]) {
+    const posts: { url: string; form: FormData }[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      posts.push({ url: String(input), form: init?.body as FormData });
+      const status = statuses.shift() ?? 200;
+      return new Response(
+        JSON.stringify(
+          status === 200
+            ? { ok: true, result: { message_id: 9 } }
+            : { ok: false, description: "Bad Request: PHOTO_INVALID_DIMENSIONS" },
+        ),
+        { status, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    return { posts, fetchImpl };
+  }
+
+  it("sends a png as a photo", async () => {
+    const { posts, fetchImpl } = recordingFetch([]);
+    const adapter = createTelegramAdapter({ token: TOKEN, fetch: fetchImpl });
+
+    await adapter.sendArtifact("42", {
+      name: "shot.png",
+      contentType: "image/png",
+      bytes: pngBytes().buffer as ArrayBuffer,
+    });
+
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.url.endsWith("/sendPhoto")).toBe(true);
+    expect(posts[0]!.form.get("photo")).toBeInstanceOf(File);
+  });
+
+  it("falls back to a document when the photo upload is rejected", async () => {
+    const { posts, fetchImpl } = recordingFetch([400, 200]);
+    const adapter = createTelegramAdapter({ token: TOKEN, fetch: fetchImpl });
+
+    await adapter.sendArtifact("42", {
+      name: "shot.png",
+      contentType: "image/png",
+      bytes: pngBytes().buffer as ArrayBuffer,
+    });
+
+    expect(posts.map((post) => post.url.split("/").pop())).toEqual([
+      "sendPhoto",
+      "sendDocument",
+    ]);
+  });
+
+  it("sends a gif as an animation", async () => {
+    const { posts, fetchImpl } = recordingFetch([]);
+    const adapter = createTelegramAdapter({ token: TOKEN, fetch: fetchImpl });
+
+    await adapter.sendArtifact("42", {
+      name: "loop.gif",
+      contentType: "image/gif",
+      bytes: new TextEncoder().encode("GIF89a").buffer as ArrayBuffer,
+    });
+
+    expect(posts[0]!.url.endsWith("/sendAnimation")).toBe(true);
+  });
+
+  it("sends unknown types as documents", async () => {
+    const { posts, fetchImpl } = recordingFetch([]);
+    const adapter = createTelegramAdapter({ token: TOKEN, fetch: fetchImpl });
+
+    await adapter.sendArtifact("42", {
+      name: "data.csv",
+      contentType: "text/csv",
+      bytes: new TextEncoder().encode("a,b").buffer as ArrayBuffer,
+    });
+
+    expect(posts[0]!.url.endsWith("/sendDocument")).toBe(true);
+  });
+});

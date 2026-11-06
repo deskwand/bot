@@ -146,7 +146,7 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
 
   const getTask: ToolRegistration<typeof TaskId> = {
     name: "get_task",
-    description: "Show one task's status, summary and artifact links.",
+    description: "Show one task's status, summary and artifact names.",
     parameters: TaskId,
     replay: "safe",
     async execute({ id }) {
@@ -164,7 +164,7 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
         if (row.artifacts.length > 0) {
           lines.push("产物：");
           for (const artifact of row.artifacts) {
-            lines.push(`- ${artifact.name}: ${artifact.url}`);
+            lines.push(`- ${artifact.name}`);
           }
         }
         return output(lines.join("\n"));

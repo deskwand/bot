@@ -1262,3 +1262,53 @@ describe("ButlerDO.reconcileChannel", () => {
     });
   });
 });
+
+describe("ButlerDO.report artifacts", () => {
+  it("sends each artifact after the report text", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+    const stub = butler("report-artifacts");
+    await seedTask(stub);
+    await env.ARTIFACTS.put("t1/f1/report.md", "# body", {
+      httpMetadata: { contentType: "text/markdown" },
+    });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "ok",
+      artifacts: [{ name: "report.md", key: "t1/f1/report.md" }],
+    });
+
+    expect(channel.sent.map((message) => message.text)).toEqual(["t1 结论：ok"]);
+    expect(channel.artifacts).toEqual([
+      { chatId: "42", name: "report.md", contentType: "text/markdown" },
+    ]);
+  });
+
+  it("tells the owner when an artifact could not be sent", async () => {
+    const channel = fakeChannel();
+    channel.adapter.sendArtifact = async () => {
+      throw new ChannelError("upstream", 502);
+    };
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+    const stub = butler("report-artifact-failed");
+    await seedTask(stub);
+    await env.ARTIFACTS.put("t1/f1/report.md", "# body");
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "ok",
+      artifacts: [{ name: "report.md", key: "t1/f1/report.md" }],
+    });
+
+    expect(channel.sent).toHaveLength(2);
+    expect(channel.sent[1]!.text).toContain("report.md");
+    expect(channel.sent[1]!.text).toContain("未能送达");
+  });
+});

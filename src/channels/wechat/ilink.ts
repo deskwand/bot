@@ -1,8 +1,9 @@
+import { createCipheriv, createHash } from "node:crypto";
 import {
   WECHAT_CDN_BASE_URL,
   downloadWeChatImage,
   type WeChatImageRef,
-} from "./media";
+} from "./media.ts";
 
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 const CHANNEL_VERSION = "1.0.0";
@@ -233,6 +234,97 @@ export function createILinkClient(opts: {
       }
     },
 
+    async sendMedia(
+      creds: WeChatCredentials,
+      toUserId: string,
+      contextToken: string,
+      file: { name: string; contentType: string; bytes: ArrayBuffer },
+      signal?: AbortSignal,
+    ): Promise<void> {
+      const plain = new Uint8Array(file.bytes);
+      const aesKey = crypto.getRandomValues(new Uint8Array(16));
+      const aesKeyHex = hexOf(aesKey);
+      const cipher = createCipheriv("aes-128-ecb", aesKey, null);
+      const ciphertext = new Uint8Array(
+        Buffer.concat([cipher.update(plain), cipher.final()]),
+      );
+      const image = /^image\/(png|jpeg|webp)$/.test(file.contentType);
+      const filekey = hexOf(crypto.getRandomValues(new Uint8Array(16)));
+
+      const upload = await post(
+        creds,
+        "/ilink/bot/getuploadurl",
+        {
+          filekey,
+          media_type: image ? 1 : 3,
+          to_user_id: toUserId,
+          rawsize: plain.byteLength,
+          rawfilemd5: createHash("md5").update(plain).digest("hex"),
+          filesize: ciphertext.byteLength,
+          aeskey: aesKeyHex,
+          no_need_thumb: true,
+          base_info: { channel_version: CHANNEL_VERSION },
+        },
+        signal,
+      );
+
+      const uploadParam = readString(upload, "upload_param");
+      if (!uploadParam) {
+        throw new ILinkError("WECHAT_ILINK_RESPONSE_INVALID", undefined, 200);
+      }
+      const cdn = await fetchImpl(
+        `${WECHAT_CDN_BASE_URL}/upload?encrypted_query_param=${encodeURIComponent(uploadParam)}&filekey=${encodeURIComponent(filekey)}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream" },
+          body: ciphertext,
+          signal,
+        },
+      );
+      const downloadParam = cdn.headers.get("x-encrypted-param");
+      if (!cdn.ok || !downloadParam) {
+        throw new ILinkError("WECHAT_ILINK_UPLOAD_FAILED", undefined, cdn.status);
+      }
+
+      // 文件与图片都要 base64(hex key)，写成 base64(raw) 微信会显示灰块。
+      const media = {
+        encrypt_query_param: downloadParam,
+        aes_key: btoa(aesKeyHex),
+        encrypt_type: 1,
+      };
+      await post(
+        creds,
+        "/ilink/bot/sendmessage",
+        {
+          msg: {
+            from_user_id: "",
+            to_user_id: toUserId,
+            client_id: crypto.randomUUID(),
+            message_type: 2,
+            message_state: 2,
+            context_token: contextToken,
+            item_list: [
+              image
+                ? {
+                    type: 2,
+                    image_item: { media, mid_size: ciphertext.byteLength },
+                  }
+                : {
+                    type: 4,
+                    file_item: {
+                      media,
+                      file_name: file.name,
+                      len: String(plain.byteLength),
+                    },
+                  },
+            ],
+          },
+          base_info: { channel_version: CHANNEL_VERSION },
+        },
+        signal,
+      );
+    },
+
     async downloadImage(
       image: WeChatImageRef,
       signal?: AbortSignal,
@@ -240,6 +332,11 @@ export function createILinkClient(opts: {
       return await downloadWeChatImage(fetchImpl, WECHAT_CDN_BASE_URL, image, signal);
     },
   };
+}
+
+/** Lowercase hex, the encoding iLink expects for `aeskey` and `filekey`. */
+function hexOf(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** Split text into WeChat-sized chunks, preferring newline boundaries. */

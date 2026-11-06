@@ -25,9 +25,14 @@ export function taskSystemPrompt(locale: Locale, spec: TaskSpec): string {
     "script output is not automatically saved as a file in this environment.",
     "When the work is done you MUST call the `finish_task` tool with a concise",
     "summary of the result. If an artifact is long, save it as an artifact",
-    "first (with `save_artifact`) and include its name and URL in the",
-    "`finish_task` artifacts list instead of pasting the content into the",
-    "summary.",
+    "first (with `save_artifact`) and pass its key in the `finish_task`",
+    "artifacts list instead of pasting the content into the summary.",
+    "Artifacts over 15 MB are rejected, so split large output into several",
+    "files or keep only the summary. The owner receives artifacts as files",
+    "in this chat; never paste or invent download links.",
+    "For binary output (png, jpeg, webp, pdf) pass standard base64 text with",
+    '`encoding: "base64"` and the matching `contentType`; the cap applies to',
+    "the decoded bytes.",
     ...(spec.botId === undefined
       ? []
       : [
