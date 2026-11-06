@@ -1,15 +1,24 @@
 import type { Context } from "@earendil-works/chord";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
+import type { ImageLimits, ImageProcessor } from "@earendil-works/pi-durable/tools";
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { INBOUND_IMAGE_LIMITS } from "../../src/channels/media";
 import { MAX_DRAFT_BYTES, createR2WorkspaceEnv } from "../../src/env/r2-env";
 import { clearWorkspace, workspaceTools } from "../../src/tools/workspace";
+import { PNG_B64, bytes } from "../helpers/images";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
 const ctx = { abortSignal: undefined } as unknown as Context;
+
+function abortedContext(): Context {
+  const controller = new AbortController();
+  controller.abort();
+  return { abortSignal: controller.signal } as unknown as Context;
+}
 
 function textOf(result: ToolExecutionResult): string {
   return (result.output ?? [])
@@ -84,6 +93,63 @@ describe("workspaceTools", () => {
     const result = await tool("read").execute({ path: "inbox/tg:1/a.pdf" }, apiFor("t1"), ctx);
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("get_artifact");
+  });
+
+  it("rethrows a tool error when the caller aborted", async () => {
+    await expect(
+      tool("read").execute({ path: "inbox/tg:1/a.pdf" }, apiFor("t1"), abortedContext()),
+    ).rejects.toThrow("get_artifact");
+  });
+
+  it("rethrows an AbortError even when the signal is not aborted", async () => {
+    const api = {
+      env: {
+        absolutePath: async () => ({
+          ok: false,
+          error: new DOMException("aborted", "AbortError"),
+        }),
+      },
+      agent: async () => ({ model: undefined }),
+      models: { getModel: () => undefined },
+    } as never;
+
+    await expect(
+      tool("read").execute({ path: "draft.md" }, api, ctx),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("clips image preparation to the inbound image limits", async () => {
+    await env.ARTIFACTS.put("work/t1/pic.png", bytes(PNG_B64), {
+      httpMetadata: { contentType: "image/png" },
+    });
+    const seen: ImageLimits[] = [];
+    const inner: ImageProcessor = {
+      async prepare(_bytes, _mimeType, limits) {
+        seen.push(limits);
+        return { data: "AAAA", mimeType: "image/png" };
+      },
+    };
+    const api = {
+      env: createR2WorkspaceEnv(env.ARTIFACTS, "t1"),
+      agent: async () => ({ model: { provider: "p", modelId: "m" } }),
+      models: {
+        getModel: () => ({
+          input: ["text", "image"],
+          inputLimits: {
+            images: {
+              resize: { maxWidth: 5000, maxHeight: 4000, maxBytes: 10 * 1024 * 1024 },
+            },
+          },
+        }),
+      },
+    } as never;
+
+    const read = workspaceTools(env.ARTIFACTS, () => "t1", inner).find(
+      (candidate) => candidate.name === "read",
+    )!;
+    await read.execute({ path: "pic.png" }, api, ctx);
+
+    expect(seen).toEqual([INBOUND_IMAGE_LIMITS]);
   });
 });
 

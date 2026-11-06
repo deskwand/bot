@@ -1,18 +1,27 @@
 import type { Static, TSchema } from "@earendil-works/pi-ai";
-import type { ToolRegistration } from "@earendil-works/pi-durable";
+import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import type { TaskEventBody } from "../protocol";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isAbortError(error: unknown): boolean {
+/** Whether `error` is an abort signal's error rather than a tool failure. */
+export function isAbortError(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
     "name" in error &&
     (error as { name?: unknown }).name === "AbortError"
   );
+}
+
+/** The result a tool failure becomes: readable text and `isError`, never a throw. */
+export function toolErrorResult(error: unknown): ToolExecutionResult {
+  return {
+    output: [{ type: "text", text: `工具出错：${errorMessage(error)}` }],
+    isError: true,
+  };
 }
 
 /**
@@ -42,10 +51,7 @@ export function withProgress<T extends TSchema>(
         result = await tool.execute(args, api, context);
       } catch (error) {
         if (context.abortSignal?.aborted || isAbortError(error)) throw error;
-        return {
-          output: [{ type: "text", text: `工具出错：${errorMessage(error)}` }],
-          isError: true,
-        };
+        return toolErrorResult(error);
       }
 
       try {

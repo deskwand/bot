@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-durable/tools";
 import { INBOUND_IMAGE_LIMITS } from "../channels/media";
 import { workspacePrefix } from "../env/r2-env";
+import { isAbortError, toolErrorResult } from "./wrap";
 
 /**
  * Every draft workspace tool starts with this: the area is private, capped at
@@ -39,11 +40,8 @@ function guardExecution<T extends ToolRegistration>(tool: T): T {
       try {
         return await tool.execute(args, api, context);
       } catch (error) {
-        if (context.abortSignal?.aborted) throw error;
-        return {
-          output: [{ type: "text", text: `工具出错：${messageOf(error)}` }],
-          isError: true,
-        };
+        if (context.abortSignal?.aborted || isAbortError(error)) throw error;
+        return toolErrorResult(error);
       }
     },
   };
@@ -57,12 +55,18 @@ function workspaceTool<T extends ToolRegistration>(tool: T): T {
   });
 }
 
+let decodeProcessor: ImageProcessor | undefined;
+
+/** Photon's wasm instance is expensive; one per isolate is enough. */
+function defaultImages(): ImageProcessor {
+  return (decodeProcessor ??= createCloudflarePhotonImages());
+}
+
 /** An image processor that never exceeds what an inbound image may be. */
-function workspaceImages(): ImageProcessor {
-  const photon = createCloudflarePhotonImages();
+function boundedImages(inner: ImageProcessor): ImageProcessor {
   return {
     async prepare(bytes: Uint8Array, mimeType: string, limits: ImageLimits) {
-      return photon.prepare(bytes, mimeType, {
+      return inner.prepare(bytes, mimeType, {
         maxWidth: Math.min(limits.maxWidth, INBOUND_IMAGE_LIMITS.maxWidth),
         maxHeight: Math.min(limits.maxHeight, INBOUND_IMAGE_LIMITS.maxHeight),
         maxBytes: Math.min(limits.maxBytes, INBOUND_IMAGE_LIMITS.maxBytes),
@@ -111,9 +115,14 @@ function listTool(bucket: R2Bucket, taskId: () => string): ToolRegistration<type
  * The draft area's tools: pi's read/write/edit over `work/<taskId>/`, plus a
  * listing of just this task's files.
  */
-export function workspaceTools(bucket: R2Bucket, taskId: () => string): ToolRegistration[] {
+export function workspaceTools(
+  bucket: R2Bucket,
+  taskId: () => string,
+  /** Decoder for images `read` returns; tests inject one, production uses Photon. */
+  images?: ImageProcessor,
+): ToolRegistration[] {
   return [
-    workspaceTool(createReadTool({ images: workspaceImages() })),
+    workspaceTool(createReadTool({ images: boundedImages(images ?? defaultImages()) })),
     workspaceTool(createWriteTool()),
     workspaceTool(createEditTool()),
     listTool(bucket, taskId),
