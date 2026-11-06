@@ -42,9 +42,13 @@ describe("artifactKeyFromRef", () => {
 });
 
 describe("getArtifactTool", () => {
-  it("tells the model it can only read this task's files", () => {
+  it("tells the model it can read this task's files and its attachments", () => {
     const tool = getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1" });
-    expect(tool.description).toContain("Only files saved by this task can be read.");
+    expect(tool.description).toBe(
+      "Read a saved file by its key: files saved by this task (`<taskId>/<fileId>/<name>`)" +
+        " or the owner's files listed in this task's attachments (`inbox/...` keys)." +
+        " Text comes back as text, PDF and Office files as Markdown, images as images.",
+    );
   });
 
   it("returns the stored bytes unchanged", async () => {

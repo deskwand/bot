@@ -256,6 +256,7 @@ export function createTelegramAdapter(
           name: string,
           bytes: Uint8Array,
           mimeType: string,
+          bestEffort = false,
         ) => {
           if (!opts.storeFile) return;
           try {
@@ -264,7 +265,7 @@ export function createTelegramAdapter(
             console.error(
               `telegram inbox store failed (${eventId}): ${(error as Error).message}`,
             );
-            markFileFailed("download");
+            if (!bestEffort) markFileFailed("download");
           }
         };
 
@@ -311,15 +312,18 @@ export function createTelegramAdapter(
           }
         }
 
-        if (opts.storeFile && photo) {
-          if (!imageBytes) {
-            markFileFailed("download");
-          } else if (imageBytes.byteLength > MAX_ARTIFACT_BYTES) {
-            markFileFailed("too_large");
+        // A photo copy in the inbox is best effort: the image still reaches
+        // the butler, so neither a failed download nor a failed store may turn
+        // into a file failure report.
+        if (opts.storeFile && photo && imageBytes) {
+          if (imageBytes.byteLength > MAX_ARTIFACT_BYTES) {
+            console.warn(
+              `telegram photo not stored (${eventId}): larger than ${MAX_ARTIFACT_BYTES} bytes`,
+            );
           } else {
             const mimeType = sniffImageType(imageBytes) ?? "image/jpeg";
             const extension = extensionForMime(mimeType) ?? "jpg";
-            await storeInInbox(`photo.${extension}`, imageBytes, mimeType);
+            await storeInInbox(`photo.${extension}`, imageBytes, mimeType, true);
           }
         }
 

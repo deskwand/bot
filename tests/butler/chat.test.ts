@@ -38,6 +38,7 @@ type SlowControl = { started: boolean; released: boolean };
 type Turn = {
   text?: string;
   toolCalls?: { name: string; args: unknown }[];
+  observe?: (context: TranscriptContext) => void;
 };
 
 /**
@@ -125,6 +126,7 @@ function routedModel(butlerTurns: Turn[], taskTurns: Turn[]): PiModel {
   const next = (context: TranscriptContext): FauxResponseStep => {
     const role = isTaskRequest(context) ? "task" : "butler";
     const turn = queues[role].shift() ?? { text: "done" };
+    turn.observe?.(context);
     return fauxAssistantMessage(
       [
         ...(turn.text === undefined ? [] : [fauxText(turn.text)]),
@@ -472,6 +474,44 @@ describe("butler chat", () => {
     expect(channel.sent).toEqual([{ chatId: "42", text: "收到文件" }]);
   });
 
+  it("still hands a file to the model when the image could not be prepared", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "收到附件",
+          observe: (context) => {
+            seen = context;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-file-image-failed").handleMessage(
+      message({
+        text: null,
+        eventId: "tg:file-image-failed",
+        imageFailed: true,
+        files: [
+          {
+            name: "a.pdf",
+            key: "inbox/tg:1/a.pdf",
+            mimeType: "application/pdf",
+            size: 2048,
+          },
+        ],
+      }),
+    );
+
+    const last = seen?.messages.filter((entry) => entry.role === "user").at(-1);
+    expect(last?.content).toBe(
+      "[附件] a.pdf · application/pdf · 2.0 KB · key: inbox/tg:1/a.pdf",
+    );
+    expect(channel.sent).toEqual([{ chatId: "42", text: "收到附件" }]);
+  });
+
   it("appends attachment lines after the text", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
@@ -795,6 +835,87 @@ describe("butler chat", () => {
       },
       { timeout: 10_000 },
     );
+  });
+
+  it("carries an inbox attachment from spawn_task through to the task", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const key = "inbox/tg:1/a.md";
+    await env.ARTIFACTS.put(key, "# 附件正文", {
+      httpMetadata: { contentType: "text/markdown" },
+    });
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      routedModel(
+        [
+          {
+            toolCalls: [
+              {
+                name: "spawn_task",
+                args: {
+                  title: "读附件",
+                  instructions: "读一下附件",
+                  attachments: [key],
+                },
+              },
+            ],
+          },
+          { text: "已安排" },
+        ],
+        [
+          { toolCalls: [{ name: "get_artifact", args: { ref: key } }] },
+          {
+            toolCalls: [
+              { name: "finish_task", args: { summary: "读完" } },
+            ],
+            observe: (context) => {
+              seen = context;
+            },
+          },
+        ],
+      ),
+    );
+
+    const butlerStub = butler("chat-attachment-wiring");
+    // Task ids restart at t1 for every Butler, so move the counter past the
+    // task the spawn test above already ran in this suite.
+    const taskId = await runInDurableObject(butlerStub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO meta (key, value) VALUES ('task_counter', '900')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      );
+      return "t901";
+    });
+    const stub = task(taskId);
+    await butlerStub.handleMessage(
+      message({ text: "读一下附件", eventId: "tg:attachment-wiring" }),
+    );
+
+    const storedSpec = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ value: string }>(
+          `SELECT value FROM meta WHERE key = 'spec'`,
+        )
+        .toArray()[0]?.value,
+    );
+    expect(JSON.parse(storedSpec ?? "{}")).toMatchObject({
+      attachments: [
+        {
+          name: "a.md",
+          key,
+          mimeType: "text/markdown",
+          size: new TextEncoder().encode("# 附件正文").byteLength,
+        },
+      ],
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(JSON.stringify(seen?.messages)).toContain("# 附件正文");
+      },
+      { timeout: 10_000 },
+    );
+    expect(channel.sent.some((sent) => sent.text === "已安排")).toBe(true);
   });
 
   it("drops an input whose admitted route is no longer current", async () => {

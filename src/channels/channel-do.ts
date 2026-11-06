@@ -1258,23 +1258,32 @@ export class ChannelDO extends Agent<Env> {
     }
 
     const files: InboundFile[] = [];
-    try {
-      const mimeType = sniffImageType(bytes) ?? prepared.image.mimeType;
-      const extension = extensionForMime(mimeType) ?? "jpg";
-      files.push(
-        await inboxStore(this.env.ARTIFACTS)(
-          event.eventId,
-          `image.${extension}`,
-          bytes,
-          mimeType,
-        ),
+    if (bytes.byteLength > MAX_ARTIFACT_BYTES) {
+      // The inbox copy is a convenience and the model image is prepared from
+      // the same bytes; an oversized original just skips the copy.
+      console.warn(
+        `channel: wechat image not stored in inbox (${event.eventId}):` +
+          ` larger than ${MAX_ARTIFACT_BYTES} bytes`,
       );
-    } catch (error) {
-      // The inbox copy is a convenience; the image itself still reaches the
-      // butler even when R2 refuses the write.
-      console.error(
-        `channel: wechat inbox store failed (${event.eventId}): ${errorMessage(error)}`,
-      );
+    } else {
+      try {
+        const mimeType = sniffImageType(bytes) ?? prepared.image.mimeType;
+        const extension = extensionForMime(mimeType) ?? "jpg";
+        files.push(
+          await inboxStore(this.env.ARTIFACTS)(
+            event.eventId,
+            `image.${extension}`,
+            bytes,
+            mimeType,
+          ),
+        );
+      } catch (error) {
+        // The inbox copy is a convenience; the image itself still reaches the
+        // butler even when R2 refuses the write.
+        console.error(
+          `channel: wechat inbox store failed (${event.eventId}): ${errorMessage(error)}`,
+        );
+      }
     }
 
     this.dispatchMessage(

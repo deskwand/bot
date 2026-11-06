@@ -193,6 +193,62 @@ describe("butler control tools", () => {
     ]);
   });
 
+  it("resolves a duplicated attachment key once", async () => {
+    const result = await runInDurableObject(
+      butler("tools-attachments-deduped"),
+      async (_instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        const file = {
+          name: "a.pdf",
+          key: "inbox/tg:1/a.pdf",
+          mimeType: "application/pdf",
+          size: 3,
+        };
+        const resolved: string[] = [];
+        const captured: { attachments?: (typeof file)[] } = {};
+        const tools = createButlerTools({
+          repo,
+          task: () => ({
+            start: async () => {},
+            status: async () => ({ state: "queued", title: "" }),
+            steer: async () => ({ ok: false, message: "" }),
+            cancel: async () => ({ ok: false, message: "" }),
+            retryTask: async () => ({ ok: false, message: "" }),
+            pendingApprovals: async () => [],
+          }),
+          spawn: async (_title, _instructions, attachments) => {
+            captured.attachments = attachments;
+            return "t1";
+          },
+          resolveAttachment: async (key) => {
+            resolved.push(key);
+            return key === file.key ? file : null;
+          },
+          memory: new MemoryStore(state.storage.sql),
+          createSchedule: async () => "s1",
+          listSchedules: () => [],
+          removeSchedule: async () => false,
+        });
+
+        const spawnTask = tools.find((tool) => tool.name === "spawn_task");
+        await spawnTask!.execute(
+          {
+            title: "t",
+            instructions: "i",
+            attachments: [file.key, file.key],
+          } as never,
+          {} as never,
+          {} as never,
+        );
+
+        return { resolved, attachments: captured.attachments };
+      },
+    );
+
+    expect(result.resolved).toEqual(["inbox/tg:1/a.pdf"]);
+    expect(result.attachments).toHaveLength(1);
+  });
+
   it("rejects an attachment key outside the inbox", async () => {
     const result = await runInDurableObject(
       butler("tools-attachment-outside"),

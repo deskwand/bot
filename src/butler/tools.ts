@@ -125,7 +125,7 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     async execute({ title, instructions, attachments }) {
       try {
         const files: InboundFile[] = [];
-        for (const key of attachments ?? []) {
+        for (const key of new Set(attachments ?? [])) {
           const file = await deps.resolveAttachment(key);
           if (file === null) return output(`附件不存在：${key}`);
           files.push(file);

@@ -89,8 +89,9 @@ export function getArtifactTool(
   return {
     name: "get_artifact",
     description:
-      "Read a saved file by its key (`<taskId>/<fileId>/<name>`). Text comes back as text, " +
-      "PDF and Office files as Markdown, images as images. Only files saved by this task can be read.",
+      "Read a saved file by its key: files saved by this task (`<taskId>/<fileId>/<name>`)" +
+      " or the owner's files listed in this task's attachments (`inbox/...` keys)." +
+      " Text comes back as text, PDF and Office files as Markdown, images as images.",
     parameters: GetArtifact,
     replay: "safe",
     async execute({ ref }, api, context): Promise<ToolExecutionResult> {

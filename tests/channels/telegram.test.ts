@@ -318,6 +318,31 @@ describe("parseInbound", () => {
     });
   });
 
+  it("keeps the photo when the inbox store fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "photos/file_7.png" } } },
+      { status: 200, bytes: pngBytes() },
+    ]);
+    const storeFile: StoreInboundFile = async () => {
+      throw new Error("r2 down");
+    };
+
+    const event = (await makeAdapter(fetchImpl, undefined, storeFile).parseInbound({
+      update_id: 71,
+      message: {
+        message_id: 710,
+        from: { id: 1 },
+        chat: { id: 42 },
+        photo: [{ file_id: "large", width: 1280, height: 1280 }],
+      },
+    })) as MessageEvent;
+
+    expect(event.images).toHaveLength(1);
+    expect(event.fileFailed).toBeUndefined();
+    expect(event.files).toBeUndefined();
+  });
+
   it("uses the file id when the document has no name", async () => {
     const { fetchImpl } = fakeFetch([
       { status: 200, body: { ok: true, result: { file_path: "documents/abc" } } },
@@ -368,8 +393,9 @@ describe("parseInbound", () => {
       { status: 200, body: { ok: true, result: { file_path: "photos/x.png" } } },
       { status: 404, body: { ok: false } },
     ]);
+    const { storeFile } = fakeStore();
 
-    const event = await makeAdapter(fetchImpl).parseInbound({
+    const event = await makeAdapter(fetchImpl, undefined, storeFile).parseInbound({
       update_id: 9,
       message: {
         message_id: 90,
@@ -389,6 +415,7 @@ describe("parseInbound", () => {
       imageFailed: true,
       eventId: "tg:9",
     });
+    expect(event).not.toHaveProperty("fileFailed");
   });
 
   it("drops a download that is not an image", async () => {

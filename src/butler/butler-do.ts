@@ -1375,7 +1375,7 @@ export class ButlerDO extends Agent<Env> {
       this.kickReconcile();
       return;
     }
-    if (evt.imageFailed && images.length === 0) {
+    if (evt.imageFailed && images.length === 0 && files.length === 0) {
       await this.sendBestEffort({
         text: imageUnavailableNotice(locale),
       });
