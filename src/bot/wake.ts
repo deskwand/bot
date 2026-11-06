@@ -11,6 +11,9 @@ export const WATCHDOG_MS = 3_600_000;
 /** How long to wait before retrying when no channel is selected. */
 export const CHANNEL_DISABLED_RETRY_MS = 3_600_000;
 
+/** How far past its time an alarm may be before `heal()` treats it as lost. */
+export const HEAL_OVERDUE_MS = 600_000;
+
 /** Consecutive failed runs before a bot tells its owner it is failing. */
 export const FAILING_NOTICE_AT = 3;
 
@@ -44,6 +47,14 @@ export function parseDuration(text: string): number | null {
 /** The longest a bot's own schedule may stretch, given its cadence. */
 export function wakeCeilingMs(defaultIntervalMs: number): number {
   return Math.min(MAX_WAKE_MS, defaultIntervalMs);
+}
+
+/** The longest gap `heal()` tolerates before calling an alarm stale. */
+export function healCeilingMs(
+  now: number,
+  defaultIntervalMs: number,
+): number {
+  return Math.max(defaultIntervalMs, 21_600_000, nextUtcMidnight(now) - now);
 }
 
 /** Keeps a requested wake time inside the allowed window around `now`. */

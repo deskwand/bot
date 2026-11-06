@@ -151,6 +151,18 @@ async function alarmAt(stub: BotStub): Promise<number | null> {
   );
 }
 
+async function deleteAlarm(stub: BotStub): Promise<void> {
+  await runInDurableObject(stub, (_instance, state) =>
+    state.storage.deleteAlarm(),
+  );
+}
+
+async function setRawAlarm(stub: BotStub, at: number): Promise<void> {
+  await runInDurableObject(stub, (_instance, state) =>
+    state.storage.setAlarm(at),
+  );
+}
+
 async function patchMeta(
   stub: BotStub,
   patch: Partial<BotMeta>,
@@ -1342,5 +1354,155 @@ describe("BotDO rename", () => {
     const stub = botStub("b-rename-missing");
 
     expect(await stub.rename("早报")).toBe(false);
+  });
+});
+
+describe("BotDO heal", () => {
+  it("heal re-arms a vanished alarm at the saved time", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-heal-vanished");
+    await initBot(stub, { firstWakeAt: now + 3_600_000 });
+    await deleteAlarm(stub);
+
+    expect(await stub.heal()).toBe("healed");
+    expect(await alarmAt(stub)).toBe(now);
+
+    await fireAlarm(stub);
+    expect(fake.spawns).toHaveLength(0);
+    expect(await alarmAt(stub)).toBe(now + 3_600_000);
+  });
+
+  it("heal wakes a due bot whose alarm vanished", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-heal-due-vanished");
+    await initBot(stub, { firstWakeAt: now });
+    await deleteAlarm(stub);
+
+    expect(await stub.heal()).toBe("healed");
+    await fireAlarm(stub);
+    expect(fake.spawns).toHaveLength(1);
+  });
+
+  it("heal wakes an overdue alarm", async () => {
+    fakeButler();
+    const overdue = botStub("b-heal-overdue");
+    await initBot(overdue, { firstWakeAt: now + 3_600_000 });
+    await setRawAlarm(overdue, now - 700_000);
+    expect(await overdue.heal()).toBe("healed");
+
+    const recent = botStub("b-heal-recent");
+    await initBot(recent, { firstWakeAt: now + 3_600_000 });
+    await setRawAlarm(recent, now - 500_000);
+    expect(await recent.heal()).toBe("ok");
+  });
+
+  it("heal wakes a bot sleeping past its ceiling", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-heal-ceiling");
+    await initBot(stub);
+    await patchMeta(stub, { nextWakeAt: now + 30 * 86_400_000 });
+    await setRawAlarm(stub, now + 30 * 86_400_000);
+
+    expect(await stub.heal()).toBe("healed");
+    expect((await stub.snapshot())?.meta.nextWakeAt).toBe(now);
+
+    await fireAlarm(stub);
+    expect(fake.spawns).toHaveLength(1);
+  });
+
+  it("heal leaves a failure retry alone", async () => {
+    fakeButler();
+    const stub = botStub("b-heal-failure");
+    await initBot(stub, { defaultIntervalMs: 3_600_000 });
+    await stub.onRunEnded("t-1", "failed", "boom");
+    await stub.onRunEnded("t-2", "failed", "boom");
+    await stub.onRunEnded("t-3", "failed", "boom");
+    const before = await alarmAt(stub);
+    expect(before).toBe(now + 21_600_000);
+
+    expect(await stub.heal()).toBe("ok");
+    expect(await alarmAt(stub)).toBe(before);
+  });
+
+  it("heal leaves a daily-limit defer alone", async () => {
+    fakeButler();
+    const stub = botStub("b-heal-daily");
+    await initBot(stub, { defaultIntervalMs: 3_600_000 });
+    await patchMeta(stub, { wakesDay: utcDay(now), wakesCount: 48 });
+    await fireAlarm(stub);
+    await fireAlarm(stub);
+    const before = await alarmAt(stub);
+    expect(before).toBe(nextUtcMidnight(now));
+
+    expect(await stub.heal()).toBe("ok");
+    expect(await alarmAt(stub)).toBe(before);
+  });
+
+  it("heal re-arms a lost watchdog", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-heal-watchdog");
+    await initBot(stub);
+    await fireAlarm(stub);
+    await deleteAlarm(stub);
+
+    expect(await stub.heal()).toBe("healed");
+
+    fake.outcome = { outcome: "completed", summary: "ok" };
+    await fireAlarm(stub);
+
+    const snapshot = await stub.snapshot();
+    expect(fake.outcomeCalls).toBe(1);
+    expect(snapshot?.meta.currentTaskId).toBeNull();
+    expect(fake.spawns).toHaveLength(1);
+  });
+
+  it("heal skips paused, finished and missing bots", async () => {
+    fakeButler();
+    const paused = botStub("b-heal-paused");
+    await initBot(paused);
+    await paused.pause();
+    expect(await paused.heal()).toBe("skipped");
+    expect(await alarmAt(paused)).toBeNull();
+
+    const finished = botStub("b-heal-finished");
+    await initBot(finished);
+    await finished.finish("x");
+    expect(await finished.heal()).toBe("skipped");
+    expect(await alarmAt(finished)).toBeNull();
+
+    const missing = botStub("b-heal-missing");
+    expect(await missing.heal()).toBe("skipped");
+    expect(await alarmAt(missing)).toBeNull();
+  });
+
+  it("heal skips while an alarm is dispatching", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-heal-dispatching");
+    await initBot(stub);
+    const gate = deferred();
+    fake.spawnGate = gate.promise;
+
+    const fired = runDurableObjectAlarm(stub);
+    await waitUntil(() => fake.spawns.length === 1);
+    expect(await stub.heal()).toBe("skipped");
+
+    gate.resolve();
+    await fired;
+
+    expect(fake.spawns).toHaveLength(1);
+    expect(await alarmAt(stub)).toBe(now + WATCHDOG_MS);
+  });
+
+  it("heal twice spawns once", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-heal-twice");
+    await initBot(stub);
+    await deleteAlarm(stub);
+
+    expect(await stub.heal()).toBe("healed");
+    expect(await stub.heal()).toBe("ok");
+
+    await fireAlarm(stub);
+    expect(fake.spawns).toHaveLength(1);
   });
 });

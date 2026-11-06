@@ -29,12 +29,14 @@ import {
   CHANNEL_DISABLED_RETRY_MS,
   DAILY_WAKE_LIMIT,
   FAILING_NOTICE_AT,
+  HEAL_OVERDUE_MS,
   MIN_WAKE_MS,
   RUN_MAX_MS,
   WATCHDOG_MS,
   clampWakeAt,
   failureDelayMs,
   formatDuration,
+  healCeilingMs,
   nextUtcMidnight,
   utcDay,
   wakeCeilingMs,
@@ -107,6 +109,9 @@ export class BotDO extends DurableObject<Env> {
   store: BotStore;
 
   private readonly backup: BackupRpc;
+
+  /** True while the alarm handler runs; heal() must not interfere with it. */
+  private alarmInFlight = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -451,145 +456,190 @@ export class BotDO extends DurableObject<Env> {
     this.store = new BotStore(this.ctx.storage.sql);
   }
 
-  async alarm(): Promise<void> {
-    const now = getClock().now();
-
-    let maintenanceActive: boolean;
-    try {
-      maintenanceActive = await this.butler().maintenanceActive();
-    } catch {
-      // Fail closed like TaskDO: an unknown lease state must not run a bot.
-      await this.ctx.storage.setAlarm(now + DEFER_MS);
-      return;
-    }
-    if (maintenanceActive) {
-      await this.ctx.storage.setAlarm(now + DEFER_MS);
-      return;
-    }
-
+  /**
+   * Cron backstop: re-arms an alarm that vanished, came due long ago, or sits
+   * far beyond the ceiling. Never touches a bot it does not own right now.
+   */
+  async heal(): Promise<"ok" | "healed" | "skipped"> {
     const meta = this.store.readMeta();
-    if (meta === null || meta.status !== "active") return;
-
-    if (meta.currentTaskId !== null) {
-      await this.checkRunningTask(meta, now);
-      return;
+    if (meta === null || meta.status !== "active" || this.alarmInFlight) {
+      return "skipped";
     }
 
-    // An alarm may fire early after a restore or a manually armed wake.
-    if (meta.nextWakeAt !== null && meta.nextWakeAt > now + 60_000) {
-      await this.ctx.storage.setAlarm(meta.nextWakeAt);
-      return;
-    }
+    const now = getClock().now();
+    const alarmAt = await this.ctx.storage.getAlarm();
+    const running = meta.currentTaskId !== null;
+    const ceiling = healCeilingMs(now, meta.defaultIntervalMs);
+    const lost =
+      alarmAt === null ||
+      alarmAt < now - HEAL_OVERDUE_MS ||
+      (!running && alarmAt > now + ceiling);
+    if (!lost) return "ok";
 
-    const day = utcDay(now);
-    if (meta.wakesDay !== day) {
-      meta.wakesDay = day;
-      meta.wakesCount = 0;
+    console.warn("bot heal:", {
+      botId: meta.botId,
+      status: meta.status,
+      alarmAt,
+      nextWakeAt: meta.nextWakeAt,
+    });
+
+    // A saved wake beyond the ceiling would make alarm() re-arm it as-is, so
+    // pull it to now first; alarm() then dispatches or reschedules from there.
+    if (
+      !running &&
+      (meta.nextWakeAt === null || meta.nextWakeAt > now + ceiling)
+    ) {
+      meta.nextWakeAt = now;
       this.store.writeMeta(meta);
     }
-    if (meta.wakesCount >= DAILY_WAKE_LIMIT) {
-      await this.deferForDailyLimit(meta, now);
-      return;
-    }
+    await this.ctx.storage.setAlarm(now);
+    return "healed";
+  }
 
-    let ownerProfile = "";
+  async alarm(): Promise<void> {
+    this.alarmInFlight = true;
     try {
-      ownerProfile = await this.butler().ownerProfile();
-    } catch (error) {
-      console.warn("bot owner profile failed:", error);
-    }
+      const now = getClock().now();
 
-    const instructions = buildBotInstructions({
-      name: meta.name,
-      mission: meta.mission,
-      docs: this.store.readDocs(),
-      ownerProfile,
-      runs: this.store.recentRuns(3),
-      steer: meta.pendingSteer,
-      manualWake:
-        meta.manualWakeAt != null && meta.manualWakeAt === meta.nextWakeAt,
-    });
-    const authorization = buildBotAuthorization({
-      name: meta.name,
-      mission: meta.mission,
-      steer: meta.pendingSteer,
-    });
-    const consumed = meta.pendingSteer.length;
-
-    let result: SpawnForBotResult;
-    try {
-      result = await this.butler().spawnForBot(
-        meta.botId,
-        meta.name,
-        instructions,
-        authorization,
-      );
-    } catch (error) {
-      const current = this.store.readMeta();
-      if (current !== null && current.status === "active") {
-        await this.armAfterFailure(current, now, errorMessage(error));
-      }
-      return;
-    }
-
-    if (!result.ok) {
-      if (result.reason === "maintenance") {
+      let maintenanceActive: boolean;
+      try {
+        maintenanceActive = await this.butler().maintenanceActive();
+      } catch {
+        // Fail closed like TaskDO: an unknown lease state must not run a bot.
         await this.ctx.storage.setAlarm(now + DEFER_MS);
-      } else if (result.reason === "channel_disabled") {
-        await this.ctx.storage.setAlarm(now + CHANNEL_DISABLED_RETRY_MS);
-      } else {
+        return;
+      }
+      if (maintenanceActive) {
+        await this.ctx.storage.setAlarm(now + DEFER_MS);
+        return;
+      }
+
+      const meta = this.store.readMeta();
+      if (meta === null || meta.status !== "active") return;
+
+      if (meta.currentTaskId !== null) {
+        await this.checkRunningTask(meta, now);
+        return;
+      }
+
+      // An alarm may fire early after a restore or a manually armed wake.
+      if (meta.nextWakeAt !== null && meta.nextWakeAt > now + 60_000) {
+        await this.ctx.storage.setAlarm(meta.nextWakeAt);
+        return;
+      }
+
+      const day = utcDay(now);
+      if (meta.wakesDay !== day) {
+        meta.wakesDay = day;
+        meta.wakesCount = 0;
+        this.store.writeMeta(meta);
+      }
+      if (meta.wakesCount >= DAILY_WAKE_LIMIT) {
+        await this.deferForDailyLimit(meta, now);
+        return;
+      }
+
+      let ownerProfile = "";
+      try {
+        ownerProfile = await this.butler().ownerProfile();
+      } catch (error) {
+        console.warn("bot owner profile failed:", error);
+      }
+
+      const instructions = buildBotInstructions({
+        name: meta.name,
+        mission: meta.mission,
+        docs: this.store.readDocs(),
+        ownerProfile,
+        runs: this.store.recentRuns(3),
+        steer: meta.pendingSteer,
+        manualWake:
+          meta.manualWakeAt != null && meta.manualWakeAt === meta.nextWakeAt,
+      });
+      const authorization = buildBotAuthorization({
+        name: meta.name,
+        mission: meta.mission,
+        steer: meta.pendingSteer,
+      });
+      const consumed = meta.pendingSteer.length;
+
+      let result: SpawnForBotResult;
+      try {
+        result = await this.butler().spawnForBot(
+          meta.botId,
+          meta.name,
+          instructions,
+          authorization,
+        );
+      } catch (error) {
         const current = this.store.readMeta();
         if (current !== null && current.status === "active") {
-          await this.armAfterFailure(current, now, result.message);
+          await this.armAfterFailure(current, now, errorMessage(error));
         }
+        return;
       }
-      return;
-    }
 
-    const current = this.store.readMeta();
-    if (current === null || current.status !== "active") {
-      // The bot was paused, finished or deleted while the spawn was in flight.
-      await this.cancelTask(result.taskId);
-      if (current === null) return;
-      // Keep the run so the cancelled outcome is recorded against it.
+      if (!result.ok) {
+        if (result.reason === "maintenance") {
+          await this.ctx.storage.setAlarm(now + DEFER_MS);
+        } else if (result.reason === "channel_disabled") {
+          await this.ctx.storage.setAlarm(now + CHANNEL_DISABLED_RETRY_MS);
+        } else {
+          const current = this.store.readMeta();
+          if (current !== null && current.status === "active") {
+            await this.armAfterFailure(current, now, result.message);
+          }
+        }
+        return;
+      }
+
+      const current = this.store.readMeta();
+      if (current === null || current.status !== "active") {
+        // The bot was paused, finished or deleted while the spawn was in flight.
+        await this.cancelTask(result.taskId);
+        if (current === null) return;
+        // Keep the run so the cancelled outcome is recorded against it.
+        current.wakesCount += 1;
+        current.pendingSteer = current.pendingSteer.slice(consumed);
+        current.manualWakeAt = null;
+        this.store.insertRun(result.taskId, now);
+        current.currentTaskId = result.taskId;
+        this.store.writeMeta(current);
+        return;
+      }
       current.wakesCount += 1;
       current.pendingSteer = current.pendingSteer.slice(consumed);
       current.manualWakeAt = null;
+      this.store.writeMeta(current);
+
       this.store.insertRun(result.taskId, now);
+      if (this.store.runEnded(result.taskId)) {
+        // The task reported back before spawn returned and onRunEnded already
+        // recorded the run. Re-arm in case that report raced this alarm.
+        const ended = this.store.readMeta();
+        if (ended !== null && ended.status === "active") {
+          const at = clampWakeAt(
+            now,
+            nextBase(ended, now),
+            wakeCeilingMs(ended.defaultIntervalMs),
+          ).at;
+          if (ended.nextWakeAt !== at) {
+            ended.nextWakeAt = at;
+            this.store.writeMeta(ended);
+          }
+          await this.ctx.storage.setAlarm(at);
+        }
+        return;
+      }
+
+      // Keep nextWakeAt: the run may already have called set_next_wake, and a
+      // past value is ignored by nextBase anyway.
       current.currentTaskId = result.taskId;
       this.store.writeMeta(current);
-      return;
+      await this.ctx.storage.setAlarm(now + WATCHDOG_MS);
+    } finally {
+      this.alarmInFlight = false;
     }
-    current.wakesCount += 1;
-    current.pendingSteer = current.pendingSteer.slice(consumed);
-    current.manualWakeAt = null;
-    this.store.writeMeta(current);
-
-    this.store.insertRun(result.taskId, now);
-    if (this.store.runEnded(result.taskId)) {
-      // The task reported back before spawn returned and onRunEnded already
-      // recorded the run. Re-arm in case that report raced this alarm.
-      const ended = this.store.readMeta();
-      if (ended !== null && ended.status === "active") {
-        const at = clampWakeAt(
-          now,
-          nextBase(ended, now),
-          wakeCeilingMs(ended.defaultIntervalMs),
-        ).at;
-        if (ended.nextWakeAt !== at) {
-          ended.nextWakeAt = at;
-          this.store.writeMeta(ended);
-        }
-        await this.ctx.storage.setAlarm(at);
-      }
-      return;
-    }
-
-    // Keep nextWakeAt: the run may already have called set_next_wake, and a
-    // past value is ignored by nextBase anyway.
-    current.currentTaskId = result.taskId;
-    this.store.writeMeta(current);
-    await this.ctx.storage.setAlarm(now + WATCHDOG_MS);
   }
 
   private butler(): BotButler {
