@@ -5,6 +5,7 @@ export const task = {
     time: "查看时间",
     read: "读取：{url}",
     save: "保存：{filename}",
+    download: "下载 {url}",
   },
   invalidUrl: "[无效 URL]",
   state: {

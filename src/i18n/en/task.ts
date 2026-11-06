@@ -7,6 +7,7 @@ export const task: Messages["task"] = {
     time: "Check the time",
     read: "Read: {url}",
     save: "Save: {filename}",
+    download: "Downloading {url}",
   },
   invalidUrl: "[invalid URL]",
   state: {

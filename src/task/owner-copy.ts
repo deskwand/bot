@@ -38,6 +38,10 @@ export function progressSaveText(locale: Locale, filename: string): string {
   return t(locale, "task.progress.save", { filename });
 }
 
+export function progressDownloadText(locale: Locale, url: string): string {
+  return t(locale, "task.progress.download", { url });
+}
+
 export function steerNotStartedText(locale: Locale): string {
   return t(locale, "task.control.steerNotStarted");
 }

@@ -50,6 +50,7 @@ import {
   mcpExtension,
   type McpGates,
 } from "../tools/mcp";
+import { documentConverterFromAi } from "../tools/file-content";
 import { webFetchTool } from "../tools/web-fetch";
 import { webSearchTool } from "../tools/web-search";
 import { withProgress } from "../tools/wrap";
@@ -66,6 +67,7 @@ import {
   missingApprovalIdText,
   parkedTaskText,
   progressArtifactText,
+  progressDownloadText,
   progressReadText,
   progressSaveText,
   progressSearchText,
@@ -257,6 +259,8 @@ export class TaskDO extends Agent<Env> {
       ],
     });
 
+    // One converter shared by every file-reading tool in this task.
+    const convert = documentConverterFromAi(this.env.AI);
     const emitProgress = (body: TaskEventBody) => this.emitProgress(body);
     this.registry.install({
       name: "execution",
@@ -269,6 +273,7 @@ export class TaskDO extends Agent<Env> {
         withProgress(
           getArtifactTool(this.env.ARTIFACTS, this.env.PUBLIC_BASE_URL, {
             taskId: () => this.currentTaskId() ?? "",
+            convert,
           }),
           emitProgress,
           (args) => {
@@ -296,7 +301,7 @@ export class TaskDO extends Agent<Env> {
           () => progressTimeText(ownerLocale(this.env)),
         ),
         withProgress(
-          webFetchTool(),
+          webFetchTool(fetch, convert),
           emitProgress,
           (args) => progressReadText(ownerLocale(this.env), args.url),
         ),
@@ -307,7 +312,15 @@ export class TaskDO extends Agent<Env> {
             () => this.assertNoMaintenance(),
           ),
           emitProgress,
-          (args) => progressSaveText(ownerLocale(this.env), args.filename ?? ""),
+          (args) => {
+            const locale = ownerLocale(this.env);
+            return args.url !== undefined
+              ? progressDownloadText(
+                  locale,
+                  safeRequestUrl(args.url, t(locale, "task.invalidUrl")),
+                )
+              : progressSaveText(locale, args.filename ?? "");
+          },
         ),
       ],
     });
