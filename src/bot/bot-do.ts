@@ -409,7 +409,7 @@ export class BotDO extends DurableObject<Env> {
 
     this.store.writeMeta(meta);
     if (meta.status === "finished") {
-      // Told only now, so a run that rescheduled after finish_bot stays quiet.
+      // Told when the run ends, after the owner approved finish_bot.
       await this.notice(
         meta,
         botFinishedText(ownerLocale(this.env), meta.name, meta.finishReason),
