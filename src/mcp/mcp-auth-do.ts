@@ -1,6 +1,6 @@
 import { Agent } from "agents";
 import { normalizeServerId } from "agents/mcp/client";
-import type { McpServerConfig } from "../config";
+import { configApprovalMode, type McpServerConfig } from "../config";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import {
   mcpConnector,
@@ -182,6 +182,7 @@ export class McpAuthDO extends Agent<Env> {
           mcpConnector(this.mcp, this.env, (target) =>
             this.accessToken(target.name, target.url),
           ),
+          configApprovalMode(readRuntimeConfig(this.env)),
         );
       } finally {
         await this.mcp.removeServer(normalizeServerId(server.name));

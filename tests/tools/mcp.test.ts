@@ -738,7 +738,7 @@ describe("probeMcpServer", () => {
     });
   });
 
-  it("reports destructive tools as approval in probes", async () => {
+  it("reports destructive tools by what they do in each approval mode", async () => {
     const client: McpClientLike = {
       async listTools() {
         return [{ name: "delete_page", annotations: { destructiveHint: true } }];
@@ -747,12 +747,15 @@ describe("probeMcpServer", () => {
         return { content: [] };
       },
     };
+    const writes = server({ approvalPolicy: "writes", requireApproval: [] });
 
+    // Autonomous runs them directly, which the picker shows as smart.
+    await expect(probeMcpServer(writes, async () => client)).resolves.toEqual({
+      ok: true,
+      tools: [{ name: "delete_page", description: "", mode: "review" }],
+    });
     await expect(
-      probeMcpServer(
-        server({ approvalPolicy: "writes", requireApproval: [] }),
-        async () => client,
-      ),
+      probeMcpServer(writes, async () => client, "reviewed"),
     ).resolves.toEqual({
       ok: true,
       tools: [{ name: "delete_page", description: "", mode: "approval" }],

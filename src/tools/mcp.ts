@@ -8,7 +8,7 @@ import type {
   ToolExecutionResult,
   ToolRegistration,
 } from "@earendil-works/pi-durable";
-import type { McpServerConfig } from "../config";
+import type { ApprovalMode, McpServerConfig } from "../config";
 import type { TaskEventBody } from "../protocol";
 import { withApproval, type ApprovalGateLike } from "../task/approvals";
 import { withProgress } from "./wrap";
@@ -411,8 +411,12 @@ async function loadServerTools(
 export async function probeMcpServer(
   server: McpServerConfig,
   connect: McpConnector,
+  approvalMode: ApprovalMode = "autonomous",
   timeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
 ): Promise<McpProbeResult> {
+  // The desktop's picker only offers the four legacy modes. A destructive tool
+  // runs directly in autonomous mode, which the picker calls smart.
+  const destructiveAs = approvalMode === "autonomous" ? "review" : "approval";
   try {
     const client = await withTimeout(
       connect(server),
@@ -428,12 +432,11 @@ export async function probeMcpServer(
     return {
       ok: true,
       tools: listed.map((info) => {
-        // The desktop's mode picker only offers the four legacy modes.
         const mode = mcpToolMode(server, info);
         return {
           name: info.name,
           description: info.description ?? "",
-          mode: mode === "destructive" ? "approval" : mode,
+          mode: mode === "destructive" ? destructiveAs : mode,
         };
       }),
     };
