@@ -598,8 +598,9 @@ export class TaskDO extends Agent<Env> {
     // the state is already terminal.
     this.setMeta("state", "cancelled");
     await this.outboxFor(taskId).emit({ type: "cancelled" });
-    this.clearDrafts(taskId);
     await this.abortWithTimeout();
+    // Only after the run stopped: an in-flight write must not land after cleanup.
+    this.clearDrafts(taskId);
 
     return { ok: true, message: cancelOkText(locale, taskId) };
   }

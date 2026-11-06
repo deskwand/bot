@@ -62,6 +62,17 @@ function defaultImages(): ImageProcessor {
   return (decodeProcessor ??= createCloudflarePhotonImages());
 }
 
+/** Create an image processor only when the first image actually needs one. */
+function lazyImages(create: () => ImageProcessor): ImageProcessor {
+  let inner: ImageProcessor | undefined;
+  return {
+    async prepare(bytes, mimeType, limits) {
+      inner ??= create();
+      return inner.prepare(bytes, mimeType, limits);
+    },
+  };
+}
+
 /** An image processor that never exceeds what an inbound image may be. */
 function boundedImages(inner: ImageProcessor): ImageProcessor {
   return {
@@ -120,9 +131,17 @@ export function workspaceTools(
   taskId: () => string,
   /** Decoder for images `read` returns; tests inject one, production uses Photon. */
   images?: ImageProcessor,
+  /** Creates the production decoder on first use; tests inject a counter. */
+  createDefaultImages: () => ImageProcessor = defaultImages,
 ): ToolRegistration[] {
   return [
-    workspaceTool(createReadTool({ images: boundedImages(images ?? defaultImages()) })),
+    workspaceTool(
+      createReadTool({
+        images: boundedImages(
+          images ?? lazyImages(createDefaultImages),
+        ),
+      }),
+    ),
     workspaceTool(createWriteTool()),
     workspaceTool(createEditTool()),
     listTool(bucket, taskId),

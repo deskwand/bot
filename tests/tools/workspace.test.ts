@@ -118,6 +118,38 @@ describe("workspaceTools", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("creates the Photon processor only when an image is read", async () => {
+    let created = 0;
+    const read = workspaceTools(env.ARTIFACTS, () => "t1", undefined, () => {
+      created += 1;
+      return {
+        async prepare() {
+          return { data: "AAAA", mimeType: "image/png" };
+        },
+      };
+    }).find((candidate) => candidate.name === "read")!;
+
+    await env.ARTIFACTS.put("work/t1/text.md", "hi");
+    await read.execute({ path: "text.md" }, apiFor("t1"), ctx);
+    expect(created).toBe(0);
+
+    await env.ARTIFACTS.put("work/t1/pic.png", bytes(PNG_B64), {
+      httpMetadata: { contentType: "image/png" },
+    });
+    const api = {
+      env: createR2WorkspaceEnv(env.ARTIFACTS, "t1"),
+      agent: async () => ({ model: { provider: "p", modelId: "m" } }),
+      models: {
+        getModel: () => ({
+          input: ["text", "image"],
+          inputLimits: { images: { resize: { maxWidth: 5000, maxHeight: 4000, maxBytes: 10 * 1024 * 1024 } } },
+        }),
+      },
+    } as never;
+    await read.execute({ path: "pic.png" }, api, ctx);
+    expect(created).toBe(1);
+  });
+
   it("clips image preparation to the inbound image limits", async () => {
     await env.ARTIFACTS.put("work/t1/pic.png", bytes(PNG_B64), {
       httpMetadata: { contentType: "image/png" },

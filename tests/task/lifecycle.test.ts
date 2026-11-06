@@ -580,16 +580,37 @@ describe("TaskDO workspace", () => {
 
   it("clears only the finished task's drafts", async () => {
     await env.ARTIFACTS.put("work/t-other/x.md", "keep me");
+    let listText = "";
     setModelOverride(
       scriptedModel([
         { toolCalls: [{ name: "write", args: { path: "d.md", content: "草稿" } }] },
-        { toolCalls: [{ name: "finish_task", args: { summary: "ok" } }] },
+        { toolCalls: [{ name: "list", args: {} }] },
+        {
+          observe: (context) => {
+            listText = lastToolText(context);
+          },
+          toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+        },
       ]),
     );
     const taskId = "t-cleanup-done";
     const stub = task(taskId);
 
     await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual([
+          "started",
+          "completed",
+        ]);
+      },
+      { timeout: 10_000 },
+    );
+
+    // The run really wrote a draft: this cannot pass before the write happened.
+    expect(listText).toContain("d.md");
 
     await vi.waitFor(
       async () => {
