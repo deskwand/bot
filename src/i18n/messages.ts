@@ -1,10 +1,6 @@
 import type { Locale } from "./index";
-
-export const zh = {
-  prompt: {
-    replyLanguage: "始终用中文回复主人。",
-  },
-} as const;
+import { en } from "./en";
+import { zh } from "./zh";
 
 /** Recursively widens every dictionary leaf to `string`. */
 export type DeepString<T> = {
@@ -12,12 +8,6 @@ export type DeepString<T> = {
 };
 
 export type Messages = DeepString<typeof zh>;
-
-export const en: Messages = {
-  prompt: {
-    replyLanguage: "Always reply to the owner in English.",
-  },
-};
 
 type DotPaths<T, Prefix extends string = ""> = {
   [K in keyof T & string]: T[K] extends string
@@ -52,5 +42,17 @@ export function t(
 ): string {
   const table = locale === "en" ? en : zh;
   const template = lookup(table, key) ?? lookup(zh, key) ?? key;
+  return formatTemplate(template, params);
+}
+
+/** Like `t`, but returns `undefined` instead of the key for unknown paths. */
+export function tryT(
+  locale: Locale,
+  key: string,
+  params: Record<string, string | number> = {},
+): string | undefined {
+  const table = locale === "en" ? en : zh;
+  const template = lookup(table, key) ?? lookup(zh, key);
+  if (template === undefined) return undefined;
   return formatTemplate(template, params);
 }
