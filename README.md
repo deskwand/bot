@@ -187,6 +187,12 @@ npm run deploy
 
 Telegram 由 Worker 主动长轮询收消息，不需要设置 webhook；旧部署升级后会自动删除已注册的 webhook。
 
+## 自托管兜底
+
+Cloudflare 是唯一的主路径。为防止供应商锁定，可以退到本机的 Miniflare（同一份构建产物、同一个 workerd 运行时）降级运行，数据通过现有的 `/admin/backup/*` 与 `/admin/r2/*` 协议搬运。资源需求、已知的版本坑、切换纪律与 RPO 见 `docs/self-host-fallback.md`。
+
+两条不能破的纪律：**同一时刻只能有一个实例在线**（两个实例同时轮询 Telegram 会互相抢 update），**不做双跑**。
+
 ## 渠道选择与切换
 
 `ACTIVE_CHANNEL` 决定唯一业务渠道：
