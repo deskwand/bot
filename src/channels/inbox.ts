@@ -41,3 +41,14 @@ export function inboxStore(bucket: R2Bucket): StoreInboundFile {
     };
   };
 }
+
+function formatAttachmentSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** The model-facing line that names an inbound attachment and its inbox key. */
+export function attachmentLine(file: InboundFile): string {
+  return `[附件] ${file.name} · ${file.mimeType} · ${formatAttachmentSize(file.size)} · key: ${file.key}`; // i18n-ignore: model-facing
+}

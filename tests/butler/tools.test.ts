@@ -114,6 +114,7 @@ describe("butler control tools", () => {
           spawn: async () => {
             throw new SpawnFailedError("t1", "boom");
           },
+          resolveAttachment: async () => null,
           memory: new MemoryStore(state.storage.sql),
           createSchedule: async () => "s1",
           listSchedules: () => [],
@@ -132,6 +133,170 @@ describe("butler control tools", () => {
     );
 
     expect(result).toBe("任务 t1 启动失败：boom");
+  });
+
+  it("passes resolved attachments to spawn", async () => {
+    const result = await runInDurableObject(
+      butler("tools-attachments"),
+      async (_instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        const file = {
+          name: "a.pdf",
+          key: "inbox/tg:1/a.pdf",
+          mimeType: "application/pdf",
+          size: 3,
+        };
+        const captured: { attachments?: typeof file[] } = {};
+        const tools = createButlerTools({
+          repo,
+          task: () => ({
+            start: async () => {},
+            status: async () => ({ state: "queued", title: "" }),
+            steer: async () => ({ ok: false, message: "" }),
+            cancel: async () => ({ ok: false, message: "" }),
+            retryTask: async () => ({ ok: false, message: "" }),
+            pendingApprovals: async () => [],
+          }),
+          spawn: async (_title, _instructions, attachments) => {
+            captured.attachments = attachments;
+            return "t1";
+          },
+          resolveAttachment: async (key) => (key === file.key ? file : null),
+          memory: new MemoryStore(state.storage.sql),
+          createSchedule: async () => "s1",
+          listSchedules: () => [],
+          removeSchedule: async () => false,
+        });
+
+        const spawnTask = tools.find((tool) => tool.name === "spawn_task");
+        await spawnTask!.execute(
+          {
+            title: "t",
+            instructions: "i",
+            attachments: ["inbox/tg:1/a.pdf"],
+          } as never,
+          {} as never,
+          {} as never,
+        );
+
+        return captured.attachments;
+      },
+    );
+
+    expect(result).toEqual([
+      {
+        name: "a.pdf",
+        key: "inbox/tg:1/a.pdf",
+        mimeType: "application/pdf",
+        size: 3,
+      },
+    ]);
+  });
+
+  it("rejects an attachment key outside the inbox", async () => {
+    const result = await runInDurableObject(
+      butler("tools-attachment-outside"),
+      async (_instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        let spawnCalls = 0;
+        const tools = createButlerTools({
+          repo,
+          task: () => ({
+            start: async () => {},
+            status: async () => ({ state: "queued", title: "" }),
+            steer: async () => ({ ok: false, message: "" }),
+            cancel: async () => ({ ok: false, message: "" }),
+            retryTask: async () => ({ ok: false, message: "" }),
+            pendingApprovals: async () => [],
+          }),
+          spawn: async () => {
+            spawnCalls += 1;
+            return "t1";
+          },
+          resolveAttachment: async (key) =>
+            key.startsWith("inbox/")
+              ? {
+                  name: "a.pdf",
+                  key,
+                  mimeType: "application/pdf",
+                  size: 3,
+                }
+              : null,
+          memory: new MemoryStore(state.storage.sql),
+          createSchedule: async () => "s1",
+          listSchedules: () => [],
+          removeSchedule: async () => false,
+        });
+
+        const spawnTask = tools.find((tool) => tool.name === "spawn_task");
+        const outcome = await spawnTask!.execute(
+          {
+            title: "t",
+            instructions: "i",
+            attachments: ["t9/x/secret.md"],
+          } as never,
+          {} as never,
+          {} as never,
+        );
+
+        return {
+          text: (outcome.output?.[0] as { text: string }).text,
+          spawnCalls,
+        };
+      },
+    );
+
+    expect(result.text).toContain("附件不存在");
+    expect(result.spawnCalls).toBe(0);
+  });
+
+  it("rejects an attachment that does not exist", async () => {
+    const result = await runInDurableObject(
+      butler("tools-attachment-missing"),
+      async (_instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        let spawnCalls = 0;
+        const tools = createButlerTools({
+          repo,
+          task: () => ({
+            start: async () => {},
+            status: async () => ({ state: "queued", title: "" }),
+            steer: async () => ({ ok: false, message: "" }),
+            cancel: async () => ({ ok: false, message: "" }),
+            retryTask: async () => ({ ok: false, message: "" }),
+            pendingApprovals: async () => [],
+          }),
+          spawn: async () => {
+            spawnCalls += 1;
+            return "t1";
+          },
+          resolveAttachment: async () => null,
+          memory: new MemoryStore(state.storage.sql),
+          createSchedule: async () => "s1",
+          listSchedules: () => [],
+          removeSchedule: async () => false,
+        });
+
+        const spawnTask = tools.find((tool) => tool.name === "spawn_task");
+        const outcome = await spawnTask!.execute(
+          {
+            title: "t",
+            instructions: "i",
+            attachments: ["inbox/tg:1/missing.pdf"],
+          } as never,
+          {} as never,
+          {} as never,
+        );
+
+        return {
+          text: (outcome.output?.[0] as { text: string }).text,
+          spawnCalls,
+        };
+      },
+    );
+
+    expect(result.text).toContain("附件不存在");
+    expect(result.spawnCalls).toBe(0);
   });
 
   it("retry_task refuses a bot task", async () => {
@@ -155,6 +320,7 @@ describe("butler control tools", () => {
             pendingApprovals: async () => [],
           }),
           spawn: async () => "t2",
+          resolveAttachment: async () => null,
           memory: new MemoryStore(state.storage.sql),
           createSchedule: async () => "s1",
           listSchedules: () => [],

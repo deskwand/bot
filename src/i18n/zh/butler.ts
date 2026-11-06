@@ -33,6 +33,8 @@ export const butler = {
     noChannel: "没有可用渠道",
     error: "出错了，稍后再试",
     imageUnavailable: "收到了图片，但没能取到图片内容，请稍后再发一次",
+    fileTooLarge: "文件超过 15 MB，没能收下",
+    fileUnavailable: "收到了文件，但没能取到内容，请稍后再发一次",
     voiceUnavailable: "收到了语音，但没能转成文字，请再发一次或换成文字",
     unsupportedMessage: "目前只支持文字、图片和语音消息",
     imageModel: "当前模型不支持图片，请在桌面端模型页换成支持视觉的模型",

@@ -185,6 +185,14 @@ export function imageUnavailableNotice(locale: Locale): string {
   return t(locale, "butler.notice.imageUnavailable");
 }
 
+export function fileTooLargeNotice(locale: Locale): string {
+  return t(locale, "butler.notice.fileTooLarge");
+}
+
+export function fileUnavailableNotice(locale: Locale): string {
+  return t(locale, "butler.notice.fileUnavailable");
+}
+
 export function voiceUnavailableNotice(locale: Locale): string {
   return t(locale, "butler.notice.voiceUnavailable");
 }

@@ -2,11 +2,13 @@ import { Agent } from "agents";
 import { PiHarness, type PiModel } from "agents/harness/pi";
 import { createRegistry, Harness, type UserInput } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
+import { artifactNameFromKey } from "../artifact";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
 import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
 import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { ownerLocale, t, type Locale } from "../i18n";
+import { attachmentLine, isInboxKey } from "../channels/inbox";
 import type { TextAction } from "../channels/text-action";
 import type {
   DbSchema,
@@ -32,6 +34,7 @@ import {
   type AdmittedMessage,
   type Artifact,
   type ChannelMessageRef,
+  type InboundFile,
   type OutboundMessage,
   type TaskEvent,
   type TaskEventBody,
@@ -45,6 +48,8 @@ import {
   cancelButton,
   decisionSuffix,
   errorNotice,
+  fileTooLargeNotice,
+  fileUnavailableNotice,
   imageModelNotice,
   imageUnavailableNotice,
   maintenanceRetryText,
@@ -245,7 +250,9 @@ export class ButlerDO extends Agent<Env> {
         ...createButlerTools({
           repo: this.repo,
           task: (id) => this.taskFor(id),
-          spawn: (title, instructions) => this.spawn(title, instructions),
+          spawn: (title, instructions, attachments) =>
+            this.spawn(title, instructions, undefined, attachments),
+          resolveAttachment: (key) => this.resolveAttachment(key),
           memory: this.memory,
           createSchedule: (cron, title, instructions) =>
             this.createSchedule(cron, title, instructions),
@@ -414,6 +421,7 @@ export class ButlerDO extends Agent<Env> {
     title: string,
     instructions: string,
     origin: Address | null = this.origin,
+    attachments: InboundFile[] = [],
   ): Promise<string> {
     const locale = ownerLocale(this.env);
     const id = this.repo.nextId();
@@ -445,7 +453,12 @@ export class ButlerDO extends Agent<Env> {
     }
 
     try {
-      await this.taskFor(id).start({ taskId: id, title, instructions });
+      await this.taskFor(id).start({
+        taskId: id,
+        title,
+        instructions,
+        ...(attachments.length === 0 ? {} : { attachments }),
+      });
     } catch (error) {
       // Without a started Task DO the row would otherwise stay `queued`
       // forever and look like an active task.
@@ -460,6 +473,23 @@ export class ButlerDO extends Agent<Env> {
     }
 
     return id;
+  }
+
+  /**
+   * Resolves an inbox key to the file reference a task can receive. Anything
+   * outside the inbox, or a missing object, is not an attachment.
+   */
+  async resolveAttachment(key: string): Promise<InboundFile | null> {
+    if (!isInboxKey(key)) return null;
+    const object = await this.env.ARTIFACTS.head(key);
+    if (object === null) return null;
+    return {
+      name: artifactNameFromKey(key),
+      key,
+      mimeType:
+        object.httpMetadata?.contentType ?? "application/octet-stream",
+      size: object.size,
+    };
   }
 
   /**
@@ -1334,6 +1364,17 @@ export class ButlerDO extends Agent<Env> {
     if (!(await this.admissionHolds(evt))) return;
 
     const images = evt.images ?? [];
+    const files = evt.files ?? [];
+    if (evt.fileFailed) {
+      await this.sendBestEffort({
+        text:
+          evt.fileFailed === "too_large"
+            ? fileTooLargeNotice(locale)
+            : fileUnavailableNotice(locale),
+      });
+      this.kickReconcile();
+      return;
+    }
     if (evt.imageFailed && images.length === 0) {
       await this.sendBestEffort({
         text: imageUnavailableNotice(locale),
@@ -1348,7 +1389,7 @@ export class ButlerDO extends Agent<Env> {
       this.kickReconcile();
       return;
     }
-    if (evt.text === null && images.length === 0) {
+    if (evt.text === null && images.length === 0 && files.length === 0) {
       await this.sendBestEffort({ text: unsupportedMessageNotice(locale) });
       this.kickReconcile();
       return;
@@ -1382,14 +1423,17 @@ export class ButlerDO extends Agent<Env> {
     }
 
     const operationId = evt.eventId;
+    const attachmentText = files.map(attachmentLine).join("\n");
+    const modelText = [evt.text, attachmentText]
+      .filter((part): part is string => part !== null && part !== "")
+      .join("\n");
     const input: UserInput =
       images.length === 0
-        ? // The guard above already ruled out a null text here.
-          (evt.text ?? "")
+        ? modelText
         : [
-            ...(evt.text === null || evt.text === ""
+            ...(modelText === ""
               ? []
-              : [{ type: "text" as const, text: evt.text }]),
+              : [{ type: "text" as const, text: modelText }]),
             ...images.map((image) => ({
               type: "image" as const,
               data: image.data,

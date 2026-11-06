@@ -36,6 +36,9 @@ export const butler: Messages["butler"] = {
     error: "Something went wrong, try again later",
     imageUnavailable:
       "Received an image but could not read it, please send it again",
+    fileTooLarge: "That file is over 15 MB, so it wasn't received",
+    fileUnavailable:
+      "A file arrived but its content couldn't be fetched; please send it again",
     voiceUnavailable:
       "Received a voice message but could not transcribe it, please send it again or type it out",
     unsupportedMessage:

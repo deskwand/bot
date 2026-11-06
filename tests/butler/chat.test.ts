@@ -84,6 +84,9 @@ function message(evt: {
   channel?: AdmittedMessage["channel"];
   chatId?: string;
   images?: AdmittedMessage["images"];
+  files?: AdmittedMessage["files"];
+  fileFailed?: AdmittedMessage["fileFailed"];
+  imageFailed?: boolean;
   voiceFailed?: boolean;
 }): AdmittedMessage {
   return {
@@ -93,6 +96,9 @@ function message(evt: {
     userId: "1",
     text: evt.text,
     ...(evt.images === undefined ? {} : { images: evt.images }),
+    ...(evt.files === undefined ? {} : { files: evt.files }),
+    ...(evt.fileFailed === undefined ? {} : { fileFailed: evt.fileFailed }),
+    ...(evt.imageFailed === undefined ? {} : { imageFailed: evt.imageFailed }),
     ...(evt.voiceFailed === undefined ? {} : { voiceFailed: evt.voiceFailed }),
     eventId: evt.eventId,
     routeKey: route.routeKey,
@@ -385,6 +391,184 @@ describe("butler chat", () => {
       { type: "image", data: PNG_B64, mimeType: "image/png" },
     ]);
     expect(channel.sent).toEqual([{ chatId: "42", text: "看到了" }]);
+  });
+
+  it("lists an image's inbox key next to the image", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "看到了",
+          observe: (context) => {
+            seen = context;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-112").handleMessage(
+      message({
+        text: "图里写了什么？",
+        eventId: "tg:112",
+        images: [{ mimeType: "image/png", data: PNG_B64 }],
+        files: [
+          {
+            name: "scan.png",
+            key: "inbox/tg:112/scan.png",
+            mimeType: "image/png",
+            size: 2048,
+          },
+        ],
+      }),
+    );
+
+    const last = seen?.messages.filter((entry) => entry.role === "user").at(-1);
+    expect(last?.content).toEqual([
+      {
+        type: "text",
+        text: "图里写了什么？\n[附件] scan.png · image/png · 2.0 KB · key: inbox/tg:112/scan.png",
+      },
+      { type: "image", data: PNG_B64, mimeType: "image/png" },
+    ]);
+    expect(channel.sent).toEqual([{ chatId: "42", text: "看到了" }]);
+  });
+
+  it("accepts a message that only carries a file", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "收到文件",
+          observe: (context) => {
+            seen = context;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-file-only").handleMessage(
+      message({
+        text: null,
+        eventId: "tg:file-only",
+        files: [
+          {
+            name: "a.pdf",
+            key: "inbox/tg:1/a.pdf",
+            mimeType: "application/pdf",
+            size: 2048,
+          },
+        ],
+      }),
+    );
+
+    const last = seen?.messages.filter((entry) => entry.role === "user").at(-1);
+    expect(last?.content).toBe(
+      "[附件] a.pdf · application/pdf · 2.0 KB · key: inbox/tg:1/a.pdf",
+    );
+    expect(channel.sent).toEqual([{ chatId: "42", text: "收到文件" }]);
+  });
+
+  it("appends attachment lines after the text", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "好的",
+          observe: (context) => {
+            seen = context;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-file-with-text").handleMessage(
+      message({
+        text: "总结一下",
+        eventId: "tg:file-with-text",
+        files: [
+          {
+            name: "a.pdf",
+            key: "inbox/tg:1/a.pdf",
+            mimeType: "application/pdf",
+            size: 2048,
+          },
+        ],
+      }),
+    );
+
+    const last = seen?.messages.filter((entry) => entry.role === "user").at(-1);
+    expect(last?.content).toBe(
+      "总结一下\n[附件] a.pdf · application/pdf · 2.0 KB · key: inbox/tg:1/a.pdf",
+    );
+    expect(channel.sent).toEqual([{ chatId: "42", text: "好的" }]);
+  });
+
+  it("tells the owner a file was too large", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let calls = 0;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "不应出现",
+          observe: () => {
+            calls += 1;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-file-too-large").handleMessage(
+      message({
+        text: null,
+        eventId: "tg:file-too-large",
+        fileFailed: "too_large",
+        imageFailed: true,
+      }),
+    );
+
+    expect(channel.sent).toEqual([
+      { chatId: "42", text: "文件超过 15 MB，没能收下" },
+    ]);
+    expect(calls).toBe(0);
+  });
+
+  it("tells the owner a file could not be received", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let calls = 0;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "不应出现",
+          observe: () => {
+            calls += 1;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-file-unavailable").handleMessage(
+      message({
+        text: null,
+        eventId: "tg:file-unavailable",
+        fileFailed: "download",
+      }),
+    );
+
+    expect(channel.sent).toEqual([
+      {
+        chatId: "42",
+        text: "收到了文件，但没能取到内容，请稍后再发一次",
+      },
+    ]);
+    expect(calls).toBe(0);
   });
 
   it("submits an image on its own when there is no text", async () => {

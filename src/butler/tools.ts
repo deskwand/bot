@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
-import type { TaskSpec } from "../protocol";
+import type { InboundFile, TaskSpec } from "../protocol";
 import type { MemoryStore } from "./memory";
 import type { ScheduleRow } from "./schedules";
 import { taskLabel, type TaskRow, type TasksRepo } from "./tasks-repo";
@@ -8,6 +8,12 @@ import { taskLabel, type TaskRow, type TasksRepo } from "./tasks-repo";
 const SpawnTask = Type.Object({
   title: Type.String(),
   instructions: Type.String(),
+  attachments: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "inbox keys from [附件] lines the task needs to read",
+    }),
+  ),
 });
 
 const ListTasks = Type.Object({
@@ -55,7 +61,13 @@ export type ButlerToolDeps = {
   repo: TasksRepo;
   task(id: string): TaskControl;
   /** Inserts a task row and starts its Task DO; returns the task id. */
-  spawn(title: string, instructions: string): Promise<string>;
+  spawn(
+    title: string,
+    instructions: string,
+    attachments?: InboundFile[],
+  ): Promise<string>;
+  /** Resolves an inbox key to its stored file reference, or null. */
+  resolveAttachment(key: string): Promise<InboundFile | null>;
   memory: MemoryStore;
   /** Persists the schedule and registers its Agent cron callback. */
   createSchedule(
@@ -110,9 +122,15 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     description:
       "Start a background task for work that needs many searches/reads or more than about a minute.",
     parameters: SpawnTask,
-    async execute({ title, instructions }) {
+    async execute({ title, instructions, attachments }) {
       try {
-        const id = await deps.spawn(title, instructions);
+        const files: InboundFile[] = [];
+        for (const key of attachments ?? []) {
+          const file = await deps.resolveAttachment(key);
+          if (file === null) return output(`附件不存在：${key}`);
+          files.push(file);
+        }
+        const id = await deps.spawn(title, instructions, files);
         const row = repo.get(id);
         return output(
           row === null || row.handle === null
