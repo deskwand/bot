@@ -22,7 +22,7 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { createBotTaskTools } from "../bot/bot-tools";
-import { ownerLocale } from "../i18n";
+import { ownerLocale, t } from "../i18n";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import {
   lastModelError,
@@ -231,16 +231,24 @@ export class TaskDO extends Agent<Env> {
         withProgress(
           getArtifactTool(this.env.ARTIFACTS, this.env.PUBLIC_BASE_URL),
           emitProgress,
-          (args) =>
-            progressArtifactText(
-              ownerLocale(this.env),
-              safeArtifactRef(args.ref),
-            ),
+          (args) => {
+            const locale = ownerLocale(this.env);
+            return progressArtifactText(
+              locale,
+              safeArtifactRef(args.ref, t(locale, "task.invalidUrl")),
+            );
+          },
         ),
         withProgress(
           httpRequestTool(this.reviewedGate),
           emitProgress,
-          (args) => `${args.method ?? "GET"} ${safeRequestUrl(args.url)}`,
+          (args) => {
+            const locale = ownerLocale(this.env);
+            return `${args.method ?? "GET"} ${safeRequestUrl(
+              args.url,
+              t(locale, "task.invalidUrl"),
+            )}`;
+          },
         ),
         withProgress(
           nowTool(),

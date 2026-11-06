@@ -24,6 +24,7 @@ export const butler: Messages["butler"] = {
     failed: "❌ {label} {title}: {reason}",
     cancelled: "🚫 {label} {title}: Cancelled",
     retryHint: 'Reply "retry" to continue',
+    cancelButton: "Cancel",
     missing: "Task not found",
   },
   notice: {

@@ -62,7 +62,7 @@ export function cancelButton(
   label: string,
 ): { label: string; hint: string } {
   return {
-    label: actionLabel(locale, "cancel"),
+    label: t(locale, "butler.task.cancelButton"),
     hint: actionHint(locale, "cancel", { taskId: label }),
   };
 }

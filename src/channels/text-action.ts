@@ -22,10 +22,18 @@ const COMMANDS: Record<string, ActionKind> = {
   cancel: "cancel",
 };
 
+/** Spell one command word both ways while leaving non-letters alone. */
+function caseInsensitive(word: string): string {
+  return Array.from(word, (char) => {
+    const lower = char.toLowerCase();
+    const upper = char.toUpperCase();
+    return lower === upper ? char : `[${lower}${upper}]`;
+  }).join("");
+}
+
 const COMMAND_PATTERN = new RegExp(
-  `^(${Object.keys(COMMANDS).join("|")})` +
+  `^(${Object.keys(COMMANDS).map(caseInsensitive).join("|")})` +
     `(?:\\s+(?:#?(\\d+)|(t\\d+)))?(?:\\s+(ap\\d+))?$`,
-  "i",
 );
 
 /** Quote pairs the owner may leave around a copied hint. */

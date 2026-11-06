@@ -94,9 +94,8 @@ describe("action buttons and hints", () => {
     for (const action of ["approve", "reject"] as const) {
       expectEnglish(approvalButtonLabel("en", action));
     }
-    expectEnglish(cancelButton("en", "#1").label);
-    expectEnglish(cancelButton("en", "#1").hint);
-    expect(cancelButton("en", "#1").hint).toContain("#1");
+    expect(cancelButton("en", "#1").label).toBe("Cancel");
+    expect(cancelButton("en", "#1").hint).toBe("cancel #1");
   });
 });
 

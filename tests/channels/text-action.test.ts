@@ -113,6 +113,21 @@ describe("parseTextAction", () => {
     expect(parseTextAction("批准 task3 ap1")).toBeNull();
   });
 
+  it("only makes the verb case-insensitive", () => {
+    // The ids stay lowercase so an uppercase id is chatter, not a target.
+    expect(parseTextAction("批准 T61 ap1")).toBeNull();
+    expect(parseTextAction("approve t1 AP2")).toBeNull();
+    expect(parseTextAction("APPROVE t1 ap2")).toEqual({
+      action: "approve",
+      target: { kind: "taskId", taskId: "t1" },
+      approvalId: "ap2",
+    });
+    expect(parseTextAction("Approve #1")).toEqual({
+      action: "approve",
+      target: { kind: "handle", handle: 1 },
+    });
+  });
+
   it("accepts the quotes the WeChat hint shows", () => {
     // The hint reads 回复"批准 #1 ap1": copying it must work verbatim.
     expect(parseTextAction('"批准 #1 ap1"')).toEqual({

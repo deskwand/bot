@@ -173,7 +173,7 @@ describe("/admin/mcp/*", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       code: "MCP_SERVER_NOT_FOUND_OR_NO_AUTH",
-      error: "服务不存在或不需要授权",
+      message: "服务不存在或不需要授权",
     });
   });
 
@@ -189,7 +189,7 @@ describe("/admin/mcp/*", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       code: "MCP_DCR_UNSUPPORTED",
-      error: "该服务不支持自动注册（DCR）",
+      message: "该服务不支持自动注册（DCR）",
     });
   });
 
@@ -210,15 +210,15 @@ describe("/admin/mcp/*", () => {
     expect(zhResponse.status).toBe(400);
     expect(await zhResponse.json()).toEqual({
       code: "MCP_SERVER_NOT_FOUND",
-      error: "服务不存在",
+      message: "服务不存在",
     });
     expect(enResponse.status).toBe(400);
-    const body = (await enResponse.json()) as { code: string; error: string };
+    const body = (await enResponse.json()) as { code: string; message: string };
     expect(body).toEqual({
       code: "MCP_SERVER_NOT_FOUND",
-      error: "Service not found",
+      message: "Service not found",
     });
-    expect(body.error).not.toMatch(/\p{Script=Han}/u);
+    expect(body.message).not.toMatch(/\p{Script=Han}/u);
   });
 
   it("revokes a server", async () => {

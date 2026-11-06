@@ -22,6 +22,7 @@ export const butler = {
     failed: "❌ {label} {title}：{reason}",
     cancelled: "🚫 {label} {title}：已取消",
     retryHint: '回复"重试"可继续',
+    cancelButton: "取消",
     missing: "任务不存在",
   },
   notice: {

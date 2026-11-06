@@ -88,7 +88,7 @@ func TestMcpServerMissingMatchesCodeAndLegacyText(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"code", domain.Error{Code: mcpServerNotFoundCode, Message: "Service not found"}, true},
+		{"code", domain.Error{Code: CodeMcpServerNotFound, Message: "Service not found"}, true},
 		{"legacy text", domain.Error{Code: "MCP_INVALID", Message: mcpServerMissing}, true},
 		{"other code", domain.Error{Code: "MCP_SERVER_NOT_FOUND_OR_NO_AUTH", Message: "服务不存在或不需要授权"}, false},
 		{"other error", errors.New("boom"), false},
@@ -104,10 +104,10 @@ func TestMcpServerMissingMatchesCodeAndLegacyText(t *testing.T) {
 		probe mcpadmin.Probe
 		want  bool
 	}{
-		{"code", mcpadmin.Probe{ReasonCode: mcpServerNotFoundCode, Reason: "Service not found"}, true},
+		{"code", mcpadmin.Probe{ReasonCode: CodeMcpServerNotFound, Reason: "Service not found"}, true},
 		{"legacy text", mcpadmin.Probe{Reason: mcpServerMissing}, true},
 		{"other reason", mcpadmin.Probe{Reason: "需要在桌面端登录授权"}, false},
-		{"not failed", mcpadmin.Probe{OK: true, ReasonCode: mcpServerNotFoundCode}, false},
+		{"not failed", mcpadmin.Probe{OK: true, ReasonCode: CodeMcpServerNotFound}, false},
 	}
 	for _, testCase := range probes {
 		if got := isMcpProbeMissing(testCase.probe); got != testCase.want {

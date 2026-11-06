@@ -128,7 +128,7 @@ describe("McpAuthDO locale", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       code: "MCP_SERVER_NOT_FOUND",
-      error: "Service not found",
+      message: "Service not found",
     });
   });
 });

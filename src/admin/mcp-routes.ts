@@ -20,7 +20,7 @@ const CALLBACK_PATH = "/mcp/oauth/callback";
 
 /** Failures the user can act on; any other error stays hidden. */
 function userError(locale: Locale, code: McpUserErrorCode): Response {
-  return json({ code, error: mcpErrorText(locale, code) }, 400);
+  return json({ code, message: mcpErrorText(locale, code) }, 400);
 }
 
 function json(body: unknown, status = 200): Response {

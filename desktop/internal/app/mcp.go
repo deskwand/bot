@@ -21,7 +21,7 @@ import (
 
 // A server published moments ago is unknown to the Worker until the new
 // version takes traffic; probe and OAuth start retry while it says so.
-const mcpServerNotFoundCode = "MCP_SERVER_NOT_FOUND"
+const CodeMcpServerNotFound = "MCP_SERVER_NOT_FOUND"
 
 // Older Workers only sent the Chinese message, without a code.
 const mcpServerMissing = "服务不存在" // i18n-ignore: legacy Worker response text
@@ -51,14 +51,14 @@ func untilMcpServerLive[T any](ctx context.Context, call func() (T, error), miss
 func isMcpServerMissing(err error) bool {
 	var derr domain.Error
 	return errors.As(err, &derr) &&
-		(derr.Code == mcpServerNotFoundCode || derr.Message == mcpServerMissing)
+		(derr.Code == CodeMcpServerNotFound || derr.Message == mcpServerMissing)
 }
 
 // isMcpProbeMissing matches the probe's coded reason, falling back to the
 // message an older Worker sent.
 func isMcpProbeMissing(probe mcpadmin.Probe) bool {
 	return !probe.OK &&
-		(probe.ReasonCode == mcpServerNotFoundCode || probe.Reason == mcpServerMissing)
+		(probe.ReasonCode == CodeMcpServerNotFound || probe.Reason == mcpServerMissing)
 }
 
 var (

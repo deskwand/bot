@@ -8,6 +8,7 @@ export const task: Messages["task"] = {
     read: "Read: {url}",
     save: "Save: {filename}",
   },
+  invalidUrl: "[invalid URL]",
   state: {
     queued: "queued",
     running: "running",

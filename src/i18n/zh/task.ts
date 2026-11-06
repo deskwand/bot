@@ -6,6 +6,7 @@ export const task = {
     read: "读取：{url}",
     save: "保存：{filename}",
   },
+  invalidUrl: "[无效 URL]",
   state: {
     queued: "排队中",
     running: "运行中",

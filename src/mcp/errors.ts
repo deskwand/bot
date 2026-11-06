@@ -5,12 +5,14 @@
 export type McpUserErrorCode =
   | "MCP_SERVER_NOT_FOUND"
   | "MCP_SERVER_NOT_FOUND_OR_NO_AUTH"
-  | "MCP_DCR_UNSUPPORTED";
+  | "MCP_DCR_UNSUPPORTED"
+  | "MCP_AUTH_REQUIRED";
 
 const CODES = new Set<string>([
   "MCP_SERVER_NOT_FOUND",
   "MCP_SERVER_NOT_FOUND_OR_NO_AUTH",
   "MCP_DCR_UNSUPPORTED",
+  "MCP_AUTH_REQUIRED",
 ] satisfies McpUserErrorCode[]);
 
 export class McpUserError extends Error {
