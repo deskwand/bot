@@ -25,22 +25,31 @@ export type McpToolInfo = {
 };
 
 /** How the loader treats one tool of a server. */
-export type McpToolMode = "disabled" | "approval" | "review" | "auto";
+export type McpToolMode =
+  | "disabled"
+  | "approval"
+  | "destructive"
+  | "review"
+  | "auto";
 
-/** The two gates installed tools may use: forced approval and auto review. */
+/** The gates installed tools may use: forced approval, destructive writes and auto review. */
 export type McpGates = {
   approval: ApprovalGateLike;
+  destructive: ApprovalGateLike;
   review: ApprovalGateLike;
 };
 
 /** A configured server that could not be loaded for this run. */
 export type McpUnavailable = { name: string; reason: string };
 
+/** The modes the desktop's mode picker offers. */
+export type McpProbeMode = Exclude<McpToolMode, "destructive">;
+
 /** Result of the desktop's "test connection" action. */
 export type McpProbeResult =
   | {
       ok: true;
-      tools: { name: string; description: string; mode: McpToolMode }[];
+      tools: { name: string; description: string; mode: McpProbeMode }[];
     }
   | { ok: false; reason: string };
 
@@ -170,7 +179,7 @@ export function mcpToolMode(
   if (server.autoApprove?.includes(tool.name)) return "auto";
   if (server.approvalPolicy === "writes") {
     if (tool.annotations?.readOnlyHint === true) return "auto";
-    if (tool.annotations?.destructiveHint === true) return "approval";
+    if (tool.annotations?.destructiveHint === true) return "destructive";
     return "review";
   }
   return "auto";
@@ -380,6 +389,8 @@ async function loadServerTools(
 
     if (mode === "approval") {
       tool = withApproval(tool, gates.approval);
+    } else if (mode === "destructive") {
+      tool = withApproval(tool, gates.destructive);
     } else if (mode === "review") {
       tool = withApproval(tool, gates.review);
     }
@@ -416,11 +427,15 @@ export async function probeMcpServer(
 
     return {
       ok: true,
-      tools: listed.map((info) => ({
-        name: info.name,
-        description: info.description ?? "",
-        mode: mcpToolMode(server, info),
-      })),
+      tools: listed.map((info) => {
+        // The desktop's mode picker only offers the four legacy modes.
+        const mode = mcpToolMode(server, info);
+        return {
+          name: info.name,
+          description: info.description ?? "",
+          mode: mode === "destructive" ? "approval" : mode,
+        };
+      }),
     };
   } catch (error) {
     return { ok: false, reason: errorMessage(error) };

@@ -43,7 +43,7 @@ async function script(id: string, code: string, setup?: (stub: Stub) => Promise<
 }
 async function fixtureMcp(stub: Stub) {
   await runInDurableObject(stub,async instance=>{
-    const loaded=await loadMcpTools([{name:"fixture",url:"https://fixture.test/mcp"}],{approval:instance.approvals,review:instance.reviewedGate},async()=>({
+    const loaded=await loadMcpTools([{name:"fixture",url:"https://fixture.test/mcp"}],{approval:instance.approvals,destructive:instance.approvals,review:instance.reviewedGate},async()=>({
       listTools:async()=>[{name:"echo",description:"Fixture echo",inputSchema:{type:"object",properties:{text:{type:"string"}},required:["text"]}}],
       callTool:async(_name,args)=>({content:[{type:"text",text:`echo:${args.text}`}]}),
     }),async()=>{});

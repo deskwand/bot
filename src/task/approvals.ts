@@ -300,6 +300,28 @@ export function rejectionText(decision: ApprovalDecision): string {
   return `用户拒绝了此操作（${decision}），请换一种方式或直接向用户说明`;
 }
 
+/**
+ * Gate that never asks the owner. It is used for write actions in the
+ * autonomous approval mode; an already-aborted call is still refused so an
+ * interrupted task cannot start a new tool.
+ */
+export class AutoGate implements ApprovalGateLike {
+  async request(
+    _tool: string,
+    _args: unknown,
+    signal: AbortSignal,
+  ): Promise<ApprovalDecision> {
+    return signal.aborted ? "rejected" : "approved";
+  }
+
+  async resolve(
+    _approvalId: string,
+    _decision: "approved" | "rejected",
+  ): Promise<{ ok: boolean; message: string }> {
+    return { ok: false, message: "该审批已处理或已失效" };
+  }
+}
+
 /** One booked review, kept for troubleshooting. */
 export type ReviewRow = {
   tool: string;

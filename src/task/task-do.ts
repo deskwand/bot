@@ -629,7 +629,11 @@ export class TaskDO extends Agent<Env> {
 
       const loaded = await loadMcpTools(
         servers,
-        { approval: this.approvals, review: this.reviewedGate },
+        {
+          approval: this.approvals,
+          destructive: this.approvals,
+          review: this.reviewedGate,
+        },
         mcpConnector(this.mcp, this.env, (server) =>
           this.env.MCP_AUTH.get(
             this.env.MCP_AUTH.idFromName("global"),

@@ -10,6 +10,7 @@ import { setChannelOverride } from "../../src/channels/override";
 import {
   ApprovalGate,
   approvalSummary,
+  AutoGate,
   PROPOSE_RULES_TOOL,
   ReviewedGate,
   withApproval,
@@ -521,6 +522,31 @@ describe("ApprovalGate notes", () => {
 
     expect(outcome.columns).toContain("reason");
     expect(outcome.row).not.toHaveProperty("reason");
+  });
+});
+
+describe("AutoGate", () => {
+  it("approves without asking", async () => {
+    expect(
+      await new AutoGate().request(
+        "http_request",
+        {},
+        new AbortController().signal,
+      ),
+    ).toBe("approved");
+  });
+  it("rejects an aborted call", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    expect(
+      await new AutoGate().request("http_request", {}, controller.signal),
+    ).toBe("rejected");
+  });
+  it("has nothing to resolve", async () => {
+    expect(await new AutoGate().resolve("ap1", "approved")).toEqual({
+      ok: false,
+      message: "该审批已处理或已失效",
+    });
   });
 });
 
