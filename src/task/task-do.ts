@@ -267,7 +267,9 @@ export class TaskDO extends Agent<Env> {
           (args) => progressSearchText(ownerLocale(this.env), args.query),
         ),
         withProgress(
-          getArtifactTool(this.env.ARTIFACTS, this.env.PUBLIC_BASE_URL),
+          getArtifactTool(this.env.ARTIFACTS, this.env.PUBLIC_BASE_URL, {
+            taskId: () => this.currentTaskId() ?? "",
+          }),
           emitProgress,
           (args) => {
             const locale = ownerLocale(this.env);

@@ -7,6 +7,7 @@ import {
   getArtifactTool,
   safeArtifactRef,
 } from "../../src/tools/get-artifact";
+import { PNG_B64, bytes, fakeApi } from "../helpers/images";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -47,7 +48,7 @@ describe("getArtifactTool", () => {
       httpMetadata: { contentType: "text/markdown; charset=utf-8" },
     });
 
-    const tool = getArtifactTool(env.ARTIFACTS, BASE);
+    const tool = getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1" });
     const text = textOf(
       await tool.execute({ ref: `${BASE}/a/t1/file-1/report.md` }, {} as never, context()),
     );
@@ -58,7 +59,7 @@ describe("getArtifactTool", () => {
   });
 
   it("reports a missing artifact without throwing", async () => {
-    const tool = getArtifactTool(env.ARTIFACTS, BASE);
+    const tool = getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1" });
     const result = await tool.execute(
       { ref: "t1/none/missing.md" },
       {} as never,
@@ -81,18 +82,18 @@ it.each([
 });
 it("preserves the exact text body and MIME type", async () => {
   await env.ARTIFACTS.put("t1/id/exact", "# 标题\n\n**bold**\n", {httpMetadata:{contentType:"TEXT/MARKDOWN; charset=utf-8"}});
-  const result = await getArtifactTool(env.ARTIFACTS, BASE).execute({ref:"t1/id/exact"}, {} as never, context());
+  const result = await getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1" }).execute({ref:"t1/id/exact"}, {} as never, context());
   expect(textOf(result).split("\n\n").slice(1).join("\n\n")).toBe("# 标题\n\n**bold**\n");
 });
 it("marks invalid and missing references as errors", async () => {
   for(const ref of ["../x", "t1/id/absent"]) {
-    expect((await getArtifactTool(env.ARTIFACTS,BASE).execute({ref},{} as never,context())).isError).toBe(true);
+    expect((await getArtifactTool(env.ARTIFACTS,BASE,{ taskId: () => "t1" }).execute({ref},{} as never,context())).isError).toBe(true);
   }
 });
 it("caps binary output and preserves every displayed byte", async () => {
   const data = Uint8Array.from({length:15_100},(_,i)=>i%256);
   await env.ARTIFACTS.put("t1/id/binary",data);
-  const text=textOf(await getArtifactTool(env.ARTIFACTS,BASE).execute({ref:"t1/id/binary"},{} as never,context()));
+  const text=textOf(await getArtifactTool(env.ARTIFACTS,BASE,{ taskId: () => "t1" }).execute({ref:"t1/id/binary"},{} as never,context()));
   const base64=text.split("\n\n").at(-1)!;
   expect(base64.length).toBe(20_000);
   expect(text).toContain("已截断");
@@ -104,7 +105,7 @@ it("cancels oversized artifact streams without materializing the full object", a
     pull(c){pulled++;c.enqueue(new Uint8Array(512*1024).fill(97));},
     cancel(){cancelled=true;},
   })})} as unknown as R2Bucket;
-  const text=textOf(await getArtifactTool(bucket,BASE).execute({ref:"t1/id/large"},{} as never,context()));
+  const text=textOf(await getArtifactTool(bucket,BASE,{ taskId: () => "t1" }).execute({ref:"t1/id/large"},{} as never,context()));
   expect(cancelled).toBe(true);
   expect(pulled).toBeLessThan(8);
   expect(text).toContain("内容超过 2 MB");
@@ -121,4 +122,39 @@ it("strips credentials and query strings from the progress label", () => {
 it("uses the caller's label for an unparsable URL", () => {
   expect(safeArtifactRef("http://[")).toBe("[无效 URL]");
   expect(safeArtifactRef("http://[", "[invalid URL]")).toBe("[invalid URL]");
+});
+
+it("refuses another task's artifact", async () => {
+  await env.ARTIFACTS.put("t2/id/secret.md", "x");
+  const result = await getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1" })
+    .execute({ ref: "t2/id/secret.md" }, {} as never, context());
+  expect(result.isError).toBe(true);
+  expect(textOf(result)).toContain("无权读取");
+});
+
+it("converts a stored PDF over 2 MB in full", async () => {
+  const pdf = new Uint8Array(3 * 1024 * 1024); pdf.set(new TextEncoder().encode("%PDF-1.7"));
+  await env.ARTIFACTS.put("t1/id/big.pdf", pdf, { httpMetadata: { contentType: "application/pdf" } });
+  let seen = 0;
+  const result = await getArtifactTool(env.ARTIFACTS, BASE, {
+    taskId: () => "t1",
+    convert: async ({ blob }) => { seen = blob.size; return { ok: true, markdown: "# 年报" }; },
+  }).execute({ ref: "t1/id/big.pdf" }, {} as never, context());
+  expect(seen).toBe(3 * 1024 * 1024);
+  expect(textOf(result)).toContain("# 年报");
+});
+
+it("returns a stored image to a vision model", async () => {
+  await env.ARTIFACTS.put("t1/id/shot.png", bytes(PNG_B64), { httpMetadata: { contentType: "image/png" } });
+  const result = await getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1" })
+    .execute({ ref: "t1/id/shot.png" }, fakeApi(true), context());
+  expect(result.output?.some((item) => item.type === "image")).toBe(true);
+});
+
+it("keeps a declared image that cannot be sniffed as binary", async () => {
+  await env.ARTIFACTS.put("t1/id/fake.png", new Uint8Array([1, 2, 3]), { httpMetadata: { contentType: "image/png" } });
+  const result = await getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1" })
+    .execute({ ref: "t1/id/fake.png" }, fakeApi(true), context());
+  expect(result.output?.some((item) => item.type === "image")).toBe(false);
+  expect(textOf(result)).toContain("base64");
 });
