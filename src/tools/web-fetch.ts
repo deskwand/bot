@@ -1,4 +1,5 @@
 import { BODY_TRUNCATION_MARKER, readCapped, truncate } from "./http-body";
+import { callAcceptsImages, classifyFile, renderFile, type DocumentConverter } from "./file-content";
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 
@@ -70,16 +71,17 @@ async function extractHtml(response: Response): Promise<string> {
   return text;
 }
 
-/** Fetch a URL and return readable text. Read-only, so safe to replay. */
+/** Fetch a URL and return readable content. Read-only, so safe to replay. */
 export function webFetchTool(
   fetchImpl: typeof fetch = fetch,
+  convert?: DocumentConverter,
 ): ToolRegistration<typeof Fetch> {
   return {
     name: "web_fetch",
-    description: "Fetch a web page over GET and return its readable text. Read-only: no custom method, headers or body. Use another tool for writes.",
+    description: "Fetch a URL over GET and return its readable content: web pages as text, PDF and Office files as Markdown, images as images. Read-only: no custom method, headers or body. Use another tool for writes.",
     parameters: Fetch,
     replay: "safe",
-    async execute({ url }, _api, context) {
+    async execute({ url }, api, context) {
       let parsed: URL;
       try {
         parsed = new URL(url);
@@ -135,6 +137,30 @@ export function webFetchTool(
         mime.endsWith("+json")
       ) {
         return textResult(truncate(await capped.response.text()) + note);
+      }
+
+      const bytes = new Uint8Array(await capped.response.arrayBuffer());
+      const name = parsed.pathname.split("/").pop() || "download";
+      const file = classifyFile(bytes, mime, name);
+      if (file.kind === "image" || file.kind === "document") {
+        if (capped.truncated) {
+          return textResult(
+            "文件超过 2 MB，web_fetch 读不全；请用 save_artifact 的 url 参数下载，再用 get_artifact 读取",
+          );
+        }
+        return renderFile(
+          {
+            bytes,
+            name,
+            mimeType: file.mimeType,
+            kind: file.kind,
+            header: `${mime} · ${bytes.byteLength} 字节\n\n`,
+          },
+          {
+            convert,
+            acceptsImages: () => callAcceptsImages(api, context),
+          },
+        );
       }
 
       return textResult(`不支持的内容类型：${mime || "未知"}`);

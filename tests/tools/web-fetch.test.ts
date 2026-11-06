@@ -2,6 +2,7 @@ import type { Context } from "@earendil-works/chord";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
 import { webFetchTool } from "../../src/tools/web-fetch";
+import { PNG_B64, bytes, fakeApi } from "../helpers/images";
 
 function context(signal?: AbortSignal): Context {
   return { abortSignal: signal } as unknown as Context;
@@ -99,16 +100,57 @@ describe("webFetchTool", () => {
     const fakeFetch = (async () =>
       new Response(new Uint8Array([1, 2, 3]), {
         status: 200,
-        headers: { "content-type": "image/png" },
+        headers: { "content-type": "application/zip" },
       })) as typeof fetch;
 
     const result = await webFetchTool(fakeFetch).execute(
-      { url: "https://example.test/image.png" },
+      { url: "https://example.test/archive.zip" },
       {} as never,
       context(),
     );
 
-    expect(textOf(result)).toContain("image/png");
+    expect(textOf(result)).toContain("application/zip");
+  });
+
+  it("converts a PDF response to markdown", async () => {
+    const fakeFetch = (async () =>
+      new Response(new TextEncoder().encode("%PDF-1.4 x"), {
+        headers: { "content-type": "application/pdf" },
+      })) as typeof fetch;
+    const result = await webFetchTool(fakeFetch, async () => ({
+      ok: true,
+      markdown: "# 论文",
+    })).execute({ url: "https://example.test/p.pdf" }, {} as never, context());
+    expect(textOf(result)).toContain("# 论文");
+  });
+
+  it("points a truncated document to save_artifact", async () => {
+    const big = new Uint8Array(3 * 1024 * 1024);
+    big.set(new TextEncoder().encode("%PDF-"));
+    const fakeFetch = (async () =>
+      new Response(big, {
+        headers: { "content-type": "application/pdf" },
+      })) as typeof fetch;
+    let called = false;
+    const result = await webFetchTool(fakeFetch, async () => {
+      called = true;
+      return { ok: true, markdown: "" };
+    }).execute({ url: "https://example.test/big.pdf" }, {} as never, context());
+    expect(called).toBe(false);
+    expect(textOf(result)).toContain("save_artifact");
+  });
+
+  it("returns an image response as an image", async () => {
+    const fakeFetch = (async () =>
+      new Response(bytes(PNG_B64), {
+        headers: { "content-type": "image/png" },
+      })) as typeof fetch;
+    const result = await webFetchTool(fakeFetch).execute(
+      { url: "https://example.test/a.png" },
+      fakeApi(true),
+      context(),
+    );
+    expect(result.output?.some((item) => item.type === "image")).toBe(true);
   });
 
   it("truncates long content to 20000 characters and marks it", async () => {
