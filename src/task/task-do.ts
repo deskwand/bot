@@ -51,8 +51,10 @@ import {
   type McpGates,
 } from "../tools/mcp";
 import { documentConverterFromAi } from "../tools/file-content";
+import { createR2WorkspaceEnv } from "../env/r2-env";
 import { webFetchTool } from "../tools/web-fetch";
 import { webSearchTool } from "../tools/web-search";
+import { clearWorkspace, workspaceTools } from "../tools/workspace";
 import { withProgress } from "../tools/wrap";
 import {
   ApprovalGate,
@@ -326,6 +328,16 @@ export class TaskDO extends Agent<Env> {
       ],
     });
 
+    // Drafts live in `work/<taskId>/` in R2; the harness builds the environment
+    // per tool call so a restarted sandbox never keeps a stale task id.
+    this.registry.install({
+      name: "workspace",
+      tools: workspaceTools(
+        this.env.ARTIFACTS,
+        () => this.currentTaskId() ?? "",
+      ),
+    });
+
     // Model selection happens in `start` once the spec is available. Keeping
     // the constructor config-free lets alarms and control RPCs run without a
     // readable DESKWAND_CONFIG.
@@ -338,6 +350,10 @@ export class TaskDO extends Agent<Env> {
             registry: this.registry,
             onWake,
             settings: { progress: PI_PROGRESS },
+            env: () => {
+              const id = this.currentTaskId();
+              return id ? createR2WorkspaceEnv(this.env.ARTIFACTS, id) : undefined;
+            },
             onReport: (error, info) => {
               this.ctx.waitUntil(this.handleReport(error, info));
             },
@@ -582,6 +598,7 @@ export class TaskDO extends Agent<Env> {
     // the state is already terminal.
     this.setMeta("state", "cancelled");
     await this.outboxFor(taskId).emit({ type: "cancelled" });
+    this.clearDrafts(taskId);
     await this.abortWithTimeout();
 
     return { ok: true, message: cancelOkText(locale, taskId) };
@@ -893,7 +910,21 @@ export class TaskDO extends Agent<Env> {
     });
     this.setMeta("state", "completed");
     this.setMeta("summary", summary);
+    this.clearDrafts(taskId);
     await delivery;
+  }
+
+  /** Drop a terminal task's private drafts without holding up its report. */
+  private clearDrafts(taskId: string): void {
+    this.ctx.waitUntil(
+      clearWorkspace(this.env.ARTIFACTS, taskId).catch((error) => {
+        console.warn(
+          `task ${taskId} draft cleanup failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }),
+    );
   }
 
   private async fail(error: unknown): Promise<void> {

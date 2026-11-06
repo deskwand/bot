@@ -21,6 +21,16 @@ describe("taskSystemPrompt", () => {
     expect(prompt).toContain("finish_task");
   });
 
+  it("explains the workspace", () => {
+    const prompt = taskSystemPrompt("zh", {
+      taskId: "t1",
+      title: "x",
+      instructions: "i",
+    });
+    expect(prompt).toContain("workspace");
+    expect(prompt).toContain("save_artifact");
+  });
+
   it("leaves ordinary tasks without bot wording", () => {
     const prompt = taskSystemPrompt("zh", spec());
 

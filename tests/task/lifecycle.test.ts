@@ -1,5 +1,6 @@
 import { PiHarness, PiSession } from "agents/harness/pi";
-import { Harness } from "@earendil-works/pi-durable";
+import { Type, type ToolResultMessage, type TranscriptContext } from "@earendil-works/pi-ai";
+import { Harness, type ToolRegistration } from "@earendil-works/pi-durable";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
@@ -60,6 +61,71 @@ function task(taskId: string) {
 
 function spec(taskId: string, instructions = "do the thing"): TaskSpec {
   return { taskId, title: `Task ${taskId}`, instructions };
+}
+
+function lastToolText(context: TranscriptContext): string {
+  const result = context.messages
+    .filter((message): message is ToolResultMessage => message.role === "toolResult")
+    .at(-1);
+  return result
+    ? result.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n")
+    : "";
+}
+
+type SlowControl = { started: boolean; released: boolean };
+
+function slowControl(instance: unknown): SlowControl | undefined {
+  return (instance as { slowControl?: SlowControl }).slowControl;
+}
+
+/** A tool that blocks until the test releases it, like control.test.ts. */
+async function installSlowWait(
+  stub: ReturnType<typeof task>,
+): Promise<void> {
+  const SlowWait = Type.Object({});
+  await runInDurableObject(stub, (instance) => {
+    const control: SlowControl = { started: false, released: false };
+    (instance as { slowControl?: SlowControl }).slowControl = control;
+    const tool: ToolRegistration<typeof SlowWait> = {
+      name: "slow_wait",
+      description: "Wait until the test releases the run.",
+      parameters: SlowWait,
+      async execute() {
+        control.started = true;
+        while (!control.released) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return { output: [{ type: "text", text: "released" }] };
+      },
+    };
+    instance.registry.install({ name: "test-slow", tools: [tool] });
+  });
+}
+
+async function waitForSlowStart(stub: ReturnType<typeof task>): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      expect(
+        await runInDurableObject(
+          stub,
+          (instance) => slowControl(instance)?.started ?? false,
+        ),
+      ).toBe(true);
+    },
+    { timeout: 10_000 },
+  );
+}
+
+async function releaseSlow(stub: ReturnType<typeof task>): Promise<void> {
+  await runInDurableObject(stub, (instance) => {
+    const control = slowControl(instance);
+    if (control) control.released = true;
+  });
+}
+
+async function workspaceKeys(taskId: string): Promise<string[]> {
+  const page = await env.ARTIFACTS.list({ prefix: `work/${taskId}/` });
+  return page.objects.map((object) => object.key);
 }
 
 describe("TaskDO lifecycle", () => {
@@ -475,6 +541,126 @@ describe("TaskDO lifecycle", () => {
       [1, "started"],
       [2, "progress"],
     ]);
+  });
+});
+
+describe("TaskDO workspace", () => {
+  it("gives the task a workspace the model can write and read", async () => {
+    let readText = "";
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "write", args: { path: "d.md", content: "草稿" } }] },
+        { toolCalls: [{ name: "read", args: { path: "d.md" } }] },
+        {
+          observe: (context) => {
+            readText = lastToolText(context);
+          },
+          toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+        },
+      ]),
+    );
+    const taskId = "t-workspace";
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual([
+          "started",
+          "completed",
+        ]);
+      },
+      { timeout: 10_000 },
+    );
+
+    expect(readText).toContain("草稿");
+  });
+
+  it("clears only the finished task's drafts", async () => {
+    await env.ARTIFACTS.put("work/t-other/x.md", "keep me");
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "write", args: { path: "d.md", content: "草稿" } }] },
+        { toolCalls: [{ name: "finish_task", args: { summary: "ok" } }] },
+      ]),
+    );
+    const taskId = "t-cleanup-done";
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        expect(await workspaceKeys(taskId)).toEqual([]);
+      },
+      { timeout: 10_000 },
+    );
+    expect(await env.ARTIFACTS.head("work/t-other/x.md")).not.toBeNull();
+  });
+
+  it("clears drafts when the task is cancelled", async () => {
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "write", args: { path: "d.md", content: "草稿" } }] },
+        { toolCalls: [{ name: "slow_wait", args: {} }] },
+        { text: "should not finish" },
+      ]),
+    );
+    const taskId = "t-cleanup-cancel";
+    const stub = task(taskId);
+    await installSlowWait(stub);
+
+    await stub.start(spec(taskId));
+    await waitForSlowStart(stub);
+    expect(await workspaceKeys(taskId)).toEqual([`work/${taskId}/d.md`]);
+
+    const cancelling = stub.cancel();
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toContain("cancelled");
+      },
+      { timeout: 5_000 },
+    );
+    await releaseSlow(stub);
+    await expect(cancelling).resolves.toMatchObject({ ok: true });
+
+    await vi.waitFor(
+      async () => {
+        expect(await workspaceKeys(taskId)).toEqual([]);
+      },
+      { timeout: 10_000 },
+    );
+    expect((await stub.status()).state).toBe("cancelled");
+  });
+
+  it("keeps drafts when the run fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "write", args: { path: "d.md", content: "草稿" } }] },
+        { error: "upstream exploded" },
+      ]),
+    );
+    const taskId = "t-cleanup-fail";
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual(["started", "failed"]);
+      },
+      { timeout: 10_000 },
+    );
+
+    expect(await workspaceKeys(taskId)).toEqual([`work/${taskId}/d.md`]);
+    expect(await (await env.ARTIFACTS.get(`work/${taskId}/d.md`))!.text()).toBe(
+      "草稿",
+    );
   });
 });
 
