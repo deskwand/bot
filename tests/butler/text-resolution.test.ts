@@ -61,13 +61,13 @@ function handleCommand(
 describe("resolveTextAction", () => {
   describe("an implicit cancel", () => {
     it("is chat when no task is active", () => {
-      expect(resolveTextAction(implicitCancel, [], [])).toEqual({
+      expect(resolveTextAction("zh", implicitCancel, [], [])).toEqual({
         kind: "chat",
       });
     });
 
     it("cancels the only active task", () => {
-      expect(resolveTextAction(implicitCancel, [t1], [])).toEqual({
+      expect(resolveTextAction("zh", implicitCancel, [t1], [])).toEqual({
         kind: "action",
         taskId: "t1",
         label: "#1",
@@ -75,7 +75,7 @@ describe("resolveTextAction", () => {
     });
 
     it("lists the active tasks when the target is ambiguous", () => {
-      expect(resolveTextAction(implicitCancel, [t1, t2], [])).toEqual({
+      expect(resolveTextAction("zh", implicitCancel, [t1, t2], [])).toEqual({
         kind: "reply",
         text: "当前有 2 个任务在进行，请写明编号：\n#1 沙箱测试\n#2 周报",
       });
@@ -85,7 +85,7 @@ describe("resolveTextAction", () => {
   describe("a cancel by handle", () => {
     it("cancels the matching active task", () => {
       expect(
-        resolveTextAction(
+        resolveTextAction("zh",
           handleCommand("cancel", 2),
           [t1, t2],
           [],
@@ -94,7 +94,7 @@ describe("resolveTextAction", () => {
     });
 
     it("replies when no active task owns the handle", () => {
-      expect(resolveTextAction(handleCommand("cancel", 9), [t1], [])).toEqual({
+      expect(resolveTextAction("zh", handleCommand("cancel", 9), [t1], [])).toEqual({
         kind: "reply",
         text: "#9 当前没有进行中的任务",
       });
@@ -103,14 +103,14 @@ describe("resolveTextAction", () => {
 
   describe("an implicit approval", () => {
     it("is chat when nothing is pending", () => {
-      expect(resolveTextAction(implicitApprove, [t1], [])).toEqual({
+      expect(resolveTextAction("zh", implicitApprove, [t1], [])).toEqual({
         kind: "chat",
       });
     });
 
     it("acts on the only pending approval", () => {
       expect(
-        resolveTextAction(implicitApprove, [t1], [pending(t1, "ap6")]),
+        resolveTextAction("zh", implicitApprove, [t1], [pending(t1, "ap6")]),
       ).toEqual({
         kind: "action",
         taskId: "t1",
@@ -121,7 +121,7 @@ describe("resolveTextAction", () => {
 
     it("lists the pending approvals when more than one is open", () => {
       expect(
-        resolveTextAction(
+        resolveTextAction("zh",
           implicitApprove,
           [t1, t2],
           [pending(t1, "ap6"), pending(t2, "ap7")],
@@ -133,11 +133,11 @@ describe("resolveTextAction", () => {
     });
 
     it("applies the same rules to a rejection", () => {
-      expect(resolveTextAction(implicitReject, [t1], [])).toEqual({
+      expect(resolveTextAction("zh", implicitReject, [t1], [])).toEqual({
         kind: "chat",
       });
       expect(
-        resolveTextAction(implicitReject, [t1], [pending(t1, "ap6")]),
+        resolveTextAction("zh", implicitReject, [t1], [pending(t1, "ap6")]),
       ).toEqual({
         kind: "action",
         taskId: "t1",
@@ -149,7 +149,7 @@ describe("resolveTextAction", () => {
 
   describe("an approval by handle", () => {
     it("replies when the task has nothing pending", () => {
-      expect(resolveTextAction(handleCommand("approve", 1), [t1], [])).toEqual(
+      expect(resolveTextAction("zh", handleCommand("approve", 1), [t1], [])).toEqual(
         {
           kind: "reply",
           text: "#1 没有待审批",
@@ -159,7 +159,7 @@ describe("resolveTextAction", () => {
 
     it("acts on the task's only pending approval", () => {
       expect(
-        resolveTextAction(
+        resolveTextAction("zh",
           handleCommand("approve", 1),
           [t1],
           [pending(t1, "ap6")],
@@ -174,7 +174,7 @@ describe("resolveTextAction", () => {
 
     it("lists both approvals when the task has two pending", () => {
       expect(
-        resolveTextAction(
+        resolveTextAction("zh",
           handleCommand("approve", 1),
           [t1],
           [pending(t1, "ap6"), pending(t1, "ap7")],
@@ -187,7 +187,7 @@ describe("resolveTextAction", () => {
 
     it("replies when no active task owns the handle", () => {
       expect(
-        resolveTextAction(handleCommand("approve", 9), [t1], []),
+        resolveTextAction("zh", handleCommand("approve", 9), [t1], []),
       ).toEqual({
         kind: "reply",
         text: "#9 当前没有进行中的任务",
@@ -196,7 +196,7 @@ describe("resolveTextAction", () => {
 
     it("applies the same rules to a rejection", () => {
       expect(
-        resolveTextAction(
+        resolveTextAction("zh",
           handleCommand("reject", 1),
           [t1],
           [pending(t1, "ap6")],
@@ -213,7 +213,7 @@ describe("resolveTextAction", () => {
   describe("an approval by handle and approval id", () => {
     it("acts when that approval is pending on the task", () => {
       expect(
-        resolveTextAction(
+        resolveTextAction("zh",
           handleCommand("approve", 1, "ap6"),
           [t1],
           [pending(t1, "ap6")],
@@ -230,7 +230,7 @@ describe("resolveTextAction", () => {
       // Approval ids are per task and handles are reused, so an old
       // `批准 #1 ap1` must not reach a newer task's ap1.
       expect(
-        resolveTextAction(
+        resolveTextAction("zh",
           handleCommand("approve", 1, "ap6"),
           [t1],
           [pending(t1, "ap7")],
@@ -243,7 +243,7 @@ describe("resolveTextAction", () => {
 
     it("still needs an active task with the handle", () => {
       expect(
-        resolveTextAction(handleCommand("approve", 9, "ap6"), [t1], []),
+        resolveTextAction("zh", handleCommand("approve", 9, "ap6"), [t1], []),
       ).toEqual({
         kind: "reply",
         text: "#9 当前没有进行中的任务",
@@ -253,13 +253,13 @@ describe("resolveTextAction", () => {
 
   it("labels a legacy active task by its internal id", () => {
     const legacy = task("t7", null, "旧任务");
-    expect(resolveTextAction(implicitCancel, [legacy], [])).toEqual({
+    expect(resolveTextAction("zh", implicitCancel, [legacy], [])).toEqual({
       kind: "action",
       taskId: "t7",
       label: "t7",
     });
     expect(
-      resolveTextAction(implicitApprove, [legacy], [pending(legacy, "ap1")]),
+      resolveTextAction("zh", implicitApprove, [legacy], [pending(legacy, "ap1")]),
     ).toEqual({
       kind: "action",
       taskId: "t7",
@@ -270,7 +270,7 @@ describe("resolveTextAction", () => {
 
   it("ignores other tasks when checking a handle", () => {
     expect(
-      resolveTextAction(handleCommand("approve", 3), [t1, t3], [pending(t1, "ap6")]),
+      resolveTextAction("zh", handleCommand("approve", 3), [t1, t3], [pending(t1, "ap6")]),
     ).toEqual({ kind: "reply", text: "#3 没有待审批" });
   });
 });
