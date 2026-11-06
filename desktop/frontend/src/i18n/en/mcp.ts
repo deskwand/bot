@@ -7,6 +7,11 @@ export const mcp: Messages["mcp"] = {
   addNamed: "Add {name}",
   addAction: "Add",
   adminUnavailable: "The cloud admin API is unavailable",
+  approvalMode: {
+    label: "Autonomous: run write actions without approval",
+    description:
+      "When on, write requests and MCP write tools run directly and only show up in progress. Tools you set to require approval and bot rules changes still ask you.",
+  },
   tooManyToolsTitle: "Many tools",
   tooManyToolsDescription:
     "Too many tools slow tasks and cost more; disable the ones you do not use.",

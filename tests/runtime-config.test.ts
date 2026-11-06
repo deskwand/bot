@@ -112,6 +112,25 @@ describe("readRuntimeConfig", () => {
     expect((caught as RuntimeConfigError).code).toBe("CONFIG_SCHEMA_INVALID");
   });
 
+  it("accepts approvalMode reviewed", () => {
+    const cfg = readRuntimeConfig(
+      envWith({ ...validConfig, approvalMode: "reviewed" }),
+    );
+    expect(cfg.approvalMode).toBe("reviewed");
+  });
+
+  it("rejects an unknown approvalMode", () => {
+    let caught: unknown;
+    try {
+      readRuntimeConfig(envWith({ ...validConfig, approvalMode: "off" }));
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(RuntimeConfigError);
+    expect((caught as RuntimeConfigError).code).toBe("CONFIG_SCHEMA_INVALID");
+  });
+
   it("preserves env:NAME MCP header references and literals", () => {
     const testCase = (cases as ConfigCase[]).find(
       (entry) => entry.name === "MCP env:NAME header preserved",

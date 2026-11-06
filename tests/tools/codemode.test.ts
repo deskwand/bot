@@ -10,11 +10,38 @@ import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" { interface ProvidedEnv extends Env {} }
 
+const ENV = env as unknown as Record<string, unknown>;
+const savedEnv = new Map<string, unknown>();
+
+/** Mutates the env seen by Durable Objects created after this call. */
+function setEnv(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
+    ENV[key] = value;
+  }
+}
+
+function restoreEnv(): void {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete ENV[key];
+    else ENV[key] = value;
+  }
+  savedEnv.clear();
+}
+
+/** Pins the runtime config to reviewed mode for the tests written before the autonomous default. */
+function reviewedMode(): void {
+  const current = ENV.DESKWAND_CONFIG;
+  const cfg = typeof current === "string" ? JSON.parse(current) : structuredClone(current);
+  setEnv({ DESKWAND_CONFIG: { ...cfg, approvalMode: "reviewed" } });
+}
+
 beforeEach(() => setChannelOverride("telegram", fakeChannel().adapter));
 afterEach(() => {
   setModelOverride(null);
   setChannelOverride("telegram", null);
   vi.restoreAllMocks();
+  restoreEnv();
 });
 
 function task(taskId: string) { return env.TASK.get(env.TASK.idFromName(taskId)); }
@@ -43,7 +70,7 @@ async function script(id: string, code: string, setup?: (stub: Stub) => Promise<
 }
 async function fixtureMcp(stub: Stub) {
   await runInDurableObject(stub,async instance=>{
-    const loaded=await loadMcpTools([{name:"fixture",url:"https://fixture.test/mcp"}],{approval:instance.approvals,review:instance.reviewedGate},async()=>({
+    const loaded=await loadMcpTools([{name:"fixture",url:"https://fixture.test/mcp"}],{approval:instance.approvals,destructive:instance.approvals,review:instance.reviewedGate},async()=>({
       listTools:async()=>[{name:"echo",description:"Fixture echo",inputSchema:{type:"object",properties:{text:{type:"string"}},required:["text"]}}],
       callTool:async(_name,args)=>({content:[{type:"text",text:`echo:${args.text}`}]}),
     }),async()=>{});
@@ -98,6 +125,7 @@ describe("TaskDO codemode",()=>{
       {text:'{"verdict":"ask","reason":"测试需要确认"}'},
       {observe:c=>{result=lastResult(c);},toolCalls:[{name:"finish_task",args:{summary:"approved flow done"}}]},
     ]));
+    reviewedMode();
     const id=`t-code-approval-${decision}`,stub=task(id);
     await stub.start({taskId:id,title:id,instructions:"post"});
     let approvalId="";
@@ -117,6 +145,7 @@ describe("TaskDO codemode",()=>{
       {text:'{"verdict":"allow","reason":"按指令提交"}'},
       {observe:c=>{result=lastResult(c);},toolCalls:[{name:"finish_task",args:{summary:"allowed flow done"}}]},
     ]));
+    reviewedMode();
     const id="t-code-review-allow",stub=task(id);
     await stub.start({taskId:id,title:id,instructions:"post"});
     await complete(stub);
@@ -124,6 +153,18 @@ describe("TaskDO codemode",()=>{
     expect(await stub.pendingApprovals()).toEqual([]);
     expect(progress.mock.calls).toContainEqual([id,"✔️ 自动放行 http_request：按指令提交"]);
     expect(result?.isError).toBe(false);expect(text(result!)).toContain("201");
+  });
+  it("runs an HTTP POST directly in autonomous mode",async()=>{
+    let sent=0;vi.spyOn(globalThis,"fetch").mockImplementation(async()=>{sent++;return new Response("created",{status:201,headers:{"content-type":"text/plain"}});});
+    const progress=vi.spyOn(ButlerDO.prototype,"reportTaskProgress");
+    const {stub,result}=await script(
+      "t-code-autonomous",
+      'const r=await tools.http_request({url:"https://fixture.test/items",method:"POST",body:"{}"});return r.status;',
+    );
+    expect(sent).toBe(1);
+    expect(await stub.pendingApprovals()).toEqual([]);
+    expect(result.isError).toBe(false);expect(text(result)).toContain("201");
+    expect(progress.mock.calls).not.toContainEqual([expect.anything(),expect.stringMatching(/^✔️ 自动放行/)]);
   });
   it("asks when the reviewer fails",async()=>{
     let sent=0;vi.spyOn(globalThis,"fetch").mockImplementation(async()=>{sent++;return new Response("created",{status:201,headers:{"content-type":"text/plain"}});});
@@ -133,6 +174,7 @@ describe("TaskDO codemode",()=>{
       {error:"boom"},
       {observe:c=>{result=lastResult(c);},toolCalls:[{name:"finish_task",args:{summary:"failed review done"}}]},
     ]));
+    reviewedMode();
     const id="t-code-review-failed",stub=task(id);
     await stub.start({taskId:id,title:id,instructions:"post"});
     let approvalId="";
@@ -151,6 +193,7 @@ describe("TaskDO codemode",()=>{
       {observe:c=>{seen=c;},text:'{"verdict":"allow","reason":"按指令提交"}'},
       {toolCalls:[{name:"finish_task",args:{summary:"authorization review done"}}]},
     ]));
+    reviewedMode();
     const id="t-code-review-auth",stub=task(id);
     await stub.start({taskId:id,title:id,instructions:"其他内容",authorization:"只允许提交表单"});
     await complete(stub);
@@ -170,6 +213,7 @@ describe("TaskDO codemode",()=>{
       {observe:c=>{seen=c;},text:'{"verdict":"allow","reason":"按指令提交"}'},
       {toolCalls:[{name:"finish_task",args:{summary:"bot review done"}}]},
     ]));
+    reviewedMode();
     const id="t-code-review-bot",stub=task(id);
     await stub.start({taskId:id,title:id,instructions:"机器人记忆xyz",botId:"b1"});
     await complete(stub);

@@ -106,6 +106,7 @@ interface MockState {
   // What the published config carries. Follows the preference only after a
   // publish, like Go's deployment hook.
   publishedLocale: Locale;
+  approvalMode: "autonomous" | "reviewed";
   localeSaveFails: boolean;
   telemetry: boolean;
   connected: boolean;
@@ -181,6 +182,9 @@ const MCP_TOOLS: Record<string, McpToolDTO[]> = {
   deepwiki: [
     { name: "read_wiki_structure", description: "读取仓库 wiki 目录", mode: "auto" },
     { name: "ask_question", description: "向仓库提问", mode: "review" },
+    // A destructiveHint tool probed in reviewed mode: approval without being
+    // in requireApproval.
+    { name: "delete_wiki", description: "删除 wiki", mode: "approval" },
   ],
   github: [
     { name: "get_file_contents", description: "读取仓库文件", mode: "auto" },
@@ -443,6 +447,7 @@ function initialState(): MockState {
     locale: initialLocale(systemLocale),
     systemLocale,
     publishedLocale: "zh",
+    approvalMode: "autonomous",
     localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
     connected: shellScenario,
@@ -660,6 +665,7 @@ export function createMockClient(): ClientService {
       customProviders: state.customProviders,
       mcpServers: state.mcpServers,
       locale: state.publishedLocale,
+      approvalMode: state.approvalMode,
       secrets: Object.keys(state.secrets)
         .sort()
         .map((name) => ({ name, configured: state.secrets[name] === true })),
@@ -682,6 +688,9 @@ export function createMockClient(): ClientService {
     if (input.butlerModel) state.butlerModel = { ...input.butlerModel };
     if (input.taskModel) state.taskModel = { ...input.taskModel };
     if (input.customProviders) state.customProviders = [...input.customProviders];
+    if (input.approvalMode === "autonomous" || input.approvalMode === "reviewed") {
+      state.approvalMode = input.approvalMode;
+    }
     for (const edit of input.secrets ?? []) {
       if (edit.operation === "clear") state.secrets[edit.name] = false;
       if (edit.operation === "replace") state.secrets[edit.name] = true;

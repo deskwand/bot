@@ -40,6 +40,16 @@ const MAX_SCRIPT_BODY_CHARS = 1_000_000;
 const SECRET_HEADER = /authorization|api[-_]?key|cookie|token|secret/i;
 const REVIEW_BODY_LIMIT = 2000;
 
+const BULLET = "\u2022";
+
+/** Placeholder shown instead of a secret in cards and progress. */
+export const REDACTED = BULLET.repeat(3);
+
+/** URLSearchParams percent-encodes U+2022; cards are read by humans. */
+function decodeRedacted(url: string): string {
+  return url.replaceAll("%E2%80%A2", BULLET);
+}
+
 const BLOCKED_HOST = /^(localhost|.*\.local|.*\.internal)$/i;
 const BLOCKED_V4 =
   /^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
@@ -73,11 +83,13 @@ export function safeRequestUrl(
 ): string {
   try {
     const url = new URL(raw);
-    for (const name of [...url.searchParams.keys()]) url.searchParams.set(name, "***");
+    for (const name of [...url.searchParams.keys()]) {
+      url.searchParams.set(name, REDACTED);
+    }
     url.username = "";
     url.password = "";
     url.hash = "";
-    return url.toString();
+    return decodeRedacted(url.toString());
   } catch {
     return invalidLabel;
   }
@@ -87,7 +99,7 @@ export function safeRequestUrl(
 export function redactArgs(args: HttpRequestArgs): Record<string, unknown> {
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(args.headers ?? {})) {
-    headers[name] = SECRET_HEADER.test(name) ? "***" : value;
+    headers[name] = SECRET_HEADER.test(name) ? REDACTED : value;
   }
   return {
     method: args.method ?? "GET",
@@ -105,7 +117,7 @@ export function redactArgs(args: HttpRequestArgs): Record<string, unknown> {
 export function reviewArgs(args: HttpRequestArgs): Record<string, unknown> {
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(args.headers ?? {})) {
-    headers[name] = SECRET_HEADER.test(name) ? "***" : value;
+    headers[name] = SECRET_HEADER.test(name) ? REDACTED : value;
   }
 
   let url: string;
@@ -115,9 +127,9 @@ export function reviewArgs(args: HttpRequestArgs): Record<string, unknown> {
     parsed.password = "";
     parsed.hash = "";
     for (const name of [...parsed.searchParams.keys()]) {
-      if (SECRET_HEADER.test(name)) parsed.searchParams.set(name, "***");
+      if (SECRET_HEADER.test(name)) parsed.searchParams.set(name, REDACTED);
     }
-    url = parsed.toString();
+    url = decodeRedacted(parsed.toString());
   } catch {
     url = "[无效 URL]";
   }

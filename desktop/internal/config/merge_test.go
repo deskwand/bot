@@ -795,3 +795,60 @@ func TestMergeEmptyConfigWithOnlyLocaleReportsMissingConfig(t *testing.T) {
 		t.Fatalf("error = %v, want the missing-config hint", err)
 	}
 }
+
+func TestMergeWritesApprovalMode(t *testing.T) {
+	base := baseSnapshot(t)
+	mode := "reviewed"
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{ApprovalMode: &mode},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		ApprovalMode string `json:"approvalMode"`
+	}
+	if err := json.Unmarshal(plan.ConfigJSON, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.ApprovalMode != "reviewed" {
+		t.Fatalf("approvalMode = %q, want reviewed", document.ApprovalMode)
+	}
+}
+
+func TestMergeKeepsApprovalModeWhenUnset(t *testing.T) {
+	base := baseSnapshot(t)
+	value, err := domain.DecodeJSON(base.ConfigJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("base document is %T", value)
+	}
+	document["approvalMode"] = "reviewed"
+	canonical, err := domain.CanonicalJSON(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.ConfigJSON = canonical
+
+	servers := rawModel(t, `[{"name":"github","url":"https://mcp.github.test/"}]`)
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{McpServers: servers},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		ApprovalMode string `json:"approvalMode"`
+	}
+	if err := json.Unmarshal(plan.ConfigJSON, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ApprovalMode != "reviewed" {
+		t.Fatalf("approvalMode = %q, want reviewed", result.ApprovalMode)
+	}
+}

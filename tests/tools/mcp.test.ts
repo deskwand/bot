@@ -143,7 +143,7 @@ function fakeManager(listed: readonly McpToolInfo[] = []) {
 }
 
 it("marks discovered MCP tools deferred", async () => {
-  const { tools } = await loadMcpTools([server()], { approval: gate("approved"), review: gate("approved") }, async () => fakeClient([]), recorder().emit);
+  const { tools } = await loadMcpTools([server()], { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") }, async () => fakeClient([]), recorder().emit);
   expect(tools.length).toBeGreaterThan(0);
   for (const tool of tools) expect(tool.deferred, tool.name).toBe(true);
 });
@@ -211,11 +211,23 @@ describe("mcpToolMode", () => {
       name: "search",
       annotations: { readOnlyHint: true, destructiveHint: true },
     };
-    expect(mcpToolMode(s, destructive)).toBe("approval");
+    expect(mcpToolMode(s, destructive)).toBe("destructive");
     expect(mcpToolMode(s, readOnly)).toBe("auto");
     expect(mcpToolMode({ ...s, autoApprove: ["delete_page"] }, destructive)).toBe(
       "auto",
     );
+  });
+
+  it("keeps requireApproval above destructive", () => {
+    const s = server({
+      approvalPolicy: "writes",
+      requireApproval: ["delete_page"],
+    });
+    const destructive = {
+      name: "delete_page",
+      annotations: { destructiveHint: true },
+    };
+    expect(mcpToolMode(s, destructive)).toBe("approval");
   });
 });
 
@@ -272,7 +284,7 @@ describe("mcpConnector", () => {
     try {
       const { tools } = await loadMcpTools(
         [server({ headers: { Authorization: "env:MISSING_TOKEN" } })],
-        { approval: gate("approved"), review: gate("approved") },
+        { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") },
         connect,
         recorder().emit,
       );
@@ -343,7 +355,7 @@ describe("loadMcpTools", () => {
 
     const { tools } = await loadMcpTools(
       [server()],
-      { approval, review: gate("approved") },
+      { approval, destructive: gate("approved"), review: gate("approved") },
       connect,
       progress.emit,
     );
@@ -393,7 +405,7 @@ describe("loadMcpTools", () => {
 
     const { tools } = await loadMcpTools(
       [server({ approvalPolicy: "writes", requireApproval: [] })],
-      { approval, review },
+      { approval, destructive: gate("approved"), review },
       async () => fakeClient(calls),
       recorder().emit,
     );
@@ -408,13 +420,46 @@ describe("loadMcpTools", () => {
     expect(calls).toEqual(['create_page:{"title":"Hello"}']);
   });
 
+  it("wraps destructive tools with the destructive gate", async () => {
+    const calls: string[] = [];
+    const approval = gate("approved");
+    const destructive = gate("approved");
+    const review = gate("approved");
+    const client: McpClientLike = {
+      async listTools() {
+        return [{ name: "delete_page", annotations: { destructiveHint: true } }];
+      },
+      async callTool(name, args): Promise<McpCallToolResult> {
+        calls.push(`${name}:${JSON.stringify(args)}`);
+        return { content: [{ type: "text", text: `ran ${name}` }] };
+      },
+    };
+
+    const { tools } = await loadMcpTools(
+      [server({ approvalPolicy: "writes", requireApproval: [] })],
+      { approval, destructive, review },
+      async () => client,
+      recorder().emit,
+    );
+
+    const result = await tools[0]!.execute({}, {} as never, context());
+
+    expect(textOf(result)).toBe("ran delete_page");
+    expect(destructive.requests).toEqual([
+      { tool: "notion__delete_page", args: {} },
+    ]);
+    expect(approval.requests).toEqual([]);
+    expect(review.requests).toEqual([]);
+    expect(calls).toEqual(["delete_page:{}"]);
+  });
+
   it("keeps requireApproval tools on the approval gate", async () => {
     const approval = gate("approved");
     const review = gate("approved");
 
     const { tools } = await loadMcpTools(
       [server()],
-      { approval, review },
+      { approval, destructive: gate("approved"), review },
       async () => fakeClient([]),
       recorder().emit,
     );
@@ -443,7 +488,7 @@ describe("loadMcpTools", () => {
 
     const { tools } = await loadMcpTools(
       [server()],
-      { approval: gate("approved"), review: gate("approved") },
+      { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") },
       async () => client,
       recorder().emit,
     );
@@ -472,7 +517,7 @@ describe("loadMcpTools", () => {
 
     const { tools } = await loadMcpTools(
       [server({ requireApproval: [] })],
-      { approval: gate("approved"), review: gate("approved") },
+      { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") },
       async () => client,
       recorder().emit,
     );
@@ -492,7 +537,7 @@ describe("loadMcpTools", () => {
 
     const { tools } = await loadMcpTools(
       [server(), server({ name: "broken", url: "https://broken.test" })],
-      { approval: gate("approved"), review: gate("approved") },
+      { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") },
       connect,
       recorder().emit,
     );
@@ -517,7 +562,7 @@ describe("loadMcpTools", () => {
     const started = Date.now();
     const { tools } = await loadMcpTools(
       [server({ name: "slow", url: "https://slow.test" }), server()],
-      { approval: gate("approved"), review: gate("approved") },
+      { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") },
       connect,
       recorder().emit,
       50,
@@ -537,7 +582,7 @@ describe("loadMcpTools", () => {
     const connect = vi.fn<McpConnector>();
 
     await expect(
-      loadMcpTools([], { approval: gate("approved"), review: gate("approved") }, connect, recorder().emit),
+      loadMcpTools([], { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") }, connect, recorder().emit),
     ).resolves.toEqual({ tools: [], unavailable: [] });
     expect(connect).not.toHaveBeenCalled();
   });
@@ -550,7 +595,7 @@ describe("loadMcpTools", () => {
         server({ name: "off", url: "https://off.test", enabled: false }),
         server({ disabledTools: ["search"] }),
       ],
-      { approval: gate("approved"), review: gate("approved") },
+      { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") },
       connect,
       recorder().emit,
     );
@@ -575,7 +620,7 @@ describe("loadMcpTools", () => {
       const started = Date.now();
       const loaded = await loadMcpTools(
         [server({ name: "slow", url: "https://slow.test" }), server()],
-        { approval: gate("approved"), review: gate("approved") },
+        { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") },
         connect,
         recorder().emit,
         100,
@@ -604,7 +649,7 @@ describe("loadMcpTools", () => {
     try {
       const loaded = await loadMcpTools(
         [server({ oauth: true })],
-        { approval: gate("approved"), review: gate("approved") },
+        { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") },
         connect,
         recorder().emit,
       );
@@ -638,7 +683,7 @@ describe("loadMcpTools", () => {
     try {
       const loaded = await loadMcpTools(
         [server({ name: "s", requireApproval: [] })],
-        { approval: gate("approved"), review: gate("approved") },
+        { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") },
         async () => client,
         recorder().emit,
       );
@@ -685,9 +730,35 @@ describe("probeMcpServer", () => {
     const failing: McpConnector = async () => {
       throw new Error("connection refused");
     };
-    await expect(probeMcpServer(server(), failing)).resolves.toEqual({
+    await expect(
+      probeMcpServer(server(), failing),
+    ).resolves.toEqual({
       ok: false,
       reason: "connection refused",
+    });
+  });
+
+  it("reports destructive tools by what they do in each approval mode", async () => {
+    const client: McpClientLike = {
+      async listTools() {
+        return [{ name: "delete_page", annotations: { destructiveHint: true } }];
+      },
+      async callTool() {
+        return { content: [] };
+      },
+    };
+    const writes = server({ approvalPolicy: "writes", requireApproval: [] });
+
+    // Autonomous runs them directly, which the picker shows as smart.
+    await expect(probeMcpServer(writes, async () => client)).resolves.toEqual({
+      ok: true,
+      tools: [{ name: "delete_page", description: "", mode: "review" }],
+    });
+    await expect(
+      probeMcpServer(writes, async () => client, "reviewed"),
+    ).resolves.toEqual({
+      ok: true,
+      tools: [{ name: "delete_page", description: "", mode: "approval" }],
     });
   });
 });

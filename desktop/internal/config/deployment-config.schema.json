@@ -28,6 +28,11 @@
       "type": "string",
       "enum": ["zh", "en"],
       "description": "Language the bot uses for fixed owner-facing text and replies. Absent means zh."
+    },
+    "approvalMode": {
+      "type": "string",
+      "enum": ["autonomous", "reviewed"],
+      "description": "How tasks handle write actions. autonomous runs them directly (only tools the owner marked as require-approval and bot rules changes ask); reviewed sends them through the model reviewer first. Absent means autonomous."
     }
   },
   "additionalProperties": true,

@@ -123,6 +123,7 @@ export interface ConfigDTO {
   customProviders: CustomProviderDTO[];
   mcpServers: unknown;
   locale: string;
+  approvalMode: string;
   secrets: SecretNameDTO[];
 }
 
@@ -137,6 +138,7 @@ export interface ConfigEditDTO {
   taskModel?: ModelDTO;
   customProviders?: CustomProviderDTO[];
   mcpServers?: unknown;
+  approvalMode?: string;
   secrets?: unknown[];
 }
 

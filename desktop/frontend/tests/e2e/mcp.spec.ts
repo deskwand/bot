@@ -32,6 +32,20 @@ async function mcpCalls(page: Page) {
   );
 }
 
+
+async function configPublishes(page: Page) {
+  return page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __configCalls: {
+            publish: { baseFingerprint?: string; approvalMode?: string }[];
+          };
+        }
+      ).__configCalls.publish,
+  );
+}
+
 test("a catalog service can be added and shows a healthy card", async ({ page }) => {
   await openServices(page);
   const form = await addCatalogEntry(page, "DeepWiki");
@@ -117,6 +131,47 @@ test("write tools default to 智能 and save outside every list", async ({ page 
   expect(server.disabledTools ?? []).not.toContain("ask_question");
 });
 
+test("saving keeps a probed destructive tool out of requireApproval", async ({ page }) => {
+  await openServices(page);
+  const form = await addCatalogEntry(page, "DeepWiki");
+  await form.getByRole("button", { name: "保存", exact: true }).click();
+
+  const card = page.getByTestId("mcp-card-deepwiki");
+  await card.getByRole("button", { name: /工具/ }).click();
+  await expect(page.getByLabel("delete_wiki 审批方式")).toHaveText("要审");
+  await page.getByLabel("read_wiki_structure 审批方式").click();
+  await page.getByRole("option", { name: "停用" }).click();
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect
+    .poll(async () => (await mcpCalls(page)).update.length)
+    .toBe(1);
+  const server = (await mcpCalls(page)).update[0]?.server as {
+    requireApproval?: string[];
+  };
+  expect(server.requireApproval ?? []).not.toContain("delete_wiki");
+});
+
+test("a tool changed to 要审 is saved into requireApproval", async ({ page }) => {
+  await openServices(page);
+  const form = await addCatalogEntry(page, "DeepWiki");
+  await form.getByRole("button", { name: "保存", exact: true }).click();
+
+  const card = page.getByTestId("mcp-card-deepwiki");
+  await card.getByRole("button", { name: /工具/ }).click();
+  await page.getByLabel("ask_question 审批方式").click();
+  await page.getByRole("option", { name: "要审" }).click();
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect
+    .poll(async () => (await mcpCalls(page)).update.length)
+    .toBe(1);
+  const server = (await mcpCalls(page)).update[0]?.server as {
+    requireApproval?: string[];
+  };
+  expect(server.requireApproval).toEqual(["ask_question"]);
+});
+
 test("only tools the Worker probed as review offer 智能", async ({ page }) => {
   await openServices(page);
   const form = await addCatalogEntry(page, "DeepWiki");
@@ -193,4 +248,23 @@ test("a failed connection shows the reason outside the badge", async ({ page }) 
   await expect(card.getByTestId("mcp-failure-deepwiki")).toHaveText(
     "dial tcp 10.0.0.12:443: connect: connection refused",
   );
+});
+
+test("approval mode switch is on by default", async ({ page }) => {
+  await openServices(page);
+  const toggle = page.getByRole("switch", { name: "自主执行：写操作不审批" });
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toBeChecked();
+});
+
+test("turning the switch off publishes reviewed", async ({ page }) => {
+  await openServices(page);
+  const toggle = page.getByRole("switch", { name: "自主执行：写操作不审批" });
+  await toggle.click();
+
+  await expect.poll(async () => (await configPublishes(page)).length).toBe(1);
+  const published = (await configPublishes(page))[0];
+  expect(published?.approvalMode).toBe("reviewed");
+  expect(published?.baseFingerprint).toBe("fp-current");
+  await expect(toggle).not.toBeChecked();
 });

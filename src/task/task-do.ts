@@ -39,11 +39,21 @@ import type {
   TaskSpec,
 } from "../protocol";
 import { saveArtifactTool } from "../tools/artifacts";
-import { loadMcpTools, mcpConnector, mcpExtension } from "../tools/mcp";
+import {
+  loadMcpTools,
+  mcpConnector,
+  mcpExtension,
+  type McpGates,
+} from "../tools/mcp";
 import { webFetchTool } from "../tools/web-fetch";
 import { webSearchTool } from "../tools/web-search";
 import { withProgress } from "../tools/wrap";
-import { ApprovalGate, ReviewedGate } from "./approvals";
+import {
+  ApprovalGate,
+  AutoGate,
+  ReviewedGate,
+  type ApprovalGateLike,
+} from "./approvals";
 import {
   cancelBlockedText,
   cancelNotStartedText,
@@ -67,6 +77,7 @@ import {
 import { Outbox } from "./outbox";
 import { reviewAction, type ReviewComplete } from "./review";
 import { taskSystemPrompt } from "./prompt";
+import { taskApprovalMode, taskGates } from "./gates";
 
 export type TaskState =
   | "queued"
@@ -121,6 +132,12 @@ export class TaskDO extends Agent<Env> {
   readonly approvals: ApprovalGate;
 
   readonly reviewedGate: ReviewedGate;
+
+  /** Gate for `http_request` writes, chosen by the approval mode. */
+  private readonly writeGate: ApprovalGateLike;
+
+  /** Gates for the MCP tool modes, chosen by the approval mode. */
+  private readonly mcpGates: McpGates;
 
   /** Resolves once MCP tools were loaded and installed on this instance. */
   private mcpTools: Promise<void> | undefined;
@@ -190,6 +207,15 @@ export class TaskDO extends Agent<Env> {
       () => ownerLocale(this.env),
     );
 
+    const mode = taskApprovalMode(() => readRuntimeConfig(this.env));
+    const gates = taskGates(mode, {
+      approval: this.approvals,
+      reviewed: this.reviewedGate,
+      auto: new AutoGate(() => ownerLocale(this.env)),
+    });
+    this.writeGate = gates.write;
+    this.mcpGates = gates.mcp;
+
     const finishTask: ToolRegistration<typeof FinishTask> = {
       name: "finish_task",
       description:
@@ -240,7 +266,7 @@ export class TaskDO extends Agent<Env> {
           },
         ),
         withProgress(
-          httpRequestTool(this.reviewedGate),
+          httpRequestTool(this.writeGate),
           emitProgress,
           (args) => {
             const locale = ownerLocale(this.env);
@@ -681,7 +707,7 @@ export class TaskDO extends Agent<Env> {
 
       const loaded = await loadMcpTools(
         servers,
-        { approval: this.approvals, review: this.reviewedGate },
+        this.mcpGates,
         mcpConnector(this.mcp, this.env, (server) =>
           this.env.MCP_AUTH.get(
             this.env.MCP_AUTH.idFromName("global"),
