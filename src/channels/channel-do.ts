@@ -38,6 +38,7 @@ import {
   versionIdOf,
 } from "./route-identity";
 import { emitChannelEvent } from "./events";
+import { inboxStore } from "./inbox";
 import { OutboundQueue } from "./outbound-queue";
 import { describeImageBytes, prepareInboundImage } from "./media";
 import { createTelegramAdapter } from "./telegram";
@@ -1561,6 +1562,7 @@ export class ChannelDO extends Agent<Env> {
     this.telegramInstance ??= createTelegramAdapter({
       token: this.env.TELEGRAM_BOT_TOKEN,
       ai: this.env.AI,
+      storeFile: inboxStore(this.env.ARTIFACTS),
     });
     return this.telegramInstance;
   }

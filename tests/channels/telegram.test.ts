@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_ARTIFACT_BYTES } from "../../src/artifact";
+import type { StoreInboundFile } from "../../src/channels/inbox";
 import { ChannelError } from "../../src/channels/types";
 import { createTelegramAdapter } from "../../src/channels/telegram";
+import type { MessageEvent } from "../../src/protocol";
 
 type RecordedCall = {
   url: string;
@@ -60,12 +63,33 @@ function makeAdapter(
   ai?: {
     run(model: string, inputs: { audio: string }): Promise<{ text?: string }>;
   },
+  storeFile?: StoreInboundFile,
 ) {
   return createTelegramAdapter({
     token: TOKEN,
     fetch: fetchImpl,
     ai,
+    storeFile,
   });
+}
+
+function fakeStore() {
+  const stored: Array<{
+    eventId: string;
+    name: string;
+    mimeType: string;
+    size: number;
+  }> = [];
+  const storeFile: StoreInboundFile = async (eventId, name, bytes, mimeType) => {
+    stored.push({ eventId, name, mimeType, size: bytes.byteLength });
+    return {
+      name,
+      key: `inbox/${eventId}/${name}`,
+      mimeType,
+      size: bytes.byteLength,
+    };
+  };
+  return { stored, storeFile };
 }
 
 describe("parseInbound", () => {
@@ -179,6 +203,163 @@ describe("parseInbound", () => {
       images: [{ mimeType: "image/png", data: PNG_B64 }],
     });
     expect(calls[0].body).toEqual({ file_id: "doc-1" });
+  });
+
+  it("stores a document and references it in files", async () => {
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "documents/report.pdf" } } },
+      { status: 200, bytes: new Uint8Array([1, 2, 3]) },
+    ]);
+    const { stored, storeFile } = fakeStore();
+
+    const event = (await makeAdapter(fetchImpl, undefined, storeFile).parseInbound({
+      update_id: 9,
+      message: {
+        message_id: 91,
+        from: { id: 1 },
+        chat: { id: 42 },
+        caption: "总结一下",
+        document: {
+          file_id: "f1",
+          mime_type: "application/pdf",
+          file_name: "年报.pdf",
+          file_size: 3,
+        },
+      },
+    })) as MessageEvent;
+
+    expect(event.text).toBe("总结一下");
+    expect(event.files).toEqual([
+      {
+        name: "年报.pdf",
+        key: "inbox/tg:9/年报.pdf",
+        mimeType: "application/pdf",
+        size: 3,
+      },
+    ]);
+    expect(event.images).toBeUndefined();
+    expect(stored).toEqual([
+      {
+        eventId: "tg:9",
+        name: "年报.pdf",
+        mimeType: "application/pdf",
+        size: 3,
+      },
+    ]);
+  });
+
+  it("refuses an oversized document without downloading it", async () => {
+    const { calls, fetchImpl } = fakeFetch();
+    const { storeFile } = fakeStore();
+
+    const event = (await makeAdapter(fetchImpl, undefined, storeFile).parseInbound({
+      update_id: 90,
+      message: {
+        message_id: 900,
+        from: { id: 1 },
+        chat: { id: 42 },
+        document: {
+          file_id: "f1",
+          mime_type: "application/pdf",
+          file_name: "big.pdf",
+          file_size: MAX_ARTIFACT_BYTES + 1,
+        },
+      },
+    })) as MessageEvent;
+
+    expect(event.fileFailed).toBe("too_large");
+    expect(event.files).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("marks a failed document download", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { fetchImpl } = fakeFetch([{ status: 200, body: { ok: false } }]);
+    const { storeFile } = fakeStore();
+
+    const event = (await makeAdapter(fetchImpl, undefined, storeFile).parseInbound({
+      update_id: 91,
+      message: {
+        message_id: 901,
+        from: { id: 1 },
+        chat: { id: 42 },
+        document: { file_id: "f1", mime_type: "application/pdf", file_size: 3 },
+      },
+    })) as MessageEvent;
+
+    expect(event.fileFailed).toBe("download");
+    expect(event.files).toBeUndefined();
+  });
+
+  it("also stores a photo as a file", async () => {
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "photos/file_7.png" } } },
+      { status: 200, bytes: pngBytes() },
+    ]);
+    const { storeFile } = fakeStore();
+
+    const event = (await makeAdapter(fetchImpl, undefined, storeFile).parseInbound({
+      update_id: 7,
+      message: {
+        message_id: 70,
+        from: { id: 1 },
+        chat: { id: 42 },
+        caption: "看图",
+        photo: [
+          { file_id: "small", width: 90, height: 90 },
+          { file_id: "large", width: 1280, height: 1280 },
+        ],
+      },
+    })) as MessageEvent;
+
+    expect(event.images).toHaveLength(1);
+    expect(event.files?.[0]).toMatchObject({
+      key: expect.stringMatching(/^inbox\/tg:\d+\/photo\.(jpg|png)$/),
+    });
+  });
+
+  it("uses the file id when the document has no name", async () => {
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "documents/abc" } } },
+      { status: 200, bytes: new Uint8Array([1, 2, 3]) },
+    ]);
+    const { storeFile } = fakeStore();
+
+    const event = (await makeAdapter(fetchImpl, undefined, storeFile).parseInbound({
+      update_id: 92,
+      message: {
+        message_id: 902,
+        from: { id: 1 },
+        chat: { id: 42 },
+        document: { file_id: "abc", mime_type: "application/pdf" },
+      },
+    })) as MessageEvent;
+
+    expect(event.files?.[0].name).toBe("abc");
+  });
+
+  it("marks a store failure as a failed download", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { fetchImpl } = fakeFetch([
+      { status: 200, body: { ok: true, result: { file_path: "documents/report.pdf" } } },
+      { status: 200, bytes: new Uint8Array([1, 2, 3]) },
+    ]);
+    const storeFile: StoreInboundFile = async () => {
+      throw new Error("r2 down");
+    };
+
+    const event = (await makeAdapter(fetchImpl, undefined, storeFile).parseInbound({
+      update_id: 93,
+      message: {
+        message_id: 903,
+        from: { id: 1 },
+        chat: { id: 42 },
+        document: { file_id: "f1", mime_type: "application/pdf" },
+      },
+    })) as MessageEvent;
+
+    expect(event.fileFailed).toBe("download");
+    expect(event.files).toBeUndefined();
   });
 
   it("keeps the text when the download fails", async () => {

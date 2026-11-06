@@ -1,3 +1,4 @@
+import { MAX_ARTIFACT_BYTES } from "../artifact";
 import {
   decodeAction,
   type ActionEvent,
@@ -7,7 +8,9 @@ import {
   type MessageEvent,
   type OutboundMessage,
 } from "../protocol";
-import { prepareInboundImage } from "./media";
+import { extensionForMime } from "../tools/file-content";
+import type { StoreInboundFile } from "./inbox";
+import { prepareInboundImage, sniffImageType } from "./media";
 import { transcribeVoice, type VoiceAi } from "./voice";
 import { renderForTelegram } from "./telegram-render";
 import { ChannelError, type ChannelAdapter, type OutboundArtifact } from "./types";
@@ -17,7 +20,12 @@ const API_BASE = "https://api.telegram.org";
 type TelegramUser = { id: number };
 type TelegramChat = { id: number };
 type TelegramPhotoSize = { file_id: string; width: number; height: number };
-type TelegramDocument = { file_id: string; mime_type?: string };
+type TelegramDocument = {
+  file_id: string;
+  mime_type?: string;
+  file_name?: string;
+  file_size?: number;
+};
 type TelegramVoice = { file_id: string; duration: number; mime_type?: string };
 type TelegramMessage = {
   message_id: number;
@@ -52,6 +60,8 @@ export type TelegramAdapterOptions = {
   fetch?: typeof fetch;
   /** 缺省时语音降级为 `voiceFailed`，不影响其他消息。 */
   ai?: VoiceAi;
+  /** 附件写入 inbox；缺省时不保存文件，行为与只收图片时一致。 */
+  storeFile?: StoreInboundFile;
 };
 
 /** The `file_id` of the message's image: its largest photo, or an image document. */
@@ -229,15 +239,88 @@ export function createTelegramAdapter(
         // A message without a sender (e.g. a channel post) has no owner to map.
         if (!message.from) return null;
 
+        const eventId = `tg:${parsed.update_id}`;
         const images: InboundImage[] = [];
         const source = imageSource(message);
-        const bytes = source ? await downloadFile(source) : undefined;
-        const prepared = bytes ? await prepareInboundImage(bytes) : undefined;
+        const document = message.document;
+        const photo = message.photo?.[message.photo.length - 1];
+
+        const files: MessageEvent["files"] = [];
+        let fileFailed: MessageEvent["fileFailed"];
+        const markFileFailed = (
+          reason: NonNullable<MessageEvent["fileFailed"]>,
+        ) => {
+          fileFailed ??= reason;
+        };
+        const storeInInbox = async (
+          name: string,
+          bytes: Uint8Array,
+          mimeType: string,
+        ) => {
+          if (!opts.storeFile) return;
+          try {
+            files.push(await opts.storeFile(eventId, name, bytes, mimeType));
+          } catch (error) {
+            console.error(
+              `telegram inbox store failed (${eventId}): ${(error as Error).message}`,
+            );
+            markFileFailed("download");
+          }
+        };
+
+        // An explicitly oversized document is refused before any download.
+        const documentTooLarge =
+          opts.storeFile !== undefined &&
+          document !== undefined &&
+          document.file_size !== undefined &&
+          document.file_size > MAX_ARTIFACT_BYTES;
+        if (documentTooLarge) markFileFailed("too_large");
+        const sourceIsOversizedDocument =
+          documentTooLarge && document !== undefined && source === document.file_id;
+
+        // One download serves both the image pipeline and the inbox copy.
+        const imageBytes =
+          source && !sourceIsOversizedDocument
+            ? await downloadFile(source)
+            : undefined;
+        const prepared = imageBytes
+          ? await prepareInboundImage(imageBytes)
+          : undefined;
         if (prepared?.ok) images.push(prepared.image);
         else if (source) {
           console.warn(
             `telegram image dropped (${source}) reason=${prepared?.reason ?? "download"}`,
           );
+        }
+
+        if (opts.storeFile && document && !documentTooLarge) {
+          const bytes =
+            source === document.file_id
+              ? imageBytes
+              : await downloadFile(document.file_id);
+          if (!bytes) {
+            markFileFailed("download");
+          } else if (bytes.byteLength > MAX_ARTIFACT_BYTES) {
+            markFileFailed("too_large");
+          } else {
+            await storeInInbox(
+              document.file_name ?? document.file_id,
+              bytes,
+              document.mime_type ?? "application/octet-stream",
+            );
+          }
+        }
+
+        if (opts.storeFile && photo) {
+          if (!imageBytes) {
+            markFileFailed("download");
+          } else if (imageBytes.byteLength > MAX_ARTIFACT_BYTES) {
+            markFileFailed("too_large");
+          } else {
+            const mimeType = sniffImageType(imageBytes) ?? "image/jpeg";
+            const extension = extensionForMime(mimeType) ?? "jpg";
+            await storeInInbox(`photo.${extension}`, imageBytes, mimeType);
+          }
         }
 
         // A voice note is transcribed here, not in the model: the transcript
@@ -266,11 +349,13 @@ export function createTelegramAdapter(
           userId: String(message.from.id),
           text: parts.length > 0 ? parts.join("\n") : null,
           ...(images.length > 0 ? { images } : {}),
+          ...(files && files.length > 0 ? { files } : {}),
+          ...(fileFailed ? { fileFailed } : {}),
           ...(source && images.length === 0 ? { imageFailed: true } : {}),
           ...(message.voice && transcript === undefined
             ? { voiceFailed: true }
             : {}),
-          eventId: `tg:${parsed.update_id}`,
+          eventId,
         };
         return event;
       }
