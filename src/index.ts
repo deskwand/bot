@@ -67,5 +67,13 @@ export default {
     } catch (error) {
       console.error("butler approval reconcile failed:", error);
     }
+
+    // Lost alarms are repaired on their own schedule; the sweep's own
+    // throttle and its per-bot catch keep it from breaking the cron.
+    try {
+      await butler(env).healBots();
+    } catch (error) {
+      console.error("bot heal failed:", error);
+    }
   },
 } satisfies ExportedHandler<Env>;

@@ -89,6 +89,19 @@ async function cancelSchedules(hub: ReturnType<typeof channels>) {
   });
 }
 
+/** The Butler's bot-heal throttle stamp, or null when the sweep never ran. */
+async function healStamp(
+  stub: ReturnType<typeof butler> = butler(),
+): Promise<string | null> {
+  return runInDurableObject(stub, (_instance, state) =>
+    state.storage.sql
+      .exec<{ value: string }>(
+        `SELECT value FROM schedules_meta WHERE key = 'bot_heal_at'`,
+      )
+      .toArray()[0]?.value ?? null,
+  );
+}
+
 async function captureButlerMessages(): Promise<{
   events: MessageEvent[];
   restore(): Promise<void>;
@@ -488,12 +501,15 @@ describe("maintenance lease pauses", () => {
     });
 
     try {
-      await worker.scheduled({} as ScheduledController, env);
-      expect(reconciled).toBe(1);
-
       await stub.acquireMaintenance("export", "op-cron");
       await worker.scheduled({} as ScheduledController, env);
+      expect(reconciled).toBe(0);
+      expect(await healStamp(stub)).toBeNull();
+
+      await stub.releaseMaintenance("op-cron");
+      await worker.scheduled({} as ScheduledController, env);
       expect(reconciled).toBe(1);
+      expect(await healStamp(stub)).not.toBeNull();
     } finally {
       await runInDurableObject(stub, (restored) => {
         (
@@ -503,5 +519,19 @@ describe("maintenance lease pauses", () => {
         ).reconcileChannel = original;
       });
     }
+  });
+
+  it("sweeps bots on a cron without a lease", async () => {
+    const stub = butler();
+    // A previous case in this file may have stamped the throttle already.
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `DELETE FROM schedules_meta WHERE key = 'bot_heal_at'`,
+      );
+    });
+
+    await worker.scheduled({} as ScheduledController, env);
+
+    expect(await healStamp(stub)).not.toBeNull();
   });
 });

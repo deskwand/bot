@@ -1,6 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BotsRepo } from "../../src/butler/bots-repo";
+import { getClock, setClockOverride } from "../../src/butler/notifier";
 import { TasksRepo, type TaskStatus } from "../../src/butler/tasks-repo";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
@@ -14,14 +15,24 @@ declare module "cloudflare:test" {
 }
 
 const DAY_MS = 86_400_000;
+const START = Date.UTC(2030, 0, 1, 9, 0, 0);
+
+let clockNow = START;
 
 beforeEach(async () => {
+  clockNow = START;
+  setClockOverride({
+    now: () => clockNow,
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+  });
   await seedOwnerAddress("42");
 });
 
 afterEach(() => {
   setChannelOverride("telegram", null);
   setModelOverride(null);
+  setClockOverride(null);
   vi.restoreAllMocks();
 });
 
@@ -63,7 +74,7 @@ async function seedBot(
     name,
     mission: "盯着价格",
     defaultIntervalMs: DAY_MS,
-    firstWakeAt: Date.now() + DAY_MS,
+    firstWakeAt: getClock().now() + DAY_MS,
   });
   return bot;
 }
@@ -354,5 +365,60 @@ describe("ButlerDO bot runs", () => {
       instructions: "查询北京天气",
     });
     expect(specs[0]?.botId).toBeUndefined();
+  });
+});
+
+describe("ButlerDO bot heal", () => {
+  it("healBots throttles to fifteen minutes", async () => {
+    const stub = butler("bots-heal-throttle");
+    await seedBot(stub, "b1", "价格哨兵");
+    await seedBot(stub, "b2", "新闻哨兵");
+
+    expect(await stub.healBots()).toEqual({ checked: 2, healed: 0 });
+
+    clockNow += 14 * 60_000;
+    expect(await stub.healBots()).toBeNull();
+
+    clockNow += 60_000;
+    expect(await stub.healBots()).not.toBeNull();
+  });
+
+  it("healBots heals a bot whose alarm vanished", async () => {
+    const stub = butler("bots-heal-vanished");
+    const b1 = await seedBot(stub, "b1", "价格哨兵");
+    await seedBot(stub, "b2", "新闻哨兵");
+    await runInDurableObject(b1, (_instance, state) =>
+      state.storage.deleteAlarm(),
+    );
+
+    expect(await stub.healBots()).toEqual({ checked: 2, healed: 1 });
+    expect(
+      await runInDurableObject(b1, (_instance, state) =>
+        state.storage.getAlarm(),
+      ),
+    ).toBe(clockNow);
+  });
+
+  it("healBots continues past a failing bot", async () => {
+    const stub = butler("bots-heal-failing");
+    await seedBot(stub, "b1", "价格哨兵");
+    await seedBot(stub, "b2", "新闻哨兵");
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as { botFor(id: string): unknown }
+      ).botFor = (id: string) =>
+        id === "b1"
+          ? {
+              heal: async () => {
+                throw new Error("boom");
+              },
+            }
+          : { heal: async () => "healed" };
+    });
+
+    await expect(stub.healBots()).resolves.toEqual({
+      checked: 2,
+      healed: 1,
+    });
   });
 });

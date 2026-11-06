@@ -123,20 +123,30 @@ export class ScheduleStore {
     return this.sql.exec(`DELETE FROM schedules WHERE id = ?`, id).rowsWritten > 0;
   }
 
-  private nextId(): string {
+  /** Reads one `schedules_meta` value, or null when the key is unset. */
+  getMeta(key: string): string | null {
     const row = this.sql
       .exec<{ value: string }>(
         `SELECT value FROM schedules_meta WHERE key = ?`,
-        COUNTER_KEY,
+        key,
       )
       .toArray()[0];
-    const next = Number(row?.value ?? 0) + 1;
+    return row?.value ?? null;
+  }
+
+  /** Writes one `schedules_meta` value, replacing any previous one. */
+  setMeta(key: string, value: string): void {
     this.sql.exec(
       `INSERT INTO schedules_meta (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      COUNTER_KEY,
-      String(next),
+      key,
+      value,
     );
+  }
+
+  private nextId(): string {
+    const next = Number(this.getMeta(COUNTER_KEY) ?? 0) + 1;
+    this.setMeta(COUNTER_KEY, String(next));
     return `s${next}`;
   }
 }

@@ -14,6 +14,9 @@ export const CHANNEL_DISABLED_RETRY_MS = 3_600_000;
 /** How far past its time an alarm may be before `heal()` treats it as lost. */
 export const HEAL_OVERDUE_MS = 600_000;
 
+/** How often the Butler's cron sweeps bots for lost or stale alarms. */
+export const HEAL_INTERVAL_MS = 900_000;
+
 /** Consecutive failed runs before a bot tells its owner it is failing. */
 export const FAILING_NOTICE_AT = 3;
 

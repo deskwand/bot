@@ -5,6 +5,7 @@ import { BackupRpc } from "../admin/backup-rpc";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
 import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
 import type { RunOutcome } from "../bot/bot-store";
+import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { ownerLocale } from "../i18n";
 import type { TextAction } from "../channels/text-action";
 import type {
@@ -104,6 +105,7 @@ const PROGRESS_HEARTBEAT_INTERVAL_MS = 180_000;
 const PROGRESS_HEARTBEAT_FIRST_MS = 60_000;
 const PROGRESS_DETAIL_MAX = 200;
 const MESSAGE_MAX = 4096;
+const BOT_HEAL_KEY = "bot_heal_at";
 
 /** Enabled MCP services the butler can hand to tasks, without their tools. */
 function enabledServices(env: Env): { name: string; description?: string }[] {
@@ -342,6 +344,30 @@ export class ButlerDO extends Agent<Env> {
   /** The bots this Butler indexes (backup discovery and management). */
   listBotIds(): string[] {
     return this.bots.list().map((row) => row.id);
+  }
+
+  /**
+   * Cron sweep: asks every bot to repair a lost or stale alarm. Throttled so
+   * the minute cron does not fan out RPCs every minute. The throttle stamp is
+   * written first, so one stuck bot cannot make the next cron rescan.
+   */
+  async healBots(): Promise<{ checked: number; healed: number } | null> {
+    const now = getClock().now();
+    const last = Number(this.schedules.getMeta(BOT_HEAL_KEY) ?? NaN);
+    if (Number.isFinite(last) && now - last < HEAL_INTERVAL_MS) return null;
+    this.schedules.setMeta(BOT_HEAL_KEY, String(now));
+
+    const bots = this.bots.list();
+    let healed = 0;
+    for (const bot of bots) {
+      try {
+        if ((await this.botFor(bot.id).heal()) === "healed") healed += 1;
+      } catch (error) {
+        // One broken bot must not stop the rest of the sweep.
+        console.error("bot heal failed:", bot.id, error);
+      }
+    }
+    return { checked: bots.length, healed };
   }
 
   async backupSchema(): Promise<DbSchema> {
