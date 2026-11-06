@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseTextAction } from "../../src/channels/text-action";
+import { actionHint } from "../../src/butler/owner-copy";
+import { parseTextAction, textHint } from "../../src/channels/text-action";
 
 describe("parseTextAction", () => {
   it("parses an approval with its approval id", () => {
@@ -102,7 +103,7 @@ describe("parseTextAction", () => {
     expect(parseTextAction("批准一下")).toBeNull();
     expect(parseTextAction("")).toBeNull();
     expect(parseTextAction("hello")).toBeNull();
-    expect(parseTextAction("approve t3 ap1")).toBeNull();
+    expect(parseTextAction("please approve t3 ap1")).toBeNull();
   });
 
   it("refuses ids that are not a task or approval number", () => {
@@ -155,5 +156,82 @@ describe("parseTextAction", () => {
   it("keeps the two approvals of one task distinct", () => {
     expect(parseTextAction("批准 t3 ap1")?.approvalId).toBe("ap1");
     expect(parseTextAction("拒绝 t3 ap2")?.approvalId).toBe("ap2");
+  });
+});
+
+describe("bilingual commands", () => {
+  it("parses English commands exactly like their Chinese counterparts", () => {
+    const pairs: ReadonlyArray<readonly [string, string]> = [
+      ["approve", "批准"],
+      ["Approve #2", "批准 #2"],
+      ["reject t61", "拒绝 t61"],
+      ["cancel 3", "取消 3"],
+      ["APPROVE #1 ap2", "批准 #1 ap2"],
+      ['"approve #1 ap2"', '"批准 #1 ap2"'],
+    ];
+    for (const [english, chinese] of pairs) {
+      expect(parseTextAction(english)).toEqual(parseTextAction(chinese));
+    }
+
+    expect(parseTextAction("approve")).toEqual({
+      action: "approve",
+      target: { kind: "implicit" },
+    });
+    expect(parseTextAction("Approve #2")).toEqual({
+      action: "approve",
+      target: { kind: "handle", handle: 2 },
+    });
+    expect(parseTextAction("reject t61 ap1")).toEqual({
+      action: "reject",
+      target: { kind: "taskId", taskId: "t61" },
+      approvalId: "ap1",
+    });
+    expect(parseTextAction("cancel 3")).toEqual({
+      action: "cancel",
+      target: { kind: "handle", handle: 3 },
+    });
+    expect(parseTextAction("APPROVE #1 ap2")).toEqual({
+      action: "approve",
+      target: { kind: "handle", handle: 1 },
+      approvalId: "ap2",
+    });
+    expect(parseTextAction('"approve #1 ap2"')).toEqual({
+      action: "approve",
+      target: { kind: "handle", handle: 1 },
+      approvalId: "ap2",
+    });
+  });
+
+  it("does not accept partial words", () => {
+    expect(parseTextAction("approved")).toBeNull();
+    expect(parseTextAction("cancellation")).toBeNull();
+  });
+
+  it("every hint round-trips through the parser", () => {
+    const quote = /"([^"]+)"/;
+    for (const locale of ["zh", "en"] as const) {
+      for (const action of ["approve", "reject", "cancel"] as const) {
+        const approvalId = action === "cancel" ? undefined : "ap7";
+        const hint = textHint(
+          locale,
+          actionHint(locale, action, {
+            taskId: "#3",
+            ...(approvalId === undefined ? {} : { approvalId }),
+          }),
+        );
+        const command = quote.exec(hint)?.[1];
+        expect(command).toBeDefined();
+
+        const parsed = parseTextAction(command!);
+        expect(parsed?.action).toBe(action);
+        expect(parsed?.target).toEqual({ kind: "handle", handle: 3 });
+        expect(parsed?.approvalId).toBe(approvalId);
+      }
+    }
+  });
+
+  it("writes the reply hint in the owner's language", () => {
+    expect(textHint("zh", "批准 #1 ap1")).toBe('回复"批准 #1 ap1"');
+    expect(textHint("en", "approve #1 ap1")).toBe('Reply "approve #1 ap1"');
   });
 });
