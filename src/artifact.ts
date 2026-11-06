@@ -24,3 +24,17 @@ export function artifactKeySegments(key: string): string[] | null {
 export function artifactNameFromKey(key: string): string {
   return key.slice(key.lastIndexOf("/") + 1);
 }
+
+// ASCII letters/digits plus the CJK/Hangul/kana ranges; everything else
+// becomes "_" so a filename cannot escape its key prefix.
+const INVALID_FILENAME_CHARS =
+  /[^A-Za-z0-9._\-\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF]/g;
+
+export function sanitizeFilename(raw: string): string {
+  // Strip any path segments, including Windows separators.
+  const basename = raw.split(/[/\\]/).pop() ?? "";
+  const name = basename
+    .replace(/\.\./g, "_")
+    .replace(INVALID_FILENAME_CHARS, "_");
+  return name === "" || name === "." || name === ".." ? "artifact" : name;
+}

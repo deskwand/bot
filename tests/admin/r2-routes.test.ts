@@ -89,6 +89,25 @@ function query(key: string): string {
   return new URLSearchParams({ key }).toString();
 }
 
+async function listAll(
+  routes: ReturnType<typeof createR2Routes>,
+): Promise<ListedObject[]> {
+  const objects: ListedObject[] = [];
+  let cursor: string | null = null;
+  do {
+    const path =
+      cursor === null
+        ? "https://example.com/admin/r2/list"
+        : `https://example.com/admin/r2/list?cursor=${encodeURIComponent(cursor)}`;
+    const response = await routes.fetch(new Request(path));
+    expect(response.status).toBe(200);
+    const page = (await response.json()) as ListResponse;
+    objects.push(...page.objects);
+    cursor = page.next;
+  } while (cursor !== null);
+  return objects;
+}
+
 describe("/admin/r2/*", () => {
   it("lists objects with size and content type across pages", async () => {
     const bucket = env.ARTIFACTS;
@@ -134,6 +153,21 @@ describe("/admin/r2/*", () => {
       size: 4,
       contentType: "image/png",
     });
+  });
+
+  it("leaves inbox and work objects out of the backup listing", async () => {
+    await env.ARTIFACTS.put("t1/id/keep.md", "x");
+    await env.ARTIFACTS.put("inbox/tg:1/skip.pdf", "x");
+    await env.ARTIFACTS.put("work/t1/skip.md", "x");
+
+    const keys = (await listAll(createR2Routes(env.ARTIFACTS))).map(
+      (object) => object.key,
+    );
+
+    expect(keys).toContain("t1/id/keep.md");
+    expect(
+      keys.some((key) => key.startsWith("inbox/") || key.startsWith("work/")),
+    ).toBe(false);
   });
 
   it("streams an object with its content type", async () => {

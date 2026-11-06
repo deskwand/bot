@@ -7,6 +7,14 @@ export type Address = { channel: ChannelId; conversationId: string };
 /** 一条已按额度处理过的入站图片；base64 不带 data: 前缀。 */
 export type InboundImage = { mimeType: string; data: string };
 
+/** 存进 inbox 的入站文件；协议里只传引用，字节不进事件。 */
+export type InboundFile = {
+  name: string;
+  key: string;
+  mimeType: string;
+  size: number;
+};
+
 export type MessageEvent = {
   type: "message";
   channel: ChannelId;
@@ -15,6 +23,10 @@ export type MessageEvent = {
   text: string | null;
   /** 最多 1 张；缺省表示这条消息没有图片。 */
   images?: InboundImage[];
+  /** 已写入 inbox 的附件；缺省表示这条消息没有附件。 */
+  files?: InboundFile[];
+  /** 消息带了附件，但没能取到可用的内容。 */
+  fileFailed?: "too_large" | "download";
   /** 消息带了图片，但取不到可用的内容（下载、解密或格式失败）。 */
   imageFailed?: boolean;
   /** 消息是语音，但没能转成文字。 */
@@ -89,6 +101,8 @@ export type TaskSpec = {
   authorization?: string;
   /** Set when the Butler spawned this task for a bot run. */
   botId?: string;
+  /** inbox 里的入站文件引用；任务只读这些引用，不接收字节。 */
+  attachments?: InboundFile[];
 };
 
 const ACTION_KINDS: readonly ActionKind[] = ["approve", "reject", "cancel"];

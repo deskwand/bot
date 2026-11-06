@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
-import { MAX_ARTIFACT_BYTES } from "../artifact";
+import { MAX_ARTIFACT_BYTES, sanitizeFilename } from "../artifact";
 import { classifyFile, extensionForMime } from "./file-content";
 import { withAbort } from "./http-body";
 import { isBlockedHost } from "./http-request";
@@ -20,20 +20,6 @@ const DOWNLOAD_TIMEOUT_MS = 60_000;
 const MAX_REDIRECTS = 5;
 const TOO_LARGE = "文件超过 15 MB，无法作为产物发送；请拆分成多个文件或只保留摘要";
 const DOWNLOAD_TOO_LARGE = "远程文件超过 15 MB，无法下载";
-
-// ASCII letters/digits plus the CJK/Hangul/kana ranges; everything else
-// becomes "_" so a filename cannot escape its key prefix.
-const INVALID_FILENAME_CHARS =
-  /[^A-Za-z0-9._\-\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF]/g;
-
-function sanitizeFilename(raw: string): string {
-  // Strip any path segments, including Windows separators.
-  const basename = raw.split(/[/\\]/).pop() ?? "";
-  const name = basename
-    .replace(/\.\./g, "_")
-    .replace(INVALID_FILENAME_CHARS, "_");
-  return name === "" || name === "." || name === ".." ? "artifact" : name;
-}
 
 function fail(text: string): ToolExecutionResult {
   return { output: [{ type: "text" as const, text }], isError: true };

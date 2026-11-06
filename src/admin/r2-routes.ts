@@ -14,6 +14,13 @@ export const MAX_R2_OBJECT_BYTES = 100 << 20;
 
 const DEFAULT_CONTENT_TYPE = "application/octet-stream";
 
+/** Backups never include inbound attachments or scratch work objects. */
+const EXCLUDED_PREFIXES = ["inbox/", "work/"];
+
+function isExcluded(key: string): boolean {
+  return EXCLUDED_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -55,11 +62,13 @@ export function createR2Routes(
       include: ["httpMetadata"],
     });
     return json({
-      objects: result.objects.map((object) => ({
-        key: object.key,
-        size: object.size,
-        contentType: object.httpMetadata?.contentType ?? "",
-      })),
+      objects: result.objects
+        .filter((object) => !isExcluded(object.key))
+        .map((object) => ({
+          key: object.key,
+          size: object.size,
+          contentType: object.httpMetadata?.contentType ?? "",
+        })),
       next: result.truncated ? result.cursor : null,
     });
   }
