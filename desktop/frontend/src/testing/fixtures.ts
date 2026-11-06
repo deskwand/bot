@@ -182,6 +182,9 @@ const MCP_TOOLS: Record<string, McpToolDTO[]> = {
   deepwiki: [
     { name: "read_wiki_structure", description: "读取仓库 wiki 目录", mode: "auto" },
     { name: "ask_question", description: "向仓库提问", mode: "review" },
+    // A destructiveHint tool probed in reviewed mode: approval without being
+    // in requireApproval.
+    { name: "delete_wiki", description: "删除 wiki", mode: "approval" },
   ],
   github: [
     { name: "get_file_contents", description: "读取仓库文件", mode: "auto" },

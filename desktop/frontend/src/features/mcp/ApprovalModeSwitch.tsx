@@ -8,7 +8,6 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useApp } from "@/components/app-context";
 import { useT } from "@/i18n";
-import { useInvalidate } from "@/services/queries";
 import type { ConfigDTO } from "@/services/types";
 
 /**
@@ -23,28 +22,30 @@ export function ApprovalModeSwitch({
 }: {
   config: ConfigDTO;
   disabled?: boolean;
-  onPublished: () => void;
+  /** Refetches the config (and anything derived from it) after a publish. */
+  onPublished: () => Promise<void>;
   onError: (error: unknown) => void;
 }) {
   const { client } = useApp();
   const t = useT();
-  const invalidate = useInvalidate();
-  const [publishing, setPublishing] = useState(false);
-  const autonomous = config.approvalMode !== "reviewed";
+  // The value being published. It stays shown, and the switch stays locked,
+  // until the refetched config arrives, so a second click never carries the
+  // stale fingerprint.
+  const [pending, setPending] = useState<boolean | null>(null);
+  const autonomous = pending ?? config.approvalMode !== "reviewed";
 
   const choose = async (next: boolean) => {
-    setPublishing(true);
+    setPending(next);
     try {
       await client.publishConfig({
         baseFingerprint: config.fingerprint,
         approvalMode: next ? "autonomous" : "reviewed",
       });
-      invalidate.config();
-      onPublished();
+      await onPublished();
     } catch (cause) {
       onError(cause);
     } finally {
-      setPublishing(false);
+      setPending(null);
     }
   };
 
@@ -58,7 +59,7 @@ export function ApprovalModeSwitch({
           </div>
           <Switch
             checked={autonomous}
-            disabled={disabled || publishing}
+            disabled={disabled || pending !== null}
             aria-label={t("mcp.approvalMode.label")}
             onCheckedChange={(next) => void choose(next)}
           />

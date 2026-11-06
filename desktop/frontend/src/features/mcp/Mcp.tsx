@@ -320,13 +320,28 @@ export function Mcp() {
 
   // The review mode is the default for write tools and is not written to any
   // list, so only auto, approval and disabled need to be collected here.
+  // A destructive tool is probed as approval in reviewed mode without being in
+  // requireApproval; writing it there would pin it to approval even after the
+  // owner switches to autonomous mode. So approval is only written for tools
+  // already forced or that the owner changed to approval here.
   const saveTools = async (server: McpServerConfig) => {
     const tools = drafts[server.name] ?? [];
+    const probed = new Map(
+      (probes[server.name]?.ok ? probes[server.name]!.tools : []).map((tool) => [
+        tool.name,
+        tool.mode,
+      ]),
+    );
+    const forced = new Set(server.requireApproval ?? []);
     const next: McpServerConfig = {
       ...server,
       autoApprove: tools.filter((tool) => tool.mode === "auto").map((tool) => tool.name),
       requireApproval: tools
-        .filter((tool) => tool.mode === "approval")
+        .filter(
+          (tool) =>
+            tool.mode === "approval" &&
+            (forced.has(tool.name) || probed.get(tool.name) !== "approval"),
+        )
         .map((tool) => tool.name),
       disabledTools: tools
         .filter((tool) => tool.mode === "disabled")
@@ -422,7 +437,7 @@ export function Mcp() {
         <ApprovalModeSwitch
           config={configData}
           disabled={!ready || !configData.configPresent}
-          onPublished={() => void configQuery.refetch()}
+          onPublished={reload}
           onError={setError}
         />
       ) : null}

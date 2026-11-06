@@ -131,6 +131,47 @@ test("write tools default to 智能 and save outside every list", async ({ page 
   expect(server.disabledTools ?? []).not.toContain("ask_question");
 });
 
+test("saving keeps a probed destructive tool out of requireApproval", async ({ page }) => {
+  await openServices(page);
+  const form = await addCatalogEntry(page, "DeepWiki");
+  await form.getByRole("button", { name: "保存", exact: true }).click();
+
+  const card = page.getByTestId("mcp-card-deepwiki");
+  await card.getByRole("button", { name: /工具/ }).click();
+  await expect(page.getByLabel("delete_wiki 审批方式")).toHaveText("要审");
+  await page.getByLabel("read_wiki_structure 审批方式").click();
+  await page.getByRole("option", { name: "停用" }).click();
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect
+    .poll(async () => (await mcpCalls(page)).update.length)
+    .toBe(1);
+  const server = (await mcpCalls(page)).update[0]?.server as {
+    requireApproval?: string[];
+  };
+  expect(server.requireApproval ?? []).not.toContain("delete_wiki");
+});
+
+test("a tool changed to 要审 is saved into requireApproval", async ({ page }) => {
+  await openServices(page);
+  const form = await addCatalogEntry(page, "DeepWiki");
+  await form.getByRole("button", { name: "保存", exact: true }).click();
+
+  const card = page.getByTestId("mcp-card-deepwiki");
+  await card.getByRole("button", { name: /工具/ }).click();
+  await page.getByLabel("ask_question 审批方式").click();
+  await page.getByRole("option", { name: "要审" }).click();
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect
+    .poll(async () => (await mcpCalls(page)).update.length)
+    .toBe(1);
+  const server = (await mcpCalls(page)).update[0]?.server as {
+    requireApproval?: string[];
+  };
+  expect(server.requireApproval).toEqual(["ask_question"]);
+});
+
 test("only tools the Worker probed as review offer 智能", async ({ page }) => {
   await openServices(page);
   const form = await addCatalogEntry(page, "DeepWiki");
