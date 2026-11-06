@@ -9,7 +9,10 @@ const GetArtifact = Type.Object({
 const ARTIFACT_PATH = "/a/";
 
 /** Progress and logs never carry a query string or credentials from a ref. */
-export function safeArtifactRef(ref: string): string {
+export function safeArtifactRef(
+  ref: string,
+  invalidLabel = "[无效 URL]", // i18n-ignore: default for model-facing callers
+): string {
   if (!/^https?:\/\//i.test(ref)) return ref;
   try {
     const url = new URL(ref);
@@ -19,7 +22,7 @@ export function safeArtifactRef(ref: string): string {
     url.hash = "";
     return url.toString();
   } catch {
-    return "[无效 URL]";
+    return invalidLabel;
   }
 }
 

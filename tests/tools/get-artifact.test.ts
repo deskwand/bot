@@ -117,3 +117,8 @@ it("strips credentials and query strings from the progress label", () => {
   );
   expect(safeArtifactRef("t1/id/x")).toBe("t1/id/x");
 });
+
+it("uses the caller's label for an unparsable URL", () => {
+  expect(safeArtifactRef("http://[")).toBe("[无效 URL]");
+  expect(safeArtifactRef("http://[", "[invalid URL]")).toBe("[invalid URL]");
+});

@@ -8,15 +8,22 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { getClock } from "../butler/notifier";
-import { QUOTA_EXHAUSTED_TEXT } from "../llm/model-errors";
+import { ownerLocale } from "../i18n";
+import { isQuotaExhaustedSummary } from "../llm/model-errors";
 import {
   BotStore,
   type BotMeta,
   type RunOutcome,
   type RunRow,
 } from "./bot-store";
-import { buildBotAuthorization, buildBotInstructions } from "./instructions";
 import { RULES_DOC, checkDocWrite, type BotDoc } from "./docs";
+import { buildBotAuthorization, buildBotInstructions } from "./instructions";
+import {
+  botDailyLimitText,
+  botFinishedText,
+  botPausedText,
+  botRunTimeoutText,
+} from "./owner-copy";
 import {
   CHANNEL_DISABLED_RETRY_MS,
   DAILY_WAKE_LIMIT,
@@ -191,7 +198,7 @@ export class BotDO extends DurableObject<Env> {
     options: { allowRules: boolean },
   ): Promise<{ ok: boolean; message: string }> {
     if (this.store.readMeta() === null) {
-      return { ok: false, message: "机器人不存在" };
+      return { ok: false, message: "机器人不存在" }; // i18n-ignore: model-facing
     }
     const check = checkDocWrite(
       this.store.readDocs(),
@@ -202,13 +209,13 @@ export class BotDO extends DurableObject<Env> {
     if (!check.ok) return { ok: false, message: check.message };
     if (check.content === null) {
       return this.store.deleteDoc(check.name)
-        ? { ok: true, message: `已删除「${check.name}」` }
-        : { ok: false, message: `没有文档「${check.name}」` };
+        ? { ok: true, message: `已删除「${check.name}」` } // i18n-ignore: model-facing
+        : { ok: false, message: `没有文档「${check.name}」` }; // i18n-ignore: model-facing
     }
     this.store.putDoc(check.name, check.content, getClock().now());
     return {
       ok: true,
-      message: `已写入「${check.name}」（${check.used}/${check.limit} 字）`,
+      message: `已写入「${check.name}」（${check.used}/${check.limit} 字）`, // i18n-ignore: model-facing
     };
   }
 
@@ -238,7 +245,7 @@ export class BotDO extends DurableObject<Env> {
     at?: number;
   }): Promise<{ at: number; clamped: boolean }> {
     const meta = this.store.readMeta();
-    if (meta === null) throw new Error("机器人不存在");
+    if (meta === null) throw new Error("机器人不存在"); // i18n-ignore: model-facing
 
     const now = getClock().now();
     const requested = req.at ?? now + (req.afterMs ?? 0);
@@ -355,7 +362,7 @@ export class BotDO extends DurableObject<Env> {
     if (
       outcome === "failed" &&
       meta.status === "active" &&
-      summary !== QUOTA_EXHAUSTED_TEXT
+      !isQuotaExhaustedSummary(summary)
     ) {
       this.store.writeMeta(meta);
       await this.armAfterFailure(meta, now, summary);
@@ -367,7 +374,7 @@ export class BotDO extends DurableObject<Env> {
       // Told only now, so a run that rescheduled after finish_bot stays quiet.
       await this.notice(
         meta,
-        `🏁 ${meta.name} 已结束，不会再唤醒（原因：${meta.finishReason ?? "未说明"}）`,
+        botFinishedText(ownerLocale(this.env), meta.name, meta.finishReason),
       );
       return;
     }
@@ -573,7 +580,11 @@ export class BotDO extends DurableObject<Env> {
       const startedAt = this.store.runStartedAt(taskId);
       if (startedAt !== null && now - startedAt > RUN_MAX_MS) {
         await this.cancelTask(taskId);
-        await this.onRunEnded(taskId, "failed", "运行超过 24 小时，已取消");
+        await this.onRunEnded(
+          taskId,
+          "failed",
+          botRunTimeoutText(ownerLocale(this.env)),
+        );
         return;
       }
       await this.ctx.storage.setAlarm(now + WATCHDOG_MS);
@@ -595,7 +606,7 @@ export class BotDO extends DurableObject<Env> {
     if (firstHit) {
       await this.notice(
         meta,
-        `⏸ ${meta.name} 今日唤醒已达 ${DAILY_WAKE_LIMIT} 次，推迟到明天 00:00 UTC`,
+        botDailyLimitText(ownerLocale(this.env), meta.name, DAILY_WAKE_LIMIT),
       );
     }
   }
@@ -614,7 +625,12 @@ export class BotDO extends DurableObject<Env> {
       await this.ctx.storage.deleteAlarm();
       await this.notice(
         meta,
-        `⚠️ ${meta.name} 已暂停：连续 3 次失败（最近原因：${reason}）`,
+        botPausedText(
+          ownerLocale(this.env),
+          meta.name,
+          PAUSE_AFTER_FAILURES,
+          reason,
+        ),
       );
       return;
     }

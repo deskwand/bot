@@ -3,6 +3,12 @@
   "src/task/prompt.ts",
   "src/task/review.ts",
   "src/bot/instructions.ts",
+  "src/butler/tools.ts",
+  "src/butler/bot-tools.ts",
+  "src/bot/bot-tools.ts",
+  "src/butler/memory.ts",
+  "src/bot/docs.ts",
+  "src/butler/schedules.ts",
   "src/tools/**",
   "desktop/frontend/src/testing/**"
 ]

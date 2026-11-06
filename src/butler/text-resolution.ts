@@ -1,4 +1,12 @@
 import type { TextAction } from "../channels/text-action";
+import type { Locale } from "../i18n";
+import {
+  resolutionActiveList,
+  resolutionNoActiveTask,
+  resolutionNoPendingApproval,
+  resolutionNoPendingApprovalId,
+  resolutionPendingList,
+} from "./owner-copy";
 import { taskLabel, type TaskRow } from "./tasks-repo";
 
 /** One approval that is still waiting for the owner's decision. */
@@ -28,6 +36,7 @@ export type Resolution =
  * Task DO to accept or reject.
  */
 export function resolveTextAction(
+  locale: Locale,
   action: TextAction & {
     target: { kind: "implicit" } | { kind: "handle"; handle: number };
   },
@@ -38,7 +47,7 @@ export function resolveTextAction(
     const handle = action.target.handle;
     const row = active.find((candidate) => candidate.handle === handle) ?? null;
     if (row === null) {
-      return reply(`#${handle} 当前没有进行中的任务`);
+      return reply(resolutionNoActiveTask(locale, handle));
     }
     if (action.action === "cancel") {
       return act(row);
@@ -52,18 +61,22 @@ export function resolveTextAction(
       );
       return matches
         ? act(row, action.approvalId)
-        : reply(`#${handle} 没有待审批 ${action.approvalId}`);
+        : reply(
+            resolutionNoPendingApprovalId(locale, handle, action.approvalId),
+          );
     }
     const candidates = pending.filter((item) => item.taskId === row.id);
-    if (candidates.length === 0) return reply(`${taskLabel(row)} 没有待审批`);
+    if (candidates.length === 0) {
+      return reply(resolutionNoPendingApproval(locale, taskLabel(row)));
+    }
     if (candidates.length === 1) return act(row, candidates[0]!.approvalId);
-    return reply(listPending(candidates));
+    return reply(resolutionPendingList(locale, candidates));
   }
 
   if (action.action === "cancel") {
     if (active.length === 0) return { kind: "chat" };
     if (active.length === 1) return act(active[0]!);
-    return reply(listActive(active));
+    return reply(resolutionActiveList(locale, active));
   }
 
   if (pending.length === 0) return { kind: "chat" };
@@ -76,7 +89,7 @@ export function resolveTextAction(
       approvalId: only.approvalId,
     };
   }
-  return reply(listPending(pending));
+  return reply(resolutionPendingList(locale, pending));
 }
 
 function act(
@@ -91,17 +104,4 @@ function act(
 
 function reply(text: string): Resolution {
   return { kind: "reply", text };
-}
-
-function listActive(active: TaskRow[]): string {
-  const lines = active.map((row) => `${taskLabel(row)} ${row.title}`);
-  return `当前有 ${active.length} 个任务在进行，请写明编号：\n${lines.join("\n")}`;
-}
-
-function listPending(pending: PendingApproval[]): string {
-  const lines = pending.map(
-    (item) =>
-      `${taskLabel({ id: item.taskId, handle: item.handle })} ${item.approvalId} ${item.title}`,
-  );
-  return `当前有 ${pending.length} 个待审批，请写明编号：\n${lines.join("\n")}`;
 }

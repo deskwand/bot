@@ -7,7 +7,9 @@ import type {
   DumpRow,
   TableSchema,
 } from "../admin/sql-dump";
+import { actionHint } from "../butler/owner-copy";
 import { isOwner } from "../config";
+import { ownerLocale, t, type Locale } from "../i18n";
 import { readRuntimeConfig } from "../runtime-config";
 import {
   decodeAction,
@@ -42,7 +44,7 @@ import {
   createTelegramPollClient,
   type TelegramUpdateBatch,
 } from "./telegram-poll";
-import { parseTextAction, type TextAction } from "./text-action";
+import { parseTextAction, textHint, type TextAction } from "./text-action";
 import { ChannelError, type ChannelAdapter } from "./types";
 import { toWeChatText } from "./wechat/markdown";
 import {
@@ -105,14 +107,16 @@ function credentialsHash(json: string): Promise<string> {
   return sha256Hex(json);
 }
 
-const ACTION_LABELS = {
-  approve: "批准",
-  reject: "拒绝",
-  cancel: "取消",
-} as const;
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function channelDisabledText(locale: Locale): string {
+  return t(locale, "channel.disabled");
+}
+
+export function channelErrorText(locale: Locale): string {
+  return t(locale, "channel.error");
 }
 
 /**
@@ -140,7 +144,7 @@ function channelErrorCode(error: unknown): string {
 }
 
 /** Drop buttons and turn each one into an instruction the owner can type. */
-function forWechat(msg: OutboundMessage): OutboundMessage {
+function forWechat(msg: OutboundMessage, locale: Locale): OutboundMessage {
   const text = toWeChatText(msg.text);
   if (!msg.buttons || msg.buttons.length === 0) return { text };
 
@@ -149,14 +153,21 @@ function forWechat(msg: OutboundMessage): OutboundMessage {
     for (const button of row) {
       // The sender knows the display handle, which the encoded data cannot.
       if (button.hint !== undefined) {
-        hints.push(`回复"${button.hint}"`);
+        hints.push(textHint(locale, button.hint));
         continue;
       }
       const decoded = decodeAction(button.data);
       if (!decoded) continue;
-      const approval = decoded.approvalId ? ` ${decoded.approvalId}` : "";
       hints.push(
-        `回复"${ACTION_LABELS[decoded.action]} ${decoded.taskId}${approval}"`,
+        textHint(
+          locale,
+          actionHint(locale, decoded.action, {
+            taskId: decoded.taskId,
+            ...(decoded.approvalId === undefined
+              ? {}
+              : { approvalId: decoded.approvalId }),
+          }),
+        ),
       );
     }
   }
@@ -302,7 +313,10 @@ export class ChannelDO extends Agent<Env> {
       if (route.channel !== "telegram") {
         if (event.type === "action") {
           try {
-            await adapter.answerAction(event.actionId, "该渠道未启用");
+            await adapter.answerAction(
+              event.actionId,
+              channelDisabledText(ownerLocale(this.env)),
+            );
           } catch (error) {
             console.error(
               `channel: answer callback failed: ${errorMessage(error)}`,
@@ -319,7 +333,7 @@ export class ChannelDO extends Agent<Env> {
         return this.lease.current() === null ? "accepted" : "maintenance";
       }
 
-      let text = "出错了，稍后再试";
+      let text = channelErrorText(ownerLocale(this.env));
       try {
         const task = this.env.TASK.get(
           this.env.TASK.idFromName(event.taskId),
@@ -500,7 +514,8 @@ export class ChannelDO extends Agent<Env> {
     msg: OutboundMessage,
   ): Promise<ChannelMessageRef> {
     const conversationId = this.currentAddress(channel);
-    const outbound = channel === "wechat" ? forWechat(msg) : msg;
+    const outbound =
+      channel === "wechat" ? forWechat(msg, ownerLocale(this.env)) : msg;
 
     if (channel !== "wechat") {
       const sent = await this.adapter(channel).send(conversationId, outbound);
@@ -1254,12 +1269,14 @@ export class ChannelDO extends Agent<Env> {
           `channel: action resolution failed: ${errorMessage(error)}`,
         );
         if (!(await this.isAdmissionCurrent("wechat", routeKey))) return;
-        await this.sendCurrent({ text: "出错了，稍后再试" });
+        await this.sendCurrent({
+          text: channelErrorText(ownerLocale(this.env)),
+        });
         return;
       }
     }
 
-    let text = "出错了，稍后再试";
+    let text = channelErrorText(ownerLocale(this.env));
     try {
       const action: ActionEvent = {
         type: "action",

@@ -1,6 +1,15 @@
 import type { TSchema, Static } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
+import type { Locale } from "../i18n";
 import type { TaskEventBody } from "../protocol";
+import {
+  approvalDecisionText,
+  approvalExpiredText,
+  approvalHandledText,
+  autoApprovedText,
+  clearedRulesText,
+  proposedRulesText,
+} from "./owner-copy";
 import { REVIEW_FAILED_REASON, type ReviewVerdict } from "./review";
 
 export type ApprovalDecision = "approved" | "rejected" | "expired";
@@ -53,7 +62,11 @@ function errorMessage(error: unknown): string {
  * Card text for one approval. A proposed rules change shows its reason and the
  * full new text; other tools keep the bounded JSON snippet.
  */
-export function approvalSummary(tool: string, argsJson: string): string {
+export function approvalSummary(
+  tool: string,
+  argsJson: string,
+  locale: Locale = "zh",
+): string {
   if (tool === PROPOSE_RULES_TOOL) {
     let args: unknown;
     try {
@@ -73,7 +86,11 @@ export function approvalSummary(tool: string, argsJson: string): string {
             ? `${text.slice(0, REASON_SUMMARY_LIMIT)}…`
             : text;
         const rules = content.trim();
-        return `理由：${summary}\n新守则：\n${rules.length > 0 ? rules : "（清空守则）"}`;
+        return proposedRulesText(
+          locale,
+          summary,
+          rules.length > 0 ? rules : clearedRulesText(locale),
+        );
       }
     }
   }
@@ -95,6 +112,7 @@ export class ApprovalGate implements ApprovalGateLike {
     private readonly sql: SqlStorage,
     private readonly emit: (body: TaskEventBody) => Promise<void>,
     private readonly timeoutMs = 600_000,
+    private readonly locale: () => Locale = () => "zh",
   ) {
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS approvals (
@@ -156,7 +174,7 @@ export class ApprovalGate implements ApprovalGateLike {
         type: "approval_requested",
         approvalId: id,
         tool,
-        argsSummary: approvalSummary(tool, argsJson),
+        argsSummary: approvalSummary(tool, argsJson, this.locale()),
         ...(note?.reason !== undefined ? { reason: note.reason } : {}),
       });
     } catch (error) {
@@ -206,7 +224,7 @@ export class ApprovalGate implements ApprovalGateLike {
       .map((row) => ({
         approvalId: row.id,
         tool: row.tool,
-        argsSummary: approvalSummary(row.tool, row.args_json),
+        argsSummary: approvalSummary(row.tool, row.args_json, this.locale()),
         ...(row.reason !== null ? { reason: row.reason } : {}),
       }));
   }
@@ -215,9 +233,10 @@ export class ApprovalGate implements ApprovalGateLike {
     approvalId: string,
     decision: "approved" | "rejected",
   ): Promise<{ ok: boolean; message: string }> {
+    const locale = this.locale();
     const status = this.statusOf(approvalId);
     if (status !== "pending") {
-      return { ok: false, message: "该审批已处理或已失效" };
+      return { ok: false, message: approvalHandledText(locale) };
     }
 
     const waiter = this.waiters.get(approvalId);
@@ -227,13 +246,13 @@ export class ApprovalGate implements ApprovalGateLike {
       // the approval message so its buttons do not stay live.
       this.setStatus(approvalId, "expired");
       await this.emitResolved(approvalId, "expired");
-      return { ok: false, message: "该审批已失效" };
+      return { ok: false, message: approvalExpiredText(locale) };
     }
 
     this.settle(approvalId, decision);
     return {
       ok: true,
-      message: decision === "approved" ? "已批准" : "已拒绝",
+      message: approvalDecisionText(locale, decision),
     };
   }
 
@@ -297,7 +316,7 @@ export class ApprovalGate implements ApprovalGateLike {
 
 /** Shared refusal text for approval-gated tools. */
 export function rejectionText(decision: ApprovalDecision): string {
-  return `用户拒绝了此操作（${decision}），请换一种方式或直接向用户说明`;
+  return `用户拒绝了此操作（${decision}），请换一种方式或直接向用户说明`; // i18n-ignore: model-facing
 }
 
 /** One booked review, kept for troubleshooting. */
@@ -326,6 +345,7 @@ export class ReviewedGate implements ApprovalGateLike {
       signal: AbortSignal,
     ) => Promise<ReviewVerdict>,
     private readonly emitProgress: (text: string) => Promise<void>,
+    private readonly locale: () => Locale = () => "zh",
   ) {
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS reviews (
@@ -379,7 +399,9 @@ export class ReviewedGate implements ApprovalGateLike {
 
     if (verdict.verdict === "allow") {
       try {
-        await this.emitProgress(`✔️ 自动放行 ${tool}：${verdict.reason}`);
+        await this.emitProgress(
+          autoApprovedText(this.locale(), tool, verdict.reason),
+        );
       } catch (error) {
         console.warn(
           `review progress for ${tool} failed: ${errorMessage(error)}`,

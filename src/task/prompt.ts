@@ -1,10 +1,11 @@
+import { t, type Locale } from "../i18n";
 import type { TaskSpec } from "../protocol";
 
 /**
  * System prompt for a task's sub-agent. Delivering through `finish_task` is
  * mandatory: the Butler relies on the resulting `completed` event.
  */
-export function taskSystemPrompt(spec: TaskSpec): string {
+export function taskSystemPrompt(locale: Locale, spec: TaskSpec): string {
   return [
     `You are the background worker for task ${spec.taskId}: ${spec.title}.`,
     "",
@@ -42,5 +43,7 @@ export function taskSystemPrompt(spec: TaskSpec): string {
           "Call `finish_bot` once the mission is complete.",
           "You must still call `finish_task` to end this run.",
         ]),
+    "",
+    t(locale, "prompt.replyLanguage"),
   ].join("\n");
 }

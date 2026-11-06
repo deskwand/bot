@@ -21,7 +21,10 @@ import (
 
 // A server published moments ago is unknown to the Worker until the new
 // version takes traffic; probe and OAuth start retry while it says so.
-const mcpServerMissing = "服务不存在" // i18n-ignore: Worker response text
+const CodeMcpServerNotFound = "MCP_SERVER_NOT_FOUND"
+
+// Older Workers only sent the Chinese message, without a code.
+const mcpServerMissing = "服务不存在" // i18n-ignore: legacy Worker response text
 
 var (
 	mcpPropagationTimeout  = 30 * time.Second
@@ -47,7 +50,15 @@ func untilMcpServerLive[T any](ctx context.Context, call func() (T, error), miss
 
 func isMcpServerMissing(err error) bool {
 	var derr domain.Error
-	return errors.As(err, &derr) && derr.Message == mcpServerMissing
+	return errors.As(err, &derr) &&
+		(derr.Code == CodeMcpServerNotFound || derr.Message == mcpServerMissing)
+}
+
+// isMcpProbeMissing matches the probe's coded reason, falling back to the
+// message an older Worker sent.
+func isMcpProbeMissing(probe mcpadmin.Probe) bool {
+	return !probe.OK &&
+		(probe.ReasonCode == CodeMcpServerNotFound || probe.Reason == mcpServerMissing)
 }
 
 var (
@@ -305,7 +316,7 @@ func (s *Service) ProbeMcp(name string) (McpProbeDTO, error) {
 	result, err := untilMcpServerLive(ctx,
 		func() (mcpadmin.Probe, error) { return client.Probe(ctx, strings.TrimSpace(name)) },
 		func(probe mcpadmin.Probe, err error) bool {
-			return err == nil && !probe.OK && probe.Reason == mcpServerMissing
+			return err == nil && isMcpProbeMissing(probe)
 		})
 	if err != nil {
 		return McpProbeDTO{}, safeAppError(err)

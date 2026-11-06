@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { t } from "../../src/i18n";
 import {
   REVIEW_FAILED_REASON,
   parseReview,
@@ -96,7 +97,7 @@ describe("reviewUserMessage", () => {
 
 describe("reviewSystemPrompt", () => {
   it("states the high-risk rules and the output format", () => {
-    const prompt = reviewSystemPrompt();
+    const prompt = reviewSystemPrompt("zh");
     for (const fragment of [
       "付款",
       "删除",
@@ -109,6 +110,14 @@ describe("reviewSystemPrompt", () => {
     ]) {
       expect(prompt).toContain(fragment);
     }
+  });
+
+  it("review prompt asks for the owner's language", () => {
+    expect(reviewSystemPrompt("en")).toContain(
+      t("en", "prompt.reviewReasonLanguage"),
+    );
+    expect(reviewSystemPrompt("en")).not.toContain("不超过 60 字的中文");
+    expect(reviewSystemPrompt("zh")).toContain("不超过 60 字的中文");
   });
 });
 
@@ -133,7 +142,7 @@ describe("reviewAction", () => {
       reason: "按指令保存笔记",
       failed: false,
     });
-    expect(system).toBe(reviewSystemPrompt());
+    expect(system).toBe(reviewSystemPrompt("zh"));
     expect(user).toBe(reviewUserMessage(input));
   });
 
@@ -155,7 +164,7 @@ describe("reviewAction", () => {
     };
 
     await expect(
-      reviewAction(input, complete, new AbortController().signal, 20),
+      reviewAction(input, complete, new AbortController().signal, "zh", 20),
     ).resolves.toEqual(failed);
     expect(seen?.aborted).toBe(true);
   });

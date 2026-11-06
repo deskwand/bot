@@ -6,6 +6,7 @@ import {
 } from "../../src/admin/admin-gateway";
 import { createMcpAdminRoutes } from "../../src/admin/mcp-routes";
 import type { McpAuthDO } from "../../src/mcp/mcp-auth-do";
+import { McpUserError, type McpUserErrorCode } from "../../src/mcp/errors";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -23,7 +24,7 @@ type Calls = {
 
 type FakeOptions = {
   complete?: boolean;
-  startError?: string;
+  startError?: McpUserErrorCode;
 };
 
 function fakeAuth(options: FakeOptions = {}): {
@@ -39,7 +40,7 @@ function fakeAuth(options: FakeOptions = {}): {
     startAuthorization: async (name: string) => {
       calls.start.push(name);
       if (options.startError !== undefined) {
-        throw new Error(options.startError);
+        throw new McpUserError(options.startError);
       }
       return { url: "https://auth.test/authorize?state=s" };
     },
@@ -158,8 +159,10 @@ describe("/admin/mcp/*", () => {
     expect(calls.start).toEqual(["notion"]);
   });
 
-  it("returns MCP_INVALID when the service needs no authorization", async () => {
-    const { stub } = fakeAuth({ startError: "服务不存在或不需要授权" });
+  it("returns a code when the service needs no authorization", async () => {
+    const { stub } = fakeAuth({
+      startError: "MCP_SERVER_NOT_FOUND_OR_NO_AUTH",
+    });
     const gateway = createAdminGateway(deps(stub));
 
     const response = await call(gateway, "/admin/mcp/oauth/start", {
@@ -169,13 +172,13 @@ describe("/admin/mcp/*", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      code: "MCP_INVALID",
+      code: "MCP_SERVER_NOT_FOUND_OR_NO_AUTH",
       message: "服务不存在或不需要授权",
     });
   });
 
   it("tells the desktop when a service does not support DCR", async () => {
-    const { stub } = fakeAuth({ startError: "该服务不支持自动注册（DCR）" });
+    const { stub } = fakeAuth({ startError: "MCP_DCR_UNSUPPORTED" });
     const gateway = createAdminGateway(deps(stub));
 
     const response = await call(gateway, "/admin/mcp/oauth/start", {
@@ -185,9 +188,37 @@ describe("/admin/mcp/*", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      code: "MCP_INVALID",
+      code: "MCP_DCR_UNSUPPORTED",
       message: "该服务不支持自动注册（DCR）",
     });
+  });
+
+  it("localizes the coded error", async () => {
+    const { stub } = fakeAuth({ startError: "MCP_SERVER_NOT_FOUND" });
+    const zh = createAdminGateway(deps(stub));
+    const en = createAdminGateway({ ...deps(stub), locale: () => "en" });
+
+    const zhResponse = await call(zh, "/admin/mcp/oauth/start", {
+      method: "POST",
+      body: { name: "missing" },
+    });
+    const enResponse = await call(en, "/admin/mcp/oauth/start", {
+      method: "POST",
+      body: { name: "missing" },
+    });
+
+    expect(zhResponse.status).toBe(400);
+    expect(await zhResponse.json()).toEqual({
+      code: "MCP_SERVER_NOT_FOUND",
+      message: "服务不存在",
+    });
+    expect(enResponse.status).toBe(400);
+    const body = (await enResponse.json()) as { code: string; message: string };
+    expect(body).toEqual({
+      code: "MCP_SERVER_NOT_FOUND",
+      message: "Service not found",
+    });
+    expect(body.message).not.toMatch(/\p{Script=Han}/u);
   });
 
   it("revokes a server", async () => {
@@ -236,7 +267,11 @@ describe("GET /mcp/oauth/callback", () => {
       "text/html; charset=utf-8",
     );
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.text()).toContain("授权完成，可以回到桌面端了");
+    const text = await response.text();
+    expect(text).toContain("授权完成，可以回到桌面端了");
+    expect(text).toContain(
+      "Authorization complete. You can return to the desktop app.",
+    );
     expect(calls.complete).toEqual([["state-1", "code-1"]]);
   });
 
@@ -251,7 +286,11 @@ describe("GET /mcp/oauth/callback", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain("授权失败，请回到桌面端重试");
+    const text = await response.text();
+    expect(text).toContain("授权失败，请回到桌面端重试");
+    expect(text).toContain(
+      "Authorization failed. Return to the desktop app and try again.",
+    );
   });
 
   it("shows the failure page without echoing a missing code or state", async () => {

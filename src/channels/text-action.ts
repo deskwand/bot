@@ -1,3 +1,4 @@
+import { t, type Locale } from "../i18n";
 import type { ActionKind } from "../protocol";
 
 export type TextTarget =
@@ -12,10 +13,28 @@ export type TextAction = {
 };
 
 const COMMANDS: Record<string, ActionKind> = {
-  批准: "approve",
-  拒绝: "reject",
-  取消: "cancel",
+  // Chinese and English command words are protocol aliases, not copy.
+  批准: "approve", // i18n-ignore: command alias
+  拒绝: "reject", // i18n-ignore: command alias
+  取消: "cancel", // i18n-ignore: command alias
+  approve: "approve",
+  reject: "reject",
+  cancel: "cancel",
 };
+
+/** Spell one command word both ways while leaving non-letters alone. */
+function caseInsensitive(word: string): string {
+  return Array.from(word, (char) => {
+    const lower = char.toLowerCase();
+    const upper = char.toUpperCase();
+    return lower === upper ? char : `[${lower}${upper}]`;
+  }).join("");
+}
+
+const COMMAND_PATTERN = new RegExp(
+  `^(${Object.keys(COMMANDS).map(caseInsensitive).join("|")})` +
+    `(?:\\s+(?:#?(\\d+)|(t\\d+)))?(?:\\s+(ap\\d+))?$`,
+);
 
 /** Quote pairs the owner may leave around a copied hint. */
 const QUOTE_PAIRS: ReadonlyArray<readonly [string, string]> = [
@@ -45,6 +64,11 @@ function unquote(command: string): string {
   return command;
 }
 
+/** The copyable reply hint shown on channels without buttons. */
+export function textHint(locale: Locale, command: string): string {
+  return t(locale, "channel.hint", { hint: command });
+}
+
 /**
  * Deterministic owner commands for channels without buttons.
  *
@@ -56,12 +80,10 @@ function unquote(command: string): string {
 export function parseTextAction(text: string): TextAction | null {
   // The owner's IME emits the full-width hash; both spellings mean #N.
   const command = unquote(text.trim()).replace(/＃/g, "#");
-  const match = /^(批准|拒绝|取消)(?:\s+(?:#?(\d+)|(t\d+)))?(?:\s+(ap\d+))?$/.exec(
-    command,
-  );
+  const match = COMMAND_PATTERN.exec(command);
   if (!match) return null;
 
-  const action = COMMANDS[match[1]!];
+  const action = COMMANDS[match[1]!.toLowerCase()];
   const handle = match[2];
   const taskId = match[3];
   const approvalId = match[4];

@@ -10,6 +10,24 @@ declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
+const ENV = env as unknown as Record<string, unknown>;
+const savedEnv = new Map<string, unknown>();
+
+function setEnv(patch: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(patch)) {
+    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
+    ENV[key] = value;
+  }
+}
+
+function restoreEnv(): void {
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete ENV[key];
+    else ENV[key] = value;
+  }
+  savedEnv.clear();
+}
+
 beforeEach(() => {
   setChannelOverride("telegram", fakeChannel().adapter);
 });
@@ -18,6 +36,7 @@ afterEach(() => {
   setModelOverride(null);
   setChannelOverride("telegram", null);
   vi.restoreAllMocks();
+  restoreEnv();
 });
 
 function butler() {
@@ -96,5 +115,50 @@ describe("TaskDO execution tools", () => {
         .toArray()[0]?.count,
     );
     expect(stored).toBe(0);
+  });
+
+  it("uses the localized invalid URL label in an English progress line", async () => {
+    setEnv({
+      DESKWAND_CONFIG: {
+        schemaVersion: 1,
+        locale: "en",
+        owner: { telegramUserIds: [100000001] },
+        models: {
+          butler: { provider: "deepseek", id: "deepseek-flash" },
+          task: { provider: "deepseek", id: "deepseek-flash" },
+        },
+        mcpServers: [],
+      },
+    });
+    const progress = vi.spyOn(ButlerDO.prototype, "reportTaskProgress");
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "get_artifact", args: { ref: "http://[" } }] },
+        { toolCalls: [{ name: "finish_task", args: { summary: "done" } }] },
+      ]),
+    );
+    const taskId = "t-tool-invalid-url";
+    const stub = env.TASK.get(env.TASK.idFromName(taskId));
+
+    await stub.start({
+      taskId,
+      title: "Invalid URL",
+      instructions: "read an invalid artifact",
+    });
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual([
+          "started",
+          "completed",
+        ]);
+      },
+      { timeout: 10_000 },
+    );
+    expect(progress.mock.calls).toContainEqual([
+      taskId,
+      "Read artifact: [invalid URL]",
+    ]);
   });
 });

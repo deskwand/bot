@@ -56,6 +56,13 @@ describe("isBlockedHost", () => {
   );
 });
 
+describe("safeRequestUrl", () => {
+  it("uses the caller's label for an unparsable URL", () => {
+    expect(safeRequestUrl("not a url")).toBe("[无效 URL]");
+    expect(safeRequestUrl("not a url", "[invalid URL]")).toBe("[invalid URL]");
+  });
+});
+
 describe("reviewArgs", () => {
   it("keeps ordinary query values and masks secret ones", () => {
     const review = reviewArgs({
