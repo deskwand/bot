@@ -122,6 +122,7 @@ type ConfigDTO struct {
 	CustomProviders    []CustomProviderDTO `json:"customProviders"`
 	McpServers         json.RawMessage     `json:"mcpServers"`
 	Locale             string              `json:"locale"`
+	ApprovalMode       string              `json:"approvalMode"`
 	Secrets            []SecretNameDTO     `json:"secrets"`
 }
 
@@ -189,6 +190,7 @@ type ConfigEditDTO struct {
 	TaskModel       *ModelDTO            `json:"taskModel,omitempty"`
 	CustomProviders *[]CustomProviderDTO `json:"customProviders,omitempty"`
 	McpServers      *json.RawMessage     `json:"mcpServers,omitempty"`
+	ApprovalMode    *string              `json:"approvalMode,omitempty"`
 	Secrets         []SecretEditDTO      `json:"secrets,omitempty"`
 }
 

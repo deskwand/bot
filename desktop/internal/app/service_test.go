@@ -2241,3 +2241,62 @@ func TestGetConfigDefaultsLocaleToZh(t *testing.T) {
 		t.Fatalf("locale = %q, want en", config.Locale)
 	}
 }
+
+func TestServiceGetConfigDefaultsApprovalModeToAutonomous(t *testing.T) {
+	f := newServiceFixture(t)
+	config, err := f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ApprovalMode != "autonomous" {
+		t.Fatalf("approvalMode = %q, want autonomous", config.ApprovalMode)
+	}
+}
+
+func TestServiceGetConfigReadsApprovalMode(t *testing.T) {
+	f := newServiceFixture(t)
+	f.snapshots.snapshot.ConfigJSON = []byte(`{
+		"schemaVersion": 1,
+		"owner": {"telegramUserIds": [42]},
+		"models": {
+			"butler": {"provider": "anthropic", "id": "claude-sonnet-5-5"},
+			"task": {"provider": "opencode-go", "id": "kimi-k3"}
+		},
+		"approvalMode": "reviewed"
+	}`)
+
+	config, err := f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ApprovalMode != "reviewed" {
+		t.Fatalf("approvalMode = %q, want reviewed", config.ApprovalMode)
+	}
+}
+
+func TestServiceConfigEditWritesApprovalModePatch(t *testing.T) {
+	f := newServiceFixture(t)
+	mode := "reviewed"
+	if _, err := f.service.PublishConfig(ConfigEditDTO{
+		BaseFingerprint: "fingerprint-1",
+		ApprovalMode:    &mode,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	change := f.publish.lastChange()
+	if change.Patch.ApprovalMode == nil || *change.Patch.ApprovalMode != "reviewed" {
+		t.Fatalf("approvalMode patch = %#v", change.Patch.ApprovalMode)
+	}
+}
+
+func TestServiceConfigEditRejectsUnknownApprovalMode(t *testing.T) {
+	f := newServiceFixture(t)
+	mode := "off"
+	_, err := f.service.PublishConfig(ConfigEditDTO{
+		BaseFingerprint: "fingerprint-1",
+		ApprovalMode:    &mode,
+	})
+	if !hasCode(err, deployment.CodeInvalidRequest) {
+		t.Fatalf("error = %v, want %s", err, deployment.CodeInvalidRequest)
+	}
+}

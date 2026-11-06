@@ -891,6 +891,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		CustomProviders:    []CustomProviderDTO{},
 		McpServers:         json.RawMessage("[]"),
 		Locale:             "zh",
+		ApprovalMode:       "autonomous",
 		Secrets:            s.secretStatuses(snapshot),
 	}
 	if len(snapshot.ConfigJSON) > 0 {
@@ -903,8 +904,9 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 				Task            *ModelDTO           `json:"task"`
 				CustomProviders []CustomProviderDTO `json:"customProviders"`
 			} `json:"models"`
-			McpServers json.RawMessage `json:"mcpServers"`
-			Locale     string          `json:"locale"`
+			McpServers   json.RawMessage `json:"mcpServers"`
+			Locale       string          `json:"locale"`
+			ApprovalMode string          `json:"approvalMode"`
 		}
 		if err := json.Unmarshal(snapshot.ConfigJSON, &document); err != nil {
 			return dto, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: s.t("app.configInvalidJSON")}
@@ -922,6 +924,9 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		}
 		if document.Locale == "en" {
 			dto.Locale = "en"
+		}
+		if document.ApprovalMode == "reviewed" {
+			dto.ApprovalMode = "reviewed"
 		}
 	}
 	if s.cache != nil {
@@ -1604,6 +1609,15 @@ func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, inpu
 	if input.McpServers != nil {
 		raw := append(json.RawMessage(nil), (*input.McpServers)...)
 		change.Patch.McpServers = &raw
+	}
+	if input.ApprovalMode != nil {
+		switch *input.ApprovalMode {
+		case "autonomous", "reviewed":
+			mode := *input.ApprovalMode
+			change.Patch.ApprovalMode = &mode
+		default:
+			return domain.Change{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.approvalModeInvalid")}
+		}
 	}
 	edited := make(map[string]bool, len(input.Secrets))
 	for _, secret := range input.Secrets {

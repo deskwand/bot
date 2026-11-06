@@ -175,6 +175,10 @@ func applyPatch(document map[string]any, patch domain.EditablePatch) error {
 		document["locale"] = *patch.Locale
 	}
 
+	if patch.ApprovalMode != nil {
+		document["approvalMode"] = *patch.ApprovalMode
+	}
+
 	if patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil {
 		return nil
 	}
