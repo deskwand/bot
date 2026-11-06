@@ -245,6 +245,68 @@ describe("BotDO lifecycle", () => {
     expect(await alarmAt(stub)).toBe(snapshot?.meta.nextWakeAt);
   });
 
+  it("setDefaultInterval pulls a later wake in", async () => {
+    fakeButler();
+    const stub = botStub("b-lifecycle-interval-pull");
+    await initBot(stub, { firstWakeAt: now + 86_400_000 });
+
+    const result = await stub.setDefaultInterval(3_600_000);
+
+    expect(result).toEqual({
+      defaultIntervalMs: 3_600_000,
+      nextWakeAt: now + 3_600_000,
+    });
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.nextWakeAt).toBe(now + 3_600_000);
+    expect(await alarmAt(stub)).toBe(now + 3_600_000);
+  });
+
+  it("setDefaultInterval does not push an earlier wake out", async () => {
+    fakeButler();
+    const stub = botStub("b-lifecycle-interval-earlier");
+    await initBot(stub, { firstWakeAt: now + 3_600_000 });
+
+    const result = await stub.setDefaultInterval(7 * 86_400_000);
+
+    expect(result).toEqual({
+      defaultIntervalMs: 7 * 86_400_000,
+      nextWakeAt: now + 3_600_000,
+    });
+    expect((await stub.snapshot())?.meta.nextWakeAt).toBe(now + 3_600_000);
+    expect(await stub.setNextWake({ afterMs: 3 * 86_400_000 })).toEqual({
+      at: now + 3 * 86_400_000,
+      clamped: false,
+    });
+  });
+
+  it("setDefaultInterval during a run keeps the watchdog", async () => {
+    fakeButler();
+    const stub = botStub("b-lifecycle-interval-run");
+    await initBot(stub);
+    await fireAlarm(stub);
+    expect(await alarmAt(stub)).toBe(now + WATCHDOG_MS);
+
+    await stub.setDefaultInterval(3_600_000);
+
+    expect((await stub.snapshot())?.meta.defaultIntervalMs).toBe(3_600_000);
+    expect(await alarmAt(stub)).toBe(now + WATCHDOG_MS);
+  });
+
+  it("setDefaultInterval on a paused bot sets no alarm", async () => {
+    fakeButler();
+    const stub = botStub("b-lifecycle-interval-paused");
+    await initBot(stub, { firstWakeAt: now + 86_400_000 });
+    await stub.pause();
+
+    const result = await stub.setDefaultInterval(3_600_000);
+
+    expect(result).toEqual({
+      defaultIntervalMs: 3_600_000,
+      nextWakeAt: null,
+    });
+    expect(await alarmAt(stub)).toBeNull();
+  });
+
   it("setNextWake is clamped", async () => {
     fakeButler();
     const stub = botStub("b-lifecycle-clamp");

@@ -2,7 +2,13 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { BotInit, BotSnapshot } from "../bot/bot-do";
 import { MEMORY_DOC, RULES_DOC, checkDocWrite, isMethodDoc } from "../bot/docs";
-import { clampWakeAt, parseDuration, wakeCeilingMs } from "../bot/wake";
+import {
+  MAX_WAKE_MS,
+  MIN_WAKE_MS,
+  clampWakeAt,
+  parseDuration,
+  wakeCeilingMs,
+} from "../bot/wake";
 import type { BotsRepo } from "./bots-repo";
 import { getClock } from "./notifier";
 import type { TaskControl } from "./tools";
@@ -32,6 +38,11 @@ const ListBots = Type.Object({});
 
 const RenameBot = Type.Object({ id: Type.String(), name: Type.String() });
 
+const SetBotInterval = Type.Object({
+  id: Type.String(),
+  interval: Type.String(),
+});
+
 const EditBotDoc = Type.Object({
   id: Type.String(),
   name: Type.String(),
@@ -46,6 +57,9 @@ export type BotControl = {
   wakeNow(): Promise<"scheduled" | "after_run" | "inactive">;
   pause(): Promise<void>;
   resume(wakeNow: boolean): Promise<void>;
+  setDefaultInterval(
+    ms: number,
+  ): Promise<{ defaultIntervalMs: number; nextWakeAt: number | null } | null>;
   rename(name: string): Promise<boolean>;
   writeDoc(
     name: string,
@@ -75,6 +89,10 @@ function iso(ms: number): string {
 
 function durationError(text: string): string {
   return `时长格式无效：${text}${DURATION_HINT}`;
+}
+
+function durationRangeError(text: string): string {
+  return `时长超出范围：${text}（最短 5m，最长 30d）`;
 }
 
 /**
@@ -304,6 +322,30 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     },
   };
 
+  const setBotInterval: ToolRegistration<typeof SetBotInterval> = {
+    name: "set_bot_interval",
+    description:
+      "Change how often a bot wakes by default. Its own schedule can never exceed this interval.",
+    parameters: SetBotInterval,
+    async execute({ id, interval }) {
+      try {
+        const intervalMs = parseDuration(interval);
+        if (intervalMs === null) return output(durationError(interval));
+        if (intervalMs < MIN_WAKE_MS || intervalMs > MAX_WAKE_MS) {
+          return output(durationRangeError(interval));
+        }
+        if (!bots.get(id)) return output(`没有机器人 ${id}`);
+        const result = await bot(id).setDefaultInterval(intervalMs);
+        if (result === null) return output(`没有机器人 ${id}`);
+        const next =
+          result.nextWakeAt === null ? "—" : iso(result.nextWakeAt);
+        return output(`已将 ${id} 的默认间隔改为 ${interval}，下次唤醒：${next}`);
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+
   const renameBot: ToolRegistration<typeof RenameBot> = {
     name: "rename_bot",
     description: "Rename a bot. Its id stays the same.",
@@ -361,6 +403,7 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     wakeBot,
     pauseBot,
     resumeBot,
+    setBotInterval,
     renameBot,
     deleteBot,
   ];

@@ -238,6 +238,36 @@ export class BotDO extends DurableObject<Env> {
   }
 
   /**
+   * Changes the bot's default cadence. A wake already scheduled beyond the new
+   * interval is pulled in, but an earlier one keeps its time.
+   */
+  async setDefaultInterval(
+    ms: number,
+  ): Promise<{ defaultIntervalMs: number; nextWakeAt: number | null } | null> {
+    const meta = this.store.readMeta();
+    if (meta === null) return null;
+
+    const now = getClock().now();
+    meta.defaultIntervalMs = ms;
+    if (
+      meta.status === "active" &&
+      meta.currentTaskId === null &&
+      meta.nextWakeAt !== null &&
+      meta.nextWakeAt > now + ms
+    ) {
+      meta.nextWakeAt = now + ms;
+      this.store.writeMeta(meta);
+      await this.ctx.storage.setAlarm(meta.nextWakeAt);
+    } else {
+      this.store.writeMeta(meta);
+    }
+    return {
+      defaultIntervalMs: meta.defaultIntervalMs,
+      nextWakeAt: meta.nextWakeAt,
+    };
+  }
+
+  /**
    * Saves the next wake time. During a run this only updates meta: the
    * watchdog alarm stays armed and the end of the run picks the saved time.
    */

@@ -4,6 +4,7 @@ import { BotStore } from "../../src/bot/bot-store";
 import { BotsRepo } from "../../src/butler/bots-repo";
 import {
   createBotTools,
+  type BotControl,
   type TaskControl,
 } from "../../src/butler/bot-tools";
 import { setClockOverride } from "../../src/butler/notifier";
@@ -57,12 +58,25 @@ function fakeTask(calls: string[]): TaskControl {
   };
 }
 
+/** A BotControl stand-in that records calls instead of touching a Bot DO. */
+function recordingBot(calls: string[]): BotControl {
+  return new Proxy({} as BotControl, {
+    get(_target, property) {
+      return async (...args: unknown[]) => {
+        calls.push(`${String(property)}:${JSON.stringify(args)}`);
+        return null;
+      };
+    },
+  });
+}
+
 /** Runs one bot tool inside the Butler object, like `createBotTools` is used. */
 async function runTool(
   name: string,
   args: Record<string, unknown>,
   calls: string[] = [],
   butlerName = "bot-tools",
+  botOverride?: BotControl,
 ): Promise<{ text: string; rows: { id: string; name: string }[] }> {
   return runInDurableObject(
     butler(butlerName),
@@ -70,7 +84,7 @@ async function runTool(
       const bots = new BotsRepo(state.storage.sql);
       const tools = createBotTools({
         bots,
-        bot: (id) => botStub(id),
+        bot: (id) => botOverride ?? botStub(id),
         task: () => fakeTask(calls),
       });
       const tool = tools.find((candidate) => candidate.name === name);
@@ -166,6 +180,85 @@ describe("butler bot tools", () => {
       `已创建机器人 b1 价格哨兵，首次唤醒：${new Date(firstWakeAt).toISOString()}`,
     );
     expect((await botStub("b1").snapshot())?.meta.nextWakeAt).toBe(firstWakeAt);
+  });
+
+  it("set_bot_interval rejects a bad interval", async () => {
+    await botStub("b1").destroy();
+    await runTool(
+      "create_bot",
+      {
+        name: "价格哨兵",
+        mission: "盯着价格",
+        default_interval: "2h",
+      },
+      [],
+      "bot-tools-set-interval-bad",
+    );
+    const calls: string[] = [];
+    const fake = recordingBot(calls);
+
+    const badFormat = await runTool(
+      "set_bot_interval",
+      { id: "b1", interval: "abc" },
+      [],
+      "bot-tools-set-interval-bad",
+      fake,
+    );
+    const tooShort = await runTool(
+      "set_bot_interval",
+      { id: "b1", interval: "1m" },
+      [],
+      "bot-tools-set-interval-bad",
+      fake,
+    );
+
+    expect(badFormat.text).toContain("时长");
+    expect(tooShort.text).toContain("时长");
+    expect(calls).toEqual([]);
+    expect((await botStub("b1").snapshot())?.meta.defaultIntervalMs).toBe(
+      2 * 3_600_000,
+    );
+  });
+
+  it("set_bot_interval reports the new cadence", async () => {
+    await botStub("b1").destroy();
+    await runTool(
+      "create_bot",
+      {
+        name: "价格哨兵",
+        mission: "盯着价格",
+        default_interval: "2h",
+        first_wake_after: "3h",
+      },
+      [],
+      "bot-tools-set-interval",
+    );
+
+    const result = await runTool(
+      "set_bot_interval",
+      { id: "b1", interval: "1h" },
+      [],
+      "bot-tools-set-interval",
+    );
+
+    const nextWakeAt = START + 3_600_000;
+    expect(result.text).toBe(
+      `已将 b1 的默认间隔改为 1h，下次唤醒：${new Date(nextWakeAt).toISOString()}`,
+    );
+    expect((await botStub("b1").snapshot())?.meta.defaultIntervalMs).toBe(
+      3_600_000,
+    );
+  });
+
+  it("set_bot_interval reports an unknown id", async () => {
+    const result = await runTool(
+      "set_bot_interval",
+      { id: "b9", interval: "1h" },
+      [],
+      "bot-tools-set-interval-missing",
+    );
+
+    expect(result.text).toBe("没有机器人 b9");
   });
 
   it("create_bot writes the initial rules", async () => {
