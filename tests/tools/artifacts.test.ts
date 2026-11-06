@@ -3,7 +3,7 @@ import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { MAX_ARTIFACT_BYTES } from "../../src/artifact";
-import { saveArtifactTool } from "../../src/tools/artifacts";
+import { filenameFromResponse, saveArtifactTool } from "../../src/tools/artifacts";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -174,4 +174,70 @@ describe("saveArtifactTool binary intake", () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("base64");
   });
+});
+
+describe("saveArtifactTool url intake", () => {
+  const tool = (f: typeof fetch) => saveArtifactTool(env.ARTIFACTS, () => "t1", undefined, f);
+
+  it("stores the downloaded bytes with the response type and disposition name", async () => {
+    const f = (async () => new Response(new Uint8Array([1, 2, 3]), { headers: {
+      "content-type": "application/pdf",
+      "content-disposition": "attachment; filename*=UTF-8''%E5%B9%B4%E6%8A%A5.pdf",
+    } })) as typeof fetch;
+    const key = textOf(await tool(f).execute({ url: "https://example.test/dl?id=1" }, {} as never, context())).replace("已保存：", "");
+    expect(key.endsWith("/年报.pdf")).toBe(true);
+    const object = await env.ARTIFACTS.get(key);
+    expect(object?.httpMetadata?.contentType).toBe("application/pdf");
+    expect(new Uint8Array(await object!.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it("requires exactly one of content and url", async () => {
+    const f = (async () => new Response("x")) as typeof fetch;
+    expect((await tool(f).execute({ filename: "a" }, {} as never, context())).isError).toBe(true);
+    expect((await tool(f).execute({ filename: "a", content: "x", url: "https://e.test/" }, {} as never, context())).isError).toBe(true);
+  });
+
+  it("refuses a private address", async () => {
+    const result = await tool((async () => { throw new Error("must not fetch"); }) as typeof fetch)
+      .execute({ url: "http://127.0.0.1/x" }, {} as never, context());
+    expect(result.isError).toBe(true);
+  });
+
+  it("refuses a redirect into a private address", async () => {
+    const f = (async () => new Response(null, { status: 302, headers: { location: "http://169.254.169.254/latest" } })) as typeof fetch;
+    const before = (await env.ARTIFACTS.list({ prefix: "t1/" })).objects.length;
+    const result = await tool(f).execute({ url: "https://example.test/x" }, {} as never, context());
+    expect(result.isError).toBe(true);
+    expect((await env.ARTIFACTS.list({ prefix: "t1/" })).objects.length).toBe(before);
+  });
+
+  it("refuses a declared length over 15 MB without reading the body", async () => {
+    let pulled = 0;
+    const body = new ReadableStream({ pull(c) { pulled++; c.enqueue(new Uint8Array(1024)); } });
+    const f = (async () => new Response(body, { headers: { "content-length": String(MAX_ARTIFACT_BYTES + 1) } })) as typeof fetch;
+    const result = await tool(f).execute({ url: "https://example.test/x" }, {} as never, context());
+    expect(result.isError).toBe(true);
+    expect(pulled).toBeLessThan(2);
+  });
+
+  it("aborts a chunked download past 15 MB without writing", async () => {
+    let cancelled = false;
+    const chunk = new Uint8Array(1024 * 1024);
+    const body = new ReadableStream({ pull(c) { c.enqueue(chunk); }, cancel() { cancelled = true; } });
+    const f = (async () => new Response(body)) as typeof fetch;
+    const before = (await env.ARTIFACTS.list({ prefix: "t1/" })).objects.length;
+    const result = await tool(f).execute({ url: "https://example.test/x" }, {} as never, context());
+    expect(result.isError).toBe(true);
+    expect(cancelled).toBe(true);
+    expect((await env.ARTIFACTS.list({ prefix: "t1/" })).objects.length).toBe(before);
+  });
+});
+
+it.each([
+  ['attachment; filename="report.pdf"', "https://e.test/x", "report.pdf"],
+  [null, "https://e.test/files/%E8%A1%A8.xlsx?x=1", "表.xlsx"],
+  [null, "https://e.test/", "download"],
+])("filenameFromResponse(%s, %s)", (disposition, url, expected) => {
+  const headers = disposition ? { "content-disposition": disposition } : undefined;
+  expect(filenameFromResponse(new Response(null, { headers }), new URL(url))).toBe(expected);
 });

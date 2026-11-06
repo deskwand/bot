@@ -307,7 +307,7 @@ export class TaskDO extends Agent<Env> {
             () => this.assertNoMaintenance(),
           ),
           emitProgress,
-          (args) => progressSaveText(ownerLocale(this.env), args.filename),
+          (args) => progressSaveText(ownerLocale(this.env), args.filename ?? ""),
         ),
       ],
     });
