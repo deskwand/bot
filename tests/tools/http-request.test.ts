@@ -56,6 +56,14 @@ describe("isBlockedHost", () => {
   );
 });
 
+describe("safeRequestUrl", () => {
+  it("masks query values without asterisks", () => {
+    const url = safeRequestUrl("https://a.example/x?token=abc&n=1");
+    expect(url).not.toContain("*");
+    expect(url).toBe("https://a.example/x?token=•••&n=•••");
+  });
+});
+
 describe("reviewArgs", () => {
   it("keeps ordinary query values and masks secret ones", () => {
     const review = reviewArgs({
@@ -69,9 +77,9 @@ describe("reviewArgs", () => {
     expect(url.password).toBe("");
     expect(url.hash).toBe("");
     expect(url.searchParams.get("action")).toBe("delete");
-    expect(url.searchParams.get("api_key")).toBe("***");
-    expect(url.searchParams.get("token")).toBe("***");
-    expect(review.headers).toEqual({ Authorization: "***", "X-Trace": "abc" });
+    expect(url.searchParams.get("api_key")).toBe("•••");
+    expect(url.searchParams.get("token")).toBe("•••");
+    expect(review.headers).toEqual({ Authorization: "•••", "X-Trace": "abc" });
     expect(review.body).toBe('{"a":1}');
   });
 
@@ -141,7 +149,7 @@ describe("httpRequestTool", () => {
     const review = notes[0]?.reviewArgs as Record<string, unknown>;
     const url = new URL(String(review.url));
     expect(url.searchParams.get("action")).toBe("delete");
-    expect(url.searchParams.get("token")).toBe("***");
+    expect(url.searchParams.get("token")).toBe("•••");
     expect(review.body).toBe("transfer 100");
     // The stored and inner-gate view stays fully redacted.
     expect(JSON.stringify(seen[0])).not.toContain("transfer 100");

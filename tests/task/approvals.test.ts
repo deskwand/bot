@@ -746,7 +746,7 @@ describe("ReviewedGate", () => {
         seen.push(args);
         return { verdict: "ask", reason: "涉及付款", failed: false };
       });
-      const args = { method: "POST", url: "https://api.example.com/pay?token=***", bodyBytes: 9 };
+      const args = { method: "POST", url: "https://api.example.com/pay?token=•••", bodyBytes: 9 };
       const result = await gate.request(
         "http_request",
         args,
@@ -761,14 +761,14 @@ describe("ReviewedGate", () => {
     ]);
     expect(outcome.requests[0]?.args).toEqual({
       method: "POST",
-      url: "https://api.example.com/pay?token=***",
+      url: "https://api.example.com/pay?token=•••",
       bodyBytes: 9,
     });
     expect(outcome.requests[0]?.note).not.toHaveProperty("reviewArgs");
     expect(outcome.rows[0]?.args_summary).toBe(
       JSON.stringify({
         method: "POST",
-        url: "https://api.example.com/pay?token=***",
+        url: "https://api.example.com/pay?token=•••",
         bodyBytes: 9,
       }),
     );
