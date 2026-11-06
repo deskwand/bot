@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   botDailyLimitText,
+  botFailingText,
   botFinishedText,
-  botPausedText,
+  botRecoveredText,
   botRunTimeoutText,
 } from "../../src/bot/owner-copy";
 
@@ -23,8 +24,11 @@ describe("bot notices", () => {
     expect(botDailyLimitText("zh", "价格哨兵", 48)).toBe(
       "⏸ 价格哨兵 今日唤醒已达 48 次，推迟到明天 00:00 UTC",
     );
-    expect(botPausedText("zh", "价格哨兵", 3, "boom")).toBe(
-      "⚠️ 价格哨兵 已暂停：连续 3 次失败（最近原因：boom）",
+    expect(botFailingText("zh", "价格哨兵", 3, "boom", "6h")).toBe(
+      "⚠️ 价格哨兵 连续 3 次失败（最近原因：boom），会继续每 6h 重试一次",
+    );
+    expect(botRecoveredText("zh", "价格哨兵")).toBe(
+      "✅ 价格哨兵 已恢复正常",
     );
     expect(botRunTimeoutText("zh")).toBe("运行超过 24 小时，已取消");
   });
@@ -33,10 +37,18 @@ describe("bot notices", () => {
     const finished = botFinishedText("en", "Price scout", "Price dropped");
     const finishUnknown = botFinishedText("en", "Price scout", null);
     const daily = botDailyLimitText("en", "Price scout", 48);
-    const paused = botPausedText("en", "Price scout", 3, "boom");
+    const failing = botFailingText("en", "Price scout", 3, "boom", "6h");
+    const recovered = botRecoveredText("en", "Price scout");
     const timeout = botRunTimeoutText("en");
 
-    for (const text of [finished, finishUnknown, daily, paused, timeout]) {
+    for (const text of [
+      finished,
+      finishUnknown,
+      daily,
+      failing,
+      recovered,
+      timeout,
+    ]) {
       expectEnglish(text);
     }
     expect(finished).toContain("Price scout");
@@ -44,8 +56,10 @@ describe("bot notices", () => {
     expect(daily).toContain("Price scout");
     expect(daily).toContain("48");
     expect(daily).toContain("00:00 UTC");
-    expect(paused).toContain("Price scout");
-    expect(paused).toContain("3");
-    expect(paused).toContain("boom");
+    expect(failing).toContain("Price scout");
+    expect(failing).toContain("3");
+    expect(failing).toContain("boom");
+    expect(failing).toContain("6h");
+    expect(recovered).toContain("Price scout");
   });
 });

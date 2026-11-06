@@ -4,6 +4,7 @@ import {
   MIN_WAKE_MS,
   clampWakeAt,
   failureDelayMs,
+  formatDuration,
   nextUtcMidnight,
   parseDuration,
   utcDay,
@@ -56,9 +57,16 @@ describe("wake rules", () => {
   });
 
   it("backs off failures", () => {
-    expect([1, 2, 3, 7].map(failureDelayMs)).toEqual([
-      900_000, 3_600_000, 21_600_000, 21_600_000,
-    ]);
+    expect(failureDelayMs(1, 300_000)).toBe(900_000);
+    expect(failureDelayMs(2, 300_000)).toBe(3_600_000);
+    expect(failureDelayMs(3, 3_600_000)).toBe(21_600_000);
+    expect(failureDelayMs(5, 2 * 86_400_000)).toBe(2 * 86_400_000);
+  });
+
+  it("formats durations in the largest whole unit", () => {
+    expect(formatDuration(21_600_000)).toBe("6h");
+    expect(formatDuration(5_400_000)).toBe("90m");
+    expect(formatDuration(86_400_000)).toBe("1d");
   });
 
   it("computes UTC days", () => {

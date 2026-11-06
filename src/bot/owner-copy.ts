@@ -19,13 +19,18 @@ export function botDailyLimitText(
   return t(locale, "bot.dailyLimit", { name, limit });
 }
 
-export function botPausedText(
+export function botFailingText(
   locale: Locale,
   name: string,
   failures: number,
   reason: string,
+  retryEvery: string,
 ): string {
-  return t(locale, "bot.paused", { name, failures, reason });
+  return t(locale, "bot.failing", { name, failures, reason, retryEvery });
+}
+
+export function botRecoveredText(locale: Locale, name: string): string {
+  return t(locale, "bot.recovered", { name });
 }
 
 export function botRunTimeoutText(locale: Locale): string {

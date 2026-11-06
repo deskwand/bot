@@ -20,19 +20,21 @@ import { RULES_DOC, checkDocWrite, type BotDoc } from "./docs";
 import { buildBotAuthorization, buildBotInstructions } from "./instructions";
 import {
   botDailyLimitText,
+  botFailingText,
   botFinishedText,
-  botPausedText,
+  botRecoveredText,
   botRunTimeoutText,
 } from "./owner-copy";
 import {
   CHANNEL_DISABLED_RETRY_MS,
   DAILY_WAKE_LIMIT,
+  FAILING_NOTICE_AT,
   MIN_WAKE_MS,
-  PAUSE_AFTER_FAILURES,
   RUN_MAX_MS,
   WATCHDOG_MS,
   clampWakeAt,
   failureDelayMs,
+  formatDuration,
   nextUtcMidnight,
   utcDay,
   wakeCeilingMs,
@@ -395,6 +397,9 @@ export class BotDO extends DurableObject<Env> {
     // A late end from an older run must not move the current run's schedule.
     if (meta.currentTaskId !== null && meta.currentTaskId !== taskId) return;
 
+    const wasFailing =
+      outcome === "completed" &&
+      meta.consecutiveFailures >= FAILING_NOTICE_AT;
     if (outcome === "completed") meta.consecutiveFailures = 0;
     if (meta.currentTaskId === taskId) meta.currentTaskId = null;
 
@@ -436,6 +441,12 @@ export class BotDO extends DurableObject<Env> {
     if (keepManual) meta.manualWakeAt = meta.nextWakeAt;
     this.store.writeMeta(meta);
     await this.ctx.storage.setAlarm(meta.nextWakeAt);
+    if (wasFailing) {
+      await this.notice(
+        meta,
+        botRecoveredText(ownerLocale(this.env), meta.name),
+      );
+    }
   }
 
   async destroy(): Promise<void> {
@@ -658,40 +669,33 @@ export class BotDO extends DurableObject<Env> {
     }
   }
 
-  /** Counts one failed run and re-arms with backoff, pausing at the limit. */
+  /** Counts one failed run and re-arms with backoff. */
   private async armAfterFailure(
     meta: BotMeta,
     now: number,
     reason: string,
   ): Promise<void> {
     meta.consecutiveFailures += 1;
-    if (meta.consecutiveFailures >= PAUSE_AFTER_FAILURES) {
-      meta.status = "paused";
-      meta.nextWakeAt = null;
-      this.store.writeMeta(meta);
-      await this.ctx.storage.deleteAlarm();
-      await this.notice(
-        meta,
-        botPausedText(
-          ownerLocale(this.env),
-          meta.name,
-          PAUSE_AFTER_FAILURES,
-          reason,
-        ),
-      );
-      return;
-    }
-
-    meta.nextWakeAt = clampWakeAt(
-      now,
-      Math.max(
-        nextBase(meta, now),
-        now + failureDelayMs(meta.consecutiveFailures),
-      ),
-    ).at;
+    const delay = failureDelayMs(
+      meta.consecutiveFailures,
+      meta.defaultIntervalMs,
+    );
+    meta.nextWakeAt = clampWakeAt(now, now + delay).at;
     this.store.writeMeta(meta);
     if (meta.status === "active") {
       await this.ctx.storage.setAlarm(meta.nextWakeAt);
+    }
+    if (meta.consecutiveFailures === FAILING_NOTICE_AT) {
+      await this.notice(
+        meta,
+        botFailingText(
+          ownerLocale(this.env),
+          meta.name,
+          FAILING_NOTICE_AT,
+          reason,
+          formatDuration(delay),
+        ),
+      );
     }
   }
 

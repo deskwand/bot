@@ -378,8 +378,8 @@ describe("BotDO lifecycle", () => {
     expect(await alarmAt(stub)).toBe(snapshot?.meta.nextWakeAt);
   });
 
-  it("ordinary failures still pause the bot", async () => {
-    fakeButler();
+  it("ordinary failures keep the bot active", async () => {
+    const fake = fakeButler();
     const stub = botStub("b-lifecycle-pause-control");
     await initBot(stub);
 
@@ -388,9 +388,12 @@ describe("BotDO lifecycle", () => {
     await stub.onRunEnded("t-3", "failed", "boom");
 
     const snapshot = await stub.snapshot();
-    expect(snapshot?.meta.status).toBe("paused");
+    expect(snapshot?.meta.status).toBe("active");
     expect(snapshot?.meta.consecutiveFailures).toBe(3);
-    expect(await alarmAt(stub)).toBeNull();
+    expect(await alarmAt(stub)).not.toBeNull();
+    expect(fake.notices.filter((n) => n.text.includes("暂停"))).toHaveLength(
+      0,
+    );
   });
 
   it("does not spawn when a fast run already scheduled a later wake", async () => {
@@ -411,7 +414,7 @@ describe("BotDO lifecycle", () => {
     expect(await alarmAt(stub)).toBe(now + snapshot!.meta.defaultIntervalMs);
   });
 
-  it("failures back off then pause", async () => {
+  it("failures back off and keep retrying", async () => {
     const fake = fakeButler();
     const stub = botStub("b-lifecycle-backoff");
     await initBot(stub, { defaultIntervalMs: 300_000 });
@@ -437,15 +440,68 @@ describe("BotDO lifecycle", () => {
     fake.outcome = { outcome: "failed", summary: "boom" };
     await fireAlarm(stub);
 
-    const snapshot = await stub.snapshot();
-    expect(snapshot?.meta.status).toBe("paused");
-    expect(await alarmAt(stub)).toBeNull();
+    let snapshot = await stub.snapshot();
+    expect(snapshot?.meta.status).toBe("active");
+    expect(await alarmAt(stub)).toBe(now + 21_600_000);
     expect(fake.notices).toEqual([
       {
         botId: "b1",
-        text: "⚠️ 价格哨兵 已暂停：连续 3 次失败（最近原因：boom）",
+        text: "⚠️ 价格哨兵 连续 3 次失败（最近原因：boom），会继续每 6h 重试一次",
       },
     ]);
+
+    now += 21_600_000;
+    await fireAlarm(stub);
+    expect(fake.spawns).toHaveLength(4);
+    now += WATCHDOG_MS;
+    fake.outcome = { outcome: "failed", summary: "boom" };
+    await fireAlarm(stub);
+
+    snapshot = await stub.snapshot();
+    expect(snapshot?.meta.status).toBe("active");
+    expect(await alarmAt(stub)).toBe(now + 21_600_000);
+    expect(fake.notices).toHaveLength(1);
+  });
+
+  it("recovery after repeated failures tells the owner", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-lifecycle-recovered");
+    await initBot(stub);
+
+    await stub.onRunEnded("t-1", "failed", "boom");
+    await stub.onRunEnded("t-2", "failed", "boom");
+    await stub.onRunEnded("t-3", "failed", "boom");
+    await stub.onRunEnded("t-ok", "completed", "好了");
+
+    const snapshot = await stub.snapshot();
+    expect(snapshot?.meta.consecutiveFailures).toBe(0);
+    expect(fake.notices.at(-1)).toEqual({
+      botId: "b1",
+      text: "✅ 价格哨兵 已恢复正常",
+    });
+  });
+
+  it("success after one failure stays quiet", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-lifecycle-quiet-recovery");
+    await initBot(stub);
+
+    await stub.onRunEnded("t-1", "failed", "boom");
+    await stub.onRunEnded("t-ok", "completed", "好了");
+
+    expect(fake.notices).toHaveLength(0);
+  });
+
+  it("failure retry ignores a later saved wake", async () => {
+    fakeButler();
+    const stub = botStub("b-lifecycle-failure-saved-wake");
+    await initBot(stub);
+    await fireAlarm(stub);
+
+    await stub.setNextWake({ afterMs: 20 * 3_600_000 });
+    await stub.onRunEnded("t1", "failed", "boom");
+
+    expect(await alarmAt(stub)).toBe(now + 900_000);
   });
 
   it("success resets the failure count", async () => {

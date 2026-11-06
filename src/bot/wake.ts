@@ -11,8 +11,8 @@ export const WATCHDOG_MS = 3_600_000;
 /** How long to wait before retrying when no channel is selected. */
 export const CHANNEL_DISABLED_RETRY_MS = 3_600_000;
 
-/** Consecutive failed runs before a bot pauses itself. */
-export const PAUSE_AFTER_FAILURES = 3;
+/** Consecutive failed runs before a bot tells its owner it is failing. */
+export const FAILING_NOTICE_AT = 3;
 
 /** Longest a single run may stay in flight before the watchdog cancels it. */
 export const RUN_MAX_MS = 86_400_000;
@@ -59,11 +59,25 @@ export function clampWakeAt(
   return { at, clamped: false };
 }
 
-/** Exponential-ish backoff: 15 minutes, 1 hour, then 6 hours. */
-export function failureDelayMs(consecutiveFailures: number): number {
+/** Backoff: 15 minutes, 1 hour, then six hours or one default interval. */
+export function failureDelayMs(
+  consecutiveFailures: number,
+  defaultIntervalMs: number,
+): number {
   if (consecutiveFailures <= 1) return 900_000;
   if (consecutiveFailures === 2) return 3_600_000;
-  return 21_600_000;
+  return Math.max(21_600_000, defaultIntervalMs);
+}
+
+/** Renders a duration in the largest unit that divides it exactly. */
+export function formatDuration(ms: number): string {
+  if (ms >= UNIT_MS.d! && ms % UNIT_MS.d! === 0) {
+    return `${ms / UNIT_MS.d!}d`;
+  }
+  if (ms >= UNIT_MS.h! && ms % UNIT_MS.h! === 0) {
+    return `${ms / UNIT_MS.h!}h`;
+  }
+  return `${Math.round(ms / UNIT_MS.m!)}m`;
 }
 
 /** The UTC calendar day of a timestamp, as `YYYY-MM-DD`. */
