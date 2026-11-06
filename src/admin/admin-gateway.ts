@@ -10,6 +10,7 @@
 import type { BotDO } from "../bot/bot-do";
 import type { ButlerDO } from "../butler/butler-do";
 import type { ChannelDO } from "../channels/channel-do";
+import type { Locale } from "../i18n";
 import type { McpAuthDO } from "../mcp/mcp-auth-do";
 import type { TaskDO } from "../task/task-do";
 import { createMcpAdminRoutes } from "./mcp-routes";
@@ -30,6 +31,7 @@ export type AdminDeps = {
   bot(id: string): DurableObjectStub<BotDO>;
   artifacts: R2Bucket;
   mcpAuth(): DurableObjectStub<McpAuthDO>;
+  locale?: () => Locale;
 };
 
 /** The DO RPC surface used by the backup and restore routes. */
@@ -201,7 +203,7 @@ export function createAdminGateway(deps: AdminDeps): {
   fetch(req: Request): Promise<Response>;
 } {
   const r2 = createR2Routes(deps.artifacts);
-  const mcp = createMcpAdminRoutes(deps.mcpAuth);
+  const mcp = createMcpAdminRoutes(deps.mcpAuth, deps.locale);
 
   async function handle(req: Request, url: URL): Promise<Response> {
     if (req.method === "POST" && url.pathname === ACQUIRE_PATH) {

@@ -4,7 +4,13 @@
  * before any of these paths are dispatched here.
  */
 
+import { t, type Locale } from "../i18n";
 import type { McpAuthDO } from "../mcp/mcp-auth-do";
+import {
+  mcpUserErrorCode,
+  type McpUserErrorCode,
+} from "../mcp/errors";
+import { mcpErrorText } from "../mcp/owner-copy";
 
 const PROBE_PATH = "/admin/mcp/probe";
 const START_PATH = "/admin/mcp/oauth/start";
@@ -13,15 +19,9 @@ const REVOKE_PREFIX = "/admin/mcp/oauth/";
 const CALLBACK_PATH = "/mcp/oauth/callback";
 
 /** Failures the user can act on; any other error stays hidden. */
-const USER_ERRORS = new Set([
-  "服务不存在",
-  "服务不存在或不需要授权",
-  "该服务不支持自动注册（DCR）",
-]);
-
-/** The success and failure pages are fixed: they never echo the query. */
-const SUCCESS_TEXT = "授权完成，可以回到桌面端了";
-const FAILURE_TEXT = "授权失败，请回到桌面端重试";
+function userError(locale: Locale, code: McpUserErrorCode): Response {
+  return json({ code, error: mcpErrorText(locale, code) }, 400);
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -39,9 +39,13 @@ function notFound(): Response {
 }
 
 function page(ok: boolean): Response {
-  const text = ok ? SUCCESS_TEXT : FAILURE_TEXT;
+  // The browser follows the system language, which may differ from the
+  // owner's choice, so the page always carries both languages.
+  const key = ok ? "mcp.callbackSuccess" : "mcp.callbackFailure";
+  const zh = t("zh", key);
+  const en = t("en", key);
   return new Response(
-    `<!doctype html><html><head><meta charset="utf-8"><title>${text}</title></head><body>${text}</body></html>`,
+    `<!doctype html><html lang="mul"><head><meta charset="utf-8"><title>DeskWand Bot</title></head><body><p>${zh}</p><p lang="en">${en}</p></body></html>`,
     {
       status: ok ? 200 : 400,
       headers: {
@@ -50,10 +54,6 @@ function page(ok: boolean): Response {
       },
     },
   );
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 async function readName(req: Request): Promise<string | null> {
@@ -68,6 +68,7 @@ async function readName(req: Request): Promise<string | null> {
 
 export function createMcpAdminRoutes(
   mcpAuth: () => DurableObjectStub<McpAuthDO>,
+  locale: () => Locale = () => "zh",
 ): { fetch(req: Request): Promise<Response> } {
   async function callback(url: URL): Promise<Response> {
     const code = url.searchParams.get("code");
@@ -92,8 +93,8 @@ export function createMcpAdminRoutes(
     } catch (error) {
       // Only fixed, user-actionable reasons are returned; network failures
       // must not leak their details.
-      const message = errorMessage(error);
-      if (USER_ERRORS.has(message)) return invalid(message);
+      const code = mcpUserErrorCode(error);
+      if (code !== null) return userError(locale(), code);
       throw error;
     }
   }

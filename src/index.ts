@@ -1,6 +1,7 @@
 import { createAdminGateway } from "./admin/admin-gateway";
 import { ChannelDO } from "./channels/channel-do";
 import { createGateway } from "./gateway";
+import { ownerLocale } from "./i18n";
 
 export { ButlerDO } from "./butler/butler-do";
 export { TaskDO } from "./task/task-do";
@@ -30,6 +31,7 @@ function admin(env: Env) {
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     artifacts: env.ARTIFACTS,
     mcpAuth: () => mcpAuth(env),
+    locale: () => ownerLocale(env),
   });
 }
 
@@ -39,6 +41,7 @@ export default {
       artifacts: env.ARTIFACTS,
       admin: admin(env),
       mcpAuth: () => mcpAuth(env),
+      locale: () => ownerLocale(env),
     });
 
     return gateway.fetch(req);

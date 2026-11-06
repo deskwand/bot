@@ -45,10 +45,11 @@ type Tool struct {
 // Probe is the /admin/mcp/probe result. Auth is only set when the server
 // needs an OAuth login instead of a connection attempt.
 type Probe struct {
-	OK     bool   `json:"ok"`
-	Reason string `json:"reason,omitempty"`
-	Auth   string `json:"auth,omitempty"`
-	Tools  []Tool `json:"tools,omitempty"`
+	OK         bool   `json:"ok"`
+	Reason     string `json:"reason,omitempty"`
+	ReasonCode string `json:"reasonCode,omitempty"`
+	Auth       string `json:"auth,omitempty"`
+	Tools      []Tool `json:"tools,omitempty"`
 }
 
 // AuthStatus is one server's OAuth state.
@@ -219,6 +220,7 @@ func (c *Client) statusError(status int, raw []byte) error {
 	var payload struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
+		Error   string `json:"error"`
 	}
 	_ = json.Unmarshal(raw, &payload)
 	code := payload.Code
@@ -226,6 +228,10 @@ func (c *Client) statusError(status int, raw []byte) error {
 		code = CodeRequestFailed
 	}
 	message := payload.Message
+	if message == "" {
+		// Newer Workers name the display text `error`.
+		message = payload.Error
+	}
 	if message == "" {
 		message = fmt.Sprintf("admin request returned HTTP %d", status)
 	}
