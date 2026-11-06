@@ -1,4 +1,5 @@
 import { t, type Locale } from "../i18n";
+import { attachmentLine } from "../channels/inbox";
 import type { TaskSpec } from "../protocol";
 
 /**
@@ -11,6 +12,13 @@ export function taskSystemPrompt(locale: Locale, spec: TaskSpec): string {
     "",
     "Instructions from the user:",
     spec.instructions,
+    ...(spec.attachments?.length
+      ? [
+          "",
+          "Files the owner sent (read them with get_artifact using the key):",
+          ...spec.attachments.map(attachmentLine),
+        ]
+      : []),
     "",
     "Work autonomously and use the available tools as needed.",
     "Your abilities include the tools listed here and the MCP services the owner",

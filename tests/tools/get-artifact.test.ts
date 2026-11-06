@@ -149,6 +149,20 @@ it("converts a stored PDF over 2 MB in full", async () => {
   expect(textOf(result)).toContain("# 年报");
 });
 
+it("reads an attached inbox file", async () => {
+  await env.ARTIFACTS.put("inbox/tg:1/a.md", "# 附件", { httpMetadata: { contentType: "text/markdown" } });
+  const result = await getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1", attachments: () => ["inbox/tg:1/a.md"] })
+    .execute({ ref: "inbox/tg:1/a.md" }, {} as never, context());
+  expect(textOf(result)).toContain("# 附件");
+});
+
+it("refuses an inbox file that is not attached", async () => {
+  await env.ARTIFACTS.put("inbox/tg:2/b.md", "x");
+  const result = await getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1", attachments: () => ["inbox/tg:1/a.md"] })
+    .execute({ ref: "inbox/tg:2/b.md" }, {} as never, context());
+  expect(textOf(result)).toContain("无权读取");
+});
+
 it("returns a stored image to a vision model", async () => {
   await env.ARTIFACTS.put("t1/id/shot.png", bytes(PNG_B64), { httpMetadata: { contentType: "image/png" } });
   const result = await getArtifactTool(env.ARTIFACTS, BASE, { taskId: () => "t1" })

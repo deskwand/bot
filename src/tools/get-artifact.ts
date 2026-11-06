@@ -79,7 +79,12 @@ export function artifactKeyFromRef(ref: string, baseUrl: string): string | null 
 export function getArtifactTool(
   bucket: R2Bucket,
   baseUrl: string,
-  options: { taskId: () => string; convert?: DocumentConverter },
+  options: {
+    taskId: () => string;
+    /** Inbox keys the owner attached to this task; readable besides its own artifacts. */
+    attachments?: () => readonly string[];
+    convert?: DocumentConverter;
+  },
 ): ToolRegistration<typeof GetArtifact> {
   return {
     name: "get_artifact",
@@ -95,7 +100,8 @@ export function getArtifactTool(
       }
 
       const segments = artifactKeySegments(key);
-      if (segments === null || segments[0] !== options.taskId()) {
+      const attached = segments !== null && (options.attachments?.() ?? []).includes(key);
+      if (segments === null || (segments[0] !== options.taskId() && !attached)) {
         return { output: [{ type: "text", text: `无权读取这个产物：${key}` }], isError: true };
       }
 

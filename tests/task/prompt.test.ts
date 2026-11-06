@@ -28,6 +28,21 @@ describe("taskSystemPrompt", () => {
     expect(prompt).not.toContain("propose_rules");
   });
 
+  it("lists attachments for the task", () => {
+    const prompt = taskSystemPrompt("zh", {
+      taskId: "t1",
+      title: "x",
+      instructions: "i",
+      attachments: [{ name: "a.pdf", key: "inbox/tg:1/a.pdf", mimeType: "application/pdf", size: 2048 }],
+    });
+    expect(prompt).toContain("[附件] a.pdf · application/pdf · 2.0 KB · key: inbox/tg:1/a.pdf");
+    expect(prompt).toContain("get_artifact");
+  });
+
+  it("says nothing about attachments when there are none", () => {
+    expect(taskSystemPrompt("zh", { taskId: "t1", title: "x", instructions: "i" })).not.toContain("[附件]");
+  });
+
   it("task prompt ends with the reply language", () => {
     expect(
       taskSystemPrompt("en", spec()).endsWith(

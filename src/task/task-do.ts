@@ -273,6 +273,7 @@ export class TaskDO extends Agent<Env> {
         withProgress(
           getArtifactTool(this.env.ARTIFACTS, this.env.PUBLIC_BASE_URL, {
             taskId: () => this.currentTaskId() ?? "",
+            attachments: () => (this.spec?.attachments ?? []).map((file) => file.key),
             convert,
           }),
           emitProgress,
