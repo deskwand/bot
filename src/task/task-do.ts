@@ -949,6 +949,7 @@ export class TaskDO extends Agent<Env> {
     // emitted a newer `started`) is still reported.
     if (this.hasFailedSinceLastStart()) {
       this.setMeta("state", "failed");
+      if (!retryable) this.clearDrafts(taskId);
       return;
     }
 
@@ -959,6 +960,9 @@ export class TaskDO extends Agent<Env> {
       retryable,
     });
     this.setMeta("state", "failed");
+    // A retryable failure may be resumed and needs its drafts; a terminal one
+    // is done with them, same as `finish` and `cancel`.
+    if (!retryable) this.clearDrafts(taskId);
     await delivery;
   }
 

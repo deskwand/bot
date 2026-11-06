@@ -1,6 +1,10 @@
 import { PiHarness, PiSession } from "agents/harness/pi";
 import { Type, type ToolResultMessage, type TranscriptContext } from "@earendil-works/pi-ai";
-import { Harness, type ToolRegistration } from "@earendil-works/pi-durable";
+import {
+  Harness,
+  type ReportInfo,
+  type ToolRegistration,
+} from "@earendil-works/pi-durable";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
@@ -120,6 +124,20 @@ async function releaseSlow(stub: ReturnType<typeof task>): Promise<void> {
   await runInDurableObject(stub, (instance) => {
     const control = slowControl(instance);
     if (control) control.released = true;
+  });
+}
+
+/** Calls the DO's private report handler, as pi's `onReport` would. */
+async function reportParked(stub: ReturnType<typeof task>): Promise<void> {
+  const info = {
+    type: "task_parked",
+    task: { id: "pi-task", kind: "agent", conversationId: "1" },
+  } as unknown as ReportInfo;
+  await runInDurableObject(stub, async (instance) => {
+    const sink = instance as unknown as {
+      handleReport(error: unknown, info: ReportInfo): Promise<void>;
+    };
+    await sink.handleReport(undefined, info);
   });
 }
 
@@ -657,7 +675,7 @@ describe("TaskDO workspace", () => {
     expect((await stub.status()).state).toBe("cancelled");
   });
 
-  it("keeps drafts when the run fails", async () => {
+  it("clears drafts when the run fails non-retryably", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     setModelOverride(
       scriptedModel([
@@ -678,9 +696,58 @@ describe("TaskDO workspace", () => {
       { timeout: 10_000 },
     );
 
+    await vi.waitFor(
+      async () => {
+        expect(await workspaceKeys(taskId)).toEqual([]);
+      },
+      { timeout: 10_000 },
+    );
+    expect((await stub.status()).state).toBe("failed");
+  });
+
+  it("keeps drafts after a retryable failure and can still read them on retry", async () => {
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "write", args: { path: "d.md", content: "草稿" } }] },
+        { toolCalls: [{ name: "slow_wait", args: {} }] },
+        { text: "after retry" },
+      ]),
+    );
+    const taskId = "t-cleanup-retry";
+    const stub = task(taskId);
+    await installSlowWait(stub);
+
+    await stub.start(spec(taskId));
+    await waitForSlowStart(stub);
+    await reportParked(stub);
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events[1]?.payload).toMatchObject({
+          type: "failed",
+          retryable: true,
+        });
+      },
+      { timeout: 10_000 },
+    );
+
+    // A retry resumes the same draft area, so the non-retryable cleanup above
+    // must not run for this failure.
     expect(await workspaceKeys(taskId)).toEqual([`work/${taskId}/d.md`]);
     expect(await (await env.ARTIFACTS.get(`work/${taskId}/d.md`))!.text()).toBe(
       "草稿",
+    );
+
+    await expect(stub.retryTask()).resolves.toMatchObject({ ok: true });
+    expect(await workspaceKeys(taskId)).toEqual([`work/${taskId}/d.md`]);
+
+    await releaseSlow(stub);
+    await vi.waitFor(
+      async () => {
+        expect((await stub.status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
     );
   });
 });

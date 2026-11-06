@@ -83,4 +83,16 @@ describe("createR2WorkspaceEnv", () => {
     expect(e.id).toBe("r2:work:t1");
     expect(e.cwd).toBe("/");
   });
+
+  it("explains that temporary files are not saved", async () => {
+    const e = envFor();
+    for (const result of [
+      await e.createTempDir("tmp", ctx),
+      await e.createTempFile({ prefix: "tmp" }, ctx),
+    ]) {
+      expect(!result.ok && result.error.message).toBe(
+        "草稿区不提供临时文件，完整输出未保存",
+      );
+    }
+  });
 });

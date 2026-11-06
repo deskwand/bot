@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import { MAX_ARTIFACT_BYTES, sanitizeFilename } from "../artifact";
+import { normalizePath, workspacePrefix } from "../env/r2-env";
 import { classifyFile, extensionForMime } from "./file-content";
 import { withAbort } from "./http-body";
 import { isBlockedHost } from "./http-request";
@@ -9,6 +10,8 @@ const SaveArtifact = Type.Object({
   filename: Type.Optional(Type.String()),
   content: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
+  /** 草稿区里的路径，例如 "report.md"；无需把内容再发一遍。 */
+  draft: Type.Optional(Type.String()),
   contentType: Type.Optional(Type.String()),
   /** `base64` 时先把 content 解成字节再落盘，用于图片等二进制产物。 */
   encoding: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("base64")])),
@@ -108,12 +111,14 @@ export function saveArtifactTool(
   return {
     name: "save_artifact",
     description:
-      "Save a file so it can be shared with the user. Pass `content` to write text or base64, or `url` to download a file (up to 15 MB) without reading it into the conversation. The returned key can be read back with get_artifact; use url for web files over 2 MB.",
+      "Save a file so it can be shared with the user. Pass `content` to write text or base64, or `url` to download a file (up to 15 MB) without reading it into the conversation. Pass `draft` to deliver a file from your private workspace without re-sending its content. The returned key can be read back with get_artifact; use url for web files over 2 MB.",
     parameters: SaveArtifact,
-    async execute({ filename, content, url, contentType, encoding }, _api, context) {
+    async execute({ filename, content, url, draft, contentType, encoding }, _api, context) {
       const hasContent = content !== undefined;
       const hasUrl = url !== undefined;
-      if (hasContent === hasUrl) return fail("content 和 url 必须且只能给一个");
+      const hasDraft = draft !== undefined;
+      const sources = [hasContent, hasUrl, hasDraft].filter(Boolean).length;
+      if (sources !== 1) return fail("content、url、draft 必须且只能给一个");
       if (hasContent && !filename) return fail("保存 content 时必须给 filename");
 
       // A backup/restore lease fences artifact writes so the R2 listing and
@@ -150,7 +155,7 @@ export function saveArtifactTool(
           ? body.byteLength
           : new TextEncoder().encode(body).byteLength;
         if (bytes > MAX_ARTIFACT_BYTES) return fail(TOO_LARGE);
-      } else {
+      } else if (hasUrl) {
         let parsed: URL;
         try {
           parsed = new URL(url!);
@@ -249,6 +254,24 @@ export function saveArtifactTool(
             name = `${name}.${extension}`;
           }
         }
+      } else {
+        const draftPath = draft!;
+        const resolved = normalizePath(draftPath);
+        if (!resolved.ok) return fail(resolved.error.message);
+        const virtualPath = resolved.value;
+        const key = workspacePrefix(id) + virtualPath.slice(1);
+        const object = await bucket.get(key);
+        if (object === null) return fail(`草稿不存在：${draftPath}`);
+        if (object.size > MAX_ARTIFACT_BYTES) return fail(TOO_LARGE);
+        body = new Uint8Array(await object.arrayBuffer());
+        name = filename || virtualPath.slice(virtualPath.lastIndexOf("/") + 1);
+
+        const inferred = classifyFile(body, "", name);
+        resolvedType =
+          contentType ??
+          (inferred.mimeType && inferred.mimeType !== DOWNLOAD_CONTENT_TYPE
+            ? inferred.mimeType
+            : DEFAULT_CONTENT_TYPE);
       }
 
       // The export may have started while we were downloading; re-check the

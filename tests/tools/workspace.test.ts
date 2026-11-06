@@ -5,7 +5,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { INBOUND_IMAGE_LIMITS } from "../../src/channels/media";
 import { MAX_DRAFT_BYTES, createR2WorkspaceEnv } from "../../src/env/r2-env";
-import { clearWorkspace, workspaceTools } from "../../src/tools/workspace";
+import { clearWorkspace, createListTool, workspaceTools } from "../../src/tools/workspace";
 import { PNG_B64, bytes } from "../helpers/images";
 
 declare module "cloudflare:test" {
@@ -83,9 +83,39 @@ describe("workspaceTools", () => {
     expect(textOf(await tool("list", "t9").execute({}, apiFor("t9"), ctx))).toBe("草稿区为空");
   });
 
+  it("marks the truncated list at the limit", async () => {
+    for (const name of ["a.md", "b.md", "c.md"]) {
+      await env.ARTIFACTS.put(`work/t-trunc/${name}`, "x");
+    }
+    const list = createListTool(env.ARTIFACTS, () => "t-trunc", 2);
+    const text = textOf(await list.execute({}, apiFor("t-trunc"), ctx));
+    const lines = text.split("\n");
+
+    expect(lines).toHaveLength(3);
+    expect(lines.at(-1)).toBe("（仅显示前 2 个）");
+  });
+
+  it("does not mark a complete list", async () => {
+    for (const name of ["a.md", "b.md"]) {
+      await env.ARTIFACTS.put(`work/t-trunc-exact/${name}`, "x");
+    }
+    const list = createListTool(env.ARTIFACTS, () => "t-trunc-exact", 2);
+    const text = textOf(await list.execute({}, apiFor("t-trunc-exact"), ctx));
+
+    expect(text).not.toContain("仅显示前");
+  });
+
   it("marks the pi tools as workspace tools", () => {
     for (const name of ["read", "write", "edit", "list"]) {
       expect(tool(name).description).toContain("workspace");
+    }
+  });
+
+  it("says there is no shell and how to continue a long file", () => {
+    for (const name of ["read", "write", "edit", "list"]) {
+      expect(tool(name).description).toContain(
+        "There is no shell; continue long files with offset/limit.",
+      );
     }
   });
 

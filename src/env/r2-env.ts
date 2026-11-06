@@ -27,7 +27,7 @@ function invalid(message: string, path: string): FileError {
 }
 
 /** Map a tool path onto the environment's virtual root and reject anything that leaves it. */
-function normalizePath(path: string): Result<string, FileError> {
+export function normalizePath(path: string): Result<string, FileError> {
   if (CONTROL_CHARACTERS.test(path)) {
     return err(invalid("路径包含控制字符", path)); // i18n-ignore: model-facing
   }
@@ -97,6 +97,13 @@ function unknown(path: string, error: unknown): FileError {
 
 function notSupported(path?: string): FileError {
   return new FileError("not_supported", "草稿工作区不支持该操作", path); // i18n-ignore: model-facing
+}
+
+function tempNotSaved(): FileError {
+  return new FileError(
+    "not_supported",
+    "草稿区不提供临时文件，完整输出未保存", // i18n-ignore: model-facing
+  );
 }
 
 /**
@@ -337,13 +344,13 @@ export function createR2WorkspaceEnv(bucket: R2Bucket, taskId: string): Executio
     async createTempDir(prefix, context) {
       void prefix;
       void context;
-      return err(notSupported());
+      return err(tempNotSaved());
     },
 
     async createTempFile(options, context) {
       void options;
       void context;
-      return err(notSupported());
+      return err(tempNotSaved());
     },
 
     async cleanup(context) {

@@ -18,7 +18,8 @@ import { isAbortError, toolErrorResult } from "./wrap";
  */
 const WORKSPACE_PREFIX =
   "Private workspace for drafts; the owner never sees these files." +
-  " Files over 1 MB are refused. Deliver a final file with save_artifact. ";
+  " Files over 1 MB are refused. There is no shell; continue long files with offset/limit." +
+  " Deliver a final file with save_artifact. ";
 
 const LIST_PAGE_LIMIT = 1000;
 
@@ -86,7 +87,11 @@ function boundedImages(inner: ImageProcessor): ImageProcessor {
   };
 }
 
-function listTool(bucket: R2Bucket, taskId: () => string): ToolRegistration<typeof List> {
+export function createListTool(
+  bucket: R2Bucket,
+  taskId: () => string,
+  limit: number = LIST_PAGE_LIMIT,
+): ToolRegistration<typeof List> {
   return {
     name: "list",
     description: "List the files in this task's private workspace.",
@@ -96,11 +101,15 @@ function listTool(bucket: R2Bucket, taskId: () => string): ToolRegistration<type
       const prefix = workspacePrefix(taskId());
       const lines: string[] = [];
       let cursor: string | undefined;
+      let truncated = false;
       try {
-        while (lines.length < LIST_PAGE_LIMIT) {
+        outer: for (;;) {
           const page = await bucket.list({ prefix, cursor });
           for (const object of page.objects) {
-            if (lines.length >= LIST_PAGE_LIMIT) break;
+            if (lines.length >= limit) {
+              truncated = true;
+              break outer;
+            }
             lines.push(
               `${object.key.slice(prefix.length)} · ${object.size} 字节 · ${object.uploaded.toISOString()}`,
             );
@@ -117,6 +126,7 @@ function listTool(bucket: R2Bucket, taskId: () => string): ToolRegistration<type
       if (lines.length === 0) {
         return { output: [{ type: "text", text: "草稿区为空" }] };
       }
+      if (truncated) lines.push(`（仅显示前 ${limit} 个）`);
       return { output: [{ type: "text", text: lines.join("\n") }] };
     },
   };
@@ -144,7 +154,7 @@ export function workspaceTools(
     ),
     workspaceTool(createWriteTool()),
     workspaceTool(createEditTool()),
-    listTool(bucket, taskId),
+    workspaceTool(createListTool(bucket, taskId)),
   ];
 }
 

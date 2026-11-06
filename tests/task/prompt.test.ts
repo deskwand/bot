@@ -29,6 +29,9 @@ describe("taskSystemPrompt", () => {
     });
     expect(prompt).toContain("workspace");
     expect(prompt).toContain("save_artifact");
+    expect(prompt).toContain(
+      'Use read, write, edit and list for drafts in your private workspace (the owner never sees it; files over 1 MB are refused; there is no shell). Build long documents there, then deliver the final file with save_artifact using `draft: "<path>"` instead of pasting its content. Saved artifacts and owner attachments are read with get_artifact.',
+    );
   });
 
   it("leaves ordinary tasks without bot wording", () => {

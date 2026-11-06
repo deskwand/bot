@@ -176,6 +176,84 @@ describe("saveArtifactTool binary intake", () => {
   });
 });
 
+describe("saveArtifactTool draft intake", () => {
+  it("delivers a draft file without re-sending its content", async () => {
+    await env.ARTIFACTS.put("work/t-draft/report.md", "# Draft body");
+    const tool = saveArtifactTool(env.ARTIFACTS, () => "t-draft");
+
+    const result = await tool.execute(
+      { draft: "report.md" },
+      {} as never,
+      context(),
+    );
+    const key = textOf(result).replace("已保存：", "");
+
+    expect(result.isError).toBeUndefined();
+    expect(key.split("/")).toHaveLength(3);
+    expect(key.startsWith("t-draft/")).toBe(true);
+    expect(key.endsWith("/report.md")).toBe(true);
+    const object = await env.ARTIFACTS.get(key);
+    expect(await object?.text()).toBe("# Draft body");
+    expect(object?.httpMetadata?.contentType).toBe(
+      "text/markdown; charset=utf-8",
+    );
+  });
+
+  it("uses the filename override and infers a known type", async () => {
+    await env.ARTIFACTS.put(
+      "work/t-draft-name/raw",
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    const tool = saveArtifactTool(env.ARTIFACTS, () => "t-draft-name");
+
+    const key = textOf(
+      await tool.execute(
+        { draft: "raw", filename: "chart.png" },
+        {} as never,
+        context(),
+      ),
+    ).replace("已保存：", "");
+
+    expect(key.endsWith("/chart.png")).toBe(true);
+    expect((await env.ARTIFACTS.get(key))?.httpMetadata?.contentType).toBe(
+      "image/png",
+    );
+  });
+
+  it("reports a missing draft", async () => {
+    const tool = saveArtifactTool(env.ARTIFACTS, () => "t-draft");
+    const result = await tool.execute(
+      { draft: "missing.md" },
+      {} as never,
+      context(),
+    );
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe("草稿不存在：missing.md");
+  });
+
+  it("rejects a draft path that escapes the workspace", async () => {
+    await env.ARTIFACTS.put("x.md", "outside");
+    const tool = saveArtifactTool(env.ARTIFACTS, () => "t-draft");
+    const result = await tool.execute(
+      { draft: "../x" },
+      {} as never,
+      context(),
+    );
+    expect(result.isError).toBe(true);
+  });
+
+  it("rejects content together with draft", async () => {
+    const tool = saveArtifactTool(env.ARTIFACTS, () => "t-draft");
+    const result = await tool.execute(
+      { filename: "a.md", content: "x", draft: "report.md" },
+      {} as never,
+      context(),
+    );
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe("content、url、draft 必须且只能给一个");
+  });
+});
+
 describe("saveArtifactTool url intake", () => {
   const tool = (f: typeof fetch) => saveArtifactTool(env.ARTIFACTS, () => "t1", undefined, f);
 
