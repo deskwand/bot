@@ -12,6 +12,7 @@ import { actionHint } from "../butler/owner-copy";
 import { isOwner } from "../config";
 import { ownerLocale, t, type Locale } from "../i18n";
 import { readRuntimeConfig } from "../runtime-config";
+import { classifyFile, extensionForMime } from "../tools/file-content";
 import {
   decodeAction,
   type ActionEvent,
@@ -19,6 +20,7 @@ import {
   type ChannelId,
   type ChannelMessageRef,
   type InboundEvent,
+  type InboundFile,
   type MessageEvent,
   type OutboundMessage,
   type RouteSnapshot,
@@ -40,7 +42,7 @@ import {
 import { emitChannelEvent } from "./events";
 import { inboxStore } from "./inbox";
 import { OutboundQueue } from "./outbound-queue";
-import { describeImageBytes, prepareInboundImage } from "./media";
+import { describeImageBytes, prepareInboundImage, sniffImageType } from "./media";
 import { createTelegramAdapter } from "./telegram";
 import {
   createTelegramPollClient,
@@ -57,6 +59,7 @@ import {
   isTrustedBaseUrl,
   parseCredentials,
   type WeChatCredentials,
+  type WeChatFileRef,
   type WeChatUpdate,
 } from "./wechat/ilink";
 import type { WeChatImageRef } from "./wechat/media";
@@ -1204,6 +1207,11 @@ export class ChannelDO extends Agent<Env> {
         return;
       }
 
+      if (update.file) {
+        this.ctx.waitUntil(this.dispatchWeChatFile(event, update.file, routeKey));
+        return;
+      }
+
       this.dispatchMessage(event, routeKey);
     });
   }
@@ -1249,7 +1257,75 @@ export class ChannelDO extends Agent<Env> {
       return;
     }
 
-    this.dispatchMessage({ ...event, images: [prepared.image] }, routeKey);
+    const files: InboundFile[] = [];
+    try {
+      const mimeType = sniffImageType(bytes) ?? prepared.image.mimeType;
+      const extension = extensionForMime(mimeType) ?? "jpg";
+      files.push(
+        await inboxStore(this.env.ARTIFACTS)(
+          event.eventId,
+          `image.${extension}`,
+          bytes,
+          mimeType,
+        ),
+      );
+    } catch (error) {
+      // The inbox copy is a convenience; the image itself still reaches the
+      // butler even when R2 refuses the write.
+      console.error(
+        `channel: wechat inbox store failed (${event.eventId}): ${errorMessage(error)}`,
+      );
+    }
+
+    this.dispatchMessage(
+      { ...event, images: [prepared.image], ...(files.length > 0 ? { files } : {}) },
+      routeKey,
+    );
+  }
+
+  /**
+   * WeChat hands files over as encrypted CDN objects too. The butler only gets
+   * the inbox reference, so a large download never enters the message event.
+   */
+  private async dispatchWeChatFile(
+    event: MessageEvent,
+    file: WeChatFileRef,
+    routeKey: string,
+  ): Promise<void> {
+    if (file.size !== undefined && file.size > MAX_ARTIFACT_BYTES) {
+      this.dispatchMessage({ ...event, fileFailed: "too_large" }, routeKey);
+      return;
+    }
+
+    const client = createILinkClient({
+      fetch: getILinkFetchOverride() ?? undefined,
+    });
+    const bytes = await client.downloadFile(file);
+    if (!bytes) {
+      console.warn(`channel: wechat file download failed (${event.eventId})`);
+      this.dispatchMessage({ ...event, fileFailed: "download" }, routeKey);
+      return;
+    }
+    if (bytes.byteLength > MAX_ARTIFACT_BYTES) {
+      this.dispatchMessage({ ...event, fileFailed: "too_large" }, routeKey);
+      return;
+    }
+
+    const { mimeType } = classifyFile(bytes, "", file.name);
+    try {
+      const stored = await inboxStore(this.env.ARTIFACTS)(
+        event.eventId,
+        file.name,
+        bytes,
+        mimeType,
+      );
+      this.dispatchMessage({ ...event, files: [stored] }, routeKey);
+    } catch (error) {
+      console.error(
+        `channel: wechat inbox store failed (${event.eventId}): ${errorMessage(error)}`,
+      );
+      this.dispatchMessage({ ...event, fileFailed: "download" }, routeKey);
+    }
   }
 
   private dispatchWeChatAction(

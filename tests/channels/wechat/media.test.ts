@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   decodeAesKey,
   decryptImage,
-  downloadWeChatImage,
+  downloadWeChatMedia,
 } from "../../../src/channels/wechat/media";
 
 const KEY_HEX = "00112233445566778899aabbccddeeff";
@@ -75,7 +75,7 @@ describe("decryptImage", () => {
   });
 });
 
-describe("downloadWeChatImage", () => {
+describe("downloadWeChatMedia", () => {
   it("fetches the CDN object and decrypts it", async () => {
     const calls: string[] = [];
     const ciphertext = encrypt(PLAIN);
@@ -84,7 +84,7 @@ describe("downloadWeChatImage", () => {
       return new Response(ciphertext, { status: 200 });
     }) as typeof fetch;
 
-    const bytes = await downloadWeChatImage(
+    const bytes = await downloadWeChatMedia(
       fetchImpl,
       "https://novac2c.cdn.weixin.qq.com/c2c",
       { encryptQueryParam: "p 1", aesKeyHex: KEY_HEX },
@@ -103,7 +103,7 @@ describe("downloadWeChatImage", () => {
       return new Response(PLAIN, { status: 200 });
     }) as typeof fetch;
 
-    const bytes = await downloadWeChatImage(fetchImpl, "https://cdn.example.com", {
+    const bytes = await downloadWeChatMedia(fetchImpl, "https://cdn.example.com", {
       encryptQueryParam: "p-2",
     });
 
@@ -117,13 +117,13 @@ describe("downloadWeChatImage", () => {
     const failing = (async () => new Response("nope", { status: 500 })) as typeof fetch;
 
     expect(
-      await downloadWeChatImage(failing, "https://cdn.example.com", {
+      await downloadWeChatMedia(failing, "https://cdn.example.com", {
         encryptQueryParam: "p",
         aesKeyHex: KEY_HEX,
       }),
     ).toBeUndefined();
     expect(
-      await downloadWeChatImage(failing, "https://cdn.example.com", {
+      await downloadWeChatMedia(failing, "https://cdn.example.com", {
         encryptQueryParam: "p",
       }),
     ).toBeUndefined();

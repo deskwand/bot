@@ -3,14 +3,16 @@ import { createDecipheriv } from "node:crypto";
 /** The CDN that fronts iLink media. */
 export const WECHAT_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
 
-/** Where one inbound image lives, as `image_item` reports it. */
-export type WeChatImageRef = {
+/** Where one inbound CDN object lives, as `image_item`/`file_item` reports it. */
+export type WeChatMediaRef = {
   encryptQueryParam: string;
   /** `image_item.aeskey`: 32 hex characters. */
   aesKeyHex?: string;
-  /** `image_item.media.aes_key`: base64 of either the hex string or the 16 raw bytes. */
+  /** `media.aes_key`: base64 of either the hex string or the 16 raw bytes. */
   mediaAesKey?: string;
 };
+
+export type WeChatImageRef = WeChatMediaRef;
 
 function hexToKey(hex: string): Uint8Array | undefined {
   if (!/^[0-9a-fA-F]{32}$/.test(hex)) return undefined;
@@ -34,12 +36,12 @@ function base64ToBytes(value: string): Uint8Array | undefined {
 }
 
 /** The 16-byte AES key: `aeskey` first, then either encoding of `media.aes_key`. */
-export function decodeAesKey(image: WeChatImageRef): Uint8Array | undefined {
-  const fromHex = image.aesKeyHex ? hexToKey(image.aesKeyHex) : undefined;
+export function decodeAesKey(media: WeChatMediaRef): Uint8Array | undefined {
+  const fromHex = media.aesKeyHex ? hexToKey(media.aesKeyHex) : undefined;
   if (fromHex) return fromHex;
-  if (!image.mediaAesKey) return undefined;
+  if (!media.mediaAesKey) return undefined;
 
-  const raw = base64ToBytes(image.mediaAesKey);
+  const raw = base64ToBytes(media.mediaAesKey);
   if (!raw) return undefined;
   if (raw.length === 16) return raw;
   return hexToKey(new TextDecoder().decode(raw));
@@ -74,21 +76,22 @@ export function decryptImage(
 }
 
 /**
- * Downloads one inbound image, decrypting it when the payload carries a key.
- * Without a usable key the CDN object is taken as it comes: iLink does not
- * always send `aeskey`, and the reference clients download those in the clear.
+ * Downloads one inbound CDN object, decrypting it when the payload carries a
+ * key. Without a usable key the CDN object is taken as it comes: iLink does
+ * not always send `aeskey`, and the reference clients download those in the
+ * clear. Images and files share this path.
  */
-export async function downloadWeChatImage(
+export async function downloadWeChatMedia(
   fetchImpl: typeof fetch,
   cdnBaseUrl: string,
-  image: WeChatImageRef,
+  media: WeChatMediaRef,
   signal?: AbortSignal,
 ): Promise<Uint8Array | undefined> {
-  const key = decodeAesKey(image);
+  const key = decodeAesKey(media);
 
   try {
     const response = await fetchImpl(
-      `${cdnBaseUrl}/download?encrypted_query_param=${encodeURIComponent(image.encryptQueryParam)}`,
+      `${cdnBaseUrl}/download?encrypted_query_param=${encodeURIComponent(media.encryptQueryParam)}`,
       signal ? { signal } : {},
     );
     if (!response.ok) return undefined;

@@ -119,6 +119,7 @@ describe("getUpdates", () => {
         text: "hello\nworld",
         messageType: 1,
         image: null,
+        file: null,
         voice: false,
       },
       {
@@ -128,6 +129,7 @@ describe("getUpdates", () => {
         text: null,
         messageType: 1,
         image: null,
+        file: null,
         voice: false,
       },
     ]);
@@ -167,6 +169,85 @@ describe("getUpdates", () => {
       mediaAesKey: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
     });
     expect(result.updates[0].text).toBeNull();
+  });
+
+  it("parses a file item", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({
+        msgs: [
+          {
+            message_id: 11,
+            from_user_id: "u-1",
+            message_type: 1,
+            item_list: [
+              {
+                type: 4,
+                file_item: {
+                  media: { encrypt_query_param: "q", aes_key: "k" },
+                  file_name: "合同.docx",
+                  len: "1234",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await client(fetchImpl).getUpdates(CREDS, "");
+
+    expect(result.updates[0].file).toEqual({
+      encryptQueryParam: "q",
+      mediaAesKey: "k",
+      name: "合同.docx",
+      size: 1234,
+    });
+  });
+
+  it("ignores a file item without a download parameter", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({
+        msgs: [
+          {
+            message_id: 12,
+            from_user_id: "u-1",
+            message_type: 1,
+            item_list: [
+              {
+                type: 4,
+                file_item: { media: {}, file_name: "合同.docx", len: "1234" },
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await client(fetchImpl).getUpdates(CREDS, "");
+
+    expect(result.updates[0].file).toBeNull();
+  });
+
+  it("downloads and decrypts a file through the CDN", async () => {
+    const key = Buffer.from("00112233445566778899aabbccddeeff", "hex");
+    const plain = new TextEncoder().encode("%PDF-1.4 x");
+    const cipher = createCipheriv("aes-128-ecb", key, null);
+    const ciphertext = Buffer.concat([cipher.update(plain), cipher.final()]);
+
+    const { calls, fetchImpl } = fakeFetch([
+      new Response(ciphertext, { status: 200 }),
+    ]);
+
+    const bytes = await client(fetchImpl).downloadFile({
+      encryptQueryParam: "q 1",
+      mediaAesKey: btoa("00112233445566778899aabbccddeeff"),
+      name: "合同.pdf",
+    });
+
+    expect(new TextDecoder().decode(bytes)).toBe("%PDF-1.4 x");
+    expect(calls[0].url).toBe(
+      "https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param=q%201",
+    );
   });
 
   it("downloads and decrypts an image through the CDN", async () => {

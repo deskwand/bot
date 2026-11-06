@@ -1,7 +1,7 @@
 import { createCipheriv, createHash } from "node:crypto";
 import {
   WECHAT_CDN_BASE_URL,
-  downloadWeChatImage,
+  downloadWeChatMedia,
   type WeChatImageRef,
 } from "./media.ts";
 
@@ -10,6 +10,7 @@ const CHANNEL_VERSION = "1.0.0";
 const DEFAULT_LIMIT = 2000;
 const TEXT_ITEM_TYPE = 1;
 const IMAGE_ITEM_TYPE = 2;
+const FILE_ITEM_TYPE = 4;
 
 export type WeChatCredentials = {
   token: string;
@@ -76,6 +77,13 @@ export function credentialsFromQrStatus(
   return { token, baseUrl, accountId, userId };
 }
 
+export type WeChatFileRef = {
+  encryptQueryParam: string;
+  mediaAesKey?: string;
+  name: string;
+  size?: number;
+};
+
 export type WeChatUpdate = {
   messageId: string | null;
   fromUserId: string;
@@ -83,6 +91,7 @@ export type WeChatUpdate = {
   text: string | null;
   messageType: number;
   image: WeChatImageRef | null;
+  file: WeChatFileRef | null;
   /** 该条消息的 item 里有 `voice_item`，即这是一条语音。 */
   voice: boolean;
 };
@@ -329,7 +338,14 @@ export function createILinkClient(opts: {
       image: WeChatImageRef,
       signal?: AbortSignal,
     ): Promise<Uint8Array | undefined> {
-      return await downloadWeChatImage(fetchImpl, WECHAT_CDN_BASE_URL, image, signal);
+      return await downloadWeChatMedia(fetchImpl, WECHAT_CDN_BASE_URL, image, signal);
+    },
+
+    async downloadFile(
+      file: WeChatFileRef,
+      signal?: AbortSignal,
+    ): Promise<Uint8Array | undefined> {
+      return await downloadWeChatMedia(fetchImpl, WECHAT_CDN_BASE_URL, file, signal);
     },
   };
 }
@@ -420,6 +436,11 @@ function toWeChatUpdate(value: Record<string, unknown>): WeChatUpdate {
       .filter((item) => item.type === IMAGE_ITEM_TYPE)
       .map(toImageRef)
       .find((ref) => ref !== null) ?? null;
+  const file =
+    items
+      .filter((item) => item.type === FILE_ITEM_TYPE)
+      .map(toFileRef)
+      .find((ref) => ref !== null) ?? null;
 
   // WeChat recognizes voice on its side and ships the transcript in the item.
   // Nothing is downloaded or decoded: no SILK, no audio model, no CPU cost.
@@ -441,6 +462,7 @@ function toWeChatUpdate(value: Record<string, unknown>): WeChatUpdate {
     text: texts.length > 0 ? texts.join("\n") : (voiceText ?? null),
     messageType,
     image,
+    file,
     voice,
   };
 }
@@ -463,6 +485,25 @@ function toImageRef(item: Record<string, unknown>): WeChatImageRef | null {
   };
 }
 
+/** A downloadable file, or `null` when the item has no CDN parameter. */
+function toFileRef(item: Record<string, unknown>): WeChatFileRef | null {
+  const file = item.file_item;
+  if (!isRecord(file)) return null;
+
+  const media = isRecord(file.media) ? file.media : {};
+  const encryptQueryParam = readString(media, "encrypt_query_param");
+  if (!encryptQueryParam) return null;
+
+  const mediaAesKey = readString(media, "aes_key");
+  const size = readSize(file, "len");
+  return {
+    encryptQueryParam,
+    ...(mediaAesKey === undefined ? {} : { mediaAesKey }),
+    name: readString(file, "file_name") ?? "file",
+    ...(size === undefined ? {} : { size }),
+  };
+}
+
 function readNumericCode(
   value: Record<string, unknown> | null,
 ): number | undefined {
@@ -478,6 +519,20 @@ function readString(
   if (!value) return undefined;
   const raw = value[key];
   return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+}
+
+/** iLink sends sizes as decimal strings; accept a number too. */
+function readSize(
+  value: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const raw = value[key];
+  if (typeof raw === "number") {
+    return Number.isInteger(raw) && raw >= 0 ? raw : undefined;
+  }
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) return undefined;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

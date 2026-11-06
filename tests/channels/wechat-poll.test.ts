@@ -1,6 +1,7 @@
 import { createCipheriv } from "node:crypto";
 import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_ARTIFACT_BYTES } from "../../src/artifact";
 import {
   setChannelOverride,
   setILinkFetchOverride,
@@ -853,11 +854,279 @@ describe("pollWeChat", () => {
           userId: OWNER,
           text: null,
           images: [{ mimeType: "image/png", data: pngB64 }],
+          files: [
+            {
+              name: "image.png",
+              key: expect.stringMatching(/^inbox\/wx:img-1\/image\.png$/),
+              mimeType: "image/png",
+              size: plain.byteLength,
+            },
+          ],
           eventId: "wx:img-1",
           routeKey: route.routeKey,
         },
       ]);
     });
+    expect(await env.ARTIFACTS.head(events[0].files![0].key)).not.toBeNull();
+  });
+
+  it("downloads a file message and hands its inbox reference to the Butler", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    setPollTimingOverride({ runMs: 20, baseBackoffMs: 2 });
+
+    const keyHex = "00112233445566778899aabbccddeeff";
+    const plain = new TextEncoder().encode("%PDF-1.4 x");
+    const cipher = createCipheriv("aes-128-ecb", Buffer.from(keyHex, "hex"), null);
+    const ciphertext = new Uint8Array(
+      Buffer.concat([cipher.update(plain), cipher.final()]),
+    );
+
+    let first = true;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/ilink/bot/getupdates")) {
+        if (!first) {
+          return new Response(
+            JSON.stringify({ get_updates_buf: "cursor-file", msgs: [] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        first = false;
+        return new Response(
+          JSON.stringify({
+            get_updates_buf: "cursor-file",
+            msgs: [
+              {
+                message_id: "file-1",
+                from_user_id: OWNER,
+                context_token: "ctx-1",
+                message_type: 1,
+                item_list: [
+                  {
+                    type: 4,
+                    file_item: {
+                      media: {
+                        encrypt_query_param: "f-1",
+                        aes_key: btoa(keyHex),
+                      },
+                      file_name: "合同.pdf",
+                      len: String(plain.byteLength),
+                    },
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(ciphertext, { status: 200 });
+    }) as typeof fetch;
+    setILinkFetchOverride(fetchImpl);
+
+    const events = await captureButler();
+    await pollThroughDO();
+
+    const route = await channels().currentRoute();
+    await vi.waitFor(() => {
+      expect(events[0]?.files).toEqual([
+        {
+          name: "合同.pdf",
+          key: expect.stringMatching(/^inbox\/wx:/),
+          mimeType: "application/pdf",
+          size: 10,
+        },
+      ]);
+    });
+    expect(events[0]).toMatchObject({
+      type: "message",
+      channel: "wechat",
+      chatId: OWNER,
+      userId: OWNER,
+      text: null,
+      eventId: "wx:file-1",
+      routeKey: route.routeKey,
+    });
+    expect(events[0].fileFailed).toBeUndefined();
+    expect(await env.ARTIFACTS.head(events[0].files![0].key)).not.toBeNull();
+  });
+
+  it("refuses a declared oversized file without downloading it", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    setPollTimingOverride({ runMs: 20, baseBackoffMs: 2 });
+
+    let first = true;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/ilink/bot/getupdates")) {
+        if (!first) {
+          return new Response(
+            JSON.stringify({ get_updates_buf: "cursor-big", msgs: [] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        first = false;
+        return new Response(
+          JSON.stringify({
+            get_updates_buf: "cursor-big",
+            msgs: [
+              {
+                message_id: "file-big",
+                from_user_id: OWNER,
+                context_token: "ctx-1",
+                message_type: 1,
+                item_list: [
+                  {
+                    type: 4,
+                    file_item: {
+                      media: { encrypt_query_param: "f-big" },
+                      file_name: "big.pdf",
+                      len: String(MAX_ARTIFACT_BYTES + 1),
+                    },
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      throw new Error(`CDN must not be called: ${url}`);
+    }) as typeof fetch;
+    setILinkFetchOverride(fetchImpl);
+
+    const events = await captureButler();
+    await pollThroughDO();
+
+    await vi.waitFor(() => {
+      expect(events[0]?.fileFailed).toBe("too_large");
+    });
+    expect(events[0].files).toBeUndefined();
+  });
+
+  it("marks a file whose download fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    setPollTimingOverride({ runMs: 20, baseBackoffMs: 2 });
+
+    let first = true;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/ilink/bot/getupdates")) {
+        if (!first) {
+          return new Response(
+            JSON.stringify({ get_updates_buf: "cursor-file-bad", msgs: [] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        first = false;
+        return new Response(
+          JSON.stringify({
+            get_updates_buf: "cursor-file-bad",
+            msgs: [
+              {
+                message_id: "file-bad",
+                from_user_id: OWNER,
+                context_token: "ctx-1",
+                message_type: 1,
+                item_list: [
+                  {
+                    type: 4,
+                    file_item: {
+                      media: { encrypt_query_param: "f-bad" },
+                      file_name: "合同.pdf",
+                      len: "10",
+                    },
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("denied", { status: 403 });
+    }) as typeof fetch;
+    setILinkFetchOverride(fetchImpl);
+
+    const events = await captureButler();
+    await pollThroughDO();
+
+    await vi.waitFor(() => {
+      expect(events[0]?.fileFailed).toBe("download");
+    });
+    expect(events[0].files).toBeUndefined();
+  });
+
+  it("also stores an inbound image in the inbox", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    setPollTimingOverride({ runMs: 20, baseBackoffMs: 2 });
+
+    const keyHex = "00112233445566778899aabbccddeeff";
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mM4YWODFTEMLQkAZZlQAS/gME0AAAAASUVORK5CYII=";
+    const plain = Uint8Array.from(atob(pngB64), (c) => c.charCodeAt(0));
+    const cipher = createCipheriv("aes-128-ecb", Buffer.from(keyHex, "hex"), null);
+    const ciphertext = new Uint8Array(
+      Buffer.concat([cipher.update(plain), cipher.final()]),
+    );
+
+    let first = true;
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/ilink/bot/getupdates")) {
+        if (!first) {
+          return new Response(
+            JSON.stringify({ get_updates_buf: "cursor-img-inbox", msgs: [] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        first = false;
+        return new Response(
+          JSON.stringify({
+            get_updates_buf: "cursor-img-inbox",
+            msgs: [
+              {
+                message_id: "img-inbox",
+                from_user_id: OWNER,
+                context_token: "ctx-1",
+                message_type: 1,
+                item_list: [
+                  {
+                    type: 2,
+                    image_item: {
+                      media: { encrypt_query_param: "p-inbox" },
+                      aeskey: keyHex,
+                    },
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(ciphertext, { status: 200 });
+    }) as typeof fetch;
+    setILinkFetchOverride(fetchImpl);
+
+    const events = await captureButler();
+    await pollThroughDO();
+
+    await vi.waitFor(() => {
+      expect(events[0]?.images).toHaveLength(1);
+      expect(events[0]?.files?.[0].key).toMatch(/^inbox\/wx:/);
+    });
+    expect(await env.ARTIFACTS.head(events[0].files![0].key)).not.toBeNull();
   });
 
   it("falls back to a text-only event when the image cannot be fetched", async () => {
