@@ -22,8 +22,13 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { createBotTaskTools } from "../bot/bot-tools";
+import { ownerLocale, t } from "../i18n";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
-import { lastModelError, userTextForModelError } from "../llm/model-errors";
+import {
+  lastModelError,
+  modelUnavailableShortText,
+  userTextForModelError,
+} from "../llm/model-errors";
 import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
 import { PI_PROGRESS } from "../llm/pi-settings";
 import type {
@@ -49,6 +54,26 @@ import {
   ReviewedGate,
   type ApprovalGateLike,
 } from "./approvals";
+import {
+  cancelBlockedText,
+  cancelNotStartedText,
+  cancelOkText,
+  missingApprovalIdText,
+  parkedTaskText,
+  progressArtifactText,
+  progressReadText,
+  progressSaveText,
+  progressSearchText,
+  progressTimeText,
+  retryBlockedText,
+  retryNotRetryableText,
+  retryNotStartedText,
+  retryOkText,
+  steerBlockedText,
+  steerNotStartedText,
+  steerOkText,
+  taskIncompleteText,
+} from "./owner-copy";
 import { Outbox } from "./outbox";
 import { reviewAction, type ReviewComplete } from "./review";
 import { taskSystemPrompt } from "./prompt";
@@ -60,14 +85,6 @@ export type TaskState =
   | "completed"
   | "failed"
   | "cancelled";
-
-const STATE_LABELS: Record<TaskState, string> = {
-  queued: "排队中",
-  running: "运行中",
-  completed: "完成",
-  failed: "失败",
-  cancelled: "取消",
-};
 
 type ControlResult = { ok: boolean; message: string };
 
@@ -160,8 +177,11 @@ export class TaskDO extends Agent<Env> {
     const storedSpec = this.readMeta("spec");
     this.spec = storedSpec ? (JSON.parse(storedSpec) as TaskSpec) : null;
 
-    this.approvals = new ApprovalGate(this.db, (body) =>
-      this.emitProgress(body),
+    this.approvals = new ApprovalGate(
+      this.db,
+      (body) => this.emitProgress(body),
+      undefined,
+      () => ownerLocale(this.env),
     );
     this.reviewedGate = new ReviewedGate(
       this.approvals,
@@ -181,15 +201,17 @@ export class TaskDO extends Agent<Env> {
           },
           this.completeReview,
           signal,
+          ownerLocale(this.env),
         ),
       (text) => this.emitProgress({ type: "progress", text }),
+      () => ownerLocale(this.env),
     );
 
     const mode = taskApprovalMode(() => readRuntimeConfig(this.env));
     const gates = taskGates(mode, {
       approval: this.approvals,
       reviewed: this.reviewedGate,
-      auto: new AutoGate(),
+      auto: new AutoGate(() => ownerLocale(this.env)),
     });
     this.writeGate = gates.write;
     this.mcpGates = gates.mcp;
@@ -215,7 +237,10 @@ export class TaskDO extends Agent<Env> {
       sections: [
         {
           key: "task",
-          render: () => (this.spec ? taskSystemPrompt(this.spec) : undefined),
+          render: () =>
+            this.spec
+              ? taskSystemPrompt(ownerLocale(this.env), this.spec)
+              : undefined,
         },
       ],
     });
@@ -227,20 +252,40 @@ export class TaskDO extends Agent<Env> {
         withProgress(
           webSearchTool(),
           emitProgress,
-          (args) => `搜索：${args.query}`,
+          (args) => progressSearchText(ownerLocale(this.env), args.query),
         ),
         withProgress(
           getArtifactTool(this.env.ARTIFACTS, this.env.PUBLIC_BASE_URL),
           emitProgress,
-          (args) => `读取产物：${safeArtifactRef(args.ref)}`,
+          (args) => {
+            const locale = ownerLocale(this.env);
+            return progressArtifactText(
+              locale,
+              safeArtifactRef(args.ref, t(locale, "task.invalidUrl")),
+            );
+          },
         ),
         withProgress(
           httpRequestTool(this.writeGate),
           emitProgress,
-          (args) => `${args.method ?? "GET"} ${safeRequestUrl(args.url)}`,
+          (args) => {
+            const locale = ownerLocale(this.env);
+            return `${args.method ?? "GET"} ${safeRequestUrl(
+              args.url,
+              t(locale, "task.invalidUrl"),
+            )}`;
+          },
         ),
-        withProgress(nowTool(), emitProgress, () => "查看时间"),
-        withProgress(webFetchTool(), emitProgress, (args) => `读取：${args.url}`),
+        withProgress(
+          nowTool(),
+          emitProgress,
+          () => progressTimeText(ownerLocale(this.env)),
+        ),
+        withProgress(
+          webFetchTool(),
+          emitProgress,
+          (args) => progressReadText(ownerLocale(this.env), args.url),
+        ),
         withProgress(
           saveArtifactTool(
             this.env.ARTIFACTS,
@@ -249,7 +294,7 @@ export class TaskDO extends Agent<Env> {
             () => this.assertNoMaintenance(),
           ),
           emitProgress,
-          (args) => `保存：${args.filename}`,
+          (args) => progressSaveText(ownerLocale(this.env), args.filename),
         ),
       ],
     });
@@ -479,27 +524,29 @@ export class TaskDO extends Agent<Env> {
     await this.flushOutbox();
     const taskId = this.currentTaskId();
     const state = this.currentState();
-    if (!taskId) return { ok: false, message: "任务尚未开始，无法追加指令" };
+    const locale = ownerLocale(this.env);
+    if (!taskId) return { ok: false, message: steerNotStartedText(locale) };
     if (state !== "running") {
       return {
         ok: false,
-        message: `任务 ${taskId} 已${STATE_LABELS[state]}，无法追加指令`,
+        message: steerBlockedText(locale, taskId, state),
       };
     }
 
     await this.harness.session().steer(text);
-    return { ok: true, message: `已向任务 ${taskId} 追加指令` };
+    return { ok: true, message: steerOkText(locale, taskId) };
   }
 
   async cancel(): Promise<ControlResult> {
     await this.flushOutbox();
     const taskId = this.currentTaskId();
     const state = this.currentState();
-    if (!taskId) return { ok: false, message: "任务尚未开始，无法取消" };
+    const locale = ownerLocale(this.env);
+    if (!taskId) return { ok: false, message: cancelNotStartedText(locale) };
     if (state !== "queued" && state !== "running") {
       return {
         ok: false,
-        message: `任务 ${taskId} 已${STATE_LABELS[state]}，无法取消`,
+        message: cancelBlockedText(locale, taskId, state),
       };
     }
 
@@ -510,24 +557,25 @@ export class TaskDO extends Agent<Env> {
     await this.outboxFor(taskId).emit({ type: "cancelled" });
     await this.abortWithTimeout();
 
-    return { ok: true, message: `任务 ${taskId} 已取消` };
+    return { ok: true, message: cancelOkText(locale, taskId) };
   }
 
   async retryTask(): Promise<ControlResult> {
     await this.flushOutbox();
     const taskId = this.currentTaskId();
     const state = this.currentState();
-    if (!taskId) return { ok: false, message: "任务尚未开始，无法重试" };
+    const locale = ownerLocale(this.env);
+    if (!taskId) return { ok: false, message: retryNotStartedText(locale) };
     if (state !== "failed") {
       return {
         ok: false,
-        message: `任务 ${taskId} 已${STATE_LABELS[state]}，无法重试`,
+        message: retryBlockedText(locale, taskId, state),
       };
     }
 
     const lastFailure = this.lastFailedEvent();
     if (!lastFailure?.retryable) {
-      return { ok: false, message: `任务 ${taskId} 的失败不可重试` };
+      return { ok: false, message: retryNotRetryableText(locale, taskId) };
     }
     // A retried run is a new turn on a possibly fresh instance: its tool
     // declarations come from the registry, so install them first.
@@ -543,13 +591,15 @@ export class TaskDO extends Agent<Env> {
     this.setMeta("operation_id", operationId);
     this.ctx.waitUntil(this.watchRun(operationId));
 
-    return { ok: true, message: `任务 ${taskId} 已重新开始` };
+    return { ok: true, message: retryOkText(locale, taskId) };
   }
 
   async handleAction(evt: ActionEvent): Promise<string> {
     await this.flushOutbox();
     if (evt.action === "cancel") return (await this.cancel()).message;
-    if (evt.approvalId === undefined) return "缺少审批编号";
+    if (evt.approvalId === undefined) {
+      return missingApprovalIdText(ownerLocale(this.env));
+    }
     return (
       await this.approvals.resolve(
         evt.approvalId,
@@ -610,7 +660,9 @@ export class TaskDO extends Agent<Env> {
     );
     const model = models.getModel(ref.provider, ref.id);
     if (!model) {
-      throw new Error(`模型 ${ref.provider}/${ref.id} 不可用`);
+      throw new Error(
+        modelUnavailableShortText(ownerLocale(this.env), ref.provider, ref.id),
+      );
     }
     const result = await models.completeSimple(
       model,
@@ -687,11 +739,11 @@ export class TaskDO extends Agent<Env> {
     info: ReportInfo,
   ): Promise<void> {
     if (info.type === "task_parked") {
-      await this.failWith("任务反复中断，已暂停", true);
+      await this.failWith(parkedTaskText(ownerLocale(this.env)), true);
       return;
     }
     if (info.type === "task_faulted" && info.reason === "restart_limit") {
-      await this.failWith("任务反复中断，已暂停", true);
+      await this.failWith(parkedTaskText(ownerLocale(this.env)), true);
     }
   }
 
@@ -746,7 +798,9 @@ export class TaskDO extends Agent<Env> {
           }
         }
         await this.fail(
-          userTextForModelError(modelError) ?? result.reason ?? "任务未完成",
+          userTextForModelError(modelError, ownerLocale(this.env)) ??
+            result.reason ??
+            taskIncompleteText(ownerLocale(this.env)),
         );
         return;
       }

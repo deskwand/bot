@@ -354,6 +354,7 @@ describe("McpAuthDO", () => {
         ok: false,
         auth: "unauthorized",
         reason: "需要在桌面端登录授权",
+        reasonCode: "MCP_AUTH_REQUIRED",
       });
     });
   });

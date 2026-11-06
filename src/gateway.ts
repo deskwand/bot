@@ -1,10 +1,12 @@
 import { createMcpAdminRoutes } from "./admin/mcp-routes";
+import type { Locale } from "./i18n";
 import type { McpAuthDO } from "./mcp/mcp-auth-do";
 
 export type GatewayDeps = {
   artifacts: R2Bucket;
   admin: { fetch(req: Request): Promise<Response> };
   mcpAuth(): DurableObjectStub<McpAuthDO>;
+  locale?: () => Locale;
 };
 
 const ARTIFACT_PREFIX = "/a/";
@@ -29,7 +31,7 @@ function notFound(): Response {
 export function createGateway(deps: GatewayDeps): {
   fetch(req: Request): Promise<Response>;
 } {
-  const mcp = createMcpAdminRoutes(deps.mcpAuth);
+  const mcp = createMcpAdminRoutes(deps.mcpAuth, deps.locale);
 
   async function handleArtifact(rawKey: string): Promise<Response> {
     let key: string;

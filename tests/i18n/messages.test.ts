@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatTemplate, t } from "../../src/i18n";
+import validConfig from "../../contracts/fixtures/config-valid.json";
+import { formatTemplate, ownerLocale, t, tryT } from "../../src/i18n";
+
+function envWith(config: unknown): Env {
+  return { DESKWAND_CONFIG: config } as unknown as Env;
+}
 
 describe("t", () => {
   it("returns the English prompt instruction", () => {
@@ -10,6 +15,23 @@ describe("t", () => {
 
   it("returns the Chinese prompt instruction", () => {
     expect(t("zh", "prompt.replyLanguage")).toBe("始终用中文回复主人。");
+  });
+});
+
+describe("ownerLocale", () => {
+  it("returns the configured locale", () => {
+    expect(ownerLocale(envWith({ ...validConfig, locale: "en" }))).toBe("en");
+  });
+
+  it("falls back to zh", () => {
+    expect(ownerLocale(envWith(undefined))).toBe("zh");
+    expect(ownerLocale(envWith("not json"))).toBe("zh");
+  });
+});
+
+describe("tryT", () => {
+  it("returns undefined for unknown keys", () => {
+    expect(tryT("en", "missing.key")).toBeUndefined();
   });
 });
 

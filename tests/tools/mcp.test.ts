@@ -323,7 +323,7 @@ describe("mcpConnector", () => {
     const connect = mcpConnector(manager, {}, async () => null);
 
     await expect(connect(server({ oauth: true }))).rejects.toThrow(
-      "需要在桌面端登录授权",
+      "MCP_AUTH_REQUIRED",
     );
     expect(registered).toHaveLength(0);
   });

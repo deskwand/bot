@@ -1,6 +1,7 @@
 import { Agent } from "agents";
 import { normalizeServerId } from "agents/mcp/client";
 import { configApprovalMode, type McpServerConfig } from "../config";
+import { ownerLocale } from "../i18n";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import {
   mcpConnector,
@@ -9,6 +10,7 @@ import {
   type McpProbeResult,
 } from "../tools/mcp";
 import { McpAuthStore } from "./auth-store";
+import { McpUserError, mcpUserErrorCode, type McpUserErrorCode } from "./errors";
 import {
   OAuthGrantError,
   beginAuthorization,
@@ -17,13 +19,25 @@ import {
   type OAuthClient,
   type OAuthDeps,
 } from "./oauth";
+import {
+  mcpAuthRequiredText,
+  mcpErrorText,
+  mcpReauthNotice,
+} from "./owner-copy";
 
 export type McpAuthState = "ok" | "needs_reauth" | "unauthorized";
 
+export type McpProbeReasonCode = McpUserErrorCode | "MCP_AUTH_REQUIRED";
+
+export type McpProbeFailure = {
+  ok: false;
+  reason: string;
+  reasonCode?: McpProbeReasonCode;
+  auth?: McpAuthState;
+};
+
 /** Refresh an access token once it has less than this left. */
 const REFRESH_THRESHOLD_MS = 60_000;
-
-const AUTH_REQUIRED = "需要在桌面端登录授权";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -164,15 +178,19 @@ export class McpAuthDO extends Agent<Env> {
    */
   async probe(
     name: string,
-  ): Promise<
-    McpProbeResult | { ok: false; reason: string; auth: McpAuthState }
-  > {
+  ): Promise<McpProbeResult | McpProbeFailure> {
+    const locale = ownerLocale(this.env);
     try {
       const server = this.configuredServer(name);
       if (server.oauth === true) {
         const auth = this.authState(server);
         if (auth !== "ok") {
-          return { ok: false, reason: AUTH_REQUIRED, auth };
+          return {
+            ok: false,
+            reason: mcpAuthRequiredText(locale),
+            reasonCode: "MCP_AUTH_REQUIRED",
+            auth,
+          };
         }
       }
 
@@ -188,6 +206,14 @@ export class McpAuthDO extends Agent<Env> {
         await this.mcp.removeServer(normalizeServerId(server.name));
       }
     } catch (error) {
+      const code = mcpUserErrorCode(error);
+      if (code !== null) {
+        return {
+          ok: false,
+          reason: mcpErrorText(locale, code),
+          reasonCode: code,
+        };
+      }
       return { ok: false, reason: errorMessage(error) };
     }
   }
@@ -233,7 +259,7 @@ export class McpAuthDO extends Agent<Env> {
     try {
       await this.env.BUTLER.get(
         this.env.BUTLER.idFromName("owner"),
-      ).systemNotice(`🔑 ${name} 授权已失效，请在桌面端重新登录`);
+      ).systemNotice(mcpReauthNotice(ownerLocale(this.env), name));
     } catch (error) {
       console.error("mcp auth notice failed:", error);
     }
@@ -249,13 +275,15 @@ export class McpAuthDO extends Agent<Env> {
     const server = readRuntimeConfig(this.env).mcpServers.find(
       (entry) => entry.name === name,
     );
-    if (server === undefined) throw new Error("服务不存在");
+    if (server === undefined) throw new McpUserError("MCP_SERVER_NOT_FOUND");
     return server;
   }
 
   private oauthServer(name: string): McpServerConfig {
     const server = this.configuredServer(name);
-    if (server.oauth !== true) throw new Error("服务不存在或不需要授权");
+    if (server.oauth !== true) {
+      throw new McpUserError("MCP_SERVER_NOT_FOUND_OR_NO_AUTH");
+    }
     return server;
   }
 

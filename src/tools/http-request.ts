@@ -77,7 +77,10 @@ export function isBlockedHost(hostname: string): boolean {
 }
 
 /** Hide URL credentials, query values and fragments in progress and approvals. */
-export function safeRequestUrl(raw: string): string {
+export function safeRequestUrl(
+  raw: string,
+  invalidLabel = "[无效 URL]", // i18n-ignore: default for model-facing callers
+): string {
   try {
     const url = new URL(raw);
     for (const name of [...url.searchParams.keys()]) {
@@ -88,7 +91,7 @@ export function safeRequestUrl(raw: string): string {
     url.hash = "";
     return decodeRedacted(url.toString());
   } catch {
-    return "[无效 URL]";
+    return invalidLabel;
   }
 }
 

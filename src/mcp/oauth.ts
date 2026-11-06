@@ -8,6 +8,7 @@ import {
   type OAuthClientInformationMixed,
   type OAuthClientMetadata,
 } from "@modelcontextprotocol/client";
+import { McpUserError } from "./errors";
 
 /** Everything the OAuth flow needs from the outside world. */
 export type OAuthDeps = {
@@ -94,7 +95,7 @@ export async function beginAuthorization(
     existing !== null && existing.issuer === issuer ? existing : null;
   if (client === null) {
     if (!metadata?.registration_endpoint) {
-      throw new Error("该服务不支持自动注册（DCR）");
+      throw new McpUserError("MCP_DCR_UNSUPPORTED");
     }
 
     const registered = await registerClient(issuer, {

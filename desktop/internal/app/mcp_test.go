@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/i18n/i18ntest"
+	"github.com/deskwand/bot/desktop/internal/mcpadmin"
 	"github.com/deskwand/bot/desktop/internal/platform"
 )
 
@@ -77,6 +79,40 @@ func mcpSnapshot(baseURL, serversJSON string, secretNames []string) domain.Snaps
 		ConfigJSON:   []byte(config),
 		SettingsJSON: settings,
 		SecretNames:  secretNames,
+	}
+}
+
+func TestMcpServerMissingMatchesCodeAndLegacyText(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"code", domain.Error{Code: CodeMcpServerNotFound, Message: "Service not found"}, true},
+		{"legacy text", domain.Error{Code: "MCP_INVALID", Message: mcpServerMissing}, true},
+		{"other code", domain.Error{Code: "MCP_SERVER_NOT_FOUND_OR_NO_AUTH", Message: "服务不存在或不需要授权"}, false},
+		{"other error", errors.New("boom"), false},
+	}
+	for _, testCase := range cases {
+		if got := isMcpServerMissing(testCase.err); got != testCase.want {
+			t.Errorf("%s: isMcpServerMissing(%v) = %v, want %v", testCase.name, testCase.err, got, testCase.want)
+		}
+	}
+
+	probes := []struct {
+		name  string
+		probe mcpadmin.Probe
+		want  bool
+	}{
+		{"code", mcpadmin.Probe{ReasonCode: CodeMcpServerNotFound, Reason: "Service not found"}, true},
+		{"legacy text", mcpadmin.Probe{Reason: mcpServerMissing}, true},
+		{"other reason", mcpadmin.Probe{Reason: "需要在桌面端登录授权"}, false},
+		{"not failed", mcpadmin.Probe{OK: true, ReasonCode: CodeMcpServerNotFound}, false},
+	}
+	for _, testCase := range probes {
+		if got := isMcpProbeMissing(testCase.probe); got != testCase.want {
+			t.Errorf("%s: isMcpProbeMissing(%#v) = %v, want %v", testCase.name, testCase.probe, got, testCase.want)
+		}
 	}
 }
 

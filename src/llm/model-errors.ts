@@ -1,12 +1,11 @@
 import type { EntryRecord } from "@earendil-works/pi-durable";
+import { t, type Locale } from "../i18n";
 
-export const QUOTA_EXHAUSTED_TEXT =
-  "今天的 Cloudflare 免费模型额度已用完（UTC 0 点重置，即北京时间 8 点）。想继续用，可以在桌面端模型页换成自己的模型 key。";
+export const QUOTA_EXHAUSTED_TEXT = t("zh", "llm.quotaExhausted");
 
 export const WORKERS_AI_QUOTA_MARKER = "WORKERS_AI_QUOTA_EXHAUSTED";
 
-export const PAID_PLAN_REQUIRED_TEXT =
-  "当前模型需要 Cloudflare Workers 付费计划，请在桌面端模型页换成免费计划可用的模型（例如默认的 Gemma 4 26B）。";
+export const PAID_PLAN_REQUIRED_TEXT = t("zh", "llm.paidPlanRequired");
 
 export const WORKERS_AI_PAID_PLAN_MARKER = "WORKERS_AI_PAID_PLAN_REQUIRED";
 
@@ -24,6 +23,50 @@ export function isWorkersAiPaidPlanRequired(
   rawProviderError: string,
 ): boolean {
   return PAID_PLAN_REQUIRED_PATTERN.test(rawProviderError);
+}
+
+export function quotaExhaustedText(locale: Locale): string {
+  return t(locale, "llm.quotaExhausted");
+}
+
+export function paidPlanRequiredText(locale: Locale): string {
+  return t(locale, "llm.paidPlanRequired");
+}
+
+/**
+ * Whether a failed run's summary is the quota notice. Bots compare the text
+ * they were handed, which is written in whatever locale was active then.
+ */
+export function isQuotaExhaustedSummary(summary: string): boolean {
+  return summary === quotaExhaustedText("zh") || summary === quotaExhaustedText("en");
+}
+
+export function modelUnavailableText(
+  locale: Locale,
+  provider: string,
+  id: string,
+): string {
+  return t(locale, "llm.modelUnavailable", { provider, id });
+}
+
+export function modelUnavailableShortText(
+  locale: Locale,
+  provider: string,
+  id: string,
+): string {
+  return t(locale, "llm.modelUnavailableShort", { provider, id });
+}
+
+export function modelKeyMissingText(
+  locale: Locale,
+  provider: string,
+  secret: string,
+): string {
+  return t(locale, "llm.modelKeyMissing", { provider, secret });
+}
+
+export function workersAiBindingUnavailableText(locale: Locale): string {
+  return t(locale, "llm.bindingUnavailable");
 }
 
 /**
@@ -53,8 +96,9 @@ export function lastModelError(
 /** The user-facing explanation for a marker rewritten by the wrapper. */
 export function userTextForModelError(
   marker: string | undefined,
+  locale: Locale = "zh",
 ): string | undefined {
-  if (marker === WORKERS_AI_QUOTA_MARKER) return QUOTA_EXHAUSTED_TEXT;
-  if (marker === WORKERS_AI_PAID_PLAN_MARKER) return PAID_PLAN_REQUIRED_TEXT;
+  if (marker === WORKERS_AI_QUOTA_MARKER) return quotaExhaustedText(locale);
+  if (marker === WORKERS_AI_PAID_PLAN_MARKER) return paidPlanRequiredText(locale);
   return undefined;
 }

@@ -71,6 +71,12 @@ export const errors: Messages["errors"] = {
     "The cloud service does not support backup yet; upgrade on Updates first.",
   MCP_ADMIN_UNAVAILABLE: "The cloud admin API is unavailable.",
   MCP_FAILED: "Cloud admin request failed.",
+  MCP_SERVER_NOT_FOUND: "Service not found",
+  MCP_SERVER_NOT_FOUND_OR_NO_AUTH:
+    "The service does not exist or needs no authorization",
+  MCP_DCR_UNSUPPORTED:
+    "This service does not support dynamic client registration (DCR)",
+  MCP_AUTH_REQUIRED: "Sign in on the desktop app to authorize",
   ADMIN_UNAUTHORIZED: "Backup credentials rejected; sign in again.",
   MAINTENANCE_REQUIRED: "The maintenance lease expired; retry.",
   MAINTENANCE_BUSY: "Another backup operation is running.",

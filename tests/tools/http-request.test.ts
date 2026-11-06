@@ -62,6 +62,11 @@ describe("safeRequestUrl", () => {
     expect(url).not.toContain("*");
     expect(url).toBe("https://a.example/x?token=•••&n=•••");
   });
+
+  it("uses the caller's label for an unparsable URL", () => {
+    expect(safeRequestUrl("not a url")).toBe("[无效 URL]");
+    expect(safeRequestUrl("not a url", "[invalid URL]")).toBe("[invalid URL]");
+  });
 });
 
 describe("reviewArgs", () => {

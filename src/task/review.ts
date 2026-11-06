@@ -1,3 +1,5 @@
+import { formatTemplate, t, type Locale } from "../i18n";
+
 /** A single, one-shot review of a write action before it runs. */
 export type ReviewInput = {
   /** What the owner actually asked for, never text produced by the tools. */
@@ -44,10 +46,12 @@ const SYSTEM_PROMPT = `你是一个审批员。你只判断这一次工具调用
 授权范围内的常规写操作返回 allow：例如按要求建文档、写笔记、建 issue、提交表单、调用 API 保存数据。
 拿不准时返回 ask。
 
-只输出一个 JSON：{"verdict":"allow"|"ask","reason":"不超过 60 字的中文"}`;
+只输出一个 JSON：{"verdict":"allow"|"ask","reason":"{reasonLanguage}"}`;
 
-export function reviewSystemPrompt(): string {
-  return SYSTEM_PROMPT;
+export function reviewSystemPrompt(locale: Locale): string {
+  return formatTemplate(SYSTEM_PROMPT, {
+    reasonLanguage: t(locale, "prompt.reviewReasonLanguage"),
+  });
 }
 
 export function reviewUserMessage(input: ReviewInput): string {
@@ -175,6 +179,7 @@ export async function reviewAction(
   input: ReviewInput,
   complete: ReviewComplete,
   signal: AbortSignal,
+  locale: Locale = "zh",
   timeoutMs: number = REVIEW_TIMEOUT_MS,
 ): Promise<ReviewVerdict> {
   signal.throwIfAborted();
@@ -183,7 +188,7 @@ export async function reviewAction(
   const aborted = abortRace(merged);
   try {
     const text = await Promise.race([
-      complete(reviewSystemPrompt(), reviewUserMessage(input), merged),
+      complete(reviewSystemPrompt(locale), reviewUserMessage(input), merged),
       aborted.promise,
     ]);
     // The model may return empty text after being interrupted instead of

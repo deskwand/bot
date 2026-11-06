@@ -9,6 +9,8 @@ import type {
   ToolRegistration,
 } from "@earendil-works/pi-durable";
 import type { ApprovalMode, McpServerConfig } from "../config";
+import { t } from "../i18n";
+import { McpUserError, mcpUserErrorCode } from "../mcp/errors";
 import type { TaskEventBody } from "../protocol";
 import { withApproval, type ApprovalGateLike } from "../task/approvals";
 import { withProgress } from "./wrap";
@@ -86,14 +88,6 @@ type McpContentItem = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** An OAuth server could not be connected because it has no usable token. */
-class McpUnauthorizedError extends Error {
-  constructor() {
-    super("需要在桌面端登录授权");
-    this.name = "McpUnauthorizedError";
-  }
 }
 
 /** Reject instead of hanging when a server never answers. */
@@ -240,7 +234,7 @@ export function mcpConnector(
     let headers = resolveMcpHeaders(server, env);
     if (server.oauth) {
       const token = await bearer(server);
-      if (token === null) throw new McpUnauthorizedError();
+      if (token === null) throw new McpUserError("MCP_AUTH_REQUIRED");
       headers = { ...headers, Authorization: `Bearer ${token}` };
     }
 
@@ -323,7 +317,10 @@ export async function loadMcpTools(
       return;
     }
 
-    const reason = errorMessage(result.reason);
+    const code = mcpUserErrorCode(result.reason);
+    // The notice is model-facing, so coded failures keep the fixed Chinese
+    // text they had before the error message became the code itself.
+    const reason = code === null ? errorMessage(result.reason) : t("zh", `mcp.${code}`);
     console.error(`mcp server ${server.name} unavailable: ${reason}`);
     unavailable.push({ name: server.name, reason });
   });
@@ -441,6 +438,9 @@ export async function probeMcpServer(
       }),
     };
   } catch (error) {
+    // Coded failures travel as-is so the Durable Object can localize them and
+    // report a matching reasonCode.
+    if (mcpUserErrorCode(error) !== null) throw error;
     return { ok: false, reason: errorMessage(error) };
   }
 }
