@@ -20,15 +20,22 @@ export type ModelsConfig = Record<Role, ModelRef> & {
   customProviders?: CustomProviderConfig[];
 };
 
+export type ApprovalMode = "autonomous" | "reviewed";
+
 export type AppConfig = {
   owner: { telegramUserIds: number[] };
   models: ModelsConfig;
   mcpServers: McpServerConfig[];
   locale?: Locale;
+  approvalMode?: ApprovalMode;
 };
 
 export function configLocale(cfg: AppConfig): Locale {
   return cfg.locale ?? "zh";
+}
+
+export function configApprovalMode(cfg: AppConfig): ApprovalMode {
+  return cfg.approvalMode ?? "autonomous";
 }
 
 export function isOwner(cfg: AppConfig, telegramUserId: number): boolean {

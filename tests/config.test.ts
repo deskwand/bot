@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isOwner, needsApproval, type AppConfig } from "../src/config";
+import {
+  configApprovalMode,
+  isOwner,
+  needsApproval,
+  type AppConfig,
+} from "../src/config";
 
 const cfg: AppConfig = {
   owner: { telegramUserIds: [111, 222] },
@@ -24,6 +29,16 @@ describe("isOwner", () => {
 
   it("rejects every id for an empty allowlist", () => {
     expect(isOwner({ ...cfg, owner: { telegramUserIds: [] } }, 111)).toBe(false);
+  });
+});
+
+describe("configApprovalMode", () => {
+  it("defaults to autonomous", () => {
+    expect(configApprovalMode(cfg)).toBe("autonomous");
+  });
+  it("returns an explicit mode", () => {
+    expect(configApprovalMode({ ...cfg, approvalMode: "reviewed" })).toBe("reviewed");
+    expect(configApprovalMode({ ...cfg, approvalMode: "autonomous" })).toBe("autonomous");
   });
 });
 
