@@ -9,16 +9,21 @@ import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messag
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { AuthContext } from "@earendil-works/pi-ai";
 import type { PiModel } from "agents/harness/pi";
+import { ownerLocale } from "../i18n";
 import { readRuntimeConfig, RuntimeConfigError } from "../runtime-config";
 import { BUILTIN_PROVIDERS } from "./catalog.generated";
 import { modelKeyAuth } from "./model-key-auth";
+import {
+  modelKeyMissingText,
+  modelUnavailableText,
+  workersAiBindingUnavailableText,
+} from "./model-errors";
 import {
   MODEL_KEY_PREFIX,
   secretNameFor,
   type CustomProviderConfig,
 } from "./providers";
 import {
-  WORKERS_AI_BINDING_UNAVAILABLE_TEXT,
   WORKERS_AI_PROVIDER_ID,
   workersAiBindingReady,
   workersAiProvider,
@@ -108,13 +113,14 @@ export function modelReadiness(
 ): string | undefined {
   if (modelOverride || testProviders.has(ref.provider)) return undefined;
 
+  const locale = ownerLocale(env);
   const workersAi = ref.provider === WORKERS_AI_PROVIDER_ID;
   if (workersAi && !workersAiBindingReady(env)) {
-    return WORKERS_AI_BINDING_UNAVAILABLE_TEXT;
+    return workersAiBindingUnavailableText(locale);
   }
 
   if (!models.getModel(ref.provider, ref.id)) {
-    return `模型 ${ref.provider}/${ref.id} 不可用，请在桌面端模型页重新选择`;
+    return modelUnavailableText(locale, ref.provider, ref.id);
   }
 
   if (workersAi) return undefined;
@@ -122,7 +128,7 @@ export function modelReadiness(
   const secretName = secretNameFor(ref.provider);
   const key = (env as unknown as Record<string, string | undefined>)[secretName];
   if (!key?.trim()) {
-    return `模型 ${ref.provider} 没有配置 key（${secretName}），请在桌面端模型页填写`;
+    return modelKeyMissingText(locale, ref.provider, secretName);
   }
 
   return undefined;

@@ -37,9 +37,6 @@ export const WORKERS_AI_PROVIDER_ID = "workers-ai";
 export const WORKERS_AI_BASE_URL =
   "https://workers-binding.ai/ai-gateway/gateways/default/workers-ai/v1";
 
-export const WORKERS_AI_BINDING_UNAVAILABLE_TEXT =
-  "Workers AI binding 不可用，请在桌面端重新部署";
-
 /**
  * Binding calls are pre-authenticated in-account. The sentinel satisfies the
  * SDK's auth-header check, while the nulls drop the placeholder auth headers

@@ -1364,7 +1364,7 @@ export class ButlerDO extends Agent<Env> {
         }
       }
       await this.sendBestEffort({
-        text: userTextForModelError(modelError) ?? errorNotice(locale),
+        text: userTextForModelError(modelError, locale) ?? errorNotice(locale),
       });
       this.kickReconcile();
       return;

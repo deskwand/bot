@@ -1,0 +1,42 @@
+export const task = {
+  progress: {
+    search: "搜索：{query}",
+    artifact: "读取产物：{ref}",
+    time: "查看时间",
+    read: "读取：{url}",
+    save: "保存：{filename}",
+  },
+  state: {
+    queued: "排队中",
+    running: "运行中",
+    completed: "完成",
+    failed: "失败",
+    cancelled: "取消",
+  },
+  control: {
+    steerNotStarted: "任务尚未开始，无法追加指令",
+    steerBlocked: "任务 {taskId} 已{state}，无法追加指令",
+    steerOk: "已向任务 {taskId} 追加指令",
+    cancelNotStarted: "任务尚未开始，无法取消",
+    cancelBlocked: "任务 {taskId} 已{state}，无法取消",
+    cancelOk: "任务 {taskId} 已取消",
+    retryNotStarted: "任务尚未开始，无法重试",
+    retryBlocked: "任务 {taskId} 已{state}，无法重试",
+    retryNotRetryable: "任务 {taskId} 的失败不可重试",
+    retryOk: "任务 {taskId} 已重新开始",
+    missingApprovalId: "缺少审批编号",
+  },
+  notice: {
+    parked: "任务反复中断，已暂停",
+    incomplete: "任务未完成",
+  },
+  approval: {
+    proposeRules: "理由：{reason}\n新守则：\n{rules}",
+    clearedRules: "（清空守则）",
+    handled: "该审批已处理或已失效",
+    expired: "该审批已失效",
+    approved: "已批准",
+    rejected: "已拒绝",
+    autoApproved: "✔️ 自动放行 {tool}：{reason}",
+  },
+} as const;
