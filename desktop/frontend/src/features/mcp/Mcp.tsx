@@ -20,6 +20,7 @@ import { toClientError } from "@/services/errors";
 import { useConfigQuery, useInvalidate, useMcpCatalogQuery } from "@/services/queries";
 import type { ConfigDTO, McpAddInput, McpProbeDTO, McpToolDTO } from "@/services/types";
 import { McpAddDialog } from "./McpAddDialog";
+import { ApprovalModeSwitch } from "./ApprovalModeSwitch";
 import { McpToolList } from "./McpToolList";
 
 const AUTH_POLL_MS = 2000;
@@ -417,6 +418,14 @@ export function Mcp() {
       <ErrorAlert error={loadError} onRetry={() => void reload()} />
       <ErrorAlert error={catalogError} onRetry={() => void reload()} />
       <ErrorAlert error={error} />
+      {configData ? (
+        <ApprovalModeSwitch
+          config={configData}
+          disabled={!ready || !configData.configPresent}
+          onPublished={() => void configQuery.refetch()}
+          onError={setError}
+        />
+      ) : null}
       {enabledToolCount > TOOL_WARNING_THRESHOLD ? (
         <Alert className="my-4" data-testid="mcp-tool-warning">
           <AlertTitle>{t("mcp.tooManyToolsTitle")}</AlertTitle>

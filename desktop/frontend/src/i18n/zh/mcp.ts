@@ -5,6 +5,11 @@ export const mcp = {
   addNamed: "添加 {name}",
   addAction: "添加",
   adminUnavailable: "云端管理接口不可用",
+  approvalMode: {
+    label: "自主执行：写操作不审批",
+    description:
+      "打开后，机器人发出的写请求和 MCP 写工具直接执行，只在进度里留记录。手动设为「要审」的工具和机器人修改守则仍需你确认。",
+  },
   tooManyToolsTitle: "工具较多",
   tooManyToolsDescription: "工具过多会拖慢任务、增加费用，建议停用用不到的。",
   empty: "还没有接入服务。从目录添加，或填自定义 URL。",
