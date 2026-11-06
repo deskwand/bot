@@ -184,6 +184,7 @@ export class TaskDO extends Agent<Env> {
           },
           this.completeReview,
           signal,
+          ownerLocale(this.env),
         ),
       (text) => this.emitProgress({ type: "progress", text }),
       () => ownerLocale(this.env),
@@ -210,7 +211,10 @@ export class TaskDO extends Agent<Env> {
       sections: [
         {
           key: "task",
-          render: () => (this.spec ? taskSystemPrompt(this.spec) : undefined),
+          render: () =>
+            this.spec
+              ? taskSystemPrompt(ownerLocale(this.env), this.spec)
+              : undefined,
         },
       ],
     });

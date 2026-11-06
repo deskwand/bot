@@ -258,7 +258,8 @@ export class ButlerDO extends Agent<Env> {
       sections: [
         {
           key: "butler",
-          render: () => butlerSystemPrompt(enabledServices(this.env)),
+          render: () =>
+            butlerSystemPrompt(ownerLocale(this.env), enabledServices(this.env)),
         },
         {
           key: "memory",

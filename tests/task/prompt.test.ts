@@ -12,7 +12,7 @@ function spec(botId?: string) {
 
 describe("taskSystemPrompt", () => {
   it("teaches bot runs to keep their documents", () => {
-    const prompt = taskSystemPrompt(spec("b1"));
+    const prompt = taskSystemPrompt("zh", spec("b1"));
 
     expect(prompt).not.toContain("b1");
     expect(prompt).toContain("propose_rules");
@@ -22,9 +22,20 @@ describe("taskSystemPrompt", () => {
   });
 
   it("leaves ordinary tasks without bot wording", () => {
-    const prompt = taskSystemPrompt(spec());
+    const prompt = taskSystemPrompt("zh", spec());
 
     expect(prompt).toContain("Instructions from the user:");
     expect(prompt).not.toContain("propose_rules");
+  });
+
+  it("task prompt ends with the reply language", () => {
+    expect(
+      taskSystemPrompt("en", spec()).endsWith(
+        "Always reply to the owner in English.",
+      ),
+    ).toBe(true);
+    expect(taskSystemPrompt("zh", spec()).endsWith("始终用中文回复主人。")).toBe(
+      true,
+    );
   });
 });
