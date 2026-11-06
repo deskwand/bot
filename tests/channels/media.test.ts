@@ -8,17 +8,7 @@ import {
   prepareInboundImage,
   sniffImageType,
 } from "../../src/channels/media";
-
-/** 真实的 8×8 纯色 PNG：Photon 能解码，且符合额度会被原样返回。 */
-const PNG_B64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mM4YWODFTEMLQkAZZlQAS/gME0AAAAASUVORK5CYII=";
-
-function bytes(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-  return out;
-}
+import { PNG_B64, bytes } from "../helpers/images";
 
 
 function crc32(bytes: Uint8Array): number {
