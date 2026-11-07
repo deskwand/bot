@@ -31,6 +31,8 @@ export type MessageEvent = {
   imageFailed?: boolean;
   /** 消息是语音，但没能转成文字。 */
   voiceFailed?: boolean;
+  /** 这条消息引用（回复）的那条消息的文本；渠道取不到时缺省。 */
+  quotedText?: string;
   eventId: string;
 };
 

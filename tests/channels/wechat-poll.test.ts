@@ -653,6 +653,58 @@ describe("pollWeChat", () => {
     ]);
   });
 
+  it("carries the quoted message text to the butler", async () => {
+    setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
+    await channels().ensurePolling();
+    await cancelSchedules();
+    const { fetchImpl } = scriptedILink([
+      jsonResponse({
+        get_updates_buf: "cursor-quote",
+        msgs: [
+          {
+            message_id: "q1",
+            from_user_id: OWNER,
+            context_token: "ctx-quote",
+            message_type: 1,
+            item_list: [
+              {
+                type: 1,
+                text_item: { text: "那明天再看" },
+                ref_msg: {
+                  title: "",
+                  message_item: {
+                    type: 1,
+                    text_item: { text: "🤖 盯盘：价格回落了" },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+    setILinkFetchOverride(fetchImpl);
+    const events = await captureButler();
+
+    await pollThroughDO();
+
+    const route = await channels().currentRoute();
+    await vi.waitFor(() => {
+      expect(events).toEqual([
+        {
+          type: "message",
+          channel: "wechat",
+          chatId: OWNER,
+          userId: OWNER,
+          text: "那明天再看",
+          quotedText: "🤖 盯盘：价格回落了",
+          eventId: "wx:q1",
+          routeKey: route.routeKey,
+        },
+      ]);
+    });
+  });
+
   it("reads the text WeChat already recognized for a voice message", async () => {
     setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
     await channels().ensurePolling();
