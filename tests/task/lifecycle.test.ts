@@ -1026,7 +1026,15 @@ describe("TaskDO skills", () => {
     const stub = task(taskId);
 
     // A failed submit leaves the object queued; the caller reports the failure.
-    await expect(stub.start(spec(taskId))).rejects.toThrow("submit failed");
+    // Consume the rejection explicitly rather than with `expect().rejects`: the
+    // DO RPC wrapper reports an unhandled rejection for a rejected call that
+    // `expect` only observes later, which fails the file despite every test
+    // passing. `.then(ok, err)` attaches the handler synchronously.
+    const failure = await stub.start(spec(taskId)).then(
+      () => null,
+      (error: Error) => error,
+    );
+    expect(failure?.message).toBe("submit failed");
     expect((await stub.status()).state).toBe("queued");
     // The library changed after the first scan; a retry must not pick it up.
     await env.ARTIFACTS.put("skills/once/SKILL.md", entry("once", "New text"));
