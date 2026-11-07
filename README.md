@@ -326,7 +326,7 @@ Telegram 由 Worker 主动长轮询收消息，本地调试不需要公网地址
 仓库同时包含 macOS / Windows 桌面客户端（Go + MyGo + React），让用户无需 Node.js、Git、Wrangler 或 Go 即可通过 Cloudflare API 部署和管理本项目：
 
 - 用户安装、Cloudflare OAuth 登录、部署 / 接管、消息入口、保存并发布、状态含义、CLI 共存与重新授权：[`docs/desktop-client.md`](docs/desktop-client.md)
-- 维护者密钥、macOS / Windows 打包、签名与公证、客户端更新源与发布工作流（`.github/workflows/desktop-release.yml`）：[`docs/desktop-client.md`](docs/desktop-client.md) 的维护者章节
+- 维护者密钥、macOS / Windows 打包、签名与公证、客户端更新源与本机发布流程（`npm run release:desktop -- --platform both`）：[`docs/desktop-client.md`](docs/desktop-client.md) 的维护者章节
 - 平台验收、PASS / FAIL / NOT RUN 证据：[`docs/verification/desktop-acceptance.md`](docs/verification/desktop-acceptance.md)
 - 本机构建：`npm run build:desktop`（需要 Worker 发布签名私钥；产物在 `desktop/build/`）
 

@@ -284,14 +284,25 @@ install -m 600 "$tmpdir/mygo-update.key" "$HOME/.deskwand-bot/client-update.key"
 
 ### 12.2 构建 Worker 发布包和桌面安装包
 
-在本机完成签名 Worker 发布包、嵌入和 macOS 打包（只适用于宿主 macOS；Windows 包只在 CI 构建，见下文）：
+在本机完成签名 Worker 发布包、嵌入和安装包打包：
 
 ```bash
 DESKWAND_RELEASE_SIGNING_KEY_FILE=/secure/release-signing-key.pem \
-  npm run build:desktop
+  npm run build:desktop                       # macOS（默认）
+
+DESKWAND_RELEASE_SIGNING_KEY_FILE=/secure/release-signing-key.pem \
+  npm run build:desktop -- --platform windows # Windows amd64，macOS 上交叉构建
 ```
 
-产物在 `desktop/build/<os>-<arch>/`。
+`--platform macos|windows` 选择打包目标，默认 `macos`，产物在 `desktop/build/<os>-<arch>/`。
+
+Windows 目标先准备并嵌入签名 Worker 包，再 `npm --prefix desktop/frontend run generate`、`npm --prefix desktop/frontend run build`，最后在 `desktop/frontend` 执行 `npx mygo build -skip-build-command -platform windows/amd64 ..`。需要三个本机条件：
+
+- `makensis`（NSIS 3.12）：Windows 上 MyGo 会下载或使用已安装的 NSIS；macOS/Linux 交叉构建必须有本机 `makensis`，缺失时脚本直接失败；
+- 客户端更新私钥 `$HOME/.deskwand-bot/client-update.key`（可用 `DESKWAND_CLIENT_UPDATE_KEY_FILE` 覆盖）：脚本以 `MYGO_UPDATER_PRIVATE_KEY` 传给 MyGo，缺失就不会生成 `update-windows-amd64.json`；
+- UTF-8 locale：NSIS 在 `LC_ALL=C` 或 `LANG=""` 下会 `std::bad_alloc` 崩溃，脚本只对 windows 构建的子进程设 `LANG`/`LC_ALL=en_US.UTF-8`，macOS 打包不受影响。
+
+0.1.25 已在本机实测通过（macOS arm64 交叉构建 windows/amd64）：`desktop/build/windows-amd64/DeskWand Bot.exe`（30.2 MB）、`deskwand-bot-setup-0.1.25-amd64.exe`（7.9 MB）、`deskwand-bot-0.1.25-windows-amd64.tar.gz`（10.2 MB）、`update-windows-amd64.json`、`install.ps1`，共享校验和 `desktop/build/SHA256SUMS`。构建通过只说明产物能生成；安装、运行、WebView2 与自动更新仍未验收。
 
 发布包 manifest 的 `upgrade.minFromVersion` 是能直接升级到本版本的最低版本，由 `build:desktop` 传入，默认 `0.1.0`（首个对外发布版本），可用 `DESKWAND_MIN_FROM_VERSION` 覆盖。它必须不高于本次发布的版本号，否则构建直接失败：那样的 manifest 会让旧部署永远报 `UPGRADE_REQUIRES_INTERMEDIATE`。只有当某个版本要求先经过中间版本时才提高它。
 
@@ -299,9 +310,7 @@ DESKWAND_RELEASE_SIGNING_KEY_FILE=/secure/release-signing-key.pem \
 - macOS：`.app` + `.dmg`，`minimumSystemVersion` 12.0；
 - Windows：NSIS 安装器，当前用户安装，不需要管理员权限。
 
-macOS 默认 ad-hoc 签名，仅适合本机或内部测试。Windows 安装器需要 NSIS：Windows 上 MyGo 会下载或使用已安装的 NSIS；macOS/Linux 交叉构建需要本机 `makensis`，否则跳过安装器。
-
-Windows 包只在 CI 的 `windows-latest` 上构建，本地脚本不做交叉构建。本机曾出现 `makensis` 崩溃，因此不提供 `build:desktop:windows` 脚本；要检查 Windows 产物，用发布工作流的 `dry-run` 模式跑到 `windows-latest`，产物作为 artifact 下载审阅。
+macOS 默认 ad-hoc 签名，仅适合本机或内部测试。
 
 **应用图标**：母版是 `desktop/icon/icon.svg`（轨道星球，设计见 `docs/superpowers/specs/2026-11-02-app-icon-design.md`）。`desktop/mygo.json` 的 `icon` 指向 `icon/icon.png`，MyGo 由它生成 macOS `.icns` 与 Windows `.ico`。修改图标：改 SVG → 运行 `bash desktop/scripts/render-icon.sh` → 同时提交 SVG 与 PNG。渲染需要本机 Google Chrome（可用 `CHROME=` 指定路径）；构建只读已提交的 PNG，不需要 Chrome。图标源文件不放在 `desktop/resources/`：MyGo 会把该目录的全部内容打进应用。`desktop/icon_test.go` 校验 PNG 尺寸、透明角和关键配色。
 
@@ -340,35 +349,32 @@ Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配�
 
 **CHANGELOG 约定**：每次发布前在 `desktop/CHANGELOG.md` 加一节 `## <version>`（也可以写成 `## [<version>] - YYYY-MM-DD`）。`desktop/mygo.json`、`desktop/main.go` 的 `appVersion`、`desktop/frontend/package.json` 三处版本号必须与它一致，发布预检会拒绝缺失或不一致的版本。
 
-**发布**：
+**发布入口是本机脚本**，不是 CI：
 
 ```bash
-npm run release:desktop -- --dry-run   # 只打印步骤与将要上传的文件
-npm run release:desktop                # 拒绝执行：本地脚本不再上传
+npm run release:desktop -- --dry-run            # 只打印，不联网、不读凭据、不构建
+npm run release:desktop                         # 按宿主平台发布（macOS 上是 macos）
+npm run release:desktop -- --platform macos
+npm run release:desktop -- --platform windows
+npm run release:desktop -- --platform both      # 先 macOS 后 Windows
 ```
 
-`scripts/release-desktop.sh` 只保留打印式 `--dry-run`：按宿主平台推导 target，读取 `desktop/mygo.json` 的版本，打印这次发布会用到的 manifest、归档与安装包名。它不构建、不联网、不读私钥或 R2 凭据、不上传；不带参数或参数不是 `--dry-run` 时直接失败。内部测试包使用发布工作流的 dry-run artifact，不再由本地脚本产出。
+`--platform macos|windows|both` 默认为宿主平台（macOS 上是 `macos`，Windows 上是 `windows`），其他取值直接失败。`--dry-run` 只打印版本、目标顺序、manifest 与将要上传的文件名，不检查密钥、不读 R2 凭据、不联网、不构建。
 
-正式发布走 `.github/workflows/desktop-release.yml`：`workflow_dispatch` 输入版本号、平台（`both`/`macos`/`windows`）、模式（`dry-run`/`publish`）与确认词。`macos` job 跑在 `macos-15`（arm64），`windows` job 跑在 `windows-latest`，两者顺序执行：先 macOS 后 Windows，因为 mygo 上传 `SHA256SUMS` 前会读取线上文件再合并，并发会互相覆盖。`publish` 必须输入 `PUBLISH`，两种模式都挂在受保护的 `release` environment 上需要人工批准，因为 dry-run 也使用正式签名私钥；dry-run 不注入 R2 凭据，只产出 artifact。`macos` job 从 `macos-14` 迁到 `macos-15`：GitHub 已于 2026-11-02 退役 macOS 14 runner，官方公告（https://github.blog/changelog/2026-10-01-github-actions-macos-14-runner-image-retirement/）建议迁移到 arm64 的 `macos-15`；job 内仍断言 `uname -m` 为 `arm64`，架构不符时直接失败。
+正式发布的顺序（`scripts/release-desktop.sh`）：
 
-两模式共同的前提：`release` environment 已配置 required reviewers（首次 dispatch 前必须先建好，否则不存在任何批准保证）、`DESKWAND_RELEASE_SIGNING_KEY`（已有的 Worker 发布签名私钥）、`DESKWAND_CLIENT_UPDATE_KEY`（客户端更新私钥）；`publish` 还需要 `AWS_ACCESS_KEY_ID` 与 `AWS_SECRET_ACCESS_KEY`（R2）。secret 缺失时工作流直接失败，不会用开发密钥伪造正式产物。`desktop-build.yml` 仍从 repository 级 secret 读取 `DESKWAND_RELEASE_SIGNING_KEY`，它的可见范围不因新增 environment 而改变。
-
-工作流按以下顺序执行（两个 job 相同）：
-
-1. `npm ci` 与前端 `npm ci`；
-2. `check:i18n`、根 `typecheck`、`tests-node/desktop-release.test.ts`、`go vet ./...` + `go test -race ./...`（Windows job 先断言 runner 是 `x86_64` 且 `gcc` 可用，以 `CGO_ENABLED=1` 跑 race；缺失即失败）；
+1. `git status --porcelain` 必须为空；
+2. Worker 发布私钥（`$HOME/.deskwand-bot/release-signing-key.pem`）与客户端更新私钥（`$HOME/.deskwand-bot/client-update.key`）必须存在；
 3. `desktop-release.ts preflight <version>`：三处版本一致、CHANGELOG 含当前版本；
-4. `desktop-release.ts check-remote <target> <version>`：只有 404 视为该平台首发，线上版本相同或更高都拒绝；
-5. 把 Worker 发布私钥写入 `$RUNNER_TEMP` 下的临时文件（`chmod 600`），job 结束时删除；客户端更新私钥不落盘，只作为 `MYGO_UPDATER_PRIVATE_KEY` 环境变量传给构建步骤；
-6. `prepare_worker_bundle` 生成并签名 Worker 发布包、嵌入客户端 → `npm --prefix desktop/frontend run generate` 生成 MyGo TS 绑定 → `npm --prefix desktop/frontend run build`。顺序不能换：`mygo build -skip-build-command` 不会重新构建已经打包的前端，但仍可能生成绑定，所以必须先显式 `generate`；
-7. `publish` 用 `mygo build -skip-build-command -upload` 上传；`dry-run` 只构建，不读 R2 凭据；
-8. 断言本平台目录下的归档、`update-<target>.json`、`install.sh` / `install.ps1` 与 dmg / setup exe 都存在，且共享的 `desktop/build/SHA256SUMS` 存在；
-9. `publish` 再跑 `verify`：manifest 的版本、归档大小与 SHA-256，以及 dmg / 安装脚本与公网 `SHA256SUMS` 逐字节核对；Windows job 在 `platforms=both` 时额外带上 `darwin-arm64` 参数，校验共享 `SHA256SUMS` 里仍保留 macOS 归档的校验行；
-10. `prepare` 步骤成功且 job 未被取消时（`!cancelled() && steps.prepare.outcome == 'success'`），把本平台构建目录与 `SHA256SUMS` 存成 artifact（保留 14 天），供审阅与恢复；prepare 之前就失败时没有 artifact 可存。
+4. 按目标顺序逐个 `desktop-release.ts check-remote <target> <version>`：只有 404 视为该平台首发，线上同版本或更高都拒绝；
+5. 逐目标 `bash scripts/build-desktop.sh --platform <target>`：脚本自己生成并签名 Worker 发布包、嵌入客户端，再打包本平台产物（两个目标就签名两次，属于可接受的重复）；
+6. 从 `~/.mc/config.json` 的 `aliases.r2` 读取 R2 凭据（`accessKey` / `secretKey`），凭据只存在于脚本内存与上传子 shell 的环境里，不打印、不写盘；
+7. 逐目标在 `desktop/frontend` 执行 `npx mygo build -skip-build-command -platform <darwin/arm64|windows/amd64> -upload ..`。两个平台都要 `MYGO_UPDATER_PRIVATE_KEY`，Windows 还要 `LANG`/`LC_ALL=en_US.UTF-8`；
+8. 逐目标 `desktop-release.ts verify <target> <version> <buildDir>`：manifest 版本、归档大小与 SHA-256、安装包与安装脚本对公网 `SHA256SUMS` 逐字节核对；`--platform both` 时 Windows 额外带上 `darwin-arm64`，确认共享 `SHA256SUMS` 仍保留 macOS 行。
 
-**单平台重试**：一个平台已发布、另一个还没发时，重新 dispatch 并选那个平台（例如 `platforms=windows`）。`macos` job 被 skip、`windows` job 照常执行，所以不会被 macOS 的同版本检查阻断；`platforms=both` 时 macOS 失败会连带跳过 Windows。
+两个平台严格顺序执行（先 macOS 后 Windows），不并发：`mygo build -upload` 上传 `SHA256SUMS` 前会读取线上文件再合并，并发会互相覆盖。脚本从不删除 R2 上的任何对象，manifest 最后上传，中途失败不会让已安装的客户端看到缺文件的版本。
 
-**同版本只读重验**：若某平台 manifest 已写成该版本而 `verify` 失败，先从原 run 下载保存的 artifact，对原产物运行 `verify <target> <version> <buildDir>` 只读重验；不得重建同版本再上传覆盖。产物对不上就停下人工诊断，修复用新版本发布。
+**半发布恢复**：一个平台已经发布、另一个失败时，用 `--platform <macos|windows>` 单独重跑那个平台，不要重跑已成功的平台。若某平台 manifest 已写成该版本而 `verify` 失败，对原产物只读重验：`node --experimental-strip-types scripts/desktop-release.ts verify <target> <version> <buildDir>`；不得重建同版本再上传覆盖，对不上就停下人工诊断，修复走新版本。
 
 **R2 布局**（`my-update-assets/bot/`）：
 
@@ -385,28 +391,24 @@ update-darwin-arm64.json                             macOS manifest，最后上�
 update-windows-amd64.json                            Windows manifest，最后上传
 ```
 
-旧版本文件全部保留：MyGo 生成 delta 需要前 3 个版本的归档，工作流从不删除 R2 上的对象。manifest 最后上传，中途失败不会让已安装的客户端看到缺文件的版本；发布后核验不一致时 `verify` 报错并提示人工处理，不回滚、不删除。
+旧版本文件全部保留：MyGo 生成 delta 需要前 3 个版本的归档，发布脚本从不删除 R2 上的对象。manifest 最后上传，中途失败不会让已安装的客户端看到缺文件的版本；发布后核验不一致时 `verify` 报错并提示人工处理，不回滚、不删除。
 
 **首次上线**：0.1.5 及更早的版本没有更新器，第一个带自动更新的版本需要用户手动下载 dmg 安装，之后才会自动更新。Windows 在 0.1.25 首次发布，同样需要先手动跑一次 NSIS 安装器。ad-hoc 签名下，自动更新不受 Gatekeeper 拦截，但首次手动安装 dmg 仍会提示「无法验证开发者」；Windows 安装器未签名，可能触发 SmartScreen 警告。
 
-### 12.5 CI
+### 12.5 CI（只做验证）
+
+CI 不发布。发布入口是 12.4 的本机脚本；CI 只验证代码与构建链。
 
 `.github/workflows/desktop-build.yml` 是验证工作流，在 `macos-latest` 和 `windows-latest` 上：
 
 - 使用 `desktop/go.mod` 的 Go 版本和 Node 26；
 - 运行根目录 typecheck/tests、Go vet/tests、前端 typecheck/build/Playwright；
 - 从仓库 secret `DESKWAND_RELEASE_SIGNING_KEY` 读取 Worker 发布私钥并写入临时文件，步骤退出时删除；
-- 只在 **push 或手动触发**且 secret 存在时签名、打包并上传安装产物；`pull_request` 只跑测试；
-- 不创建 tag、不发布 release，权限只有 `contents: read`；
+- 只在 **push 或手动触发**且 secret 存在时签名、打包并上传安装产物作为 artifact；`pull_request` 只跑测试；
+- 不创建 tag、不发布 release、不写 R2，权限只有 `contents: read`；
 - 使用固定到 commit SHA 的 GitHub Actions。
 
-`.github/workflows/desktop-release.yml` 是唯一的发布工作流，只能手动触发：
-
-- `dry-run` 模式构建所选平台、不写 R2，也使用受保护的 `release` environment，产物作为 artifact 供审阅；首次接入 Windows 时必须先跑通它；
-- `publish` 模式要求 `confirm` 等于 `PUBLISH`，并挂在受保护的 `release` environment 上；
-- 两个 job 顺序执行，`macos-15` 先、`windows-latest` 后；
-- Windows job 先断言 runner 是 `x86_64` 且 `gcc` 可用，以 `CGO_ENABLED=1` 跑 `go test -race`；工具链缺失时必须失败；
-- secret 缺失时工作流失败，不会用开发密钥伪造正式产物。
+历史说明：2026-11-07 曾新增 `.github/workflows/desktop-release.yml` 想做 CI 发布，该工作流已按用户方向调整撤回；R2 凭据、更新私钥与发布顺序现在只在本机脚本里。`desktop-build.yml` 不在撤回范围内。
 
 ### 12.6 验收记录
 
@@ -415,4 +417,4 @@ update-windows-amd64.json                            Windows manifest，最后�
 - `docs/verification/2026-11-01-client-capabilities.md`
 - `docs/verification/desktop-acceptance.md`
 
-控制面单元测试、本机打包和 Playwright 通过，都不等于干净机器安装或真实微信 / Telegram 收发已经验收。Windows 的发布工作流只做过本地语法与结构校验：`release` environment 与 secrets 配置、任何 dispatch、R2 上传和 Windows 真机行为都是 NOT RUN。根目录完整 `npm test` 当前为 FAIL（workerd 阶段测试全过，但有两个未处理错误导致 Node 阶段没有执行），细节记在 `docs/verification/desktop-acceptance.md`。
+控制面单元测试、本机打包和 Playwright 通过，都不等于干净机器安装或真实微信 / Telegram 收发已经验收。Windows 安装包已在本机构建通过（0.1.25，见 12.2），但 Windows 实机安装与运行、WebView2 缺失表现、自动更新替换，以及任何 R2 上传或公开发布仍是 NOT RUN。根目录完整 `npm test` 当前为 FAIL（workerd 阶段测试全过，但有两个未处理错误导致 Node 阶段没有执行），细节记在 `docs/verification/desktop-acceptance.md`。
