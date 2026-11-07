@@ -29,6 +29,7 @@
       { "name": "BUTLER", "class_name": "ButlerDO" },
       { "name": "TASK", "class_name": "TaskDO" },
       { "name": "BOT", "class_name": "BotDO" },
+      { "name": "BOT_CHAT", "class_name": "BotChatDO" },
       { "name": "CHANNELS", "class_name": "ChannelDO" },
       { "name": "MCP_AUTH", "class_name": "McpAuthDO" }
     ]
@@ -49,6 +50,10 @@
     {
       "tag": "v4",
       "new_sqlite_classes": ["McpAuthDO"]
+    },
+    {
+      "tag": "v5",
+      "new_sqlite_classes": ["BotChatDO"]
     }
   ],
   "triggers": {

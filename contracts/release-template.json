@@ -9,6 +9,7 @@
     { "name": "BUTLER", "className": "ButlerDO" },
     { "name": "TASK", "className": "TaskDO" },
     { "name": "BOT", "className": "BotDO" },
+    { "name": "BOT_CHAT", "className": "BotChatDO" },
     { "name": "CHANNELS", "className": "ChannelDO" },
     { "name": "MCP_AUTH", "className": "McpAuthDO" }
   ],
@@ -57,6 +58,10 @@
     {
       "tag": "v4",
       "newSqliteClasses": ["McpAuthDO"]
+    },
+    {
+      "tag": "v5",
+      "newSqliteClasses": ["BotChatDO"]
     }
   ],
   "installParameters": [

@@ -40,6 +40,11 @@ export const butler = {
     imageModel: "当前模型不支持图片，请在桌面端模型页换成支持视觉的模型",
     bot: "🤖 {name}：{text}",
   },
+  botChat: {
+    deleted: "这个机器人已经删除了",
+    rulesUpdated: "已更新守则：{rules}",
+    rulesDeleted: "已删除守则",
+  },
   resolution: {
     noActiveTask: "#{handle} 当前没有进行中的任务",
     noPendingApproval: "{label} 没有待审批",

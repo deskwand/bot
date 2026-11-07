@@ -6,6 +6,7 @@
   "src/butler/tools.ts",
   "src/butler/bot-tools.ts",
   "src/bot/bot-tools.ts",
+  "src/bot/bot-chat-tools.ts",
   "src/butler/memory.ts",
   "src/bot/docs.ts",
   "src/butler/schedules.ts",
