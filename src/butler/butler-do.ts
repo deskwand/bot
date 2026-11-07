@@ -12,6 +12,7 @@ import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { ownerLocale, t, type Locale } from "../i18n";
 import { isInboxKey } from "../channels/inbox";
+import { parseActiveChannel } from "../channels/route-identity";
 import type { TextAction } from "../channels/text-action";
 import type {
   DbSchema,
@@ -283,7 +284,11 @@ export class ButlerDO extends Agent<Env> {
         {
           key: "butler",
           render: () =>
-            butlerSystemPrompt(ownerLocale(this.env), enabledServices(this.env)),
+            butlerSystemPrompt(
+              ownerLocale(this.env),
+              enabledServices(this.env),
+              parseActiveChannel(this.env.ACTIVE_CHANNEL),
+            ),
         },
         {
           key: "memory",

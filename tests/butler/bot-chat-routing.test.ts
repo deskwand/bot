@@ -335,7 +335,7 @@ describe("bot chat routing", () => {
 
 describe("butler prompt bot chat line", () => {
   it("tells the owner how to reach a bot directly", () => {
-    const prompt = butlerSystemPrompt("zh", []);
+    const prompt = butlerSystemPrompt("zh", [], "telegram");
     expect(prompt).toContain("@名字");
     expect(prompt).toContain("直接回复机器人消息");
   });
