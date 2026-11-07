@@ -257,6 +257,10 @@ func guardMissingWebView(goos string, available func() bool, prompt, quit func()
 	if goos != "windows" || !platform.NeedsWebViewRuntimePrompt(goos, available()) {
 		return false
 	}
+	// Without the runtime there is no page to show, so the only useful step is
+	// to explain why and end the launch: the log says so even when the dialog
+	// itself cannot appear.
+	log.Printf("WebView2 Runtime is missing on %s; showing the install prompt and quitting", goos)
 	defer quit()
 	prompt()
 	return true

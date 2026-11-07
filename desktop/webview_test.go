@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"log"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo"
@@ -105,6 +109,60 @@ func TestGuardMissingWebViewQuitsOnceOnEveryChoice(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGuardMissingWebViewIgnoresOtherButtons keeps a negative or out-of-range
+// button index from opening the download page: only the first button asks for
+// it, any other answer just closes the launch.
+func TestGuardMissingWebViewIgnoresOtherButtons(t *testing.T) {
+	for _, button := range []int{-1, 2, 99} {
+		t.Run(strconv.Itoa(button), func(t *testing.T) {
+			run := runWebViewGuard("windows", false, i18n.EN, button, nil, nil)
+
+			if !run.handled {
+				t.Fatal("guardMissingWebView handled = false, want true on Windows without the runtime")
+			}
+			if len(run.options) != 1 {
+				t.Errorf("dialog calls = %d, want 1", len(run.options))
+			}
+			if len(run.opened) != 0 {
+				t.Errorf("openExternal calls = %v, want none for button %d", run.opened, button)
+			}
+			if run.quits != 1 {
+				t.Errorf("quit calls = %d, want exactly 1", run.quits)
+			}
+		})
+	}
+}
+
+// TestGuardMissingWebViewLogsBeforeThePrompt records that the missing runtime is
+// stated in the log, in English, before the dialog opens and the app quits.
+func TestGuardMissingWebViewLogsBeforeThePrompt(t *testing.T) {
+	var logs bytes.Buffer
+	original := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(original) })
+
+	var loggedAtPrompt string
+	quit := 0
+	handled := guardMissingWebView("windows", func() bool { return false }, func() {
+		loggedAtPrompt = logs.String()
+	}, func() { quit++ })
+
+	if !handled {
+		t.Fatal("guardMissingWebView handled = false, want true on Windows without the runtime")
+	}
+	if quit != 1 {
+		t.Errorf("quit calls = %d, want exactly 1", quit)
+	}
+	recorded := logs.String()
+	if !strings.Contains(recorded, "WebView2") {
+		t.Errorf("log = %q, want a missing WebView2 note", recorded)
+	}
+	if !strings.Contains(loggedAtPrompt, "WebView2") {
+		t.Errorf("log at the prompt = %q, want the note already written", loggedAtPrompt)
+	}
+	i18ntest.NoHan(t, "the missing WebView2 log line", recorded)
 }
 
 // TestGuardMissingWebViewSkipsWithoutTheRuntimeCheck covers the two paths that
