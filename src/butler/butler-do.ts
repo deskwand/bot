@@ -1413,9 +1413,10 @@ export class ButlerDO extends Agent<Env> {
     // Attachments stay with the Butler: `steer` cannot carry them, so a bot
     // run would never see the file.
     if (files.length === 0) {
-      // Accepted risk: the bot path does not repeat the second `admissionHolds`
-      // check below, because the chat has its own event-id dedupe. The fixed
-      // empty/ambiguous replies are not deduped on redelivery either.
+      // Accepted risks: the bot path does not repeat the second
+      // `admissionHolds` check below, so a route switch during the chat's
+      // prompt refresh can still let one old-route message through. The fixed
+      // empty/ambiguous replies are not deduped on redelivery.
       const address = resolveBotAddress(
         { text: evt.text, quotedText: evt.quotedText },
         this.bots.list(),
