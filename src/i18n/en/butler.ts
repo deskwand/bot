@@ -51,6 +51,9 @@ export const butler: Messages["butler"] = {
     deleted: "This bot has been deleted",
     rulesUpdated: "Rules updated: {rules}",
     rulesDeleted: "Rules deleted",
+    empty: "What would you like to say to 🤖 {name}?",
+    ambiguous: "Several bots are named {name}; use @id:\n{lines}",
+    unavailable: "🤖 {name} can't reply right now; try again later",
   },
   resolution: {
     noActiveTask: "#{handle} has no active task",

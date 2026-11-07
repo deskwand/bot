@@ -5,6 +5,7 @@ import { BackupRpc } from "../admin/backup-rpc";
 import { artifactNameFromKey } from "../artifact";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
 import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
+import type { BotChatInput } from "../bot/bot-chat-do";
 import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { ownerLocale, t, type Locale } from "../i18n";
@@ -68,6 +69,7 @@ import {
   renderOwnerProfile,
 } from "./memory";
 import { BotsRepo } from "./bots-repo";
+import { resolveBotAddress } from "./bot-address";
 import {
   toUserInput,
   turnBlocker,
@@ -107,6 +109,23 @@ const PROGRESS_HEARTBEAT_FIRST_MS = 60_000;
 const PROGRESS_DETAIL_MAX = 200;
 const MESSAGE_MAX = 4096;
 const BOT_HEAL_KEY = "bot_heal_at";
+
+/** The part of a bot chat stub the Butler uses. */
+type BotChatStub = {
+  chat(input: BotChatInput): Promise<void>;
+  destroy(): Promise<void>;
+};
+
+let botChatStubOverride:
+  | ((botId: string) => { chat(input: BotChatInput): Promise<void> })
+  | null = null;
+
+/** Test-only bot chat stub override, mirroring `setBotButlerOverride`. */
+export function setBotChatStubOverride(
+  fn: ((botId: string) => { chat(input: BotChatInput): Promise<void> }) | null,
+): void {
+  botChatStubOverride = fn;
+}
 
 /** Enabled MCP services the butler can hand to tasks, without their tools. */
 function enabledServices(env: Env): { name: string; description?: string }[] {
@@ -257,6 +276,7 @@ export class ButlerDO extends Agent<Env> {
         ...createBotTools({
           bots: this.bots,
           bot: (id) => this.botFor(id),
+          botChat: (id) => this.botChatFor(id),
           task: (id) => this.taskFor(id),
         }),
       ],
@@ -1390,6 +1410,59 @@ export class ButlerDO extends Agent<Env> {
       return;
     }
 
+    // Attachments stay with the Butler: `steer` cannot carry them, so a bot
+    // run would never see the file.
+    if (files.length === 0) {
+      const address = resolveBotAddress(
+        { text: evt.text, quotedText: evt.quotedText },
+        this.bots.list(),
+      );
+      if (address.kind === "ambiguous") {
+        const lines = address.matches
+          .map((bot) => `${bot.id} ${bot.name}`)
+          .join("\n");
+        await this.sendBestEffort({
+          text: t(locale, "butler.botChat.ambiguous", {
+            name: address.name,
+            lines,
+          }),
+        });
+        this.kickReconcile();
+        return;
+      }
+      if (address.kind === "bot") {
+        if (address.text === "" && images.length === 0) {
+          await this.sendBestEffort({
+            text: t(locale, "butler.botChat.empty", {
+              name: address.bot.name,
+            }),
+          });
+          this.kickReconcile();
+          return;
+        }
+        try {
+          await this.botChatFor(address.bot.id).chat({
+            botId: address.bot.id,
+            text: address.text,
+            images,
+            eventId: evt.eventId,
+          });
+        } catch (error) {
+          console.error(
+            `butler bot chat ${address.bot.id} failed:`,
+            error,
+          );
+          await this.sendBestEffort({
+            text: t(locale, "butler.botChat.unavailable", {
+              name: address.bot.name,
+            }),
+          });
+        }
+        this.kickReconcile();
+        return;
+      }
+    }
+
     // Tests replace the model per message; in production this is a no-op after
     // the first message of an object instance.
     await this.ensureModel();
@@ -1483,6 +1556,19 @@ export class ButlerDO extends Agent<Env> {
 
   private botFor(id: string): DurableObjectStub<BotDO> {
     return this.env.BOT.get(this.env.BOT.idFromName(id));
+  }
+
+  private botChatFor(id: string): BotChatStub {
+    const override = botChatStubOverride;
+    if (override !== null) {
+      // The override stands in for `chat` only; deletion is covered by the
+      // bot-tools tests, so `destroy` is a no-op here.
+      return {
+        chat: (input) => override(id).chat(input),
+        destroy: async () => {},
+      };
+    }
+    return this.env.BOT_CHAT.get(this.env.BOT_CHAT.idFromName(id));
   }
 
   /**
