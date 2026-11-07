@@ -144,6 +144,11 @@ export class ScheduleStore {
     );
   }
 
+  /** Removes one `schedules_meta` value; unset keys are ignored. */
+  deleteMeta(key: string): void {
+    this.sql.exec(`DELETE FROM schedules_meta WHERE key = ?`, key);
+  }
+
   private nextId(): string {
     const next = Number(this.getMeta(COUNTER_KEY) ?? 0) + 1;
     this.setMeta(COUNTER_KEY, String(next));

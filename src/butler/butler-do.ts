@@ -420,32 +420,43 @@ export class ButlerDO extends Agent<Env> {
     let interrupted = 0;
     for (const row of running) {
       const failureKey = `${TASK_PROBE_FAILURES_PREFIX}${row.id}`;
+      let probeFailed = false;
       try {
-        await this.taskFor(row.id).liveness();
+        const probed = await this.taskFor(row.id).liveness();
+        // `liveness` flushes the outbox first, so a run that finished would
+        // already have reported and flipped the row. A row still `running`
+        // while the probe says otherwise is as dead as a thrown probe.
+        probeFailed =
+          probed.state !== "running" &&
+          this.repo.get(row.id)?.status === "running";
+        if (probeFailed) {
+          console.error(
+            `task probe failed: ${row.id} state=${probed.state}`,
+          );
+        }
       } catch (error) {
         // A deploy or a short network blip can fail one probe; only the
         // second consecutive failure is treated as a lost run.
-        const failures =
-          Number(this.schedules.getMeta(failureKey) ?? "0") + 1;
         console.error("task probe failed:", row.id, error);
-        if (failures < 2) {
-          this.schedules.setMeta(failureKey, String(failures));
-          continue;
-        }
-        this.db.exec(
-          `DELETE FROM schedules_meta WHERE key = ?`,
-          failureKey,
-        );
-        await this.handleFailed(
-          row.id,
-          t(ownerLocale(this.env), "butler.task.interrupted"),
-          false,
-          now,
-        );
-        interrupted += 1;
+        probeFailed = true;
+      }
+      if (!probeFailed) {
+        this.schedules.deleteMeta(failureKey);
         continue;
       }
-      this.db.exec(`DELETE FROM schedules_meta WHERE key = ?`, failureKey);
+      const failures = Number(this.schedules.getMeta(failureKey) ?? "0") + 1;
+      if (failures < 2) {
+        this.schedules.setMeta(failureKey, String(failures));
+        continue;
+      }
+      this.schedules.deleteMeta(failureKey);
+      await this.handleFailed(
+        row.id,
+        t(ownerLocale(this.env), "butler.task.interrupted"),
+        false,
+        now,
+      );
+      interrupted += 1;
     }
     return { checked: running.length, interrupted };
   }
@@ -804,12 +815,15 @@ export class ButlerDO extends Agent<Env> {
         await this.handleApprovalResolved(taskId, body.approvalId, body.decision);
         break;
       case "completed":
+        this.schedules.deleteMeta(`${TASK_PROBE_FAILURES_PREFIX}${taskId}`);
         await this.handleCompleted(taskId, body.summary, body.artifacts, now);
         break;
       case "failed":
+        this.schedules.deleteMeta(`${TASK_PROBE_FAILURES_PREFIX}${taskId}`);
         await this.handleFailed(taskId, body.reason, body.retryable, now);
         break;
       case "cancelled":
+        this.schedules.deleteMeta(`${TASK_PROBE_FAILURES_PREFIX}${taskId}`);
         await this.handleCancelled(taskId, now);
         break;
       case "stalled":

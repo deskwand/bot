@@ -194,6 +194,79 @@ describe("ButlerDO.healTasks", () => {
     expect(sent).toEqual([]);
   });
 
+  it("counts a probe that reports a non-running state as a failure", async () => {
+    const stub = butler("heal-not-running");
+    await installProbe(stub, async () => ({
+      state: "queued",
+      reattached: false,
+    }));
+    const sent = await captureSends(stub);
+    await seedTask(stub, { id: "t1", status: "running" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(await stub.healTasks()).toEqual({ checked: 1, interrupted: 0 });
+    expect(await taskStatus(stub, "t1")).toBe("running");
+
+    now += STALL_AFTER_MS;
+    expect(await stub.healTasks()).toEqual({ checked: 1, interrupted: 1 });
+
+    expect(await taskStatus(stub, "t1")).toBe("failed");
+    expect(sent).toEqual([
+      {
+        text: expect.stringContaining("任务中断了，后台没有响应"),
+        priority: "critical",
+      },
+    ]);
+  });
+
+  it("counts a completed probe whose row is still running, without interrupting yet", async () => {
+    const stub = butler("heal-completed-probe");
+    await installProbe(stub, async () => ({
+      state: "completed",
+      reattached: false,
+    }));
+    const sent = await captureSends(stub);
+    await seedTask(stub, { id: "t1", status: "running" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(await stub.healTasks()).toEqual({ checked: 1, interrupted: 0 });
+    expect(await taskStatus(stub, "t1")).toBe("running");
+    expect(sent).toEqual([]);
+
+    // It was counted: the next unsuccessful sweep interrupts.
+    now += STALL_AFTER_MS;
+    expect(await stub.healTasks()).toEqual({ checked: 1, interrupted: 1 });
+  });
+
+  it("clears the probe failure count when a terminal event arrives", async () => {
+    const stub = butler("heal-reset-on-terminal");
+    await installProbe(stub, async () => {
+      throw new Error("stub unavailable");
+    });
+    const sent = await captureSends(stub);
+    await seedTask(stub, { id: "t1", status: "running" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(await stub.healTasks()).toEqual({ checked: 1, interrupted: 0 });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "done",
+      artifacts: [],
+    });
+    // The retry keeps the id: a fresh run starts with a clean counter.
+    await stub.report({ taskId: "t1", seq: 2, type: "started" });
+
+    now += STALL_AFTER_MS;
+    expect(await stub.healTasks()).toEqual({ checked: 1, interrupted: 0 });
+    expect(await taskStatus(stub, "t1")).toBe("running");
+    expect(sent.filter((entry) => entry.text.includes("任务中断了"))).toEqual(
+      [],
+    );
+  });
+
   it("probes only running tasks", async () => {
     const stub = butler("heal-running-only");
     const probed = await installProbe(stub, async () => ({
