@@ -13,3 +13,9 @@ desktop/internal/release/bundle/*
 !desktop/internal/release/keys/*.pub.pem
 .claude/
 out/
+
+# 维护者本地发布配置（真实域名、账号 ID、桶名、遥测地址），绝不提交
+.release.env
+desktop/mygo.release.json
+desktop/mygo.json.orig
+wrangler.local.jsonc
