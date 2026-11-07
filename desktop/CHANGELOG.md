@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.22
+
+- 可以直接和 bot 对话：消息里 `@名字`（或 `@id`），或者引用它那条 `🤖 名字：` 消息回复，就会进到 bot 自己的会话，不再经过管家；回复里可用的工具包括 `run_now`、`write_doc`、`search_runs`、`set_next_wake`、`set_interval`、`pause`、`resume`。
+- 引用回复现在会带上被引用的原文（Telegram 取 reply/caption，微信取引用消息的文本，空则回退标题），所以「引用着回复」能被准确识别。
+- 换模型时加了上下文窗口护栏：目标模型比当前小四倍以上会被拒绝并说明原因；模型目录补上了 `contextWindow`。
+- 直接对话里换模型沿用管家那套安全规则；删除 bot 会一并清掉它的会话。
+
 ## 0.1.21
 
 - 任务有了私有工作区：每个任务一份 R2 沙箱，新增 `read` / `write` / `edit` / `list` 四个工具，可以来回改几份草稿再交付。单文件上限 1 MB，没有 shell，长文件用 offset/limit 续读。
