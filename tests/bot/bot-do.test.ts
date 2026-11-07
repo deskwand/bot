@@ -25,7 +25,10 @@ import {
   nextUtcMidnight,
   utcDay,
 } from "../../src/bot/wake";
-import { buildBotInstructions } from "../../src/bot/instructions";
+import {
+  CHAT_STEER_PREFIX,
+  buildBotInstructions,
+} from "../../src/bot/instructions";
 import { setClockOverride } from "../../src/butler/notifier";
 import { QUOTA_EXHAUSTED_TEXT } from "../../src/llm/model-errors";
 
@@ -696,6 +699,31 @@ describe("BotDO lifecycle", () => {
 
     expect(fake.spawns[0]?.instructions).toContain("先看主站");
     expect((await stub.snapshot())?.meta.pendingSteer).toEqual([]);
+  });
+
+  it("steer from chat asks the run to report", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-lifecycle-steer-from-chat");
+    await initBot(stub);
+
+    await stub.steer("查一下价格", { fromChat: true });
+    await fireAlarm(stub);
+
+    expect(fake.spawns[0]?.instructions).toContain(
+      CHAT_STEER_PREFIX + "查一下价格",
+    );
+  });
+
+  it("steer without the chat marker stays plain", async () => {
+    const fake = fakeButler();
+    const stub = botStub("b-lifecycle-steer-plain");
+    await initBot(stub);
+
+    await stub.steer("x");
+    await fireAlarm(stub);
+
+    expect(fake.spawns[0]?.instructions).toContain("- x\n");
+    expect(fake.spawns[0]?.instructions).not.toContain(CHAT_STEER_PREFIX);
   });
 
   it("keeps steer that arrives during dispatch", async () => {

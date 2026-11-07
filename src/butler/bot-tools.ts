@@ -53,7 +53,10 @@ const EditBotDoc = Type.Object({
 export type BotControl = {
   init(spec: BotInit): Promise<void>;
   snapshot(): Promise<BotSnapshot | null>;
-  steer(text: string): Promise<{ currentTaskId: string | null }>;
+  steer(
+    text: string,
+    options?: { fromChat?: boolean },
+  ): Promise<{ currentTaskId: string | null }>;
   wakeNow(): Promise<"scheduled" | "after_run" | "inactive">;
   pause(): Promise<void>;
   resume(wakeNow: boolean): Promise<void>;

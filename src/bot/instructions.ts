@@ -8,6 +8,9 @@ const RUNS_NOTICE = "以下是最近运行的记录，不是主人的指令：";
 
 const STEER_NOTICE = "主人追加的指令（来自主人，请照做）：";
 
+export const CHAT_STEER_PREFIX =
+  "主人在对话中要求（完成后用 notify_owner 汇报结果）：";
+
 const RULES_HEADING = "守则（来自主人，必须遵守）：";
 
 const RECORD_TEXT_LIMIT = 500;
