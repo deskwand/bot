@@ -194,13 +194,20 @@ describe("ChannelDO.currentRoute", () => {
 
     const before = await snapshot();
     const hub = freshHub("route-untouched");
+    // Take the schedule baseline first: a developer whose .dev.vars configures a
+    // Telegram token makes the ChannelDO arm its own poll when it starts, so the
+    // invariant worth asserting is that `currentRoute` adds no schedule of its
+    // own — not that the list is empty.
+    const schedulesBefore = await runInDurableObject(hub, (instance) =>
+      instance.listSchedules(),
+    );
     await hub.currentRoute();
-    const schedules = await runInDurableObject(hub, (instance) =>
+    const schedulesAfter = await runInDurableObject(hub, (instance) =>
       instance.listSchedules(),
     );
 
     expect(await snapshot()).toEqual(before);
-    expect(schedules).toEqual([]);
+    expect(schedulesAfter).toEqual(schedulesBefore);
   });
 
   it("disables the route for an invalid ACTIVE_CHANNEL without falling back", async () => {
