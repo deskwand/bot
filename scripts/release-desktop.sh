@@ -38,6 +38,66 @@ trap restore_config EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# 版本发布完成后打 tag 并建 GitHub Release。两个平台的公网 manifest 都到这一版才建
+# Release，避免把一个只有单平台可用的版本当成完整发布对外公布。
+github_tag_and_release() {
+  local tag="v${version}"
+  if ! command -v gh >/dev/null; then
+    echo "缺少 gh（GitHub CLI），跳过 tag 与 GitHub Release" >&2
+    return 0
+  fi
+  if git -C "$root" rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+    echo "tag ${tag} 已存在"
+  else
+    git -C "$root" tag -a "$tag" -m "DeskWand Bot ${version}"
+    echo "已创建 tag ${tag}"
+  fi
+  if [ -z "$(git -C "$root" ls-remote --tags origin "refs/tags/${tag}")" ]; then
+    git -C "$root" push origin "$tag"
+  fi
+
+  local missing=""
+  local t published
+  for t in darwin-arm64 windows-amd64; do
+    # manifest 的排版由 mygo 决定，所以按 JSON 解析而不是匹配文本。
+    published="$(curl -fsS --max-time 30 "${base}/update-${t}.json" 2>/dev/null |
+      node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).version))}catch{}})' ||
+      true)"
+    if [ "$published" != "$version" ]; then
+      missing="${missing} ${t}"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    echo "尚缺平台：${missing}（tag 已推送）。两个平台的 manifest 都到 ${version} 后，"
+    echo "运行 npm run release:desktop -- --github-only 建 GitHub Release。"
+    return 0
+  fi
+
+  local notes assets=() target dir
+  notes="$(mktemp)"
+  node --experimental-strip-types "$root/scripts/desktop-release.ts" notes "$version" >"$notes"
+  for target in macos windows; do
+    files_of "$(target_of "$target")"
+    dir="$(build_dir_of "$target")"
+    if [ -f "$dir/$installer" ]; then
+      assets+=("$dir/$installer")
+    else
+      echo "缺少本平台安装包 ${installer}：Release 将不带它" >&2
+    fi
+  done
+  [ -f "$root/desktop/build/SHA256SUMS" ] && assets+=("$root/desktop/build/SHA256SUMS")
+
+  if (cd "$root" && gh release view "$tag" >/dev/null 2>&1); then
+    echo "GitHub Release ${tag} 已存在"
+  else
+    (cd "$root" && gh release create "$tag" \
+      --title "DeskWand Bot ${version}" \
+      --notes-file "$notes" \
+      "${assets[@]}")
+  fi
+  rm -f "$notes"
+}
+
 usage() {
   cat >&2 <<'EOF'
 用法：release-desktop.sh [--dry-run] [--platform macos|windows|both] [--github-only] [--no-github]
@@ -356,65 +416,6 @@ for target in "${targets[@]}"; do
 done
 echo "只发布了一个平台时，另一个平台用 --platform <macos|windows> 单独重跑；不得重建同版本覆盖。"
 
-# 版本发布完成后打 tag 并建 GitHub Release。两个平台的公网 manifest 都到这一版才建
-# Release，避免把一个只有单平台可用的版本当成完整发布对外公布。
-github_tag_and_release() {
-  local tag="v${version}"
-  if ! command -v gh >/dev/null; then
-    echo "缺少 gh（GitHub CLI），跳过 tag 与 GitHub Release" >&2
-    return 0
-  fi
-  if git -C "$root" rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-    echo "tag ${tag} 已存在"
-  else
-    git -C "$root" tag -a "$tag" -m "DeskWand Bot ${version}"
-    echo "已创建 tag ${tag}"
-  fi
-  if [ -z "$(git -C "$root" ls-remote --tags origin "refs/tags/${tag}")" ]; then
-    git -C "$root" push origin "$tag"
-  fi
-
-  local missing=""
-  local t published
-  for t in darwin-arm64 windows-amd64; do
-    # manifest 的排版由 mygo 决定，所以按 JSON 解析而不是匹配文本。
-    published="$(curl -fsS --max-time 30 "${base}/update-${t}.json" 2>/dev/null |
-      node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).version))}catch{}})' ||
-      true)"
-    if [ "$published" != "$version" ]; then
-      missing="${missing} ${t}"
-    fi
-  done
-  if [ -n "$missing" ]; then
-    echo "尚缺平台：${missing}（tag 已推送）。两个平台的 manifest 都到 ${version} 后，"
-    echo "运行 npm run release:desktop -- --github-only 建 GitHub Release。"
-    return 0
-  fi
-
-  local notes assets=() target dir
-  notes="$(mktemp)"
-  node --experimental-strip-types "$root/scripts/desktop-release.ts" notes "$version" >"$notes"
-  for target in macos windows; do
-    files_of "$(target_of "$target")"
-    dir="$(build_dir_of "$target")"
-    if [ -f "$dir/$installer" ]; then
-      assets+=("$dir/$installer")
-    else
-      echo "缺少本平台安装包 ${installer}：Release 将不带它" >&2
-    fi
-  done
-  [ -f "$root/desktop/build/SHA256SUMS" ] && assets+=("$root/desktop/build/SHA256SUMS")
-
-  if (cd "$root" && gh release view "$tag" >/dev/null 2>&1); then
-    echo "GitHub Release ${tag} 已存在"
-  else
-    (cd "$root" && gh release create "$tag" \
-      --title "DeskWand Bot ${version}" \
-      --notes-file "$notes" \
-      "${assets[@]}")
-  fi
-  rm -f "$notes"
-}
 
 echo "==> 8/8 打 tag 与 GitHub Release"
 if [ "$github" = true ]; then
