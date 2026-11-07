@@ -1,6 +1,6 @@
 import type { TranscriptContext } from "@earendil-works/pi-ai";
 import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   setBotChatOverrides,
   type BotChatButler,
@@ -635,7 +635,7 @@ describe("bot chat", () => {
     ]);
   });
 
-  it("a rules write appends the confirmation", async () => {
+  it("a rules write sends the confirmation as its own message", async () => {
     const bot = fakeSelf();
     const { butler, notices } = fakeButler();
     install(bot, butler);
@@ -664,13 +664,83 @@ describe("bot chat", () => {
       },
     ]);
     expect(notices).toEqual([
+      { botId, text: "好的" },
       {
         botId,
-        text: `好的\n\n${t("zh", "butler.botChat.rulesUpdated", {
+        text: t("zh", "butler.botChat.rulesUpdated", {
           rules: "不要半夜通知",
-        })}`,
+        }),
       },
     ]);
+  });
+
+  it("truncates a long rules confirmation and says how long it was", async () => {
+    const bot = fakeSelf();
+    const { butler, notices } = fakeButler();
+    install(bot, butler);
+    const botId = "rules-long-bot";
+    const rules = "x".repeat(300);
+
+    setModelOverride(
+      scriptedModel([
+        {
+          toolCalls: [
+            { name: "write_doc", args: { name: RULES_DOC, content: rules } },
+          ],
+        },
+        { text: "好的" },
+      ]),
+    );
+
+    await chat(chatStub(botId), botId, "加一条长守则", "e-rules-long");
+
+    expect(notices).toEqual([
+      { botId, text: "好的" },
+      {
+        botId,
+        text: t("zh", "butler.botChat.rulesUpdated", {
+          rules:
+            "x".repeat(200) +
+            t("zh", "butler.botChat.rulesTruncated", { count: 300 }),
+        }),
+      },
+    ]);
+  });
+
+  it("a rules write outside a turn notifies immediately", async () => {
+    const bot = fakeSelf();
+    const { butler, notices } = fakeButler();
+    install(bot, butler);
+    const botId = "rules-outside-turn-bot";
+
+    // A turn first, so the chat has stored its bot id as an alarm resume
+    // would have done.
+    setModelOverride(scriptedModel([{ text: "第一轮回答" }]));
+    const stub = chatStub(botId);
+    await chat(stub, botId, "你好", "e-outside-first");
+    expect(notices).toEqual([{ botId, text: "第一轮回答" }]);
+
+    // A resumed turn runs the tool outside runTurn, so no `chat()` is active.
+    await runInDurableObject(stub, async (instance) => {
+      const writeDoc = instance.registry
+        .snapshot()
+        .tools()
+        .find(({ tool }) => tool.name === "write_doc");
+      expect(writeDoc).toBeDefined();
+      await writeDoc!.tool.execute(
+        { name: RULES_DOC, content: "不要半夜通知" },
+        undefined as never,
+        undefined as never,
+      );
+    });
+
+    await vi.waitFor(() => expect(notices).toHaveLength(2));
+    expect(notices[1]).toEqual({
+      botId,
+      text: t("zh", "butler.botChat.rulesUpdated", {
+        rules: "不要半夜通知",
+      }),
+    });
   });
 
   it("a rules write without reply text still sends the confirmation", async () => {

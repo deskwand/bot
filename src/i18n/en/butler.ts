@@ -50,6 +50,7 @@ export const butler: Messages["butler"] = {
   botChat: {
     deleted: "This bot has been deleted",
     rulesUpdated: "Rules updated: {rules}",
+    rulesTruncated: "… ({count} chars total)",
     rulesDeleted: "Rules deleted",
     empty: "What would you like to say to 🤖 {name}?",
     ambiguous: "Several bots are named {name}; use @id:\n{lines}",

@@ -49,9 +49,10 @@ export function setBotChatOverrides(o: {
 }
 
 /**
- * One bot's direct conversation with the owner. Each bot gets its own object
- * (`env.BOT_CHAT.idFromName(botId)`); the transcript is pi's, so the Bot DO
- * never has to grow a chat mode.
+ * One bot's direct conversation with the owner. Each bot generation gets its
+ * own object (`env.BOT_CHAT.idFromName("<id>@<createdAt>")`, so a reused id
+ * never inherits an older bot's transcript); the transcript is pi's, so the
+ * Bot DO never has to grow a chat mode.
  */
 export class BotChatDO extends Agent<Env> {
   readonly registry = createRegistry();
@@ -70,6 +71,9 @@ export class BotChatDO extends Agent<Env> {
   /** In-memory queue: concurrent chats of one bot run one after another. */
   private turn: Promise<void> = Promise.resolve();
 
+  /** True while `runTurn` runs; false when an alarm resumes a turn. */
+  private activeTurn = false;
+
   private botId: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -77,12 +81,17 @@ export class BotChatDO extends Agent<Env> {
 
     // Installed once, at construction: Pi may re-run the harness factory after
     // a storage error, so registry changes must not depend on it.
+    // Accepted risk: unlike the Butler's inbound path, chat tools do not check
+    // the maintenance lease (they match the Butler's own tools).
     this.registry.install({
       name: "bot-chat",
       tools: createBotChatTools(
         () => this.self(),
         (rules) => {
           this.rulesWritten = rules;
+          // A turn resumed from an alarm runs tools outside `runTurn`, so no
+          // reply is left to carry the confirmation. Send it right away.
+          if (!this.activeTurn) this.notifyRulesOutsideTurn(rules);
         },
       ),
       sections: [
@@ -134,9 +143,9 @@ export class BotChatDO extends Agent<Env> {
   }
 
   /**
-   * Answers one owner message. Resolves after the turn's reply was sent, so a
-   * failed send surfaces as a rejected RPC (the Butler then says the bot is
-   * unavailable instead of retrying the message as its own instruction).
+   * Answers one owner message. Resolves after the turn's reply was sent.
+   * A failed send is logged and dropped: `notifyFromBot` reports it by
+   * returning false rather than throwing.
    */
   chat(input: BotChatInput): Promise<void> {
     const run = () => this.runTurn(input);
@@ -145,51 +154,63 @@ export class BotChatDO extends Agent<Env> {
   }
 
   private async runTurn(input: BotChatInput): Promise<void> {
-    this.botId = input.botId;
-    // Kept in storage so tools still find their bot after an alarm resumes a
-    // turn in a fresh instance.
-    this.ctx.storage.kv.put(BOT_ID_KEY, input.botId);
-    this.rulesWritten = null;
+    this.activeTurn = true;
+    try {
+      this.botId = input.botId;
+      // Kept in storage so tools still find their bot after an alarm resumes a
+      // turn in a fresh instance.
+      this.ctx.storage.kv.put(BOT_ID_KEY, input.botId);
+      this.rulesWritten = null;
 
-    const locale = ownerLocale(this.env);
-    const prompt = await this.refreshPrompt();
-    if (prompt === "") {
-      await this.butler().notifyFromBot(
-        input.botId,
-        t(locale, "butler.botChat.deleted"),
+      const locale = ownerLocale(this.env);
+      const prompt = await this.refreshPrompt();
+      if (prompt === "") {
+        await this.sendNotice(
+          input.botId,
+          t(locale, "butler.botChat.deleted"),
+        );
+        return;
+      }
+
+      await this.ensureModel();
+
+      const images = input.images ?? [];
+      const blocked = turnBlocker(this.env, images.length > 0);
+      if (blocked !== undefined) {
+        await this.sendNotice(input.botId, blocked);
+        return;
+      }
+
+      const receipt = await this.harness.submit(
+        toUserInput(input.text, images, []),
+        { operationId: input.eventId },
       );
-      return;
-    }
+      // The same event was already accepted: never answer it twice.
+      if (!receipt.accepted) return;
 
-    await this.ensureModel();
+      const result = await this.harness.wait(input.eventId);
+      const answer =
+        result.status === "unanswered"
+          ? await unansweredText(
+              result.reason,
+              () => this.harness.session().messages(),
+              locale,
+            )
+          : (result.text ?? "");
 
-    const images = input.images ?? [];
-    const blocked = turnBlocker(this.env, images.length > 0);
-    if (blocked !== undefined) {
-      await this.butler().notifyFromBot(input.botId, blocked);
-      return;
-    }
-
-    const receipt = await this.harness.submit(
-      toUserInput(input.text, images, []),
-      { operationId: input.eventId },
-    );
-    // The same event was already accepted: never answer it twice.
-    if (!receipt.accepted) return;
-
-    const result = await this.harness.wait(input.eventId);
-    const answer =
-      result.status === "unanswered"
-        ? await unansweredText(
-            result.reason,
-            () => this.harness.session().messages(),
-            locale,
-          )
-        : (result.text ?? "");
-
-    const text = this.withRulesConfirmation(answer, locale);
-    if (text.length > 0) {
-      await this.butler().notifyFromBot(input.botId, text);
+      if (answer.length > 0) {
+        await this.sendNotice(input.botId, answer);
+      }
+      // The confirmation is its own message so the code-generated line can
+      // never be cut off with the answer.
+      if (this.rulesWritten !== null) {
+        await this.sendNotice(
+          input.botId,
+          this.confirmationFor(this.rulesWritten, locale),
+        );
+      }
+    } finally {
+      this.activeTurn = false;
     }
   }
 
@@ -204,20 +225,48 @@ export class BotChatDO extends Agent<Env> {
       return "";
     }
     const ownerProfile = await this.butler().ownerProfile();
-    this.prompt = botChatSystemPrompt(snapshot, ownerProfile);
+    this.prompt = botChatSystemPrompt(
+      snapshot,
+      ownerProfile,
+      ownerLocale(this.env),
+    );
     return this.prompt;
   }
 
-  /** Appends the code-generated confirmation after a rules write. */
-  private withRulesConfirmation(answer: string, locale: Locale): string {
-    if (this.rulesWritten === null) return answer;
-    const confirmation =
-      this.rulesWritten === ""
-        ? t(locale, "butler.botChat.rulesDeleted")
-        : t(locale, "butler.botChat.rulesUpdated", {
-            rules: this.rulesWritten.slice(0, 200),
-          });
-    return answer.length > 0 ? `${answer}\n\n${confirmation}` : confirmation;
+  /** The code-generated confirmation for a rules write or deletion. */
+  private confirmationFor(rules: string, locale: Locale): string {
+    if (rules === "") return t(locale, "butler.botChat.rulesDeleted");
+    const shown =
+      rules.length > 200
+        ? rules.slice(0, 200) +
+          t(locale, "butler.botChat.rulesTruncated", { count: rules.length })
+        : rules;
+    return t(locale, "butler.botChat.rulesUpdated", { rules: shown });
+  }
+
+  /**
+   * Sends a rules confirmation when no `runTurn` is around to do it, as when
+   * an alarm resumes a turn. Best effort: the owner still sees the rules when
+   * they next talk to the bot.
+   */
+  private notifyRulesOutsideTurn(rules: string): void {
+    const botId = this.botIdNow();
+    if (botId === undefined) return;
+    const confirmation = this.confirmationFor(rules, ownerLocale(this.env));
+    void this.butler()
+      .notifyFromBot(botId, confirmation)
+      .then((sent) => {
+        if (!sent) console.warn(`bot chat ${botId}: rules notice not sent`);
+      })
+      .catch((error) => {
+        console.error(`bot chat ${botId} rules notice failed:`, error);
+      });
+  }
+
+  /** Best-effort notice to the owner; a false result is logged, not thrown. */
+  private async sendNotice(botId: string, text: string): Promise<void> {
+    const sent = await this.butler().notifyFromBot(botId, text);
+    if (!sent) console.warn(`bot chat ${botId}: notice not sent, dropping`);
   }
 
   private async ensureModel(): Promise<void> {

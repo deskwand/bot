@@ -68,6 +68,19 @@ describe("resolveBotAddress", () => {
         matches: [b4, b5],
       });
     });
+
+    it("is ambiguous when the token is one bot's id and another's name", () => {
+      const idBot: BotRef = { id: "b1", name: "盯盘" };
+      const nameBot: BotRef = { id: "n1", name: " B1 " };
+
+      expect(
+        resolveBotAddress({ text: "@b1 hi" }, [idBot, nameBot]),
+      ).toEqual({
+        kind: "ambiguous",
+        name: "b1",
+        matches: [idBot, nameBot],
+      });
+    });
   });
 
   describe("a quoted bot reply", () => {

@@ -69,7 +69,22 @@ function matchAddress(
   const rest = end === -1 ? "" : afterAt.slice(end).trim();
 
   const byId = bots.find((bot) => bot.id === token);
-  if (byId !== undefined) return { kind: "bot", bot: byId, text: rest };
+  if (byId !== undefined) {
+    // An id that is also another bot's name is ambiguous: the owner may have
+    // meant either. The id match comes first.
+    const key = token.toLowerCase();
+    const alsoNamed = bots.filter(
+      (bot) => bot !== byId && bot.name.trim().toLowerCase() === key,
+    );
+    if (alsoNamed.length > 0) {
+      return {
+        kind: "ambiguous",
+        name: token,
+        matches: [byId, ...alsoNamed],
+      };
+    }
+    return { kind: "bot", bot: byId, text: rest };
+  }
 
   const key = token.toLowerCase();
   const matches = bots.filter((bot) => bot.name.trim().toLowerCase() === key);

@@ -43,6 +43,7 @@ export const butler = {
   botChat: {
     deleted: "这个机器人已经删除了",
     rulesUpdated: "已更新守则：{rules}",
+    rulesTruncated: "…（共 {count} 字）",
     rulesDeleted: "已删除守则",
     empty: "想跟 🤖 {name} 说什么？",
     ambiguous: "有多个叫 {name} 的机器人，请用 @id：\n{lines}",

@@ -1413,6 +1413,9 @@ export class ButlerDO extends Agent<Env> {
     // Attachments stay with the Butler: `steer` cannot carry them, so a bot
     // run would never see the file.
     if (files.length === 0) {
+      // Accepted risk: the bot path does not repeat the second `admissionHolds`
+      // check below, because the chat has its own event-id dedupe. The fixed
+      // empty/ambiguous replies are not deduped on redelivery either.
       const address = resolveBotAddress(
         { text: evt.text, quotedText: evt.quotedText },
         this.bots.list(),
@@ -1568,7 +1571,13 @@ export class ButlerDO extends Agent<Env> {
         destroy: async () => {},
       };
     }
-    return this.env.BOT_CHAT.get(this.env.BOT_CHAT.idFromName(id));
+    // A reused id must not inherit the previous bot's transcript, so the
+    // object is named by the id and the index row's creation time.
+    const row = this.bots.get(id);
+    if (row === null) throw new Error(`bot ${id} is not in the index`);
+    return this.env.BOT_CHAT.get(
+      this.env.BOT_CHAT.idFromName(`${row.id}@${row.createdAt}`),
+    );
   }
 
   /**

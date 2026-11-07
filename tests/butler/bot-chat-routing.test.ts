@@ -69,6 +69,7 @@ const MODELS = {
     },
   ]),
   plainAnswer: scriptedModel([{ text: "普通回答" }]),
+  nameAnswer: scriptedModel([{ text: "命名回答" }]),
 };
 
 function butler() {
@@ -304,6 +305,31 @@ describe("bot chat routing", () => {
     );
 
     expect(channel.sent).toEqual([{ chatId: "42", text: "普通回答" }]);
+  });
+
+  it("names each bot chat after the bot id and its creation time", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(MODELS.nameAnswer);
+    await seedBot("route-b9", "路由庚");
+    const createdAt = await runInDurableObject(butler(), (_instance, state) =>
+      new BotsRepo(state.storage.sql).get("route-b9")!.createdAt,
+    );
+
+    await butler().handleMessage(
+      message({ text: "@路由庚 你好", eventId: "tg:route-9" }),
+    );
+
+    expect(channel.sent).toEqual([
+      { chatId: "42", text: "🤖 路由庚：命名回答" },
+    ]);
+    const named = env.BOT_CHAT.get(
+      env.BOT_CHAT.idFromName(`route-b9@${createdAt}`),
+    );
+    const stored = await runInDurableObject(named, (_instance, state) =>
+      state.storage.kv.get("botId"),
+    );
+    expect(stored).toBe("route-b9");
   });
 });
 

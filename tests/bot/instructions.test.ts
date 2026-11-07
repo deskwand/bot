@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHAT_STEER_PREFIX,
+  botChatSystemPrompt,
   buildBotAuthorization,
   buildBotInstructions,
 } from "../../src/bot/instructions";
@@ -61,6 +63,23 @@ describe("buildBotAuthorization", () => {
     });
 
     expect(text).not.toContain("主人追加");
+  });
+
+  it("ignores steer that came from a direct chat turn", () => {
+    const steer = ["降到 100 以下就告诉我", CHAT_STEER_PREFIX + "查一下价格"];
+    const text = buildBotAuthorization({
+      name: "价格哨兵",
+      mission: "盯着 X 的价格",
+      steer,
+    });
+
+    expect(text).toContain("降到 100 以下就告诉我");
+    expect(text).not.toContain("查一下价格");
+    expect(text).not.toContain(CHAT_STEER_PREFIX);
+
+    const instructions = render({ steer });
+    expect(instructions).toContain("降到 100 以下就告诉我");
+    expect(instructions).toContain(CHAT_STEER_PREFIX + "查一下价格");
   });
 });
 
@@ -198,6 +217,37 @@ describe("buildBotInstructions", () => {
   it("marks a wake requested by the owner", () => {
     expect(render({ manualWake: true })).toContain(
       "唤醒原因：主人要求立即唤醒",
+    );
+  });
+});
+
+describe("botChatSystemPrompt", () => {
+  const snapshot = {
+    meta: {
+      botId: "b1",
+      name: "价格哨兵",
+      mission: "盯着价格",
+      status: "active" as const,
+      nextWakeAt: null,
+      defaultIntervalMs: 86_400_000,
+      currentTaskId: null,
+      consecutiveFailures: 0,
+      wakesDay: null,
+      wakesCount: 0,
+      pendingSteer: [],
+    },
+    docs: [],
+    runs: [],
+  };
+
+  it("ends with the reply language line", () => {
+    expect(
+      botChatSystemPrompt(snapshot, "", "en").endsWith(
+        "Always reply to the owner in English.",
+      ),
+    ).toBe(true);
+    expect(botChatSystemPrompt(snapshot, "", "zh").endsWith("始终用中文回复主人。")).toBe(
+      true,
     );
   });
 });
