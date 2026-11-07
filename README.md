@@ -1,10 +1,29 @@
 # DeskWand Bot
 
-一个部署在 Cloudflare Workers 上的单人助手。
+一个住在你自己 Cloudflare Worker 里的 bot。有自己的使命和记忆，自己安排什么时候醒；没事不吵你，真有事才发一条。
 
-AGPL-3.0 许可，见 [LICENSE](LICENSE)。
+AGPL-3.0 · [English](README.en.md)
 
-DeskWand Bot 的管家负责对话、记忆、任务派发与通知，每个任务由独立的 Durable Object 执行，结果（含产物文件）统一由管家经当前选中渠道回传。同一时刻只启用一个业务渠道，由 Worker 环境变量 `ACTIVE_CHANNEL` 选择（`telegram` 或 `wechat`）。仓库同时包含配套的 macOS / Windows 桌面客户端（见「桌面客户端」）。
+## 三分钟跑起来
+
+不想碰命令行的话，装桌面客户端就行，不需要 Node、Git 或 Wrangler：
+
+1. 用 Cloudflare 账号登录（浏览器里授权一次，不用自己填 account id 或 token）
+2. 选模型和入口。默认 Workers AI 的 Gemma 4 26B，不用填 key；入口选 Telegram 或微信
+3. 点部署。客户端会建资源、上传代码、激活版本
+
+然后用你选的那个入口跟它说话，比如「每天早上看一遍科技新闻，有大事就发我」。
+
+命令行部署、secrets、`DESKWAND_CONFIG` 怎么写，看下面的章节。
+
+## 它跟一般 agent 不一样的地方
+
+- **跑在你自己的账号里。** Worker、Durable Objects、R2 都是你的，控制台里看得见，也能自己删。消息和任务不经过我们的服务器。
+- **是长期存在的东西，不是一次对话。** 有自己的使命、守则、记忆，自己决定下次什么时候醒（5 分钟到 30 天之间）。每次醒来还记得上次做到哪。
+- **默认不吵。** 不发「已开始」、不发进度、不发心跳。只有真有值得说的变化才发一条。
+- **花钱有边界。** 免费额度用完就停到 UTC 0 点，不会自动扣费。
+
+## 架构
 
 - 渠道层：`ChannelDO`（Telegram 长轮询与微信 iLink 轮询，单实例）
 - 控制链路：`ButlerDO`（全局单实例，Pi agent + SQLite 业务表）
@@ -13,6 +32,8 @@ DeskWand Bot 的管家负责对话、记忆、任务派发与通知，每个任�
 - 外部服务：`McpAuthDO`（全局单实例，远程 MCP 的 OAuth 注册、token 保管与续期，以及桌面端"测试连接"）
 - 定时任务：通过 Agents SDK `Agent.schedule` 注册 cron（渠道轮询保活另用每 5 分钟一次的 Cron Trigger），cron 按 **UTC** 解释
 - 产物：写入 R2，任务完成时由渠道以文件/图片本体直接送达（不进公开 URL）。单文件上限 15MB，超过在 `save_artifact` 阶段即被拒绝
+
+每个任务的每一步先落盘再展示，进程被打断就从最后一次提交继续；同一个请求重发返回原结果，不会执行两次。
 
 ## 消息格式
 
