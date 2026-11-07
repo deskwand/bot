@@ -541,6 +541,51 @@ describe("verifyPublishedAssets", () => {
     ).rejects.toThrow();
   });
 
+  it("rejects a same-length tampered remote script or installer", async () => {
+    // 远端内容被换成等长数据，SHA256SUMS 仍对应本地文件：长度检查会放行，
+    // 只有逐字节的 SHA-256 比较能发现篡改。
+    const dir = tempDir();
+    materialize(dir, DARWIN_ARTIFACTS);
+    const localScript = DARWIN_ARTIFACTS.find((a) => a.name === "install.sh")!.content;
+    const tamperedScript = "#!/bin/xx\n";
+    expect(Buffer.byteLength(tamperedScript)).toBe(Buffer.byteLength(localScript));
+    expect(tamperedScript).not.toBe(localScript);
+
+    await expect(
+      verifyPublishedAssets({
+        target: "darwin-arm64",
+        version: "0.1.6",
+        buildDir: dir,
+        env: {},
+        fetchFn: releaseFetch({
+          sums: sumsFor(DARWIN_ARTIFACTS),
+          remote: DARWIN_ARTIFACTS,
+          remoteOverride: { "install.sh": tamperedScript },
+        }).fetchFn,
+      }),
+    ).rejects.toThrow("公网 install.sh 的 SHA-256 与本地不一致");
+
+    const windowsDir = tempDir();
+    materialize(windowsDir, WINDOWS_ARTIFACTS);
+    const localInstaller = WINDOWS_ARTIFACTS.find((a) => a.name === WINDOWS_INSTALLER)!.content;
+    const tamperedInstaller = "WINDOWS EXE";
+    expect(Buffer.byteLength(tamperedInstaller)).toBe(Buffer.byteLength(localInstaller));
+
+    await expect(
+      verifyPublishedAssets({
+        target: "windows-amd64",
+        version: "0.1.6",
+        buildDir: windowsDir,
+        env: {},
+        fetchFn: releaseFetch({
+          sums: sumsFor(WINDOWS_ARTIFACTS),
+          remote: WINDOWS_ARTIFACTS,
+          remoteOverride: { [WINDOWS_INSTALLER]: tamperedInstaller },
+        }).fetchFn,
+      }),
+    ).rejects.toThrow(`公网 ${WINDOWS_INSTALLER} 的 SHA-256 与本地不一致`);
+  });
+
   it("rejects a missing or duplicate checksum line", async () => {
     const dir = tempDir();
     materialize(dir, WINDOWS_ARTIFACTS);

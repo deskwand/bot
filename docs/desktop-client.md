@@ -349,7 +349,7 @@ npm run release:desktop                # 拒绝执行：本地脚本不再上传
 
 `scripts/release-desktop.sh` 只保留打印式 `--dry-run`：按宿主平台推导 target，读取 `desktop/mygo.json` 的版本，打印这次发布会用到的 manifest、归档与安装包名。它不构建、不联网、不读私钥或 R2 凭据、不上传；不带参数或参数不是 `--dry-run` 时直接失败。内部测试包使用发布工作流的 dry-run artifact，不再由本地脚本产出。
 
-正式发布走 `.github/workflows/desktop-release.yml`：`workflow_dispatch` 输入版本号、平台（`both`/`macos`/`windows`）、模式（`dry-run`/`publish`）与确认词。`macos` job 跑在 `macos-14`（arm64），`windows` job 跑在 `windows-latest`，两者顺序执行：先 macOS 后 Windows，因为 mygo 上传 `SHA256SUMS` 前会读取线上文件再合并，并发会互相覆盖。`publish` 必须输入 `PUBLISH`，两种模式都挂在受保护的 `release` environment 上需要人工批准，因为 dry-run 也使用正式签名私钥；dry-run 不注入 R2 凭据，只产出 artifact。
+正式发布走 `.github/workflows/desktop-release.yml`：`workflow_dispatch` 输入版本号、平台（`both`/`macos`/`windows`）、模式（`dry-run`/`publish`）与确认词。`macos` job 跑在 `macos-15`（arm64），`windows` job 跑在 `windows-latest`，两者顺序执行：先 macOS 后 Windows，因为 mygo 上传 `SHA256SUMS` 前会读取线上文件再合并，并发会互相覆盖。`publish` 必须输入 `PUBLISH`，两种模式都挂在受保护的 `release` environment 上需要人工批准，因为 dry-run 也使用正式签名私钥；dry-run 不注入 R2 凭据，只产出 artifact。`macos` job 从 `macos-14` 迁到 `macos-15`：GitHub 已于 2026-11-02 退役 macOS 14 runner，官方公告（https://github.blog/changelog/2026-10-01-github-actions-macos-14-runner-image-retirement/）建议迁移到 arm64 的 `macos-15`；job 内仍断言 `uname -m` 为 `arm64`，架构不符时直接失败。
 
 两模式共同的前提：`release` environment 已配置 required reviewers（首次 dispatch 前必须先建好，否则不存在任何批准保证）、`DESKWAND_RELEASE_SIGNING_KEY`（已有的 Worker 发布签名私钥）、`DESKWAND_CLIENT_UPDATE_KEY`（客户端更新私钥）；`publish` 还需要 `AWS_ACCESS_KEY_ID` 与 `AWS_SECRET_ACCESS_KEY`（R2）。secret 缺失时工作流直接失败，不会用开发密钥伪造正式产物。`desktop-build.yml` 仍从 repository 级 secret 读取 `DESKWAND_RELEASE_SIGNING_KEY`，它的可见范围不因新增 environment 而改变。
 
@@ -360,7 +360,7 @@ npm run release:desktop                # 拒绝执行：本地脚本不再上传
 3. `desktop-release.ts preflight <version>`：三处版本一致、CHANGELOG 含当前版本；
 4. `desktop-release.ts check-remote <target> <version>`：只有 404 视为该平台首发，线上版本相同或更高都拒绝；
 5. 把 Worker 发布私钥写入 `$RUNNER_TEMP` 下的临时文件（`chmod 600`），job 结束时删除；客户端更新私钥不落盘，只作为 `MYGO_UPDATER_PRIVATE_KEY` 环境变量传给构建步骤；
-6. `prepare_worker_bundle` 生成并签名 Worker 发布包、嵌入客户端 → `npm --prefix desktop/frontend run generate` 生成 MyGo TS 绑定 → `npm --prefix desktop/frontend run build`。顺序不能换：`mygo build -skip-build-command` 自己不会再生成绑定；
+6. `prepare_worker_bundle` 生成并签名 Worker 发布包、嵌入客户端 → `npm --prefix desktop/frontend run generate` 生成 MyGo TS 绑定 → `npm --prefix desktop/frontend run build`。顺序不能换：`mygo build -skip-build-command` 不会重新构建已经打包的前端，但仍可能生成绑定，所以必须先显式 `generate`；
 7. `publish` 用 `mygo build -skip-build-command -upload` 上传；`dry-run` 只构建，不读 R2 凭据；
 8. 断言本平台目录下的归档、`update-<target>.json`、`install.sh` / `install.ps1` 与 dmg / setup exe 都存在，且共享的 `desktop/build/SHA256SUMS` 存在；
 9. `publish` 再跑 `verify`：manifest 的版本、归档大小与 SHA-256，以及 dmg / 安装脚本与公网 `SHA256SUMS` 逐字节核对；Windows job 在 `platforms=both` 时额外带上 `darwin-arm64` 参数，校验共享 `SHA256SUMS` 里仍保留 macOS 归档的校验行；
@@ -404,7 +404,7 @@ update-windows-amd64.json                            Windows manifest，最后�
 
 - `dry-run` 模式构建所选平台、不写 R2，也使用受保护的 `release` environment，产物作为 artifact 供审阅；首次接入 Windows 时必须先跑通它；
 - `publish` 模式要求 `confirm` 等于 `PUBLISH`，并挂在受保护的 `release` environment 上；
-- 两个 job 顺序执行，`macos-14` 先、`windows-latest` 后；
+- 两个 job 顺序执行，`macos-15` 先、`windows-latest` 后；
 - Windows job 先断言 runner 是 `x86_64` 且 `gcc` 可用，以 `CGO_ENABLED=1` 跑 `go test -race`；工具链缺失时必须失败；
 - secret 缺失时工作流失败，不会用开发密钥伪造正式产物。
 

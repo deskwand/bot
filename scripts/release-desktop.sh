@@ -46,14 +46,12 @@ fi
 
 slug="deskwand-bot"
 default_base="https://updates.example.com/bot"
-base="${DESKWAND_UPDATE_BASE:-$default_base}"
-# 与 scripts/desktop-release.ts 的 updateBase 一致：去掉全部尾部斜杠。
-while [ "${base%/}" != "$base" ]; do
-  base="${base%/}"
-done
-if [ -z "${base// /}" ]; then
-  base="$default_base"
-fi
+# 与 scripts/desktop-release.ts 的 updateBase 逐字一致：trim()、空值回落到默认值、
+# 再去掉全部尾部斜杠。用 node 做，避免 shell 的空白判断与 TS 的 trim() 不一致。
+base="$(DESKWAND_UPDATE_BASE="${DESKWAND_UPDATE_BASE-}" node -e '
+const raw = (process.env.DESKWAND_UPDATE_BASE ?? "").trim();
+process.stdout.write((raw || process.argv[1]).replace(/\/+$/, ""));
+' "$default_base")"
 
 manifest="$base/update-${target}.json"
 archive="${slug}-${version}-${target}.tar.gz"
@@ -86,7 +84,7 @@ cat <<EOF
    ${install_script}
    SHA256SUMS
    update-${target}.json（最后上传）
-5. 公网核验：manifest 的 version、归档大小与 SHA-256
+5. 公网核验：manifest 的 version；归档、${installer}、${install_script} 的大小与 SHA-256，并与公网 SHA256SUMS 的校验和逐字节核对
 
 本命令只打印。真正的构建与上传必须手动触发工作流：
   .github/workflows/desktop-release.yml
