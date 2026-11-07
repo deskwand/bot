@@ -1,12 +1,34 @@
 import { t, type Locale } from "../i18n";
 import { attachmentLine } from "../channels/inbox";
-import type { TaskSpec } from "../protocol";
+import type { ChannelId, TaskSpec } from "../protocol";
+
+const CHANNEL_NAMES: Record<ChannelId, string> = {
+  wechat: "WeChat",
+  telegram: "Telegram",
+};
 
 /**
  * System prompt for a task's sub-agent. Delivering through `finish_task` is
  * mandatory: the Butler relies on the resulting `completed` event.
  */
-export function taskSystemPrompt(locale: Locale, spec: TaskSpec): string {
+export function taskSystemPrompt(
+  locale: Locale,
+  spec: TaskSpec,
+  channel: ChannelId | null,
+): string {
+  const channelName = channel === null ? null : CHANNEL_NAMES[channel];
+  const deliveryLine =
+    channelName === null
+      ? "Your summary is delivered to the owner as a chat message on an asynchronous messaging channel. They usually read it on a phone, away from a computer, and may read it hours later."
+      : `Your summary is delivered to the owner as a chat message on an asynchronous messaging channel (${channelName}). They usually read it on a phone, away from a computer, and may read it hours later.`;
+  const phoneContext = [
+    deliveryLine,
+    "- Lead with the outcome in one or two sentences; detail comes after.",
+    "- Keep it short enough to read on one phone screen. Use short paragraphs and brief lists only: no tables, no multi-level headings.",
+    '- Every message must stand on its own: no "the above", no references to earlier turns.',
+    "- Long material goes into an artifact, not into the summary.",
+    "- If you had to assume something, say so in one line at the end.",
+  ];
   return [
     `You are the background worker for task ${spec.taskId}: ${spec.title}.`,
     "",
@@ -31,6 +53,9 @@ export function taskSystemPrompt(locale: Locale, spec: TaskSpec): string {
     "too. Use Promise.allSettled when partial results matter. Return a summary",
     "from scripts and save large results with save_artifact; full truncated",
     "script output is not automatically saved as a file in this environment.",
+    "",
+    ...phoneContext,
+    "",
     "When the work is done you MUST call the `finish_task` tool with a concise",
     "summary of the result. If an artifact is long, save it as an artifact",
     "first (with `save_artifact`) and pass its key in the `finish_task`",
@@ -49,7 +74,7 @@ export function taskSystemPrompt(locale: Locale, spec: TaskSpec): string {
           "",
           "You are one run of an autonomous bot; its identity, rules, methods and memory are in the instructions.",
           "Follow its rules (守则). To change them, call `propose_rules` with the full new text and a reason.",
-          "Do not call `notify_owner` when there is nothing the owner needs to know about.",
+          "Do not call `notify_owner` when there is nothing the owner needs to know about. The owner is on their phone, away from a computer: every message interrupts them.",
           "Before finishing, review the run: if you hit a dead end or found a better way, update the matching",
           "method document with `write_doc`; if facts or state changed, rewrite `记忆`. Write nothing when nothing changed.",
           "Documents are overwritten whole: start from their current text in the instructions. Changes appear from the next run.",

@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
 import { DEFER_MS } from "../admin/maintenance";
+import { parseActiveChannel } from "../channels/route-identity";
 import type {
   DbSchema,
   DumpPage,
@@ -258,7 +259,11 @@ export class TaskDO extends Agent<Env> {
           key: "task",
           render: () =>
             this.spec
-              ? taskSystemPrompt(ownerLocale(this.env), this.spec)
+              ? taskSystemPrompt(
+                  ownerLocale(this.env),
+                  this.spec,
+                  parseActiveChannel(this.env.ACTIVE_CHANNEL),
+                )
               : undefined,
         },
         {
