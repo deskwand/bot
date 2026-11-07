@@ -116,6 +116,7 @@ jobs:
           source scripts/lib/worker-bundle.sh
           prepare_worker_bundle "$PWD" "$RELEASE_VERSION" "$DESKWAND_RELEASE_SIGNING_KEY_FILE" "0.1.0"
           rm -rf desktop/build
+          npm --prefix desktop/frontend run generate
           npm --prefix desktop/frontend run build
 
       - name: Build and upload
@@ -256,6 +257,7 @@ jobs:
           source scripts/lib/worker-bundle.sh
           prepare_worker_bundle "$PWD" "$RELEASE_VERSION" "$DESKWAND_RELEASE_SIGNING_KEY_FILE" "0.1.0"
           rm -rf desktop/build
+          npm --prefix desktop/frontend run generate
           npm --prefix desktop/frontend run build
 
       - name: Build and upload
