@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { Provider } from "@earendil-works/pi-ai/models";
 import { Harness, type ToolRegistration } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { PiHarness, PiSession, type PiModel } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -209,6 +210,78 @@ afterEach(() => {
 });
 
 describe("butler chat", () => {
+  for (const reopen of [false, true]) {
+    it(`rejects a smaller model without changing history${reopen ? " after reopening Pi" : ""}`, async () => {
+      const channel = fakeChannel();
+      setChannelOverride("telegram", channel.adapter);
+      let targetRequests = 0;
+      const large = scriptedModel([{ text: "original answer" }], { contextWindow: 128000 });
+      const small = scriptedModel([{ text: "unsafe target", observe: () => { targetRequests += 1; } }], { contextWindow: 16000 });
+      setModelOverride(large);
+      const stub = butler(`window-downgrade-${reopen}`);
+      await stub.handleMessage(message({ text: "keep this original detail", eventId: `window:first:${reopen}` }));
+      const before = await runInDurableObject(stub, async (instance) => {
+        const harness = (instance as unknown as { harness: PiHarness }).harness;
+        const conversation = await (await harness.pi()).root(BACKGROUND_CONTEXT);
+        const snapshot = {
+          entries: await harness.session().messages(),
+          model: (await conversation.agent(BACKGROUND_CONTEXT)).model,
+          head: (await conversation.context(BACKGROUND_CONTEXT)).head?.id,
+        };
+        if (reopen) await harness.dispose();
+        return snapshot;
+      });
+      setModelOverride(small);
+      for (const attempt of [1, 2]) {
+        await stub.handleMessage(message({ text: "next message", eventId: `window:second:${reopen}:${attempt}` }));
+        expect(targetRequests).toBe(0);
+        expect(channel.sent.at(-1)?.text).toContain("128000");
+        expect(channel.sent.at(-1)?.text).toContain("16000");
+        const after = await runInDurableObject(stub, async (instance) => {
+          const harness = (instance as unknown as { harness: PiHarness }).harness;
+          const conversation = await (await harness.pi()).root(BACKGROUND_CONTEXT);
+          return {
+            entries: await harness.session().messages(),
+            model: (await conversation.agent(BACKGROUND_CONTEXT)).model,
+            head: (await conversation.context(BACKGROUND_CONTEXT)).head?.id,
+          };
+        });
+        expect(after).toEqual(before);
+      }
+    });
+  }
+
+  it.each([272000, 400000])("allows a 1M to %s GPT-sized switch", async (contextWindow) => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const deepseek = scriptedModel([{ text: "million window" }], { contextWindow: 1_000_000 });
+    const gpt = scriptedModel([{ text: "GPT-sized window" }], { contextWindow });
+    const smaller = scriptedModel([{ text: "smaller after GPT" }], { contextWindow: 128000 });
+    setModelOverride(deepseek);
+    const stub = butler(`moderate-shrink-${contextWindow}`);
+    await stub.handleMessage(message({ text: "first", eventId: `moderate:first:${contextWindow}` }));
+    setModelOverride(gpt);
+    await stub.handleMessage(message({ text: "second", eventId: `moderate:second:${contextWindow}` }));
+    expect(channel.sent.at(-1)?.text).toBe("GPT-sized window");
+    // A subsequent switch uses the current GPT window, not the old 1M window.
+    setModelOverride(smaller);
+    await stub.handleMessage(message({ text: "third", eventId: `moderate:third:${contextWindow}` }));
+    expect(channel.sent.at(-1)?.text).toBe("smaller after GPT");
+  });
+
+  it("allows a larger model for the existing conversation", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const small = scriptedModel([{ text: "small answer" }], { contextWindow: 32000 });
+    const large = scriptedModel([{ text: "large answer" }], { contextWindow: 128000 });
+    setModelOverride(small);
+    const stub = butler("window-upgrade");
+    await stub.handleMessage(message({ text: "first", eventId: "window:small" }));
+    setModelOverride(large);
+    await stub.handleMessage(message({ text: "second", eventId: "window:large" }));
+    expect(channel.sent.at(-1)?.text).toBe("large answer");
+  });
+
   it("answers a text message", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);

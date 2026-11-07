@@ -1,3 +1,4 @@
+import type { PiHarness } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryStore } from "../../src/butler/memory";
@@ -69,7 +70,7 @@ const cancelModel = scriptedModel([
     observe: (context) =>
       cancelTranscript.push(JSON.stringify(context.messages)),
   },
-]);
+], { contextWindow: 1_000_000 });
 
 beforeEach(async () => {
   await seedOwnerAddress("42");
@@ -590,6 +591,11 @@ describe("butler control tools", () => {
       { timeout: 10_000 },
     );
 
+    // Let the completion report settle before replacing the global test model.
+    // Reports now apply the same model-switch guard as inbound chat.
+    await vi.waitFor(() => runInDurableObject(butler("owner"), (instance) =>
+      (instance as unknown as { harness: PiHarness }).harness.wait(`task-completed:${taskId}`),
+    ));
     setModelOverride(cancelModel);
 
     await butler("owner").handleMessage(

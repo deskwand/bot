@@ -1,6 +1,8 @@
 import type { Messages } from "../messages";
 
 export const llm: Messages["llm"] = {
+  windowDowngrade: "Cannot switch the Butler model: {source} has a {from}-token context window, but {target} has only {to} tokens. The target is less than one quarter of the current window. The current session model and conversation are preserved. Choose a model with at least one quarter of the current window.",
+  windowUnknown: "Cannot verify the context windows for this Butler model switch. Update the model catalog and check custom model window settings.",
   quotaExhausted:
     "Today's free Cloudflare model allowance is used up (it resets at 00:00 UTC, 08:00 Beijing time). To keep going, switch to your own model key on the Models page of the desktop app.",
   paidPlanRequired:

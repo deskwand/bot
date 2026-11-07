@@ -79,6 +79,16 @@ describe("generated model catalog", () => {
     }
   });
 
+  it("includes actual context windows for every provider", async () => {
+    const catalog = await buildCatalog();
+    for (const provider of catalog.providers) {
+      for (const model of provider.models) {
+        expect(Number.isFinite(model.contextWindow), `${provider.id}/${model.id}`).toBe(true);
+        expect(model.contextWindow, `${provider.id}/${model.id}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it("documents how to regenerate", () => {
     const source = readFileSync(TS_OUTPUT_PATH, "utf8");
     expect(source).toContain("node --experimental-strip-types scripts/generate-model-catalog.ts");
