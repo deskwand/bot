@@ -36,6 +36,7 @@ type TelegramMessage = {
   photo?: TelegramPhotoSize[];
   document?: TelegramDocument;
   voice?: TelegramVoice;
+  reply_to_message?: TelegramMessage;
 };
 type TelegramCallbackQuery = {
   id: string;
@@ -346,12 +347,17 @@ export function createTelegramAdapter(
           (part): part is string => typeof part === "string" && part !== "",
         );
 
+        const quotedText = (
+          message.reply_to_message?.text ?? message.reply_to_message?.caption
+        )?.trim();
+
         const event: MessageEvent = {
           type: "message",
           channel: "telegram",
           chatId: String(message.chat.id),
           userId: String(message.from.id),
           text: parts.length > 0 ? parts.join("\n") : null,
+          ...(quotedText ? { quotedText } : {}),
           ...(images.length > 0 ? { images } : {}),
           ...(files && files.length > 0 ? { files } : {}),
           ...(fileFailed ? { fileFailed } : {}),

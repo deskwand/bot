@@ -43,3 +43,9 @@ it("butler prompt ends with the reply language", () => {
     true,
   );
 });
+
+it("tells the butler that the owner can talk to a bot directly", () => {
+  const prompt = butlerSystemPrompt("zh", []);
+  expect(prompt).toContain("@名字");
+  expect(prompt).toContain("直接回复机器人消息");
+});

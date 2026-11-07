@@ -135,6 +135,119 @@ describe("getUpdates", () => {
     ]);
   });
 
+  it("reads the quoted message text from ref_msg", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({
+        msgs: [
+          {
+            message_id: 43,
+            from_user_id: "u-1",
+            message_type: 1,
+            item_list: [
+              {
+                type: 1,
+                text_item: { text: "那明天再看" },
+                ref_msg: {
+                  title: "",
+                  message_item: {
+                    type: 1,
+                    text_item: { text: "🤖 盯盘：价格回落了" },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await client(fetchImpl).getUpdates(CREDS, "");
+
+    expect(result.updates[0].text).toBe("那明天再看");
+    expect(result.updates[0].quotedText).toBe("🤖 盯盘：价格回落了");
+  });
+
+  it("falls back to the ref_msg title", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({
+        msgs: [
+          {
+            message_id: 44,
+            from_user_id: "u-1",
+            message_type: 1,
+            item_list: [
+              {
+                type: 1,
+                text_item: { text: "那明天再看" },
+                ref_msg: {
+                  title: "🤖 盯盘：价格回落了",
+                  message_item: { type: 2, image_item: {} },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await client(fetchImpl).getUpdates(CREDS, "");
+
+    expect(result.updates[0].quotedText).toBe("🤖 盯盘：价格回落了");
+  });
+
+  it("falls back past a blank ref_msg text to the title", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({
+        msgs: [
+          {
+            message_id: 46,
+            from_user_id: "u-1",
+            message_type: 1,
+            item_list: [
+              {
+                type: 1,
+                text_item: { text: "那明天再看" },
+                ref_msg: {
+                  title: "🤖 盯盘：见图",
+                  message_item: { type: 1, text_item: { text: "   " } },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await client(fetchImpl).getUpdates(CREDS, "");
+
+    expect(result.updates[0].quotedText).toBe("🤖 盯盘：见图");
+  });
+
+  it("leaves quotedText unset for an empty reference", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({
+        msgs: [
+          {
+            message_id: 45,
+            from_user_id: "u-1",
+            message_type: 1,
+            item_list: [
+              {
+                type: 1,
+                text_item: { text: "那明天再看" },
+                ref_msg: { title: "", message_item: { type: 2, image_item: {} } },
+              },
+            ],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await client(fetchImpl).getUpdates(CREDS, "");
+
+    expect("quotedText" in result.updates[0]).toBe(false);
+  });
+
   it("reads an image item's CDN reference", async () => {
     const { fetchImpl } = fakeFetch([
       jsonResponse({

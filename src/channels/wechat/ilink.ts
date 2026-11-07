@@ -94,6 +94,8 @@ export type WeChatUpdate = {
   file: WeChatFileRef | null;
   /** 该条消息的 item 里有 `voice_item`，即这是一条语音。 */
   voice: boolean;
+  /** 被引用消息的文本；引用里没有文本时缺省。 */
+  quotedText?: string;
 };
 
 type QrStatus = "wait" | "scaned" | "confirmed" | "expired";
@@ -455,6 +457,8 @@ function toWeChatUpdate(value: Record<string, unknown>): WeChatUpdate {
         .find((text) => text !== undefined && text !== "")
     : undefined;
 
+  const quotedText = quotedTextOf(items);
+
   return {
     messageId,
     fromUserId,
@@ -464,7 +468,26 @@ function toWeChatUpdate(value: Record<string, unknown>): WeChatUpdate {
     image,
     file,
     voice,
+    ...(quotedText ? { quotedText } : {}),
   };
+}
+
+/** The text of the message this one replies to, if the items carry one. */
+function quotedTextOf(items: Record<string, unknown>[]): string | undefined {
+  const ref = items
+    .map((item) => (isRecord(item.ref_msg) ? item.ref_msg : null))
+    .find((candidate) => candidate !== null);
+  if (!ref) return undefined;
+
+  const messageItem = isRecord(ref.message_item) ? ref.message_item : null;
+  const textItem =
+    messageItem && isRecord(messageItem.text_item)
+      ? messageItem.text_item
+      : null;
+  const text = [readString(textItem, "text"), readString(ref, "title")]
+    .map((candidate) => candidate?.trim())
+    .find((candidate) => candidate);
+  return text;
 }
 
 /** A downloadable image, or `null` when the item has no CDN parameter. */

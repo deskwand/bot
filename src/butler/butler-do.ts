@@ -2,15 +2,16 @@ import { Agent } from "agents";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
 import { PiHarness, type PiModel } from "agents/harness/pi";
-import { createRegistry, Harness, type UserInput } from "@earendil-works/pi-durable";
+import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
 import { artifactNameFromKey } from "../artifact";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
 import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
+import type { BotChatInput } from "../bot/bot-chat-do";
 import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { ownerLocale, t, type Locale } from "../i18n";
-import { attachmentLine, isInboxKey } from "../channels/inbox";
+import { isInboxKey } from "../channels/inbox";
 import type { TextAction } from "../channels/text-action";
 import type {
   DbSchema,
@@ -19,16 +20,7 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
-import {
-  lastModelError,
-  userTextForModelError,
-} from "../llm/model-errors";
-import {
-  createModelsForEnv,
-  modelAcceptsImages,
-  modelReadiness,
-  resolveModel,
-} from "../llm/models";
+import { createModelsForEnv, resolveModel } from "../llm/models";
 import { PI_PROGRESS } from "../llm/pi-settings";
 import {
   encodeAction,
@@ -52,7 +44,6 @@ import {
   errorNotice,
   fileTooLargeNotice,
   fileUnavailableNotice,
-  imageModelNotice,
   imageUnavailableNotice,
   maintenanceRetryText,
   maintenanceText,
@@ -80,6 +71,12 @@ import {
   renderOwnerProfile,
 } from "./memory";
 import { BotsRepo } from "./bots-repo";
+import { resolveBotAddress } from "./bot-address";
+import {
+  toUserInput,
+  turnBlocker,
+  unansweredText,
+} from "./model-gate";
 import { createBotTools } from "./bot-tools";
 import { butlerSystemPrompt } from "./prompt";
 import {
@@ -114,6 +111,23 @@ const PROGRESS_HEARTBEAT_FIRST_MS = 60_000;
 const PROGRESS_DETAIL_MAX = 200;
 const MESSAGE_MAX = 4096;
 const BOT_HEAL_KEY = "bot_heal_at";
+
+/** The part of a bot chat stub the Butler uses. */
+type BotChatStub = {
+  chat(input: BotChatInput): Promise<void>;
+  destroy(): Promise<void>;
+};
+
+let botChatStubOverride:
+  | ((botId: string) => { chat(input: BotChatInput): Promise<void> })
+  | null = null;
+
+/** Test-only bot chat stub override, mirroring `setBotButlerOverride`. */
+export function setBotChatStubOverride(
+  fn: ((botId: string) => { chat(input: BotChatInput): Promise<void> }) | null,
+): void {
+  botChatStubOverride = fn;
+}
 
 /** Enabled MCP services the butler can hand to tasks, without their tools. */
 function enabledServices(env: Env): { name: string; description?: string }[] {
@@ -261,6 +275,7 @@ export class ButlerDO extends Agent<Env> {
         ...createBotTools({
           bots: this.bots,
           bot: (id) => this.botFor(id),
+          botChat: (id) => this.botChatFor(id),
           task: (id) => this.taskFor(id),
         }),
       ],
@@ -1398,6 +1413,63 @@ export class ButlerDO extends Agent<Env> {
       return;
     }
 
+    // Attachments stay with the Butler: `steer` cannot carry them, so a bot
+    // run would never see the file.
+    if (files.length === 0) {
+      // Accepted risks: the bot path does not repeat the second
+      // `admissionHolds` check below, so a route switch during the chat's
+      // prompt refresh can still let one old-route message through. The fixed
+      // empty/ambiguous replies are not deduped on redelivery.
+      const address = resolveBotAddress(
+        { text: evt.text, quotedText: evt.quotedText },
+        this.bots.list(),
+      );
+      if (address.kind === "ambiguous") {
+        const lines = address.matches
+          .map((bot) => `${bot.id} ${bot.name}`)
+          .join("\n");
+        await this.sendBestEffort({
+          text: t(locale, "butler.botChat.ambiguous", {
+            name: address.name,
+            lines,
+          }),
+        });
+        this.kickReconcile();
+        return;
+      }
+      if (address.kind === "bot") {
+        if (address.text === "" && images.length === 0) {
+          await this.sendBestEffort({
+            text: t(locale, "butler.botChat.empty", {
+              name: address.bot.name,
+            }),
+          });
+          this.kickReconcile();
+          return;
+        }
+        try {
+          await this.botChatFor(address.bot.id).chat({
+            botId: address.bot.id,
+            text: address.text,
+            images,
+            eventId: evt.eventId,
+          });
+        } catch (error) {
+          console.error(
+            `butler bot chat ${address.bot.id} failed:`,
+            error,
+          );
+          await this.sendBestEffort({
+            text: t(locale, "butler.botChat.unavailable", {
+              name: address.bot.name,
+            }),
+          });
+        }
+        this.kickReconcile();
+        return;
+      }
+    }
+
     // Tests replace the model per message; in production this is a no-op after
     // the first message of an object instance.
     await this.ensureModel();
@@ -1407,62 +1479,27 @@ export class ButlerDO extends Agent<Env> {
 
     // Answer a missing key or an unavailable model here instead of letting pi
     // fail the run after the input was accepted.
-    const models = createModelsForEnv(this.env);
-    const butlerModel = readRuntimeConfig(this.env).models.butler;
-    const notReady = modelReadiness(this.env, models, butlerModel);
-    if (notReady) {
-      await this.sendBestEffort({ text: notReady });
-      this.kickReconcile();
-      return;
-    }
-
-    // pi-ai swaps images for a placeholder on a text-only model; say so instead.
-    if (images.length > 0 && !modelAcceptsImages(models, butlerModel)) {
-      await this.sendBestEffort({
-        text: imageModelNotice(locale),
-      });
+    const blocked = turnBlocker(this.env, images.length > 0);
+    if (blocked) {
+      await this.sendBestEffort({ text: blocked });
       this.kickReconcile();
       return;
     }
 
     const operationId = evt.eventId;
-    const attachmentText = files.map(attachmentLine).join("\n");
-    const modelText = [evt.text, attachmentText]
-      .filter((part): part is string => part !== null && part !== "")
-      .join("\n");
-    const input: UserInput =
-      images.length === 0
-        ? modelText
-        : [
-            ...(modelText === ""
-              ? []
-              : [{ type: "text" as const, text: modelText }]),
-            ...images.map((image) => ({
-              type: "image" as const,
-              data: image.data,
-              mimeType: image.mimeType,
-            })),
-          ];
+    const input = toUserInput(evt.text, images, files);
     const receipt = await this.harness.submit(input, { operationId });
     // Telegram redelivered an update we already accepted: never answer twice.
     if (!receipt.accepted) return;
 
     const result = await this.harness.wait(operationId);
     if (result.status === "unanswered") {
-      let modelError: string | undefined;
-      if (result.reason === "model_error") {
-        try {
-          modelError = lastModelError(await this.harness.session().messages());
-        } catch (error) {
-          const reason =
-            error instanceof Error ? error.message : String(error);
-          console.warn(
-            `butler: could not read the transcript after a model error: ${reason}`,
-          );
-        }
-      }
       await this.sendBestEffort({
-        text: userTextForModelError(modelError, locale) ?? errorNotice(locale),
+        text: await unansweredText(
+          result.reason,
+          () => this.harness.session().messages(),
+          locale,
+        ),
       });
       this.kickReconcile();
       return;
@@ -1529,6 +1566,25 @@ export class ButlerDO extends Agent<Env> {
 
   private botFor(id: string): DurableObjectStub<BotDO> {
     return this.env.BOT.get(this.env.BOT.idFromName(id));
+  }
+
+  private botChatFor(id: string): BotChatStub {
+    const override = botChatStubOverride;
+    if (override !== null) {
+      // The override stands in for `chat` only; deletion is covered by the
+      // bot-tools tests, so `destroy` is a no-op here.
+      return {
+        chat: (input) => override(id).chat(input),
+        destroy: async () => {},
+      };
+    }
+    // A reused id must not inherit the previous bot's transcript, so the
+    // object is named by the id and the index row's creation time.
+    const row = this.bots.get(id);
+    if (row === null) throw new Error(`bot ${id} is not in the index`);
+    return this.env.BOT_CHAT.get(
+      this.env.BOT_CHAT.idFromName(`${row.id}@${row.createdAt}`),
+    );
   }
 
   /**

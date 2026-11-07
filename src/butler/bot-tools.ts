@@ -53,7 +53,10 @@ const EditBotDoc = Type.Object({
 export type BotControl = {
   init(spec: BotInit): Promise<void>;
   snapshot(): Promise<BotSnapshot | null>;
-  steer(text: string): Promise<{ currentTaskId: string | null }>;
+  steer(
+    text: string,
+    options?: { fromChat?: boolean },
+  ): Promise<{ currentTaskId: string | null }>;
   wakeNow(): Promise<"scheduled" | "after_run" | "inactive">;
   pause(): Promise<void>;
   resume(wakeNow: boolean): Promise<void>;
@@ -72,6 +75,7 @@ export type BotControl = {
 export type BotToolDeps = {
   bots: BotsRepo;
   bot(id: string): BotControl;
+  botChat(id: string): { destroy(): Promise<void> };
   task(id: string): TaskControl;
 };
 
@@ -87,11 +91,11 @@ function iso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
-function durationError(text: string): string {
+export function durationError(text: string): string {
   return `时长格式无效：${text}${DURATION_HINT}`;
 }
 
-function durationRangeError(text: string): string {
+export function durationRangeError(text: string): string {
   return `时长超出范围：${text}（最短 5m，最长 30d）`;
 }
 
@@ -100,7 +104,7 @@ function durationRangeError(text: string): string {
  * answer with text and never throw: the model explains failures to the owner.
  */
 export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
-  const { bots, bot, task } = deps;
+  const { bots, bot, botChat, task } = deps;
 
   const createBot: ToolRegistration<typeof CreateBot> = {
     name: "create_bot",
@@ -386,6 +390,11 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
           await task(currentTaskId).cancel();
         }
         await bot(id).destroy();
+        try {
+          await botChat(id).destroy();
+        } catch (error) {
+          console.error(`bot chat ${id} destroy failed:`, error);
+        }
         bots.remove(id);
         return output(`已删除机器人 ${id}`);
       } catch (error) {

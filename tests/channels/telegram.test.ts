@@ -151,6 +151,78 @@ describe("parseInbound", () => {
     });
   });
 
+  it("reply_to_message text becomes quotedText", async () => {
+    const { fetchImpl } = fakeFetch();
+    const adapter = makeAdapter(fetchImpl);
+
+    const event = await adapter.parseInbound({
+      update_id: 3,
+      message: {
+        message_id: 12,
+        from: { id: 7 },
+        chat: { id: 42 },
+        text: "那明天再看",
+        reply_to_message: {
+          message_id: 7,
+          chat: { id: 42 },
+          text: "🤖 盯盘：价格回落了",
+        },
+      },
+    });
+
+    expect(event).toMatchObject({
+      text: "那明天再看",
+      quotedText: "🤖 盯盘：价格回落了",
+    });
+  });
+
+  it("reply_to_message caption becomes quotedText", async () => {
+    const { calls, fetchImpl } = fakeFetch();
+    const adapter = makeAdapter(fetchImpl);
+
+    const event = await adapter.parseInbound({
+      update_id: 4,
+      message: {
+        message_id: 13,
+        from: { id: 7 },
+        chat: { id: 42 },
+        text: "那明天再看",
+        reply_to_message: {
+          message_id: 8,
+          chat: { id: 42 },
+          caption: "🤖 盯盘：见图",
+          photo: [{ file_id: "quoted", width: 1280, height: 1280 }],
+        },
+      },
+    });
+
+    expect(event).toMatchObject({
+      text: "那明天再看",
+      quotedText: "🤖 盯盘：见图",
+    });
+    expect("images" in event!).toBe(false);
+    // The quoted photo belongs to the earlier message; it is not re-downloaded.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("no reply leaves quotedText unset", async () => {
+    const { fetchImpl } = fakeFetch();
+    const adapter = makeAdapter(fetchImpl);
+
+    const event = await adapter.parseInbound({
+      update_id: 5,
+      message: {
+        message_id: 14,
+        from: { id: 7 },
+        chat: { id: 42 },
+        text: "hi",
+      },
+    });
+
+    expect(event).not.toBeNull();
+    expect("quotedText" in event!).toBe(false);
+  });
+
   it("downloads the largest photo and keeps the caption as text", async () => {
     const { calls, fetchImpl } = fakeFetch([
       { status: 200, body: { ok: true, result: { file_path: "photos/file_7.png" } } },

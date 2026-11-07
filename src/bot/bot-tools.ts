@@ -78,6 +78,83 @@ function clampText(text: string): string {
   return `${text.slice(0, RECORD_TEXT_LIMIT)}…`;
 }
 
+/** `search_runs`, shared by bot runs and direct bot chats. */
+export function searchRunsTool(
+  bot: () => Pick<BotControl, "searchRuns">,
+): ToolRegistration {
+  const searchRuns: ToolRegistration<typeof SearchRuns> = {
+    name: "search_runs",
+    description:
+      "Search this bot's older runs (notes and summaries) by keyword.",
+    parameters: SearchRuns,
+    replay: "safe",
+    async execute({ keyword }) {
+      try {
+        const runs = await bot().searchRuns(keyword);
+        if (runs.length === 0) return output("没有匹配的运行记录");
+        return output(
+          runs
+            .map((run) => {
+              const details = [run.note, run.summary]
+                .filter(
+                  (value): value is string =>
+                    value !== null && value.length > 0,
+                )
+                .map(clampText);
+              return `- ${run.taskId} ${iso(run.startedAt)}（${
+                run.outcome ?? "未结束"
+              }）：${details.join("；")}`;
+            })
+            .join("\n"),
+        );
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+  return searchRuns;
+}
+
+/** `set_next_wake`, shared by bot runs and direct bot chats. */
+export function setNextWakeTool(
+  bot: () => Pick<BotControl, "setNextWake">,
+): ToolRegistration {
+  const setNextWake: ToolRegistration<typeof SetNextWake> = {
+    name: "set_next_wake",
+    description:
+      "Schedule the next run, either after a duration such as `2h` or at a UTC ISO time. The latest allowed time is one default interval from now; to sleep longer, wake up and schedule again.",
+    parameters: SetNextWake,
+    replay: "safe",
+    async execute({ after, at }) {
+      if ((after === undefined) === (at === undefined)) {
+        return output("after 和 at 必须二选一");
+      }
+
+      let req: { afterMs?: number; at?: number };
+      if (after !== undefined) {
+        const afterMs = parseDuration(after);
+        if (afterMs === null) {
+          return output(`时长格式无效：${after}（示例：30m、2h、1d）`);
+        }
+        req = { afterMs };
+      } else {
+        const parsed = Date.parse(at!);
+        if (Number.isNaN(parsed)) return output(`时间格式无效：${at}`);
+        req = { at: parsed };
+      }
+
+      try {
+        const result = await bot().setNextWake(req);
+        const hint = result.clamped ? "（已调整到允许范围）" : "";
+        return output(`下次唤醒：${iso(result.at)}${hint}`);
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+  return setNextWake;
+}
+
 /**
  * Tools installed on a TaskDO that runs for a bot. They write through to the
  * bot's own storage. `propose_rules`, `notify_owner` and `finish_bot` are not
@@ -152,70 +229,9 @@ export function createBotTaskTools(
     },
   };
 
-  const searchRuns: ToolRegistration<typeof SearchRuns> = {
-    name: "search_runs",
-    description:
-      "Search this bot's older runs (notes and summaries) by keyword.",
-    parameters: SearchRuns,
-    replay: "safe",
-    async execute({ keyword }) {
-      try {
-        const runs = await bot.searchRuns(keyword);
-        if (runs.length === 0) return output("没有匹配的运行记录");
-        return output(
-          runs
-            .map((run) => {
-              const details = [run.note, run.summary]
-                .filter(
-                  (value): value is string =>
-                    value !== null && value.length > 0,
-                )
-                .map(clampText);
-              return `- ${run.taskId} ${iso(run.startedAt)}（${
-                run.outcome ?? "未结束"
-              }）：${details.join("；")}`;
-            })
-            .join("\n"),
-        );
-      } catch (error) {
-        return output(errorText(error));
-      }
-    },
-  };
+  const searchRuns = searchRunsTool(() => bot);
 
-  const setNextWake: ToolRegistration<typeof SetNextWake> = {
-    name: "set_next_wake",
-    description:
-      "Schedule the next run, either after a duration such as `2h` or at a UTC ISO time. The latest allowed time is one default interval from now; to sleep longer, wake up and schedule again.",
-    parameters: SetNextWake,
-    replay: "safe",
-    async execute({ after, at }) {
-      if ((after === undefined) === (at === undefined)) {
-        return output("after 和 at 必须二选一");
-      }
-
-      let req: { afterMs?: number; at?: number };
-      if (after !== undefined) {
-        const afterMs = parseDuration(after);
-        if (afterMs === null) {
-          return output(`时长格式无效：${after}（示例：30m、2h、1d）`);
-        }
-        req = { afterMs };
-      } else {
-        const parsed = Date.parse(at!);
-        if (Number.isNaN(parsed)) return output(`时间格式无效：${at}`);
-        req = { at: parsed };
-      }
-
-      try {
-        const result = await bot.setNextWake(req);
-        const hint = result.clamped ? "（已调整到允许范围）" : "";
-        return output(`下次唤醒：${iso(result.at)}${hint}`);
-      } catch (error) {
-        return output(errorText(error));
-      }
-    },
-  };
+  const setNextWake = setNextWakeTool(() => bot);
 
   const note: ToolRegistration<typeof BotNote> = {
     name: "bot_note",

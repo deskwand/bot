@@ -47,6 +47,15 @@ export const butler: Messages["butler"] = {
       "This model does not support images; switch to a vision-capable model on the Models page of the desktop app",
     bot: "🤖 {name}: {text}",
   },
+  botChat: {
+    deleted: "This bot has been deleted",
+    rulesUpdated: "Rules updated: {rules}",
+    rulesTruncated: "… ({count} chars total)",
+    rulesDeleted: "Rules deleted",
+    empty: "What would you like to say to 🤖 {name}?",
+    ambiguous: "Several bots are named {name}; use @id:\n{lines}",
+    unavailable: "🤖 {name} can't reply right now; try again later",
+  },
   resolution: {
     noActiveTask: "#{handle} has no active task",
     noPendingApproval: "{label} has no pending approval",

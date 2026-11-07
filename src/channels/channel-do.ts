@@ -1189,6 +1189,7 @@ export class ChannelDO extends Agent<Env> {
         chatId: update.fromUserId,
         userId: update.fromUserId,
         text: update.text,
+        ...(update.quotedText ? { quotedText: update.quotedText } : {}),
         ...(update.voice && !update.text ? { voiceFailed: true } : {}),
         eventId,
       };

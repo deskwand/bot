@@ -17,7 +17,11 @@ import {
   type RunRow,
 } from "./bot-store";
 import { RULES_DOC, checkDocWrite, type BotDoc } from "./docs";
-import { buildBotAuthorization, buildBotInstructions } from "./instructions";
+import {
+  CHAT_STEER_PREFIX,
+  buildBotAuthorization,
+  buildBotInstructions,
+} from "./instructions";
 import {
   botDailyLimitText,
   botFailingText,
@@ -308,10 +312,15 @@ export class BotDO extends DurableObject<Env> {
     this.store.setRunNote(taskId, text);
   }
 
-  async steer(text: string): Promise<{ currentTaskId: string | null }> {
+  async steer(
+    text: string,
+    options?: { fromChat?: boolean },
+  ): Promise<{ currentTaskId: string | null }> {
     const meta = this.store.readMeta();
     if (meta === null) return { currentTaskId: null };
-    meta.pendingSteer.push(text);
+    meta.pendingSteer.push(
+      options?.fromChat === true ? CHAT_STEER_PREFIX + text : text,
+    );
     this.store.writeMeta(meta);
     return { currentTaskId: meta.currentTaskId };
   }

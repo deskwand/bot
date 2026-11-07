@@ -6,6 +6,7 @@ import { ownerLocale } from "./i18n";
 export { ButlerDO } from "./butler/butler-do";
 export { TaskDO } from "./task/task-do";
 export { BotDO } from "./bot/bot-do";
+export { BotChatDO } from "./bot/bot-chat-do";
 export { ChannelDO };
 export { McpAuthDO } from "./mcp/mcp-auth-do";
 

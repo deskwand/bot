@@ -77,6 +77,7 @@ async function runTool(
   calls: string[] = [],
   butlerName = "bot-tools",
   botOverride?: BotControl,
+  destroyChat?: (id: string) => Promise<void>,
 ): Promise<{ text: string; rows: { id: string; name: string }[] }> {
   return runInDurableObject(
     butler(butlerName),
@@ -85,6 +86,9 @@ async function runTool(
       const tools = createBotTools({
         bots,
         bot: (id) => botOverride ?? botStub(id),
+        botChat: (id) => ({
+          destroy: () => destroyChat?.(id) ?? Promise.resolve(),
+        }),
         task: () => fakeTask(calls),
       });
       const tool = tools.find((candidate) => candidate.name === name);
@@ -499,6 +503,7 @@ describe("butler bot tools", () => {
 
   it("delete_bot cancels the run and empties the bot", async () => {
     const calls: string[] = [];
+    const chatCalls: string[] = [];
     await runTool(
       "create_bot",
       {
@@ -516,10 +521,15 @@ describe("butler bot tools", () => {
       { id: "b1" },
       calls,
       "bot-tools-delete",
+      undefined,
+      async (id) => {
+        chatCalls.push(id);
+      },
     );
 
     expect(deleted.text).toBe("已删除机器人 b1");
     expect(calls).toEqual(["cancel"]);
+    expect(chatCalls).toEqual(["b1"]);
     expect(deleted.rows).toEqual([]);
     expect(await botStub("b1").snapshot()).toBeNull();
 
@@ -530,6 +540,32 @@ describe("butler bot tools", () => {
       "bot-tools-delete",
     );
     expect(listed.text).toBe("没有机器人");
+  });
+
+  it("delete_bot keeps going when the chat destroy fails", async () => {
+    const calls: string[] = [];
+    await runTool(
+      "create_bot",
+      { name: "早报", mission: "盯着新闻", default_interval: "2h" },
+      calls,
+      "bot-tools-delete-chat",
+    );
+    const failed = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const deleted = await runTool(
+      "delete_bot",
+      { id: "b1" },
+      calls,
+      "bot-tools-delete-chat",
+      undefined,
+      async () => {
+        throw new Error("chat destroy failed");
+      },
+    );
+
+    expect(deleted.text).toBe("已删除机器人 b1");
+    expect(deleted.rows).toEqual([]);
+    expect(failed).toHaveBeenCalled();
   });
 
   it("rename_bot trims the name and updates both stores", async () => {
