@@ -8,6 +8,8 @@ export const task = {
     download: "下载 {url}",
   },
   invalidUrl: "[无效 URL]",
+  skillsUnavailable:
+    "读取技能目录失败，本次任务未开始执行。请稍后重新发起任务。",
   state: {
     queued: "排队中",
     running: "运行中",

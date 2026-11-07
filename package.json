@@ -30,7 +30,8 @@
     "@silvia-odwyer/photon": "0.3.3",
     "@sinclair/typebox": "0.34.52",
     "agents": "0.32.0",
-    "telegram-md-entities": "0.7.3"
+    "telegram-md-entities": "0.7.3",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.23.0",

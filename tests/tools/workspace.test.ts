@@ -79,6 +79,95 @@ describe("workspaceTools", () => {
     expect(text).not.toContain("b.md");
   });
 
+  it("shares skill files between tasks", async () => {
+    await tool("write", "t-a").execute(
+      { path: "/skills/demo/SKILL.md", content: "v1" },
+      apiFor("t-a"),
+      ctx,
+    );
+    const other = textOf(
+      await tool("read", "t-b").execute(
+        { path: "/skills/demo/SKILL.md" },
+        apiFor("t-b"),
+        ctx,
+      ),
+    );
+    expect(other).toContain("v1");
+    const privateRead = await tool("read", "t-b").execute(
+      { path: "draft.md" },
+      apiFor("t-b"),
+      ctx,
+    );
+    expect(privateRead.isError).toBe(true);
+  });
+
+  it("lists the whole library or one skill directory", async () => {
+    await env.ARTIFACTS.put("skills/demo/SKILL.md", "x");
+    await env.ARTIFACTS.put("skills/demo/references/a.md", "x");
+    await env.ARTIFACTS.put("skills/demo-other/SKILL.md", "x");
+    await env.ARTIFACTS.put("work/t1/private.md", "x");
+
+    const demo = textOf(
+      await tool("list", "t1").execute({ path: "/skills/demo" }, apiFor("t1"), ctx),
+    );
+    expect(demo).toContain("/skills/demo/SKILL.md");
+    expect(demo).toContain("/skills/demo/references/a.md");
+    expect(demo).not.toContain("demo-other");
+    expect(demo).not.toContain("private.md");
+
+    const library = textOf(
+      await tool("list", "t1").execute({ path: "skills/" }, apiFor("t1"), ctx),
+    );
+    expect(library).toContain("/skills/demo/SKILL.md");
+    expect(library).toContain("/skills/demo-other/SKILL.md");
+    expect(library).not.toContain("private.md");
+
+    const drafts = textOf(
+      await tool("list", "t1").execute({}, apiFor("t1"), ctx),
+    );
+    expect(drafts).toContain("private.md");
+    expect(drafts).not.toContain("skills/");
+
+    for (const path of ["/work", "/skills/Bad"]) {
+      const result = await tool("list", "t1").execute(
+        { path },
+        apiFor("t1"),
+        ctx,
+      );
+      expect(result.isError).toBe(true);
+    }
+  });
+
+  it("says when a shared skill directory is empty", async () => {
+    const result = await tool("list", "t1").execute(
+      { path: "/skills/missing" },
+      apiFor("t1"),
+      ctx,
+    );
+    expect(textOf(result)).toContain("/skills/missing");
+    expect(textOf(result)).not.toContain("草稿区");
+  });
+
+  it("marks a truncated shared listing at the limit", async () => {
+    for (const name of ["a.md", "b.md", "c.md"]) {
+      await env.ARTIFACTS.put(`skills/demo/${name}`, "x");
+    }
+    const list = createListTool(env.ARTIFACTS, () => "t1", 2);
+    const text = textOf(
+      await list.execute({ path: "/skills/demo" }, apiFor("t1"), ctx),
+    );
+    expect(text.split("\n")).toHaveLength(3);
+    expect(text).toContain("仅显示前 2 个");
+  });
+
+  it("clears private drafts without touching shared skills", async () => {
+    await env.ARTIFACTS.put("work/t-clear/a.md", "x");
+    await env.ARTIFACTS.put("skills/demo/SKILL.md", "y");
+
+    expect(await clearWorkspace(env.ARTIFACTS, "t-clear")).toBe(1);
+    expect(await env.ARTIFACTS.head("skills/demo/SKILL.md")).not.toBeNull();
+  });
+
   it("says the workspace is empty", async () => {
     expect(textOf(await tool("list", "t9").execute({}, apiFor("t9"), ctx))).toBe("草稿区为空");
   });

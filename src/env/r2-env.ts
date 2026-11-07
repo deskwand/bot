@@ -14,6 +14,9 @@ import {
 /** Largest draft a task may write, measured in UTF-8 bytes. */
 export const MAX_DRAFT_BYTES = 1 << 20;
 
+/** A skill directory name: 1-64 lowercase letters, digits or hyphens, alphanumeric ends. */
+export const SKILL_NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
 /** R2 prefix holding one task's drafts. */
 export function workspacePrefix(taskId: string): string {
   return `work/${taskId}/`;
@@ -67,8 +70,22 @@ export function normalizePath(path: string): Result<string, FileError> {
   return ok(`/${segments.join("/")}`);
 }
 
-function keyFor(taskId: string, virtualPath: string): string {
-  return workspacePrefix(taskId) + virtualPath.slice(1);
+/**
+ * Maps a normalised virtual path to its R2 key. `/skills/` is the one shared
+ * area; everything else stays under the task's private drafts.
+ */
+function workspaceObjectKey(taskId: string, virtualPath: string): string {
+  const relative = virtualPath.slice(1);
+  return relative.startsWith("skills/")
+    ? relative
+    : workspacePrefix(taskId) + relative;
+}
+
+function skillPathError(path: string): FileError {
+  return invalid(
+    "A shared skill file must be /skills/<name>/<file> with a valid name", // i18n-ignore: model-facing
+    path,
+  );
 }
 
 function fileInfoOf(object: R2Object, virtualPath: string): FileInfo {
@@ -112,7 +129,18 @@ function tempNotSaved(): FileError {
  * get_artifact, and nothing here can run a shell.
  */
 export function createR2WorkspaceEnv(bucket: R2Bucket, taskId: string): ExecutionEnv {
-  const resolve = (path: string) => normalizePath(path);
+  const resolve = (path: string): Result<string, FileError> => {
+    const resolved = normalizePath(path);
+    if (!resolved.ok) return resolved;
+    const segments = resolved.value.split("/").slice(1);
+    if (segments[0] === "skills" && segments.length > 1) {
+      const name = segments[1];
+      if (segments.length < 3 || name === undefined || !SKILL_NAME.test(name)) {
+        return err(skillPathError(path));
+      }
+    }
+    return resolved;
+  };
 
   return {
     id: `r2:work:${taskId}`,
@@ -131,7 +159,7 @@ export function createR2WorkspaceEnv(bucket: R2Bucket, taskId: string): Executio
       void context;
       const resolved = resolve(path);
       if (!resolved.ok) return resolved;
-      const key = keyFor(taskId, resolved.value);
+      const key = workspaceObjectKey(taskId, resolved.value);
       try {
         const object = await bucket.get(key);
         if (object === null) return err(notFound(resolved.value));
@@ -164,7 +192,7 @@ export function createR2WorkspaceEnv(bucket: R2Bucket, taskId: string): Executio
       if (!resolved.ok) return err(resolved.error);
 
       const virtualPath = resolved.value;
-      const key = keyFor(taskId, virtualPath);
+      const key = workspaceObjectKey(taskId, virtualPath);
       let opened: R2Object | null;
       try {
         opened = await bucket.head(key);
@@ -247,7 +275,7 @@ export function createR2WorkspaceEnv(bucket: R2Bucket, taskId: string): Executio
       }
 
       try {
-        await bucket.put(keyFor(taskId, resolved.value), bytes, {
+        await bucket.put(workspaceObjectKey(taskId, resolved.value), bytes, {
           httpMetadata: {
             contentType:
               isText ? "text/plain; charset=utf-8" : "application/octet-stream",
@@ -287,7 +315,7 @@ export function createR2WorkspaceEnv(bucket: R2Bucket, taskId: string): Executio
       const resolved = resolve(path);
       if (!resolved.ok) return err(resolved.error);
       try {
-        const object = await bucket.head(keyFor(taskId, resolved.value));
+        const object = await bucket.head(workspaceObjectKey(taskId, resolved.value));
         if (object === null) return err(notFound(resolved.value));
         return ok(fileInfoOf(object, resolved.value));
       } catch (error) {
@@ -322,7 +350,7 @@ export function createR2WorkspaceEnv(bucket: R2Bucket, taskId: string): Executio
       const resolved = resolve(path);
       if (!resolved.ok) return err(resolved.error);
       try {
-        const object = await bucket.head(keyFor(taskId, resolved.value));
+        const object = await bucket.head(workspaceObjectKey(taskId, resolved.value));
         return ok(object !== null);
       } catch (error) {
         return err(unknown(resolved.value, error));

@@ -42,6 +42,10 @@ export function progressDownloadText(locale: Locale, url: string): string {
   return t(locale, "task.progress.download", { url });
 }
 
+export function skillsUnavailableText(locale: Locale): string {
+  return t(locale, "task.skillsUnavailable");
+}
+
 export function steerNotStartedText(locale: Locale): string {
   return t(locale, "task.control.steerNotStarted");
 }

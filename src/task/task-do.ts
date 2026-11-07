@@ -22,6 +22,8 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { createBotTaskTools } from "../bot/bot-tools";
+import { discoverSkills, type SkillCatalog } from "../skills/catalog";
+import { skillSystemPrompt } from "../skills/prompt";
 import { ownerLocale, t } from "../i18n";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import {
@@ -78,6 +80,7 @@ import {
   retryNotRetryableText,
   retryNotStartedText,
   retryOkText,
+  skillsUnavailableText,
   steerBlockedText,
   steerNotStartedText,
   steerOkText,
@@ -257,6 +260,20 @@ export class TaskDO extends Agent<Env> {
             this.spec
               ? taskSystemPrompt(ownerLocale(this.env), this.spec)
               : undefined,
+        },
+        {
+          key: "skills",
+          render: () => {
+            const raw = this.readMeta("skills_catalog");
+            if (raw === undefined || raw === "pending") return undefined;
+            try {
+              return skillSystemPrompt(JSON.parse(raw) as SkillCatalog);
+            } catch (error) {
+              // A corrupt row must not wedge every later prompt.
+              console.error("Stored skill catalog is unreadable", error);
+              return undefined;
+            }
+          },
         },
       ],
     });
@@ -482,9 +499,14 @@ export class TaskDO extends Agent<Env> {
     this.setMeta("state", "queued");
     if (this.readMeta("spec") === undefined) {
       this.spec = spec;
-      this.setMeta("task_id", spec.taskId);
-      this.setMeta("title", spec.title);
-      this.setMeta("spec", JSON.stringify(spec));
+      // The catalog marker goes in the same transaction as the spec, so a new
+      // task is never mistaken for one started before skills existed.
+      this.ctx.storage.transactionSync(() => {
+        this.setMeta("task_id", spec.taskId);
+        this.setMeta("title", spec.title);
+        this.setMeta("spec", JSON.stringify(spec));
+        this.setMeta("skills_catalog", "pending");
+      });
     }
 
     const effective = this.spec ?? spec;
@@ -525,6 +547,24 @@ export class TaskDO extends Agent<Env> {
       await this.failWith(notReady, false);
       return;
     }
+
+    // The catalog is fixed for this task: the model gets the snapshot stored
+    // here, while each entry body is read live when the model opens it.
+    if (this.readMeta("skills_catalog") === "pending") {
+      try {
+        const catalog = await discoverSkills(this.env.ARTIFACTS);
+        if (this.readMeta("state") === "cancelled") return;
+        this.setMeta("skills_catalog", JSON.stringify(catalog));
+      } catch (error) {
+        console.error("Skill discovery failed", error);
+        await this.failWith(
+          skillsUnavailableText(ownerLocale(this.env)),
+          false,
+        );
+        return;
+      }
+    }
+    if (this.readMeta("state") === "cancelled") return;
 
     // MCP tools are loaded outside the harness factory so a restart never
     // rebuilds them mid-run; install them before the model can ask for one.
