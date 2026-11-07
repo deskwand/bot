@@ -9,7 +9,10 @@ import { PiHarness } from "agents/harness/pi";
 import { contentText, Type } from "@earendil-works/pi-ai";
 import {
   createRegistry,
+  GenerationTask,
   Harness,
+  hook,
+  ToolTask,
   type ReportInfo,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
@@ -91,6 +94,7 @@ import { Outbox } from "./outbox";
 import { reviewAction, type ReviewComplete } from "./review";
 import { taskSystemPrompt } from "./prompt";
 import { taskApprovalMode, taskGates } from "./gates";
+import { STALL_AFTER_MS, StallWatch, type TaskActivity } from "./stall";
 
 export type TaskState =
   | "queued"
@@ -165,6 +169,13 @@ export class TaskDO extends Agent<Env> {
   private spec: TaskSpec | null;
 
   private outbox: Outbox | undefined;
+
+  /**
+   * Tool calls currently running, in start order (`call.id` → tool name).
+   * In memory only: after an eviction the last activity written to storage is
+   * still the best available answer.
+   */
+  private readonly runningTools = new Map<string, string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -254,6 +265,23 @@ export class TaskDO extends Agent<Env> {
     this.registry.install({
       name: "task",
       tools: [finishTask],
+      hooks: [
+        hook(ToolTask, {
+          beforeTool: (call) => {
+            this.onToolStart(call);
+            return undefined;
+          },
+          afterTool: (call) => {
+            this.onToolEnd(call);
+            return undefined;
+          },
+        }),
+        hook(GenerationTask, {
+          afterResponse: () => {
+            this.onModelResponse();
+          },
+        }),
+      ],
       sections: [
         {
           key: "task",
@@ -584,6 +612,7 @@ export class TaskDO extends Agent<Env> {
       return;
     }
     this.setMeta("state", "running");
+    await this.beginStallWatch();
 
     this.ctx.waitUntil(this.watchRun(operationId));
   }
@@ -675,6 +704,7 @@ export class TaskDO extends Agent<Env> {
     // parked, followed by an ordinary run failure: re-attach to the run below.
     await this.harness.session().retry();
     this.setMeta("state", "running");
+    await this.beginStallWatch();
     await this.outboxFor(taskId).emit({ type: "started" });
 
     const operationId = this.readMeta("operation_id") ?? `task:${taskId}`;
@@ -1141,6 +1171,118 @@ export class TaskDO extends Agent<Env> {
     schedule?: Schedule<unknown>,
   ): Promise<void> {
     await this.flushOutbox(schedule?.id);
+  }
+
+  /**
+   * Scheduled callback: decide whether the current run has gone quiet for too
+   * long. Reports at most once per stretch of inactivity; `StallWatch` clears
+   * the notification flag on the next recorded activity.
+   */
+  async checkStall(
+    _payload?: unknown,
+    schedule?: Schedule<unknown>,
+  ): Promise<void> {
+    // A check can land after the run ended; a bot run never notifies the owner.
+    if (this.currentState() !== "running" || this.spec?.botId !== undefined) {
+      return;
+    }
+
+    const now = Date.now();
+    const watch = this.stallWatch();
+    const check = watch.check(now);
+    if (check.due === "notify") {
+      await this.emitProgress({
+        type: "stalled",
+        activity: check.activity,
+        idleMs: check.idleMs,
+      });
+      watch.markNotified(now);
+    }
+
+    // After a notification, only new activity can re-arm the watch; keep
+    // checking at the same cadence so a full threshold of new silence is
+    // measured from that activity.
+    await this.scheduleStallCheck(
+      check.due === "notify" ? now + STALL_AFTER_MS : check.at,
+      schedule?.id,
+    );
+  }
+
+  /** Start watching a run that just moved to `running`. */
+  private async beginStallWatch(): Promise<void> {
+    const now = Date.now();
+    this.stallWatch().record({ kind: "waiting_model" }, now);
+    await this.scheduleStallCheck(now + STALL_AFTER_MS);
+  }
+
+  private onToolStart(call: { id: string; name: string }): void {
+    this.runningTools.set(call.id, call.name);
+    this.recordActivity({ kind: "running_tool", tool: call.name });
+  }
+
+  private onToolEnd(call: { id: string }): void {
+    this.runningTools.delete(call.id);
+    // A parallel round can still have tools in flight; name the last one that
+    // started, which is the one most likely to be the current bottleneck.
+    const remaining = [...this.runningTools.values()];
+    const tool = remaining[remaining.length - 1];
+    this.recordActivity(
+      tool === undefined
+        ? { kind: "waiting_model" }
+        : { kind: "running_tool", tool },
+    );
+  }
+
+  private onModelResponse(): void {
+    // Tools in flight will update the activity themselves when they finish;
+    // the model answering for them must not hide a running tool.
+    if (this.runningTools.size > 0) return;
+    this.recordActivity({ kind: "waiting_model" });
+  }
+
+  private recordActivity(activity: TaskActivity): void {
+    this.stallWatch().record(activity, Date.now());
+  }
+
+  private stallWatch(): StallWatch {
+    return new StallWatch({
+      read: (key) => this.readMeta(key),
+      write: (key, value) => this.setMeta(key, value),
+    });
+  }
+
+  /**
+   * Keep exactly one pending stall check. Like the outbox retry, a schedule
+   * that is already due is ignored: it is running or about to run, and would
+   * otherwise suppress its successor.
+   */
+  private async scheduleStallCheck(
+    atMs: number,
+    excludeId?: string,
+  ): Promise<void> {
+    try {
+      const now = Date.now();
+      const pending = await this.listSchedules();
+      if (
+        pending.some(
+          (schedule) =>
+            schedule.callback === "checkStall" &&
+            schedule.id !== excludeId &&
+            schedule.time * 1000 > now,
+        )
+      ) {
+        return;
+      }
+
+      const at = Math.max(atMs, now + 60_000);
+      await this.schedule((at - now) / 1000, "checkStall");
+    } catch (error) {
+      console.error(
+        `task stall check schedule failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private outboxFor(taskId: string): Outbox {

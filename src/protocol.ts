@@ -1,4 +1,5 @@
 import type { ModelRef } from "./llm/models";
+import type { TaskActivity } from "./task/stall";
 
 export type ChannelId = "telegram" | "wechat";
 
@@ -96,6 +97,7 @@ export type TaskEventBody =
     }
   | { type: "completed"; summary: string; artifacts: Artifact[] }
   | { type: "failed"; reason: string; retryable: boolean }
+  | { type: "stalled"; activity: TaskActivity; idleMs: number }
   | { type: "cancelled" };
 
 export type TaskEvent = TaskEventBody & { taskId: string; seq: number };
