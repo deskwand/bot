@@ -872,7 +872,7 @@ describe("butler chat", () => {
     const progress = channel.sent[0];
     expect(progress).toMatchObject({
       chatId: "42",
-      text: "⏳ #1 查天气：已开始",
+      text: "#1 查天气：已开始",
     });
     expect(progress?.buttons).toEqual([
       [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
@@ -1146,9 +1146,7 @@ describe("butler chat", () => {
     await vi.waitFor(() => {
       expect(sends.filter((msg) => msg.text.includes("请求执行"))).toHaveLength(1);
     });
-    expect(sends.some((msg) => msg.text.includes("\n⚠️ 对外发送\n"))).toBe(
-      true,
-    );
+    expect(sends.some((msg) => msg.text.includes("\n对外发送\n"))).toBe(true);
     expect(sends.some((msg) => msg.text === "收到")).toBe(true);
   });
 });

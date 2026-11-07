@@ -477,7 +477,7 @@ describe("butler control tools", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "42",
-        text: "⏳ #1 查天气：已开始",
+        text: "#1 查天气：已开始",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
         ],
@@ -487,7 +487,7 @@ describe("butler control tools", () => {
       {
         chatId: "42",
         messageId: "1",
-        text: "⏳ #1 查天气：早期进度",
+        text: "#1 查天气：早期进度",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
         ],
@@ -529,7 +529,7 @@ describe("butler control tools", () => {
     expect(result?.message).toBe("boom");
     expect(result?.row).toMatchObject({ status: "failed", summary: "boom" });
     expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "1", text: "❌ #1 坏任务：boom" },
+      { chatId: "42", messageId: "1", text: "#1 坏任务：boom" },
     ]);
   });
 

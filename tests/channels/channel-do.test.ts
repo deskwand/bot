@@ -604,11 +604,11 @@ describe("sendCurrent", () => {
     });
 
     await hub.sendCurrent({
-      text: "🔐 t3 请求执行 web_fetch",
+      text: "t3 请求执行 web_fetch",
       buttons: [
         [
-          { label: "✅ 批准", data: "a:approve:t3:ap1" },
-          { label: "❌ 拒绝", data: "a:reject:t3:ap1" },
+          { label: "批准", data: "a:approve:t3:ap1" },
+          { label: "拒绝", data: "a:reject:t3:ap1" },
         ],
       ],
     });

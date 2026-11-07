@@ -479,7 +479,7 @@ describe("BotDO lifecycle", () => {
     expect(fake.notices).toEqual([
       {
         botId: "b1",
-        text: "⚠️ 价格哨兵 连续 3 次失败（最近原因：boom），会继续每 6h 重试一次",
+        text: "价格哨兵 连续 3 次失败（最近原因：boom），会继续每 6h 重试一次",
       },
     ]);
 
@@ -510,7 +510,7 @@ describe("BotDO lifecycle", () => {
     expect(snapshot?.meta.consecutiveFailures).toBe(0);
     expect(fake.notices.at(-1)).toEqual({
       botId: "b1",
-      text: "✅ 价格哨兵 已恢复正常",
+      text: "价格哨兵 已恢复正常",
     });
   });
 
@@ -596,7 +596,7 @@ describe("BotDO lifecycle", () => {
     expect(await alarmAt(stub)).toBe(midnight);
     expect(fake.notices).toHaveLength(1);
     expect(fake.notices[0]?.text).toBe(
-      "⏸ 价格哨兵 今日唤醒已达 48 次，推迟到明天 00:00 UTC",
+      "价格哨兵 今日唤醒已达 48 次，推迟到明天 00:00 UTC",
     );
   });
 

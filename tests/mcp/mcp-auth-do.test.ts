@@ -286,7 +286,7 @@ describe("McpAuthDO", () => {
       expect(await instance.accessToken("notion", URL_A)).toBeNull();
       expect(await instance.accessToken("notion", URL_A)).toBeNull();
       expect(notices).toEqual([
-        "🔑 notion 授权已失效，请在桌面端重新登录",
+        "notion 授权已失效，请在桌面端重新登录",
       ]);
       expect(await instance.status()).toEqual([
         { name: "notion", state: "needs_reauth" },

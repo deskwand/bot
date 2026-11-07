@@ -75,8 +75,8 @@ describe("action buttons and hints", () => {
       actionHint("zh", "approve", { taskId: "t1", approvalId: "ap2" }),
     ).toBe("批准 t1 ap2");
     expect(actionHint("zh", "cancel", { taskId: "#1" })).toBe("取消 #1");
-    expect(approvalButtonLabel("zh", "approve")).toBe("✅ 批准");
-    expect(approvalButtonLabel("zh", "reject")).toBe("❌ 拒绝");
+    expect(approvalButtonLabel("zh", "approve")).toBe("批准");
+    expect(approvalButtonLabel("zh", "reject")).toBe("拒绝");
     expect(cancelButton("zh", "#1")).toEqual({
       label: "取消",
       hint: "取消 #1",
@@ -108,7 +108,7 @@ describe("approval card", () => {
         reason: "涉及付款",
         argsSummary: "https://example.com",
       }),
-    ).toBe("🔐 #1 请求执行 web_fetch\n⚠️ 涉及付款\nhttps://example.com");
+    ).toBe("#1 请求执行 web_fetch\n涉及付款\nhttps://example.com");
     expect(
       approvalCardText("zh", {
         label: "t1",
@@ -116,7 +116,7 @@ describe("approval card", () => {
         tool: "web_fetch",
         argsSummary: "https://example.com",
       }),
-    ).toBe("🤖 价格哨兵 🔐 t1 请求执行 web_fetch\nhttps://example.com");
+    ).toBe("🤖 价格哨兵 t1 请求执行 web_fetch\nhttps://example.com");
     expect(decisionSuffix("zh", "approved")).toBe("\n→ 已批准");
     expect(decisionSuffix("zh", "rejected")).toBe("\n→ 已拒绝");
     expect(decisionSuffix("zh", "expired")).toBe("\n→ 已过期");
@@ -150,26 +150,26 @@ describe("approval card", () => {
 describe("task lifecycle copy", () => {
   it("keeps the Chinese lifecycle messages", () => {
     expect(taskStartedText("zh", "#1", "查天气")).toBe(
-      "⏳ #1 查天气：已开始",
+      "#1 查天气：已开始",
     );
     expect(taskStartFailedText("zh", "#1", "查天气", "boom")).toBe(
-      "❌ #1 查天气：boom",
+      "#1 查天气：boom",
     );
     expect(taskProgressText("zh", "#1", "查天气", "读取页面")).toBe(
-      "⏳ #1 查天气：读取页面",
+      "#1 查天气：读取页面",
     );
     expect(taskCompletedText("zh", "#1", "查天气")).toBe(
-      "✅ #1 查天气：已完成",
+      "#1 查天气：已完成",
     );
     expect(taskCompletedText("zh", "#1", "查天气", "摘要")).toBe(
-      "✅ #1 查天气：摘要",
+      "#1 查天气：摘要",
     );
     expect(taskFailedText("zh", "#1", "查天气", "超时")).toBe(
-      "❌ #1 查天气：超时",
+      "#1 查天气：超时",
     );
     expect(retryHint("zh", true)).toBe('\n回复"重试"可继续');
     expect(retryHint("zh", false)).toBe("");    expect(taskCancelledText("zh", "#1", "查天气")).toBe(
-      "🚫 #1 查天气：已取消",
+      "#1 查天气：已取消",
     );
   });
 

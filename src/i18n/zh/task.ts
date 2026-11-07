@@ -42,6 +42,6 @@ export const task = {
     expired: "该审批已失效",
     approved: "已批准",
     rejected: "已拒绝",
-    autoApproved: "✔️ 自动放行 {tool}：{reason}",
+    autoApproved: "自动放行 {tool}：{reason}",
   },
 } as const;

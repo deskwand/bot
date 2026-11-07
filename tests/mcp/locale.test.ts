@@ -71,7 +71,7 @@ describe("MCP owner copy", () => {
     );
     expect(mcpAuthRequiredText("zh")).toBe("需要在桌面端登录授权");
     expect(mcpReauthNotice("zh", "notion")).toBe(
-      "🔑 notion 授权已失效，请在桌面端重新登录",
+      "notion 授权已失效，请在桌面端重新登录",
     );
   });
 
@@ -86,7 +86,7 @@ describe("MCP owner copy", () => {
     for (const text of english) expectEnglish(text);
     expect(mcpErrorText("en", "MCP_SERVER_NOT_FOUND")).toBe("Service not found");
     expect(mcpReauthNotice("en", "notion")).toContain("notion");
-    expect(mcpReauthNotice("en", "notion")).toContain("🔑");
+    expect(mcpReauthNotice("en", "notion")).not.toContain("🔑");
   });
 });
 
