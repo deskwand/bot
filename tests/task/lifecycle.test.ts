@@ -825,3 +825,364 @@ describe("TaskDO artifacts", () => {
     );
   });
 });
+
+describe("TaskDO skills", () => {
+  // The library is shared across tasks and tests, so each case starts empty.
+  beforeEach(async () => {
+    const page = await env.ARTIFACTS.list({ prefix: "skills/" });
+    const keys = page.objects.map((object) => object.key);
+    if (keys.length > 0) await env.ARTIFACTS.delete(keys);
+  });
+
+  const entry = (name: string, description: string, body = "SECRET_BODY") =>
+    `---\nname: ${name}\ndescription: ${description}\n---\n${body}`;
+
+  async function metaOf(taskId: string): Promise<Map<string, string>> {
+    return runInDurableObject(task(taskId), (_instance, state) => {
+      const rows = state.storage.sql
+        .exec<{ key: string; value: string }>(
+          "SELECT key, value FROM meta",
+        )
+        .toArray();
+      return new Map(rows.map((row) => [row.key, row.value]));
+    });
+  }
+
+  async function seedQueued(
+    taskId: string,
+    skillsCatalog?: string,
+  ): Promise<void> {
+    await runInDurableObject(task(taskId), (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec(
+        `INSERT INTO meta (key, value) VALUES ('task_id', ?), ('title', ?), ('spec', ?), ('state', 'queued')`,
+        taskId,
+        `Task ${taskId}`,
+        JSON.stringify(spec(taskId)),
+      );
+      if (skillsCatalog !== undefined) {
+        sql.exec(
+          "INSERT INTO meta (key, value) VALUES ('skills_catalog', ?)",
+          skillsCatalog,
+        );
+      }
+    });
+  }
+
+  it("injects metadata before the first request and reads the body only on demand", async () => {
+    await env.ARTIFACTS.put(
+      "skills/inject/SKILL.md",
+      entry("inject", "Discuss ideas"),
+    );
+    let firstRequest = "";
+    let bodyText = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          observe: (context) => {
+            firstRequest = JSON.stringify(context);
+          },
+          toolCalls: [
+            { name: "read", args: { path: "/skills/inject/SKILL.md" } },
+          ],
+        },
+        {
+          observe: (context) => {
+            bodyText = lastToolText(context);
+          },
+          toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+        },
+      ]),
+    );
+    const taskId = "t-skill-inject";
+
+    await task(taskId).start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        expect((await task(taskId).status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+
+    expect(firstRequest).toContain("Discuss ideas");
+    expect(firstRequest).toContain("/skills/inject/SKILL.md");
+    expect(firstRequest).not.toContain("SECRET_BODY");
+    expect(bodyText).toContain("SECRET_BODY");
+  });
+
+  it("stores the discovered snapshot", async () => {
+    await env.ARTIFACTS.put("skills/rescan/SKILL.md", entry("rescan", "Old text"));
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "finish_task", args: { summary: "ok" } }] },
+      ]),
+    );
+    const taskId = "t-skill-rescan";
+    const stub = task(taskId);
+
+    await stub.start(spec(taskId));
+    await vi.waitFor(
+      async () => {
+        expect((await stub.status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+
+    const stored = await metaOf(taskId);
+    expect(JSON.parse(stored.get("skills_catalog")!)).toMatchObject({
+      skills: [{ name: "rescan", description: "Old text" }],
+    });
+  });
+
+  it("reuses the stored catalog when a submit has to be retried", async () => {
+    await env.ARTIFACTS.put("skills/once/SKILL.md", entry("once", "Old text"));
+    const submit = vi
+      .spyOn(PiHarness.prototype, "submit")
+      .mockRejectedValueOnce(new Error("submit failed"));
+    let request = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          observe: (context) => {
+            request = JSON.stringify(context);
+          },
+          toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+        },
+      ]),
+    );
+    const taskId = "t-skill-submit";
+    const stub = task(taskId);
+
+    // A failed submit leaves the object queued; the caller reports the failure.
+    await expect(stub.start(spec(taskId))).rejects.toThrow("submit failed");
+    expect((await stub.status()).state).toBe("queued");
+    // The library changed after the first scan; a retry must not pick it up.
+    await env.ARTIFACTS.put("skills/once/SKILL.md", entry("once", "New text"));
+    await env.ARTIFACTS.put("skills/added/SKILL.md", entry("added", "Added later"));
+
+    await stub.start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        expect((await stub.status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+
+    // pi may submit more than once per run; only that it ran again matters.
+    expect(submit.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(request).toContain("Old text");
+    expect(request).not.toContain("New text");
+    expect(request).not.toContain("Added later");
+  });
+
+  it("keeps a cancelled task cancelled when discovery finishes late", async () => {
+    await env.ARTIFACTS.put("skills/slow/SKILL.md", entry("slow", "Slow skill"));
+    const submit = vi.spyOn(PiHarness.prototype, "submit");
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "finish_task", args: { summary: "never" } }] },
+      ]),
+    );
+    const taskId = "t-skill-cancel";
+    const stub = task(taskId);
+
+    let reading: Promise<unknown> | undefined;
+    const realArtifacts = env.ARTIFACTS;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slowBucket = {
+      list: (options?: R2ListOptions) => realArtifacts.list(options),
+      get: (key: string) => {
+        reading = gate.then(() => realArtifacts.get(key));
+        return reading;
+      },
+    };
+    setEnv({ ARTIFACTS: slowBucket });
+
+    const started = stub.start(spec(taskId));
+    await vi.waitFor(() => {
+      expect(reading).toBeDefined();
+    });
+    await stub.cancel();
+    release();
+    await started;
+
+    expect((await stub.status()).state).toBe("cancelled");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("keeps a stored empty catalog instead of rescanning", async () => {
+    await env.ARTIFACTS.put("skills/later/SKILL.md", entry("later", "Added later"));
+    let request = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          observe: (context) => {
+            request = JSON.stringify(context);
+          },
+          toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+        },
+      ]),
+    );
+    const taskId = "t-skill-empty";
+    await seedQueued(taskId, JSON.stringify({ skills: [], diagnostics: [] }));
+
+    await task(taskId).start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        expect((await task(taskId).status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+
+    expect(request).not.toContain("Added later");
+    expect(request).toContain("/skills/<name>/SKILL.md");
+  });
+
+  it("leaves a task from before this feature without a catalog", async () => {
+    await env.ARTIFACTS.put("skills/legacy/SKILL.md", entry("legacy", "Legacy lib"));
+    let request = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          observe: (context) => {
+            request = JSON.stringify(context);
+          },
+          toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+        },
+      ]),
+    );
+    const taskId = "t-skill-legacy";
+    await seedQueued(taskId);
+
+    await task(taskId).start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        expect((await task(taskId).status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+
+    expect(request).not.toContain("Legacy lib");
+    expect(request).not.toContain("/skills/<name>/SKILL.md");
+    expect((await metaOf(taskId)).has("skills_catalog")).toBe(false);
+  });
+
+  it("uses the frozen description while the entry body stays live", async () => {
+    await env.ARTIFACTS.put("skills/frozen/SKILL.md", entry("frozen", "Old text", "OLD_BODY"));
+    let request = "";
+    let bodyText = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          observe: (context) => {
+            request = JSON.stringify(context);
+          },
+          toolCalls: [
+            { name: "read", args: { path: "/skills/frozen/SKILL.md" } },
+          ],
+        },
+        {
+          observe: (context) => {
+            bodyText = lastToolText(context);
+          },
+          toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+        },
+      ]),
+    );
+    const taskId = "t-skill-frozen";
+    await seedQueued(
+      taskId,
+      JSON.stringify({
+        skills: [
+          {
+            name: "frozen",
+            description: "Frozen text",
+            path: "/skills/frozen/SKILL.md",
+          },
+        ],
+        diagnostics: [],
+      }),
+    );
+    await env.ARTIFACTS.put(
+      "skills/frozen/SKILL.md",
+      entry("frozen", "New text", "NEW_BODY"),
+    );
+
+    await task(taskId).start(spec(taskId));
+
+    await vi.waitFor(
+      async () => {
+        expect((await task(taskId).status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+
+    expect(request).toContain("Frozen text");
+    expect(request).not.toContain("New text");
+    expect(bodyText).toContain("NEW_BODY");
+  });
+
+  it("fails without calling the model when the library cannot be read", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const submit = vi.spyOn(PiHarness.prototype, "submit");
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "finish_task", args: { summary: "never" } }] },
+      ]),
+    );
+    const broken = {
+      list: () => {
+        throw new Error("R2 unavailable");
+      },
+      get: () => {
+        throw new Error("R2 unavailable");
+      },
+    };
+    setEnv({ ARTIFACTS: broken });
+    const taskId = "t-skill-broken";
+
+    await task(taskId).start(spec(taskId));
+
+    const events = await butler().debugEvents(taskId);
+    expect(events.map((event) => event.type)).toEqual(["started", "failed"]);
+    expect(events[1]?.payload).toMatchObject({ retryable: false });
+    expect(submit).not.toHaveBeenCalled();
+    expect(await metaOf(taskId)).toContainEqual(["skills_catalog", "pending"]);
+    expect(await task(taskId).status()).toMatchObject({ state: "failed" });
+  });
+
+  it("gives bot runs the same catalog", async () => {
+    await env.ARTIFACTS.put("skills/forbot/SKILL.md", entry("forbot", "Bot skill"));
+    let request = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          observe: (context) => {
+            request = JSON.stringify(context);
+          },
+          toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+        },
+      ]),
+    );
+    const taskId = "t-skill-bot";
+
+    await task(taskId).start({ ...spec(taskId), botId: "b1" });
+
+    await vi.waitFor(
+      async () => {
+        expect((await task(taskId).status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+
+    expect(request).toContain("Bot skill");
+    expect(request).toContain("write_doc");
+  });
+});

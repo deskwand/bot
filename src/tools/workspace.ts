@@ -9,7 +9,7 @@ import {
   type ImageProcessor,
 } from "@earendil-works/pi-durable/tools";
 import { INBOUND_IMAGE_LIMITS } from "../channels/media";
-import { workspacePrefix } from "../env/r2-env";
+import { SKILL_NAME, normalizePath, workspacePrefix } from "../env/r2-env";
 import { isAbortError, toolErrorResult } from "./wrap";
 
 /**
@@ -18,12 +18,44 @@ import { isAbortError, toolErrorResult } from "./wrap";
  */
 const WORKSPACE_PREFIX =
   "Private workspace for drafts; the owner never sees these files." +
+  " The one exception is /skills/, the shared skill library: files there persist across tasks and every task can read them." +
   " Files over 1 MB are refused. There is no shell; continue long files with offset/limit." +
   " Deliver a final file with save_artifact. ";
 
 const LIST_PAGE_LIMIT = 1000;
 
-const List = Type.Object({});
+const List = Type.Object({
+  path: Type.Optional(
+    Type.String({
+      description:
+        "Use /skills or a skill directory to list the shared library; omit for private drafts.",
+    }),
+  ),
+});
+
+/** Resolves the list target, or says why the path is not listable. */
+function listTarget(
+  taskId: string,
+  path: string | undefined,
+): { prefix: string; shared: boolean } | string {
+  if (path === undefined) return { prefix: workspacePrefix(taskId), shared: false };
+
+  const resolved = normalizePath(path.replace(/\/+$/, ""));
+  if (!resolved.ok) {
+    return "Only /skills or a skill directory can be listed outside the private workspace"; // i18n-ignore: model-facing
+  }
+  const segments = resolved.value.split("/").slice(1);
+  if (segments[0] === "skills" && segments.length === 1) {
+    return { prefix: "skills/", shared: true };
+  }
+  if (segments[0] !== "skills" || segments.length !== 2) {
+    return "Only /skills or a skill directory can be listed outside the private workspace"; // i18n-ignore: model-facing
+  }
+  if (!SKILL_NAME.test(segments[1]!)) {
+    return "That skill directory is not valid"; // i18n-ignore: model-facing
+  }
+  return { prefix: `skills/${segments[1]!}/`, shared: true };
+}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -94,11 +126,16 @@ export function createListTool(
 ): ToolRegistration<typeof List> {
   return {
     name: "list",
-    description: "List the files in this task's private workspace.",
+    description:
+      "List this task's private drafts, or the shared skills under /skills.",
     parameters: List,
     replay: "safe",
-    async execute(_args, _api, _context): Promise<ToolExecutionResult> {
-      const prefix = workspacePrefix(taskId());
+    async execute(args, _api, _context): Promise<ToolExecutionResult> {
+      const target = listTarget(taskId(), args.path);
+      if (typeof target === "string") {
+        return { output: [{ type: "text", text: target }], isError: true };
+      }
+      const { prefix, shared } = target;
       const lines: string[] = [];
       let cursor: string | undefined;
       let truncated = false;
@@ -110,8 +147,11 @@ export function createListTool(
               truncated = true;
               break outer;
             }
+            const name = shared
+              ? `/${object.key}`
+              : object.key.slice(prefix.length);
             lines.push(
-              `${object.key.slice(prefix.length)} · ${object.size} 字节 · ${object.uploaded.toISOString()}`,
+              `${name} · ${object.size} 字节 · ${object.uploaded.toISOString()}`,
             );
           }
           if (!page.truncated || page.cursor === undefined) break;
@@ -119,12 +159,28 @@ export function createListTool(
         }
       } catch (error) {
         return {
-          output: [{ type: "text", text: `列出草稿失败：${messageOf(error)}` }],
+          output: [
+            {
+              type: "text",
+              text: shared
+                ? `列出技能目录失败：${messageOf(error)}`
+                : `列出草稿失败：${messageOf(error)}`,
+            },
+          ],
           isError: true,
         };
       }
       if (lines.length === 0) {
-        return { output: [{ type: "text", text: "草稿区为空" }] };
+        return {
+          output: [
+            {
+              type: "text",
+              text: shared
+                ? `/${prefix.replace(/\/$/, "")} 下没有文件`
+                : "草稿区为空",
+            },
+          ],
+        };
       }
       if (truncated) lines.push(`（仅显示前 ${limit} 个）`);
       return { output: [{ type: "text", text: lines.join("\n") }] };

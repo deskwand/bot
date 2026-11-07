@@ -231,6 +231,20 @@ describe("saveArtifactTool draft intake", () => {
     expect(textOf(result)).toBe("草稿不存在：missing.md");
   });
 
+  it("does not export a shared skill through private draft intake", async () => {
+    await env.ARTIFACTS.put("skills/demo/SKILL.md", "shared-only");
+    const tool = saveArtifactTool(env.ARTIFACTS, () => "t-skill-export");
+
+    const result = await tool.execute(
+      { draft: "/skills/demo/SKILL.md" },
+      {} as never,
+      context(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("草稿不存在");
+  });
+
   it("rejects a draft path that escapes the workspace", async () => {
     await env.ARTIFACTS.put("x.md", "outside");
     const tool = saveArtifactTool(env.ARTIFACTS, () => "t-draft");

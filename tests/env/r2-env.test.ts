@@ -51,6 +51,88 @@ describe("createR2WorkspaceEnv", () => {
     expect(await e.exists("/missing.md", ctx)).toEqual({ ok: true, value: false });
   });
 
+  it("shares skill files but keeps ordinary drafts private", async () => {
+    const a = envFor("t-skill-a");
+    const b = envFor("t-skill-b");
+
+    expect((await a.writeFile("/skills/demo/SKILL.md", "v1", ctx)).ok).toBe(true);
+    expect(await env.ARTIFACTS.get("skills/demo/SKILL.md")).not.toBeNull();
+    expect(await b.readTextFile("skills/demo/SKILL.md", ctx)).toEqual({
+      ok: true,
+      value: "v1",
+    });
+    expect(await b.fileInfo("/skills/demo/SKILL.md", ctx)).toMatchObject({
+      ok: true,
+      value: { path: "/skills/demo/SKILL.md", name: "SKILL.md" },
+    });
+    expect(await b.exists("/skills/demo/SKILL.md", ctx)).toEqual({
+      ok: true,
+      value: true,
+    });
+
+    await a.writeFile("notes.md", "private", ctx);
+    expect((await b.readTextFile("notes.md", ctx)).ok).toBe(false);
+
+    await a.writeFile("/skills/demo/SKILL.md", "v2", ctx);
+    expect(await b.readTextFile("/skills/demo/SKILL.md", ctx)).toEqual({
+      ok: true,
+      value: "v2",
+    });
+  });
+
+  it("reads a shared skill through the binary reader", async () => {
+    const e = envFor("t-skill-r");
+    await e.writeFile("/skills/demo/notes.txt", "a\nbb\nccc\n", ctx);
+    const opened = await e.openBinaryReader(
+      "/skills/demo/notes.txt",
+      undefined,
+      ctx,
+    );
+    if (!opened.ok) throw opened.error;
+
+    const reader = opened.value;
+    expect(
+      new TextDecoder().decode(getOrThrow(await reader.read(2, 2, ctx))),
+    ).toBe("bb");
+    expect(
+      getOrThrow(await reader.scanLines({ startLine: 1, endLine: 2 }, ctx))
+        .newlines,
+    ).toBe(3);
+  });
+
+  it("rejects shared skill paths that could never be discovered", async () => {
+    const e = envFor();
+    for (const path of [
+      "/skills/x",
+      "/skills/Bad/SKILL.md",
+      "/skills/-a/SKILL.md",
+      "/skills/",
+    ]) {
+      const wrote = await e.writeFile(path, "x", ctx);
+      expect(!wrote.ok && wrote.error.code).toBe("invalid");
+      const read = await e.readTextFile(path, ctx);
+      expect(!read.ok && read.error.code).toBe("invalid");
+    }
+    expect(await env.ARTIFACTS.head("skills/x")).toBeNull();
+    expect(await env.ARTIFACTS.head("skills/Bad/SKILL.md")).toBeNull();
+    expect(await env.ARTIFACTS.head("skills/-a/SKILL.md")).toBeNull();
+
+    // A lone `skills` segment is an ordinary private draft, not the library.
+    expect((await e.writeFile("skills", "x", ctx)).ok).toBe(true);
+    expect(await env.ARTIFACTS.head("work/t1/skills")).not.toBeNull();
+  });
+
+  it("refuses a shared skill file over 1 MB", async () => {
+    const e = envFor();
+    const result = await e.writeFile(
+      "/skills/demo/big.md",
+      "x".repeat(MAX_DRAFT_BYTES + 1),
+      ctx,
+    );
+    expect(!result.ok && result.error.code).toBe("invalid");
+    expect(await env.ARTIFACTS.head("skills/demo/big.md")).toBeNull();
+  });
+
   it("reports a missing file as not_found", async () => {
     const result = await envFor().fileInfo("/none.md", ctx);
     expect(!result.ok && result.error.code).toBe("not_found");

@@ -10,6 +10,8 @@ export const task: Messages["task"] = {
     download: "Downloading {url}",
   },
   invalidUrl: "[invalid URL]",
+  skillsUnavailable:
+    "The skill library could not be read. No model work started; please create a new task later.",
   state: {
     queued: "queued",
     running: "running",

@@ -189,6 +189,54 @@ npm run deploy
 
 Telegram 由 Worker 主动长轮询收消息，不需要设置 webhook；旧部署升级后会自动删除已注册的 webhook。
 
+### 首次导入预置技能
+
+任务 agent 的技能库是 R2 里的共享目录 `skills/`，与任务草稿 `work/<taskId>/` 分开。仓库自带一个预置技能 `skills/brainstorming/SKILL.md`，但 `npm run deploy` 只上传 Worker 代码，不会写入 R2 对象。空 bucket 在导入前没有任何技能。
+
+在部署者电脑上执行一次（bucket 名以 `wrangler.jsonc` 的 `ARTIFACTS` 绑定为准，当前为 `my-artifacts`）：
+
+```bash
+npx wrangler r2 object put my-artifacts/skills/brainstorming/SKILL.md \
+  --file skills/brainstorming/SKILL.md \
+  --content-type "text/markdown; charset=utf-8" \
+  --remote
+```
+
+该命令会覆盖同名对象，只在首次导入、或你主动选择恢复/更新时执行，日常部署不必重复。升级 Worker 不会恢复被删除的预置技能，也不会覆盖你改过的内容。源码包必须包含 `skills/brainstorming/SKILL.md`。
+
+## 6. 技能
+
+技能是一段工作方法说明，任务 agent 在新任务开始时自动拿到全部技能的名称、描述和入口路径；需要时再读取正文。管家不加载技能。
+
+安装由任务 agent 用普通的 `write` 完成。例如发送：
+
+> 请把下面这个技能安装为 `weekly-report`，保存在 `/skills/weekly-report/SKILL.md`
+
+入口必须是 `/skills/<名字>/SKILL.md`，名字为 1–64 个小写字母、数字或连字符，首尾不能是连字符；正文开头要有 front matter：
+
+```markdown
+---
+name: weekly-report
+description: 每周汇总本周任务，输出一页 Markdown 报告。
+---
+
+# 每周报告
+...
+```
+
+附加参考文件放在同一目录下（如 `/skills/weekly-report/references/`），相对路径以技能目录为基准。写入共享目录不经过审批闸门，只受提示词约束——被不可信网页诱导写入的技能会影响之后所有新任务，所以只在你自己要求时才让它装；单文件上限 1 MiB，没有 shell，也无法执行脚本，所以带脚本的技能只能保存、不能运行。
+
+界面与生效时机：
+
+- 新增、修改或删除技能对**下一个新任务**生效；正在运行的任务沿用启动时的目录，但正文是读取当时的 R2 内容。
+- 删除没有聊天工具，用 Cloudflare R2 控制台删除 `skills/<名字>/SKILL.md`（删入口即停用），或：
+
+```bash
+npx wrangler r2 object delete my-artifacts/skills/weekly-report/SKILL.md --remote
+```
+
+- `/admin/r2/*` 是桌面端的备份接口（需要维护租约）：技能会进入备份，恢复备份也会带回已删除的技能。它不是日常删除入口。
+
 ## 自托管兜底
 
 Cloudflare 是唯一的主路径。为防止供应商锁定，可以退到本机的 Miniflare（同一份构建产物、同一个 workerd 运行时）降级运行，数据通过现有的 `/admin/backup/*` 与 `/admin/r2/*` 协议搬运。资源需求、已知的版本坑、切换纪律与 RPO 见 `docs/self-host-fallback.md`。
@@ -307,6 +355,8 @@ npm run typecheck    # tsc --noEmit
 10. 渠道切换：把 `ACTIVE_CHANNEL` 改为另一渠道并发布，确认新配置版本里当前渠道能对话，另一边发消息不会执行任务；任务进度、审批与完成通知都出现在当前渠道。
 11. 未选中微信时确认没有持续轮询；选中微信且尚无 context 时，给主人发第一条文字消息能正常回复，随后待审批会重展。
 12. 用文字「批准 t3 ap1」/「拒绝 t3 ap1」/「取消 t3」在微信执行审批与取消，重复发送仍是幂等结果。
+13. 导入预置技能后新建任务，问它有哪些技能 → 能看到 brainstorming；让它读取该技能 → 返回正文。
+14. 删除 `skills/brainstorming/SKILL.md` 后新建任务 → 不再出现该技能；正在运行的任务不受影响。
 
 ## 项目结构
 

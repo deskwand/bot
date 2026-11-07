@@ -36,6 +36,7 @@ export function taskSystemPrompt(locale: Locale, spec: TaskSpec): string {
     "first (with `save_artifact`) and pass its key in the `finish_task`",
     "artifacts list instead of pasting the content into the summary.",
     'Use read, write, edit and list for drafts in your private workspace (the owner never sees it; files over 1 MB are refused; there is no shell). Build long documents there, then deliver the final file with save_artifact using `draft: "<path>"` instead of pasting its content. Saved artifacts and owner attachments are read with get_artifact.',
+    "The only shared exception is /skills/, which holds skills every task can read and that persist across tasks. Writing there installs a skill for the next new task; it is not how you hand the owner a file.",
     "Artifacts over 15 MB are rejected, so split large output into several",
     "files or keep only the summary. The owner receives artifacts as files",
     "in this chat; never paste or invent download links.",

@@ -170,6 +170,31 @@ describe("/admin/r2/*", () => {
     ).toBe(false);
   });
 
+  it("includes shared skills and can delete their entries", async () => {
+    await env.ARTIFACTS.put("skills/demo/SKILL.md", "# skill", {
+      httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+    });
+    const routes = createR2Routes(env.ARTIFACTS);
+    const key = "skills/demo/SKILL.md";
+
+    const keys = (await listAll(routes)).map((object) => object.key);
+    expect(keys).toContain(key);
+
+    const read = await routes.fetch(
+      new Request(`https://example.com/admin/r2/object?${query(key)}`),
+    );
+    expect(read.status).toBe(200);
+    expect(await read.text()).toBe("# skill");
+
+    const removed = await routes.fetch(
+      new Request(`https://example.com/admin/r2/object?${query(key)}`, {
+        method: "DELETE",
+      }),
+    );
+    expect(removed.status).toBe(204);
+    expect(await env.ARTIFACTS.head(key)).toBeNull();
+  });
+
   it("streams an object with its content type", async () => {
     await env.ARTIFACTS.put("stream/notes.txt", "hello R2", {
       httpMetadata: { contentType: "text/plain" },
