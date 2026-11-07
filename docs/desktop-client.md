@@ -341,9 +341,18 @@ Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配�
 
 `desktop/mygo.json` 的 `updates` 是唯一的更新配置来源：
 
-- `updates.publicKey`：12.1 生成的客户端更新公钥；
-- `updates.url`：`https://updates.example.com/bot`；
-- `updates.s3`：桶 `my-update-assets`、前缀 `bot` 和 R2 endpoint（只含账号 ID，不是凭据）。
+- `updates.publicKey`：12.1 生成的客户端更新公钥，可以公开提交；
+- `updates.url`：更新源基址。仓库里是占位符 `https://updates.example.com/bot`；
+- `updates.s3`：桶、前缀与 R2 endpoint。仓库里是 `my-update-assets` / `bot` / `https://account-id.r2.cloudflarestorage.com`。endpoint 只含账号 ID，不是凭据。
+
+**维护者的真实值不进仓库。** 把它们写进两个 gitignored 文件：
+
+- `.release.env`（仓库根目录）：`PUBLIC_BASE_URL`、`R2_ARTIFACTS_BUCKET`、`DESKWAND_UPDATE_BASE`、`DESKWAND_UPDATE_BUCKET`、`DESKWAND_UPDATE_ENDPOINT`、`DESKWAND_TELEMETRY_BASE`；
+- `desktop/mygo.release.json`：`{ "url": …, "s3": { "bucket": …, "prefix": …, "endpoint": … } }`。
+
+注入方式：`npm run deploy` 会用 `.release.env` 生成 `wrangler.local.jsonc` 再 `wrangler deploy --config`（`wrangler.jsonc` 里的 vars 会覆盖云端值，桶名又没有 CLI 参数可覆盖，所以两处都靠生成配置）；`npm run build:desktop` / `npm run release:desktop` 会在编译前把 `mygo.release.json` 合进 `mygo.json`、结束后还原，并用 `-X main.telemetryBaseURL` 注入遥测地址。
+
+没有这两个文件时（开源检出）一切照常：构建和测试都能跑，只是产物指向占位符更新源、客户端不上报遥测；`release:desktop` 的真发布会直接拒绝，避免把打不开更新通道的客户端发出去。
 
 客户端后台每 6 小时检查一次，发现新版本后弹窗询问；确认后才下载、安装并重启。开发构建或安装目录不可写时不做后台检查，手动检查会说明原因。
 

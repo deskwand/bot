@@ -212,9 +212,9 @@ describe("Worker release manifest", () => {
     const text = build().manifestBytes.toString("utf8");
 
     for (const forbidden of [
-      "example",
       "your-worker.workers.dev",
       "my-artifacts",
+      "my-update-assets",
       "100000001",
       "telegramUserIds",
       "https://bot.",
@@ -540,7 +540,7 @@ describe("Wrangler dry-run integration", () => {
       expect(files.has("index.js.map")).toBe(false);
 
       const text = [...files.values()].map((bytes) => Buffer.from(bytes).toString("utf8")).join("\n");
-      for (const forbidden of ["example", "your-worker.workers.dev", "my-artifacts", "100000001"]) {
+      for (const forbidden of ["your-worker.workers.dev", "my-artifacts", "my-update-assets", "100000001"]) {
         expect(text).not.toContain(forbidden);
       }
     } finally {

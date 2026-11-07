@@ -1,5 +1,7 @@
 # 多渠道管家 Bot（Cloudflare Workers）
 
+AGPL-3.0 许可，见 [LICENSE](LICENSE)。
+
 一个部署在 Cloudflare Workers 上的单人助手：管家负责对话、记忆、任务派发与通知，每个任务由独立的 Durable Object 执行，结果（含产物文件）统一由管家经当前选中渠道回传。同一时刻只启用一个业务渠道，由 Worker 环境变量 `ACTIVE_CHANNEL` 选择（`telegram` 或 `wechat`）。
 
 - 渠道层：`ChannelDO`（Telegram 长轮询与微信 iLink 轮询，单实例）
@@ -327,7 +329,7 @@ Telegram 由 Worker 主动长轮询收消息，本地调试不需要公网地址
 
 - 用户安装、Cloudflare OAuth 登录、部署 / 接管、消息入口、保存并发布、状态含义、CLI 共存与重新授权：[`docs/desktop-client.md`](docs/desktop-client.md)
 - 维护者密钥、macOS / Windows 打包、签名与公证、客户端更新源与本机发布流程（`npm run release:desktop -- --platform both`）：[`docs/desktop-client.md`](docs/desktop-client.md) 的维护者章节
-- 平台验收、PASS / FAIL / NOT RUN 证据：[`docs/verification/desktop-acceptance.md`](docs/verification/desktop-acceptance.md)
+- 平台验收的 PASS / FAIL / NOT RUN 结论属于维护者内部记录，不随仓库公开
 - 本机构建：`npm run build:desktop`（需要 Worker 发布签名私钥；产物在 `desktop/build/`）
 
 桌面客户端更新与 Worker 发布包使用不同密钥（`deskwand-client-1` / `deskwand-release-1`）。客户端更新默认未配置更新源，且永远不会自动升级云端服务。

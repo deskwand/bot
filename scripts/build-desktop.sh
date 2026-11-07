@@ -14,6 +14,26 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 frontend="$root/desktop/frontend"
+
+# 维护者的真实发布配置（gitignored）。没有这个文件时就按提交的占位符构建，
+# 这是开源检出的预期行为。
+if [ -f "$root/.release.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$root/.release.env"
+  set +a
+fi
+
+# 更新配置只在维护者机器上有值；构建结束（不管成功还是失败）一律还原。
+merge_config() { node --experimental-strip-types "$root/scripts/lib/mygo-release-config.ts" merge; }
+restore_config() { node --experimental-strip-types "$root/scripts/lib/mygo-release-config.ts" restore || true; }
+merge_config
+trap restore_config EXIT
+
+# 遥测地址不进仓库：官方构建用 -X 注入，没配置时留空，客户端不上报。
+if [ -n "${DESKWAND_TELEMETRY_BASE:-}" ]; then
+  export MYGO_LDFLAGS="-X main.telemetryBaseURL=${DESKWAND_TELEMETRY_BASE}"
+fi
 key_file="${DESKWAND_RELEASE_SIGNING_KEY_FILE:-$HOME/.deskwand-bot/release-signing-key.pem}"
 client_key_file="${DESKWAND_CLIENT_UPDATE_KEY_FILE:-$HOME/.deskwand-bot/client-update.key}"
 # shellcheck source=scripts/lib/worker-bundle.sh

@@ -27,6 +27,10 @@ import (
 // it in sync with desktop/mygo.json.
 const appVersion = "0.1.26"
 
+// telemetryBaseURL is empty unless the build injects one with
+// -X main.telemetryBaseURL, so a build from source reports nothing.
+var telemetryBaseURL = ""
+
 const (
 	credentialService    = "com.deskwand.bot"
 	devCredentialService = "com.deskwand.bot.dev"
@@ -85,15 +89,17 @@ func main() {
 
 	// Anonymous usage reporting. A development build reports nothing: its runs
 	// would otherwise look like installs, and its version is not a release.
+	// A build from source reports nothing either: the reporting endpoint is
+	// injected at build time with -X main.telemetryBaseURL.
 	var reporter *telemetry.Reporter
 	telemetrySettings, telemetryErr := app.NewFileTelemetryStore(dataDir)
 	if telemetryErr != nil {
 		// Reporting is optional; the client must start without it.
 		log.Printf("telemetry state: %v", telemetryErr)
 	}
-	if telemetrySettings != nil && !dev {
+	if telemetrySettings != nil && !dev && telemetryBaseURL != "" {
 		reporter = telemetry.New(telemetry.Options{
-			BaseURL: "https://api.example.com",
+			BaseURL: telemetryBaseURL,
 			Version: appVersion,
 			Store:   telemetrySettings,
 		})

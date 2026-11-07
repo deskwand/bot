@@ -15,6 +15,15 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 frontend="$root/desktop/frontend"
+
+# 维护者的真实发布配置（gitignored）。没有它时基址就是占位符，真发布会拒绝。
+if [ -f "$root/.release.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$root/.release.env"
+  set +a
+fi
+
 release_key_file="${DESKWAND_RELEASE_SIGNING_KEY_FILE:-$HOME/.deskwand-bot/release-signing-key.pem}"
 client_key_file="${DESKWAND_CLIENT_UPDATE_KEY_FILE:-$HOME/.deskwand-bot/client-update.key}"
 
@@ -127,6 +136,17 @@ base="$(DESKWAND_UPDATE_BASE="${DESKWAND_UPDATE_BASE-}" node -e '
 const raw = (process.env.DESKWAND_UPDATE_BASE ?? "").trim();
 process.stdout.write((raw || process.argv[1]).replace(/\/+$/, ""));
 ' "$default_base")"
+
+# 把指向占位符的客户端发出去等于让所有人失去更新通道，所以真发布一律拒绝。
+# --dry-run 不联网、不上传，保留它以便在没有 .release.env 的机器上预览步骤。
+if [ "$dry_run" != true ]; then
+  case "$base" in
+    *example.com*)
+      echo "更新基址仍是占位符（$base）：请在 .release.env 里设置 DESKWAND_UPDATE_BASE。" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 # 每个目标自己的归档、安装包与安装脚本名。
 files_of() {

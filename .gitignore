@@ -19,3 +19,8 @@ out/
 desktop/mygo.release.json
 desktop/mygo.json.orig
 wrangler.local.jsonc
+
+# 内部文档不进公开仓库（计划、规格、评审、验收记录）
+docs/superpowers/
+docs/notes/
+docs/verification/
