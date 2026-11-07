@@ -52,6 +52,7 @@ export const errors: Messages["errors"] = {
   OWNER_REQUIRED: "Confirm the owner list (it can be empty).",
   MODELS_REQUIRED: "Choose the butler and task models.",
   CONFIG_MISSING: "DESKWAND_CONFIG is missing in the cloud.",
+  MODEL_SWITCH_REJECTED: "Model switch blocked; check the details.",
   MODEL_KEY_MISSING: "Model key missing; add it on Models.",
   SERVICE_NOT_FOUND: "Worker not found.",
   UPLOAD_REJECTED: "Cloudflare rejected the upload.",

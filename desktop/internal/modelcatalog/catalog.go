@@ -21,11 +21,12 @@ var embeddedCatalog []byte
 
 // Model is one chat model listed by a built-in provider.
 type Model struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	API     string   `json:"api"`
-	BaseURL string   `json:"baseUrl"`
-	Input   []string `json:"input,omitempty"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	API           string   `json:"api"`
+	BaseURL       string   `json:"baseUrl"`
+	Input         []string `json:"input,omitempty"`
+	ContextWindow int      `json:"contextWindow"`
 }
 
 // Provider is one built-in provider from the shared catalog.
@@ -177,6 +178,33 @@ func validateRole(locale, role string, ref RoleRef, custom map[string]map[string
 		}
 	}
 	return fmt.Errorf("%s", i18n.T(locale, "catalog.modelUnavailable", ref.Provider, ref.ID))
+}
+
+// ContextWindow resolves the Worker token limit; zero means the model is unknown.
+// Custom models default to 128000, matching src/llm/models.ts.
+func ContextWindow(doc ModelsDoc, ref RoleRef) int {
+	for _, provider := range doc.CustomProviders {
+		if provider.ID != ref.Provider {
+			continue
+		}
+		for _, model := range provider.Models {
+			if model.ID == ref.ID {
+				if model.ContextWindow == 0 {
+					return 128000
+				}
+				return model.ContextWindow
+			}
+		}
+		return 0
+	}
+	if provider, ok := LookupBuiltin(ref.Provider); ok {
+		for _, model := range provider.Models {
+			if model.ID == ref.ID {
+				return model.ContextWindow
+			}
+		}
+	}
+	return 0
 }
 
 // RequiredSecretNames returns the sorted, deduplicated MODEL_KEY_* names the

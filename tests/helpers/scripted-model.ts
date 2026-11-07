@@ -27,11 +27,14 @@ let nextModel = 0;
  * next scripted turn. Once the script is exhausted every request answers
  * `{ text: "done" }`.
  */
-export function scriptedModel(turns: ScriptedTurn[]): PiModel {
+export function scriptedModel(
+  turns: ScriptedTurn[],
+  options: { contextWindow?: number } = {},
+): PiModel {
   nextModel += 1;
   const id = `scripted-${nextModel}`;
 
-  const faux = fauxProvider({ provider: id, api: id, models: [{ id }] });
+  const faux = fauxProvider({ provider: id, api: id, models: [{ id, ...options }] });
   const steps: FauxResponseStep[] = turns.map((turn) => {
     const content = [
       ...(turn.text === undefined ? [] : [fauxText(turn.text)]),

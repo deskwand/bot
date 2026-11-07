@@ -1,4 +1,6 @@
 import { env, runInDurableObject } from "cloudflare:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { PiHarness } from "agents/harness/pi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
 import type {
@@ -216,6 +218,36 @@ async function progressMessageId(
 }
 
 describe("ButlerDO.report", () => {
+  it("delivers the Telegram result when an excessive model reduction blocks its report", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let targetRequests = 0;
+    const large = scriptedModel([{ text: "original answer" }], { contextWindow: 1_000_000 });
+    const small = scriptedModel([{ text: "must not run", observe: () => { targetRequests += 1; } }], { contextWindow: 128000 });
+    setModelOverride(large);
+    const stub = butler("report-window-refused");
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as { harness: PiHarness }).harness.prompt("original detail", { operationId: "report-window-seed" });
+    });
+    const snapshot = () => runInDurableObject(stub, async (instance) => {
+      const harness = (instance as unknown as { harness: PiHarness }).harness;
+      const conversation = await (await harness.pi()).root(BACKGROUND_CONTEXT);
+      return {
+        model: (await conversation.agent(BACKGROUND_CONTEXT)).model,
+        head: (await conversation.context(BACKGROUND_CONTEXT)).head?.id,
+        entries: await harness.session().messages(),
+      };
+    });
+    await seedTask(stub);
+    const before = await snapshot();
+    setModelOverride(small);
+    await stub.report({ taskId: "t1", seq: 1, type: "completed", summary: "Result: 1 USD = 7.12 CNY", artifacts: [] });
+    expect(targetRequests).toBe(0);
+    expect(channel.sent.map((entry) => entry.text).join("\n")).toContain("Result: 1 USD = 7.12 CNY");
+    expect(channel.sent.map((entry) => entry.text).join("\n")).toContain("四分之一");
+    expect(await snapshot()).toEqual(before);
+  });
+
   /** WeChat hub + clock fixture shared by the WeChat cases in this file. */
   async function wechatButler(name: string): Promise<{
     stub: ButlerStub;

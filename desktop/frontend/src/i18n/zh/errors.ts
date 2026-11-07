@@ -50,6 +50,7 @@ export const errors = {
   OWNER_REQUIRED: "需要确认 owner 列表（可留空）。",
   MODELS_REQUIRED: "需要选择管家和任务模型。",
   CONFIG_MISSING: "云端缺少 DESKWAND_CONFIG。",
+  MODEL_SWITCH_REJECTED: "模型切换受限，请查看详情。",
   MODEL_KEY_MISSING: "缺少模型密钥，请在模型页填写。",
   SERVICE_NOT_FOUND: "找不到该 Worker。",
   UPLOAD_REJECTED: "Cloudflare 拒绝了上传。",

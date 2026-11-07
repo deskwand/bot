@@ -25,6 +25,7 @@ export type CatalogModel = {
   api: string;
   baseUrl: string;
   input?: ("text" | "image")[];
+  contextWindow: number;
 };
 
 export type CatalogProvider = {
@@ -44,6 +45,7 @@ type PiModel = {
   name: string;
   api: string;
   baseUrl: string;
+  contextWindow: number;
 };
 
 type PiProvider = {
@@ -83,6 +85,7 @@ function workersAiProvider(): CatalogProvider {
       api: model.api,
       baseUrl: model.baseUrl,
       input: model.input,
+      contextWindow: model.contextWindow,
     }))
     .sort((left, right) => left.id.localeCompare(right.id, "en"));
   return {
@@ -159,6 +162,7 @@ export async function buildCatalog(): Promise<Catalog> {
         name: model.name,
         api: model.api,
         baseUrl: model.baseUrl,
+        contextWindow: model.contextWindow,
       }))
       .sort((left, right) => left.id.localeCompare(right.id, "en"));
     if (models.length === 0) continue;

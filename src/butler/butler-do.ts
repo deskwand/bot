@@ -1,4 +1,6 @@
 import { Agent } from "agents";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
 import { PiHarness, type PiModel } from "agents/harness/pi";
 import { createRegistry, Harness, type UserInput } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
@@ -157,9 +159,6 @@ export class ButlerDO extends Agent<Env> {
 
   private readonly backup: BackupRpc;
 
-  /** The model last applied to the Butler session (see `ensureModel`). */
-  private appliedModel: PiModel | undefined;
-
   /** The address of the message being answered (source of spawned tasks). */
   private origin: Address | null = null;
 
@@ -289,7 +288,6 @@ export class ButlerDO extends Agent<Env> {
             readRuntimeConfig(butler.env).models.butler,
             butler.env,
           );
-          butler.appliedModel = model;
           return model;
         } catch (error) {
           if (error instanceof RuntimeConfigError) return undefined;
@@ -615,7 +613,9 @@ export class ButlerDO extends Agent<Env> {
       await this.handleInboundMessage(evt);
     } catch (error) {
       console.error("butler message failed:", error);
-      await this.sendErrorReply(errorNotice(ownerLocale(this.env)));
+      await this.sendErrorReply(
+        error instanceof ModelSwitchError ? error.message : errorNotice(ownerLocale(this.env)),
+      );
     }
   }
 
@@ -1188,9 +1188,8 @@ export class ButlerDO extends Agent<Env> {
 
     let text = "";
     try {
-      // A session default already covers this; when config was missing the
-      // getter left no model and this raises the fixed configuration error.
-      if (!this.appliedModel) await this.ensureModel();
+      // Reports observe the same model-switch guard as incoming messages.
+      await this.ensureModel();
       const receipt = await this.harness.submit(lines.join("\n"), {
         operationId,
         entry: {
@@ -1204,8 +1203,12 @@ export class ButlerDO extends Agent<Env> {
       const result = await this.harness.wait(operationId);
       text = result.status === "done" && result.text ? result.text : "";
     } catch (error) {
-      // The single WeChat terminal message is sent below even when the model
-      // step fails: it is the owner's only signal that the task finished.
+      // A blocked model switch must not suppress the completed task's result
+      // on Telegram, whose terminal status and result are separate messages.
+      if (error instanceof ModelSwitchError) {
+        text = [summary, error.message].filter(Boolean).join("\n\n");
+      }
+      // WeChat also retains its existing summary fallback for other failures.
       console.error("butler completion report failed:", error);
     }
 
@@ -1485,14 +1488,17 @@ export class ButlerDO extends Agent<Env> {
       readRuntimeConfig(this.env).models.butler,
       this.env,
     );
-    if (
-      this.appliedModel?.provider === model.provider &&
-      this.appliedModel.id === model.id
-    ) {
-      return;
-    }
+    // Defaults apply only to new roots. Read the persisted model on reopen.
+    const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
+    const active = (await conversation.agent(BACKGROUND_CONTEXT)).model;
+    if (active?.provider === model.provider && active.modelId === model.id) return;
+    assertModelWindowSwitch(
+      createModelsForEnv(this.env),
+      active ? { provider: active.provider, id: active.modelId } : undefined,
+      model,
+      ownerLocale(this.env),
+    );
     await this.harness.session().setModel(model);
-    this.appliedModel = model;
   }
 
   private async sendErrorReply(text: string): Promise<void> {

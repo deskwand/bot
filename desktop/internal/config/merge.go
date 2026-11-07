@@ -97,6 +97,16 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 		}
 	}
 
+	if !empty {
+		previous, err := modelcatalog.ParseModels(base.ConfigJSON)
+		if err != nil {
+			return domain.PublishPlan{}, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: "the current configuration has unreadable model settings"}
+		}
+		if err := validateButlerWindow(mergeLocale(change), previous, modelsDoc); err != nil {
+			return domain.PublishPlan{}, err
+		}
+	}
+
 	return domain.PublishPlan{
 		BaseVersionID: base.VersionID,
 		ConfigJSON:    canonical,

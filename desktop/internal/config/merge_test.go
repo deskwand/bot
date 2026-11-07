@@ -186,6 +186,8 @@ func TestMergeExplicitEmptyOwnerClearsAllowlist(t *testing.T) {
 
 func TestMergeReplacesModelRawJSON(t *testing.T) {
 	base := baseSnapshot(t)
+	// Keep the raw JSON replacement fixture within the allowed window policy.
+	base.ConfigJSON = bytes.ReplaceAll([]byte(baseConfigDocument), []byte(`"provider":"opencode-go","id":"deepseek-v4.1-flash"`), []byte(`"provider":"anthropic","id":"claude-haiku-4-5"`))
 	plan, err := Merge(base, domain.Change{
 		BaseFingerprint: base.Fingerprint,
 		Patch: domain.EditablePatch{
@@ -568,6 +570,9 @@ func TestReferenceMigrationsAreLockedDown(t *testing.T) {
 
 func TestMergeAllowsUnknownBuiltinModelWhenReleaseChanges(t *testing.T) {
 	base := baseSnapshot(t)
+	// Preserve an already configured unknown model during an upgrade, rather
+	// than switching to a model whose window cannot be verified.
+	base.ConfigJSON = bytes.ReplaceAll([]byte(baseConfigDocument), []byte(`"provider":"opencode-go","id":"deepseek-v4.1-flash"`), []byte(`"provider":"deepseek","id":"not-in-catalog"`))
 	plan, err := Merge(base, domain.Change{
 		BaseFingerprint:    base.Fingerprint,
 		AllowReleaseChange: true,
