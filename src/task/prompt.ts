@@ -17,16 +17,19 @@ export function taskSystemPrompt(
   channel: ChannelId | null,
 ): string {
   const channelName = channel === null ? null : CHANNEL_NAMES[channel];
+  const channelSuffix = channelName === null ? "" : ` (${channelName})`;
   const deliveryLine =
-    channelName === null
-      ? "Your summary is delivered to the owner as a chat message on an asynchronous messaging channel. They usually read it on a phone, away from a computer, and may read it hours later."
-      : `Your summary is delivered to the owner as a chat message on an asynchronous messaging channel (${channelName}). They usually read it on a phone, away from a computer, and may read it hours later.`;
+    spec.botId !== undefined
+      ? `Your \`finish_task\` summary goes to the bot's run log, not to the owner. Messages you send with \`notify_owner\` reach the owner as chat messages on an asynchronous messaging channel${channelSuffix}. They usually read them on a phone, away from a computer, and may read them hours later.`
+      : `Your summary is delivered to the owner as a chat message on an asynchronous messaging channel${channelSuffix}. They usually read it on a phone, away from a computer, and may read it hours later.`;
   const phoneContext = [
     deliveryLine,
     "- Lead with the outcome in one or two sentences; detail comes after.",
     "- Keep it short enough to read on one phone screen. Use short paragraphs and brief lists only: no tables, no multi-level headings.",
     '- Every message must stand on its own: no "the above", no references to earlier turns.',
-    "- Long material goes into an artifact, not into the summary.",
+    spec.botId !== undefined
+      ? "- Long material goes into an artifact, not into the message."
+      : "- Long material goes into an artifact, not into the summary.",
     "- If you had to assume something, say so in one line at the end.",
   ];
   return [
@@ -53,13 +56,13 @@ export function taskSystemPrompt(
     "too. Use Promise.allSettled when partial results matter. Return a summary",
     "from scripts and save large results with save_artifact; full truncated",
     "script output is not automatically saved as a file in this environment.",
-    "",
-    ...phoneContext,
-    "",
     "When the work is done you MUST call the `finish_task` tool with a concise",
     "summary of the result. If an artifact is long, save it as an artifact",
     "first (with `save_artifact`) and pass its key in the `finish_task`",
     "artifacts list instead of pasting the content into the summary.",
+    "",
+    ...phoneContext,
+    "",
     'Use read, write, edit and list for drafts in your private workspace (the owner never sees it; files over 1 MB are refused; there is no shell). Build long documents there, then deliver the final file with save_artifact using `draft: "<path>"` instead of pasting its content. Saved artifacts and owner attachments are read with get_artifact.',
     "The only shared exception is /skills/, which holds skills every task can read and that persist across tasks. Writing there installs a skill for the next new task; it is not how you hand the owner a file.",
     "Artifacts over 15 MB are rejected, so split large output into several",

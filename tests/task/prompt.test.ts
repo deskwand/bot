@@ -110,3 +110,26 @@ describe("taskSystemPrompt channel and phone context", () => {
     expect(taskSystemPrompt("zh", spec(), "wechat")).not.toContain("every message interrupts them");
   });
 });
+
+describe("taskSystemPrompt delivery destination", () => {
+  it("tells a bot run its summary stays in the run log", () => {
+    const prompt = taskSystemPrompt("zh", spec("b1"), "wechat");
+    expect(prompt).toContain("goes to the bot's run log, not to the owner");
+    expect(prompt).toContain("(WeChat)");
+    expect(prompt).not.toContain("Your summary is delivered to the owner");
+    expect(prompt).toContain("not into the message.");
+  });
+
+  it("drops the channel name for a bot run when it is unknown", () => {
+    const prompt = taskSystemPrompt("zh", spec("b1"), null);
+    expect(prompt).toContain("on an asynchronous messaging channel. They usually read them");
+    expect(prompt).not.toContain("()");
+  });
+
+  it("places the phone block after the finish_task instructions for ordinary tasks", () => {
+    const prompt = taskSystemPrompt("zh", spec(), "wechat");
+    expect(prompt.indexOf("Your summary is delivered to the owner")).toBeGreaterThan(
+      prompt.indexOf("When the work is done you MUST call"),
+    );
+  });
+});
