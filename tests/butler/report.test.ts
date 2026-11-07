@@ -398,6 +398,78 @@ describe("ButlerDO.report", () => {
     expect(channel.edits).toEqual([]);
   });
 
+  it("marks terminal and approval messages as critical", async () => {
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+    const stub = butler("report-priority");
+    await seedTask(stub);
+
+    const sent: OutboundMessage[] = [];
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as {
+          channels(): {
+            currentRoute(): Promise<{
+              channel: "telegram";
+              routeKey: string;
+            }>;
+            isAdmissionCurrent(): Promise<boolean>;
+            editCurrent(): Promise<boolean>;
+            sendCurrent(msg: OutboundMessage): Promise<{
+              channel: "telegram";
+              conversationId: string;
+              routeKey: string;
+              messageId: string;
+            }>;
+          };
+        }
+      ).channels = () => ({
+        currentRoute: async () => ({
+          channel: "telegram",
+          routeKey: "test-route",
+        }),
+        isAdmissionCurrent: async () => true,
+        editCurrent: async () => false,
+        sendCurrent: async (msg) => {
+          sent.push(msg);
+          return {
+            channel: "telegram",
+            conversationId: "42",
+            routeKey: "test-route",
+            messageId: "99",
+          };
+        },
+      });
+    });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "approval_requested",
+      approvalId: "ap1",
+      tool: "web_fetch",
+      argsSummary: "a",
+    });
+    await stub.report({
+      taskId: "t1",
+      seq: 2,
+      type: "completed",
+      summary: "ok",
+      artifacts: [],
+    });
+
+    expect(
+      sent.find((message) => message.text.includes("请求执行 web_fetch"))
+        ?.priority,
+    ).toBe("critical");
+    expect(
+      sent.find((message) => message.text.includes("已完成"))?.priority,
+    ).toBe("critical");
+    // The completion report itself is an ordinary message.
+    expect(
+      sent.find((message) => message.text === "t1 结论：ok")?.priority,
+    ).toBeUndefined();
+  });
+
   it("falls back to the task summary when the report produces no text", async () => {
     const { stub, channel } = await wechatButler("report-wechat-terminal-empty");
     setModelOverride(scriptedModel([{ text: "" }]));

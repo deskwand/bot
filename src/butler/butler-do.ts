@@ -1032,7 +1032,12 @@ export class ButlerDO extends Agent<Env> {
     const row = this.repo.get(taskId);
     if (!row) return;
 
-    const message: OutboundMessage = { text: clampMessage(text) };
+    // A terminal status is the answer the owner has been waiting for: the
+    // WeChat queue must not evict it behind progress frames.
+    const message: OutboundMessage = {
+      text: clampMessage(text),
+      priority: "critical",
+    };
     if (row.progressMessageRef !== null) {
       const outcome = await this.editBestEffort(row.progressMessageRef, message);
       if (outcome === "edited") return;
@@ -1092,6 +1097,7 @@ export class ButlerDO extends Agent<Env> {
     const explicit = { taskId, approvalId: approval.approvalId };
     const ref = await this.sendBestEffort({
       text,
+      priority: "critical",
       buttons: [
         [
           {

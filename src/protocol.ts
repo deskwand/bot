@@ -69,7 +69,13 @@ export type ActionEvent = {
 export type InboundEvent = MessageEvent | ActionEvent;
 
 export type Button = { label: string; data: string; hint?: string };
-export type OutboundMessage = { text: string; buttons?: Button[][] };
+/** How readily a channel that drops on overflow may discard this message. */
+export type MessagePriority = "normal" | "alert" | "critical";
+export type OutboundMessage = {
+  text: string;
+  buttons?: Button[][];
+  priority?: MessagePriority;
+};
 
 export type Artifact = { name: string; key: string };
 
