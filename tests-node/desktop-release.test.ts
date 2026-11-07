@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   changelogHasVersion,
+  changelogSection,
   checkPublishedVersion,
   compareVersions,
   findArchive,
@@ -716,5 +717,31 @@ describe("isEntryPoint", () => {
     expect(isEntryPoint(other, moduleUrl)).toBe(false);
     expect(isEntryPoint(undefined, moduleUrl)).toBe(false);
     expect(isEntryPoint(join(dir, "missing.ts"), moduleUrl)).toBe(false);
+  });
+});
+
+describe("changelogSection", () => {
+  const markdown = [
+    "# Changelog",
+    "",
+    "## 0.1.3",
+    "",
+    "- new thing",
+    "- another thing",
+    "",
+    "## 0.1.2",
+    "",
+    "- older",
+    "",
+  ].join("\n");
+
+  it("returns the body of one version and stops at the next heading", () => {
+    expect(changelogSection(markdown, "0.1.3")).toBe("- new thing\n- another thing");
+  });
+
+  it("accepts a bracketed heading and throws for a missing or empty section", () => {
+    expect(changelogSection("# Changelog\n\n## [0.1.3] - 2026-11-04\n\n- x\n", "0.1.3")).toBe("- x");
+    expect(() => changelogSection(markdown, "0.1.1")).toThrow();
+    expect(() => changelogSection("# Changelog\n\n## 0.1.3\n\n## 0.1.2\n", "0.1.3")).toThrow("空");
   });
 });

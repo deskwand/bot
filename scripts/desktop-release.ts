@@ -5,6 +5,7 @@
  *   node --experimental-strip-types scripts/desktop-release.ts preflight <version>
  *   node --experimental-strip-types scripts/desktop-release.ts check-remote <target> <version>
  *   node --experimental-strip-types scripts/desktop-release.ts verify <target> <version> <buildDir> [otherTarget]
+ *   node --experimental-strip-types scripts/desktop-release.ts notes <version>
  *
  * target 取 darwin-arm64 或 windows-amd64。The publish itself is performed by
  * `mygo build -upload`; this module only reads local files and the public
@@ -82,6 +83,25 @@ export function changelogHasVersion(markdown: string, version: string): boolean 
   const escaped = escapeRegExp(version);
   const heading = new RegExp(`^##\\s+(?:\\[${escaped}\\]|${escaped})(?:\\s+-\\s+.*)?\\s*$`, "m");
   return heading.test(markdown);
+}
+
+/**
+ * Returns the changelog section of `version` without its heading, which is what
+ * a GitHub release body should contain. The section ends at the next `## `.
+ */
+export function changelogSection(markdown: string, version: string): string {
+  const escaped = escapeRegExp(version);
+  const lines = markdown.split("\n");
+  const start = lines.findIndex((line) =>
+    new RegExp(`^##\\s+(?:\\[${escaped}\\]|${escaped})(?:\\s+-\\s+.*)?\\s*$`).test(line),
+  );
+  if (start === -1) throw new Error(`desktop/CHANGELOG.md 缺少 ## ${version} 一节`);
+
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => line.startsWith("## "));
+  const body = (end === -1 ? rest : rest.slice(0, end)).join("\n").trim();
+  if (body.length === 0) throw new Error(`desktop/CHANGELOG.md 的 ## ${version} 一节是空的`);
+  return body;
 }
 
 /** Returns a description of the first version mismatch, or null when all agree. */
@@ -416,7 +436,7 @@ function needed(value: string | undefined, usage: string): string {
   return value;
 }
 
-const USAGE = "desktop-release.ts <preflight|check-remote|verify> ...";
+const USAGE = "desktop-release.ts <preflight|check-remote|verify|notes> ...";
 
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
@@ -437,6 +457,12 @@ async function main(): Promise<void> {
       } else {
         console.log(`${target} 线上版本 ${result.published}，准备发布 ${version}`);
       }
+      return;
+    }
+    case "notes": {
+      const version = needed(args[0], "notes <version>");
+      const path = join(REPO_ROOT, "desktop", "CHANGELOG.md");
+      process.stdout.write(changelogSection(readFileSync(path, "utf8"), version) + "\n");
       return;
     }
     case "verify": {

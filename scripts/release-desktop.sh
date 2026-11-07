@@ -40,16 +40,20 @@ trap 'exit 143' TERM
 
 usage() {
   cat >&2 <<'EOF'
-用法：release-desktop.sh [--dry-run] [--platform macos|windows|both]
+用法：release-desktop.sh [--dry-run] [--platform macos|windows|both] [--github-only] [--no-github]
 
-  --dry-run   只打印发布步骤，不联网、不读凭据、不构建、不上传
-  --platform  发布目标，默认按宿主平台（macOS = macos）；both 先 macOS 后 Windows
+  --dry-run      只打印发布步骤，不联网、不读凭据、不构建、不上传
+  --platform     发布目标，默认按宿主平台（macOS = macos）；both 先 macOS 后 Windows
+  --github-only  只给已发布的版本打 tag 并建 GitHub Release，不构建、不上传
+  --no-github    不发 tag、不建 GitHub Release
 EOF
 }
 
 dry_run=false
 platform=""
 platform_set=false
+github=true
+github_only=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)
@@ -65,6 +69,14 @@ while [ "$#" -gt 0 ]; do
     --platform=*)
       platform="${1#--platform=}"
       platform_set=true
+      shift
+      ;;
+    --github-only)
+      github_only=true
+      shift
+      ;;
+    --no-github)
+      github=false
       shift
       ;;
     -h|--help)
@@ -208,6 +220,8 @@ if [ "$dry_run" = true ]; then
   if [ "$platform" = "both" ]; then
     echo "   windows 的核验额外带上 darwin-arm64，确认共享 SHA256SUMS 仍保留 macOS 行"
   fi
+  echo "7. 打 tag v${version}、推送到 origin，并在两个平台的 manifest 都到该版本后建 GitHub Release"
+  echo "   （--no-github 跳过；事后补发用 --github-only）"
   echo
   echo "本命令只打印，以下动作一行都不跑：构建、读取私钥或 R2 凭据、联网、上传。"
   exit 0
@@ -225,7 +239,14 @@ if printf '%s\n' "${targets[@]}" | grep -qx macos; then
   fi
 fi
 
-echo "==> 1/7 前置检查"
+# --github-only：版本已经在 R2 上，只补 tag 与 GitHub Release。
+if [ "$github_only" = true ]; then
+  echo "==> 只打 tag 与 GitHub Release（${version}）"
+  github_tag_and_release
+  exit 0
+fi
+
+echo "==> 1/8 前置检查"
 if [ -n "$(git -C "$root" status --porcelain)" ]; then
   echo "工作区不干净：请先提交或清理改动再发布" >&2
   exit 1
@@ -238,7 +259,7 @@ for key in "$release_key_file" "$client_key_file"; do
   fi
 done
 
-echo "==> 2/7 发布预检与线上版本检查"
+echo "==> 2/8 发布预检与线上版本检查"
 node --experimental-strip-types "$root/scripts/desktop-release.ts" preflight "$version"
 # 公网 manifest 的读取会偶发 fetch failed（本机实测），失败即中止发布会让人误以为
 # 版本冲突。这里只对网络读取重试 3 次；版本冲突等确定性错误仍会连续失败并中止。
@@ -256,7 +277,7 @@ for target in "${targets[@]}"; do
   done
 done
 
-echo "==> 3/7 逐平台构建产物"
+echo "==> 3/8 逐平台构建产物"
 # 合并维护者的更新配置并保持到脚本退出：5/7 的 mygo -upload 也要读同一份 updates，
 # 若只在 build-desktop.sh 里合并，它退出时就会把 mygo.json 还原成占位符，上传会去
 # 读 updates.example.com 的 SHA256SUMS 而失败。
@@ -267,7 +288,7 @@ for target in "${targets[@]}"; do
   bash "$root/scripts/build-desktop.sh" --platform "$target"
 done
 
-echo "==> 4/7 读取 R2 凭据"
+echo "==> 4/8 读取 R2 凭据"
 # R2 凭据只存在于脚本内存与上传子 shell 的环境里，不打印、不写文件。
 r2_credentials="$(node -e '
 const fs = require("node:fs");
@@ -291,7 +312,7 @@ aws_key_id="$(printf '%s\n' "$r2_credentials" | sed -n '1p')"
 aws_secret="$(printf '%s\n' "$r2_credentials" | sed -n '2p')"
 unset r2_credentials
 
-echo "==> 5/7 逐平台上传到 R2"
+echo "==> 5/8 逐平台上传到 R2"
 for target in "${targets[@]}"; do
   t="$(target_of "$target")"
   files_of "$t"
@@ -312,7 +333,7 @@ for target in "${targets[@]}"; do
   )
 done
 
-echo "==> 6/7 公网核验"
+echo "==> 6/8 公网核验"
 for target in "${targets[@]}"; do
   t="$(target_of "$target")"
   if [ "$t" = "windows-amd64" ] && [ "$platform" = "both" ]; then
@@ -324,7 +345,7 @@ for target in "${targets[@]}"; do
   fi
 done
 
-echo "==> 7/7 完成"
+echo "==> 7/8 完成"
 for target in "${targets[@]}"; do
   t="$(target_of "$target")"
   files_of "$t"
@@ -334,3 +355,70 @@ for target in "${targets[@]}"; do
   fi
 done
 echo "只发布了一个平台时，另一个平台用 --platform <macos|windows> 单独重跑；不得重建同版本覆盖。"
+
+# 版本发布完成后打 tag 并建 GitHub Release。两个平台的公网 manifest 都到这一版才建
+# Release，避免把一个只有单平台可用的版本当成完整发布对外公布。
+github_tag_and_release() {
+  local tag="v${version}"
+  if ! command -v gh >/dev/null; then
+    echo "缺少 gh（GitHub CLI），跳过 tag 与 GitHub Release" >&2
+    return 0
+  fi
+  if git -C "$root" rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+    echo "tag ${tag} 已存在"
+  else
+    git -C "$root" tag -a "$tag" -m "DeskWand Bot ${version}"
+    echo "已创建 tag ${tag}"
+  fi
+  if [ -z "$(git -C "$root" ls-remote --tags origin "refs/tags/${tag}")" ]; then
+    git -C "$root" push origin "$tag"
+  fi
+
+  local missing=""
+  local t published
+  for t in darwin-arm64 windows-amd64; do
+    # manifest 的排版由 mygo 决定，所以按 JSON 解析而不是匹配文本。
+    published="$(curl -fsS --max-time 30 "${base}/update-${t}.json" 2>/dev/null |
+      node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).version))}catch{}})' ||
+      true)"
+    if [ "$published" != "$version" ]; then
+      missing="${missing} ${t}"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    echo "尚缺平台：${missing}（tag 已推送）。两个平台的 manifest 都到 ${version} 后，"
+    echo "运行 npm run release:desktop -- --github-only 建 GitHub Release。"
+    return 0
+  fi
+
+  local notes assets=() target dir
+  notes="$(mktemp)"
+  node --experimental-strip-types "$root/scripts/desktop-release.ts" notes "$version" >"$notes"
+  for target in macos windows; do
+    files_of "$(target_of "$target")"
+    dir="$(build_dir_of "$target")"
+    if [ -f "$dir/$installer" ]; then
+      assets+=("$dir/$installer")
+    else
+      echo "缺少本平台安装包 ${installer}：Release 将不带它" >&2
+    fi
+  done
+  [ -f "$root/desktop/build/SHA256SUMS" ] && assets+=("$root/desktop/build/SHA256SUMS")
+
+  if (cd "$root" && gh release view "$tag" >/dev/null 2>&1); then
+    echo "GitHub Release ${tag} 已存在"
+  else
+    (cd "$root" && gh release create "$tag" \
+      --title "DeskWand Bot ${version}" \
+      --notes-file "$notes" \
+      "${assets[@]}")
+  fi
+  rm -f "$notes"
+}
+
+echo "==> 8/8 打 tag 与 GitHub Release"
+if [ "$github" = true ]; then
+  github_tag_and_release
+else
+  echo "已指定 --no-github：跳过 tag 与 GitHub Release"
+fi
