@@ -35,6 +35,9 @@ if [ "${DESKWAND_RELEASE_CONFIG_MERGED:-}" = "1" ]; then
 else
   merge_config
   trap restore_config EXIT
+  # EXIT trap 不会因 SIGTERM/SIGINT 触发：被打断也要还原掉真实域名与账号 ID。
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 fi
 
 # 遥测地址不进仓库：官方构建用 -X 注入，没配置时留空，客户端不上报。

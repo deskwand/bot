@@ -29,7 +29,14 @@ client_key_file="${DESKWAND_CLIENT_UPDATE_KEY_FILE:-$HOME/.deskwand-bot/client-u
 
 # 合并/还原维护者的发布配置（desktop/mygo.release.json → desktop/mygo.json）。
 merge_config() { node --experimental-strip-types "$root/scripts/lib/mygo-release-config.ts" merge; }
-restore_config() { node --experimental-strip-types "$root/scripts/lib/mygo-release-config.ts" restore || true; }
+restore_config() { node --experimental-strip-types "$root/scripts/lib/mygo-release-config.ts" restore >/dev/null 2>&1 || true; }
+# EXIT trap 不会因 SIGTERM/SIGINT 触发，而合并后的 mygo.json 里是真实域名与账号 ID：
+# 被打断也要先还原，所以把这两个信号转成一次正常退出。
+# 上一次被 SIGKILL 或断电打断时会留下合并态，这里先还原，避免把真值留在工作区。
+restore_config >/dev/null 2>&1 || true
+trap restore_config EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 usage() {
   cat >&2 <<'EOF'
@@ -254,7 +261,6 @@ echo "==> 3/7 逐平台构建产物"
 # 若只在 build-desktop.sh 里合并，它退出时就会把 mygo.json 还原成占位符，上传会去
 # 读 updates.example.com 的 SHA256SUMS 而失败。
 merge_config
-trap restore_config EXIT
 export DESKWAND_RELEASE_CONFIG_MERGED=1
 # build-desktop.sh 自己生成并签名 Worker 发布包、嵌入客户端，再打包本平台产物。
 for target in "${targets[@]}"; do
