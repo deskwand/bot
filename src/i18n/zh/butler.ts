@@ -24,6 +24,8 @@ export const butler = {
     retryHint: '回复"重试"可继续',
     cancelButton: "取消",
     missing: "任务不存在",
+    stalledModel: "{label} {title}：在等模型响应，已经 {minutes} 分钟没有进展",
+    stalledTool: "{label} {title}：最后一步是「{tool}」，已经 {minutes} 分钟没有返回",
     artifactFailed: "产物「{name}」未能送达（{reason}）",
   },
   notice: {

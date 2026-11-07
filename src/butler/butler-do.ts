@@ -57,6 +57,7 @@ import {
   taskProgressText,
   taskStartedText,
   taskStartFailedText,
+  taskStalledText,
   unsupportedMessageNotice,
   voiceUnavailableNotice,
 } from "./owner-copy";
@@ -758,6 +759,9 @@ export class ButlerDO extends Agent<Env> {
       case "cancelled":
         await this.handleCancelled(taskId, now);
         break;
+      case "stalled":
+        await this.handleStalled(taskId, body);
+        break;
     }
 
     // A report is an activity point: re-present approvals this route owns.
@@ -941,6 +945,34 @@ export class ButlerDO extends Agent<Env> {
     }
 
     this.scheduleProgressFlush(taskId, now);
+  }
+
+  /**
+   * A stalled run gets one standalone notice, so the progress message keeps
+   * its reference and the terminal event still edits that same message. Bot
+   * tasks never alert the owner, and a report that arrives after the task
+   * ended must not resurrect it.
+   */
+  private async handleStalled(
+    taskId: string,
+    body: Extract<TaskEventBody, { type: "stalled" }>,
+  ): Promise<void> {
+    const row = this.repo.get(taskId);
+    if (!row || row.status !== "running" || row.botId !== null) return;
+
+    const locale = ownerLocale(this.env);
+    await this.sendBestEffort({
+      text: clampMessage(
+        taskStalledText(
+          locale,
+          taskLabel(row),
+          row.title,
+          body.activity,
+          body.idleMs,
+        ),
+      ),
+      priority: "alert",
+    });
   }
 
   private scheduleProgressFlush(taskId: string, now: number): void {

@@ -1280,6 +1280,149 @@ describe("ButlerDO.report", () => {
   });
 });
 
+describe("ButlerDO.report stalled", () => {
+  type Boundary = {
+    currentRoute(): Promise<{ channel: "telegram"; routeKey: string }>;
+    isAdmissionCurrent(): Promise<boolean>;
+    editCurrent(ref: ChannelMessageRef): Promise<boolean>;
+    sendCurrent(msg: OutboundMessage): Promise<ChannelMessageRef>;
+  };
+
+  async function capture(stub: ButlerStub): Promise<{
+    sent: OutboundMessage[];
+    edited: ChannelMessageRef[];
+  }> {
+    const sent: OutboundMessage[] = [];
+    const edited: ChannelMessageRef[] = [];
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { channels(): Boundary }).channels = () => ({
+        currentRoute: async () => ({
+          channel: "telegram",
+          routeKey: "test-route",
+        }),
+        isAdmissionCurrent: async () => true,
+        editCurrent: async (ref) => {
+          edited.push(ref);
+          return true;
+        },
+        sendCurrent: async (msg) => {
+          sent.push(msg);
+          return {
+            channel: "telegram",
+            conversationId: "42",
+            routeKey: "test-route",
+            messageId: String(sent.length),
+          };
+        },
+      });
+    });
+    return { sent, edited };
+  }
+
+  const stalledTool = {
+    activity: { kind: "running_tool" as const, tool: "web_fetch" },
+    idleMs: 600_000,
+  };
+
+  it("sends one alert for a stalled tool", async () => {
+    const stub = butler("report-stalled-tool");
+    const { sent } = await capture(stub);
+    await seedTask(stub, { status: "running" });
+
+    await stub.report({ taskId: "t1", seq: 1, type: "stalled", ...stalledTool });
+
+    expect(sent).toEqual([
+      {
+        text: expect.stringContaining(
+          "最后一步是「web_fetch」，已经 10 分钟没有返回",
+        ),
+        priority: "alert",
+      },
+    ]);
+  });
+
+  it("says it is waiting for the model", async () => {
+    const stub = butler("report-stalled-model");
+    const { sent } = await capture(stub);
+    await seedTask(stub, { status: "running" });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "stalled",
+      activity: { kind: "waiting_model" },
+      idleMs: 600_000,
+    });
+
+    expect(sent.at(-1)?.text).toContain("在等模型响应");
+    expect(sent.at(-1)?.text).toContain("已经 10 分钟没有进展");
+  });
+
+  it("ignores a stalled event for a task that already ended", async () => {
+    const stub = butler("report-stalled-finished");
+    const { sent } = await capture(stub);
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+    await seedTask(stub, { status: "running" });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "ok",
+      artifacts: [],
+    });
+    const before = sent.length;
+
+    await stub.report({ taskId: "t1", seq: 2, type: "stalled", ...stalledTool });
+
+    expect(sent).toHaveLength(before);
+  });
+
+  it("ignores a stalled event for a bot task", async () => {
+    const stub = butler("report-stalled-bot");
+    const { sent } = await capture(stub);
+    await seedTask(stub, { id: "b1", status: "running" });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`UPDATE tasks SET bot_id = 'bot-a' WHERE id = 'b1'`);
+    });
+
+    await stub.report({ taskId: "b1", seq: 1, type: "stalled", ...stalledTool });
+
+    expect(sent).toEqual([]);
+  });
+
+  it("does not overwrite the progress message reference", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+
+    const stub = butler("report-stalled-ref");
+    await seedTask(stub, { status: "running" });
+
+    await stub.report({ taskId: "t1", seq: 1, type: "started" });
+    await stub.report({ taskId: "t1", seq: 2, type: "stalled", ...stalledTool });
+    expect(channel.sent.map((message) => message.text).join("\n")).toContain(
+      "最后一步是「web_fetch」",
+    );
+
+    await stub.report({
+      taskId: "t1",
+      seq: 3,
+      type: "completed",
+      summary: "ok",
+      artifacts: [],
+    });
+
+    expect(channel.edits.at(-1)).toMatchObject({
+      messageId: "77",
+      text: "#1 查天气：已完成",
+    });
+    expect(await progressMessageId(stub, "t1")).toBe("77");
+  });
+});
+
 describe("ButlerDO.reconcileChannel", () => {
   type Boundary = {
     currentRoute: RouteSnapshot;

@@ -26,6 +26,10 @@ export const butler: Messages["butler"] = {
     retryHint: 'Reply "retry" to continue',
     cancelButton: "Cancel",
     missing: "Task not found",
+    stalledModel:
+      "{label} {title}: waiting for the model, no progress for {minutes} min",
+    stalledTool:
+      '{label} {title}: last step "{tool}" has not returned for {minutes} min',
     artifactFailed: "Artifact “{name}” was not delivered ({reason})",
   },
   notice: {
