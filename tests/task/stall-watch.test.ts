@@ -410,4 +410,29 @@ describe("TaskDO stall watch", () => {
 
     await cancelSchedules(stub);
   });
+
+  it("writes one meta row per activity event instead of three", async () => {
+    const { taskId, stub } = taskStub();
+    await prepareTask(stub, taskId);
+
+    const keys = await runInDurableObject(stub, (instance) => {
+      const target = instance as unknown as StallInternals;
+      const original = target.setMeta.bind(target);
+      const written: string[] = [];
+      target.setMeta = (key, value) => {
+        written.push(key);
+        original(key, value);
+      };
+
+      target.onToolStart({ id: "a", name: "web_fetch" });
+      target.onToolEnd({ id: "a" });
+      target.onModelResponse();
+      target.onToolStart({ id: "b", name: "http_request" });
+
+      return written;
+    });
+
+    // Four events used to write twelve rows across three keys.
+    expect(keys).toEqual(["activity", "activity", "activity", "activity"]);
+  });
 });

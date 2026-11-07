@@ -1273,13 +1273,15 @@ export class TaskDO extends Agent<Env> {
 
   /**
    * Re-arm the watch from the stored activity. A run that was never observed
-   * (no `activity_at`) starts its clock now, as `waiting_model`.
+   * (no recorded activity) starts its clock now, as `waiting_model`.
    */
   private async armStallCheckFromActivity(): Promise<void> {
-    if (this.readMeta("activity_at") === undefined) {
+    const watch = this.stallWatch();
+    let activityAt = watch.activityAt();
+    if (activityAt === undefined) {
       this.recordActivity({ kind: "waiting_model" });
+      activityAt = Date.now();
     }
-    const activityAt = Number(this.readMeta("activity_at") ?? Date.now());
     await this.scheduleStallCheck(activityAt + STALL_AFTER_MS);
   }
 
@@ -1324,12 +1326,8 @@ export class TaskDO extends Agent<Env> {
   /** Re-record the current activity, e.g. when an approval changes state. */
   private touchActivity(): void {
     try {
-      const raw = this.readMeta("activity_state");
-      const activity: TaskActivity =
-        raw === undefined
-          ? { kind: "waiting_model" }
-          : (JSON.parse(raw) as TaskActivity);
-      this.stallWatch().record(activity, Date.now());
+      const watch = this.stallWatch();
+      this.recordActivity(watch.activity() ?? { kind: "waiting_model" });
     } catch (error) {
       console.warn(
         `task activity record failed: ${

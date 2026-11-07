@@ -14,9 +14,18 @@ export type StallCheck =
   | { due: "notify"; activity: TaskActivity; idleMs: number }
   | { due: "later"; at: number };
 
-const ACTIVITY_AT = "activity_at";
-const ACTIVITY_STATE = "activity_state";
-const STALL_NOTIFIED_AT = "stall_notified_at";
+/** The whole watch state in one row: the clock, the step, and when it was reported. */
+type StallRecord = {
+  at: number;
+  activity: TaskActivity;
+  notifiedAt: number | null;
+};
+
+const RECORD_KEY = "activity";
+// The three-key layout that objects created before this change still carry.
+const LEGACY_ACTIVITY_AT = "activity_at";
+const LEGACY_ACTIVITY_STATE = "activity_state";
+const LEGACY_STALL_NOTIFIED_AT = "stall_notified_at";
 
 export class StallWatch {
   private readonly store: StallStore;
@@ -27,41 +36,62 @@ export class StallWatch {
     this.afterMs = afterMs;
   }
 
+  /** One row per event: the three-key layout wrote three. */
   record(activity: TaskActivity, now: number): void {
-    this.store.write(ACTIVITY_AT, String(now));
-    this.store.write(ACTIVITY_STATE, JSON.stringify(activity));
-    this.store.write(STALL_NOTIFIED_AT, "");
+    this.store.write(
+      RECORD_KEY,
+      JSON.stringify({ at: now, activity, notifiedAt: null }),
+    );
   }
 
   check(now: number): StallCheck {
-    const activityAt = this.readActivityAt();
-    if (activityAt === undefined) {
+    const record = readRecord(this.store);
+    if (record === null || record.notifiedAt !== null) {
       return { due: "later", at: now + this.afterMs };
     }
 
-    const notifiedAt = this.store.read(STALL_NOTIFIED_AT);
-    if (notifiedAt !== undefined && notifiedAt !== "") {
-      return { due: "later", at: now + this.afterMs };
-    }
-
-    const idleMs = now - activityAt;
+    const idleMs = now - record.at;
     if (idleMs < this.afterMs) {
-      return { due: "later", at: activityAt + this.afterMs };
+      return { due: "later", at: record.at + this.afterMs };
     }
 
-    return {
-      due: "notify",
-      activity: JSON.parse(this.store.read(ACTIVITY_STATE) ?? "") as TaskActivity,
-      idleMs,
-    };
+    return { due: "notify", activity: record.activity, idleMs };
   }
 
   markNotified(now: number): void {
-    this.store.write(STALL_NOTIFIED_AT, String(now));
+    const record = readRecord(this.store);
+    if (record === null) return;
+    this.store.write(
+      RECORD_KEY,
+      JSON.stringify({ ...record, notifiedAt: now }),
+    );
   }
 
-  private readActivityAt(): number | undefined {
-    const value = this.store.read(ACTIVITY_AT);
-    return value === undefined ? undefined : Number(value);
+  /** The activity clock, or undefined when no event was ever recorded. */
+  activityAt(): number | undefined {
+    return readRecord(this.store)?.at;
   }
+
+  /** The step last recorded, or undefined when none was. */
+  activity(): TaskActivity | undefined {
+    return readRecord(this.store)?.activity;
+  }
+}
+
+function readRecord(store: StallStore): StallRecord | null {
+  const raw = store.read(RECORD_KEY);
+  if (raw !== undefined) return JSON.parse(raw) as StallRecord;
+
+  const at = store.read(LEGACY_ACTIVITY_AT);
+  if (at === undefined) return null;
+  const state = store.read(LEGACY_ACTIVITY_STATE);
+  const notifiedAt = store.read(LEGACY_STALL_NOTIFIED_AT) ?? "";
+  return {
+    at: Number(at),
+    activity:
+      state === undefined
+        ? { kind: "waiting_model" }
+        : (JSON.parse(state) as TaskActivity),
+    notifiedAt: notifiedAt === "" ? null : Number(notifiedAt),
+  };
 }
