@@ -204,7 +204,7 @@ describe("approval copy", () => {
 
   it("approval card is English", () => {
     const card = approvalCardText("en", {
-      prefix: "🤖 Price scout ",
+      prefix: '"Price scout" ',
       label: "#1",
       tool: "http_request",
       reason: "Pays a bill",

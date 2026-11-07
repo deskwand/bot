@@ -13,8 +13,8 @@ export type BotAddress =
   | { kind: "ambiguous"; name: string; matches: BotRef[] };
 
 /**
- * Recognises a message that is meant for one bot: either a reply quoting a
- * `🤖 名字：…` notice, or an `@名字` / `@id` address at the start of the text.
+ * Recognises a message that is meant for one bot: either a reply quoting an
+ * `【名字】…` notice, or an `@名字` / `@id` address at the start of the text.
  *
  * A quote wins over an `@` address, so `@News 你好` under a quoted `盯盘` reply
  * still goes to `盯盘` with the body untouched.
@@ -50,7 +50,11 @@ function matchQuote(
 function hasNoticePrefix(quoted: string, name: string): boolean {
   return (
     quoted.startsWith(t("zh", "butler.notice.bot", { name, text: "" })) ||
-    quoted.startsWith(t("en", "butler.notice.bot", { name, text: "" }))
+    quoted.startsWith(t("en", "butler.notice.bot", { name, text: "" })) ||
+    // Legacy notices sent before the text prefix replaced the robot emoji.
+    // They stay recognisable so replies to older messages still reach the bot.
+    quoted.startsWith(`🤖 ${name}：`) ||
+    quoted.startsWith(`🤖 ${name}: `)
   );
 }
 

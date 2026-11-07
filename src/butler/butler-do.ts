@@ -1068,7 +1068,12 @@ export class ButlerDO extends Agent<Env> {
 
     const locale = ownerLocale(this.env);
     const bot = row.botId === null ? null : this.bots.get(row.botId);
-    const prefix = row.botId === null ? "" : `🤖 ${bot?.name ?? row.botId} `;
+    const prefix =
+      row.botId === null
+        ? ""
+        : t(locale, "butler.notice.botTaskPrefix", {
+            name: bot?.name ?? row.botId,
+          });
     const label = taskLabel(row);
     const text = clampMessage(
       approvalCardText(locale, {

@@ -4,13 +4,6 @@ import { en, zh } from "../../src/i18n";
 /** Characters rendered as emoji by default, plus the emoji variation selector. */
 const EMOJI = /\p{Extended_Pictographic}|\uFE0F/u;
 
-// Task 2 removes these exemptions along with the robot emoji marker.
-const EXEMPT = new Set([
-  "butler.notice.bot",
-  "butler.botChat.empty",
-  "butler.botChat.unavailable",
-]);
-
 function leaves(
   tree: unknown,
   prefix = "",
@@ -34,7 +27,6 @@ describe("user-visible copy", () => {
       ["en", en],
     ] as const) {
       for (const [key, value] of leaves(tree)) {
-        if (EXEMPT.has(key)) continue;
         expect(value, `${locale}:${key}`).not.toMatch(EMOJI);
       }
     }

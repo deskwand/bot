@@ -112,11 +112,11 @@ describe("approval card", () => {
     expect(
       approvalCardText("zh", {
         label: "t1",
-        prefix: "🤖 价格哨兵 ",
+        prefix: "「价格哨兵」",
         tool: "web_fetch",
         argsSummary: "https://example.com",
       }),
-    ).toBe("🤖 价格哨兵 t1 请求执行 web_fetch\nhttps://example.com");
+    ).toBe("「价格哨兵」t1 请求执行 web_fetch\nhttps://example.com");
     expect(decisionSuffix("zh", "approved")).toBe("\n→ 已批准");
     expect(decisionSuffix("zh", "rejected")).toBe("\n→ 已拒绝");
     expect(decisionSuffix("zh", "expired")).toBe("\n→ 已过期");
@@ -125,7 +125,7 @@ describe("approval card", () => {
   it("writes the English card with the same parameters", () => {
     const text = approvalCardText("en", {
       label: "#1",
-      prefix: "🤖 Price sentinel ",
+      prefix: '"Price sentinel" ',
       tool: "web_fetch",
       reason: "This spends money",
       argsSummary: "https://example.com",
@@ -213,7 +213,7 @@ describe("butler notices", () => {
       "当前模型不支持图片，请在桌面端模型页换成支持视觉的模型",
     );
     expect(botNoticeText("zh", "价格哨兵", "降价了")).toBe(
-      "🤖 价格哨兵：降价了",
+      "【价格哨兵】降价了",
     );
   });
 
