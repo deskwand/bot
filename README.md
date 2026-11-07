@@ -1,8 +1,10 @@
-# 多渠道管家 Bot（Cloudflare Workers）
+# DeskWand Bot
+
+一个部署在 Cloudflare Workers 上的单人助手。
 
 AGPL-3.0 许可，见 [LICENSE](LICENSE)。
 
-一个部署在 Cloudflare Workers 上的单人助手：管家负责对话、记忆、任务派发与通知，每个任务由独立的 Durable Object 执行，结果（含产物文件）统一由管家经当前选中渠道回传。同一时刻只启用一个业务渠道，由 Worker 环境变量 `ACTIVE_CHANNEL` 选择（`telegram` 或 `wechat`）。
+DeskWand Bot 的管家负责对话、记忆、任务派发与通知，每个任务由独立的 Durable Object 执行，结果（含产物文件）统一由管家经当前选中渠道回传。同一时刻只启用一个业务渠道，由 Worker 环境变量 `ACTIVE_CHANNEL` 选择（`telegram` 或 `wechat`）。仓库同时包含配套的 macOS / Windows 桌面客户端（见「桌面客户端」）。
 
 - 渠道层：`ChannelDO`（Telegram 长轮询与微信 iLink 轮询，单实例）
 - 控制链路：`ButlerDO`（全局单实例，Pi agent + SQLite 业务表）
@@ -325,7 +327,7 @@ Telegram 由 Worker 主动长轮询收消息，本地调试不需要公网地址
 
 ## 桌面客户端
 
-仓库同时包含 macOS / Windows 桌面客户端（Go + MyGo + React），让用户无需 Node.js、Git、Wrangler 或 Go 即可通过 Cloudflare API 部署和管理本项目：
+仓库同时包含 macOS / Windows 桌面客户端 **DeskWand Bot**（Go + MyGo + React），让用户无需 Node.js、Git、Wrangler 或 Go 即可通过 Cloudflare API 部署和管理本项目：
 
 - 用户安装、Cloudflare OAuth 登录、部署 / 接管、消息入口、保存并发布、状态含义、CLI 共存与重新授权：[`docs/desktop-client.md`](docs/desktop-client.md)
 - 维护者密钥、macOS / Windows 打包、签名与公证、客户端更新源与本机发布流程（`npm run release:desktop -- --platform both`）：[`docs/desktop-client.md`](docs/desktop-client.md) 的维护者章节
