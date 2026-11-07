@@ -27,8 +27,15 @@ fi
 # 更新配置只在维护者机器上有值；构建结束（不管成功还是失败）一律还原。
 merge_config() { node --experimental-strip-types "$root/scripts/lib/mygo-release-config.ts" merge; }
 restore_config() { node --experimental-strip-types "$root/scripts/lib/mygo-release-config.ts" restore || true; }
-merge_config
-trap restore_config EXIT
+# release-desktop.sh 会在整个发布过程中（包括它自己的上传步骤）持有合并结果，
+# 由它负责合并与还原。这里再合并一次会把备份写成已合并的内容，退出时就还原不回
+# 提交里的占位符了。
+if [ "${DESKWAND_RELEASE_CONFIG_MERGED:-}" = "1" ]; then
+  echo "==> 沿用 release-desktop.sh 已合并的发布配置"
+else
+  merge_config
+  trap restore_config EXIT
+fi
 
 # 遥测地址不进仓库：官方构建用 -X 注入，没配置时留空，客户端不上报。
 if [ -n "${DESKWAND_TELEMETRY_BASE:-}" ]; then

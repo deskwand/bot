@@ -9,11 +9,14 @@ import { join } from "node:path";
  * A checkout without the release file builds against the committed
  * placeholders, which is what an open-source contributor gets.
  */
-export function merge(root: string): "merged" | "skipped" {
+export function merge(root: string): "merged" | "already-merged" | "skipped" {
   const configPath = join(root, "desktop/mygo.json");
   const backupPath = join(root, "desktop/mygo.json.orig");
   const releasePath = join(root, "desktop/mygo.release.json");
   if (!existsSync(releasePath)) return "skipped";
+  // A second merge in the same run would copy the already-merged file over the
+  // backup, so the committed placeholders would be lost for good.
+  if (existsSync(backupPath)) return "already-merged";
 
   copyFileSync(configPath, backupPath);
   const config = JSON.parse(readFileSync(configPath, "utf8")) as { updates?: object };
