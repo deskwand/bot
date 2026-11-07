@@ -1,6 +1,6 @@
 import { Agent } from "agents";
 import { PiHarness, type PiModel } from "agents/harness/pi";
-import { createRegistry, Harness, type UserInput } from "@earendil-works/pi-durable";
+import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
 import { artifactNameFromKey } from "../artifact";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
@@ -8,7 +8,7 @@ import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
 import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { ownerLocale, t, type Locale } from "../i18n";
-import { attachmentLine, isInboxKey } from "../channels/inbox";
+import { isInboxKey } from "../channels/inbox";
 import type { TextAction } from "../channels/text-action";
 import type {
   DbSchema,
@@ -17,16 +17,7 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
-import {
-  lastModelError,
-  userTextForModelError,
-} from "../llm/model-errors";
-import {
-  createModelsForEnv,
-  modelAcceptsImages,
-  modelReadiness,
-  resolveModel,
-} from "../llm/models";
+import { createModelsForEnv, resolveModel } from "../llm/models";
 import { PI_PROGRESS } from "../llm/pi-settings";
 import {
   encodeAction,
@@ -50,7 +41,6 @@ import {
   errorNotice,
   fileTooLargeNotice,
   fileUnavailableNotice,
-  imageModelNotice,
   imageUnavailableNotice,
   maintenanceRetryText,
   maintenanceText,
@@ -78,6 +68,11 @@ import {
   renderOwnerProfile,
 } from "./memory";
 import { BotsRepo } from "./bots-repo";
+import {
+  toUserInput,
+  turnBlocker,
+  unansweredText,
+} from "./model-gate";
 import { createBotTools } from "./bot-tools";
 import { butlerSystemPrompt } from "./prompt";
 import {
@@ -1404,62 +1399,27 @@ export class ButlerDO extends Agent<Env> {
 
     // Answer a missing key or an unavailable model here instead of letting pi
     // fail the run after the input was accepted.
-    const models = createModelsForEnv(this.env);
-    const butlerModel = readRuntimeConfig(this.env).models.butler;
-    const notReady = modelReadiness(this.env, models, butlerModel);
-    if (notReady) {
-      await this.sendBestEffort({ text: notReady });
-      this.kickReconcile();
-      return;
-    }
-
-    // pi-ai swaps images for a placeholder on a text-only model; say so instead.
-    if (images.length > 0 && !modelAcceptsImages(models, butlerModel)) {
-      await this.sendBestEffort({
-        text: imageModelNotice(locale),
-      });
+    const blocked = turnBlocker(this.env, images.length > 0);
+    if (blocked) {
+      await this.sendBestEffort({ text: blocked });
       this.kickReconcile();
       return;
     }
 
     const operationId = evt.eventId;
-    const attachmentText = files.map(attachmentLine).join("\n");
-    const modelText = [evt.text, attachmentText]
-      .filter((part): part is string => part !== null && part !== "")
-      .join("\n");
-    const input: UserInput =
-      images.length === 0
-        ? modelText
-        : [
-            ...(modelText === ""
-              ? []
-              : [{ type: "text" as const, text: modelText }]),
-            ...images.map((image) => ({
-              type: "image" as const,
-              data: image.data,
-              mimeType: image.mimeType,
-            })),
-          ];
+    const input = toUserInput(evt.text, images, files);
     const receipt = await this.harness.submit(input, { operationId });
     // Telegram redelivered an update we already accepted: never answer twice.
     if (!receipt.accepted) return;
 
     const result = await this.harness.wait(operationId);
     if (result.status === "unanswered") {
-      let modelError: string | undefined;
-      if (result.reason === "model_error") {
-        try {
-          modelError = lastModelError(await this.harness.session().messages());
-        } catch (error) {
-          const reason =
-            error instanceof Error ? error.message : String(error);
-          console.warn(
-            `butler: could not read the transcript after a model error: ${reason}`,
-          );
-        }
-      }
       await this.sendBestEffort({
-        text: userTextForModelError(modelError, locale) ?? errorNotice(locale),
+        text: await unansweredText(
+          result.reason,
+          () => this.harness.session().messages(),
+          locale,
+        ),
       });
       this.kickReconcile();
       return;
