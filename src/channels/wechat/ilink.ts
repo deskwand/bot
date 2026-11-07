@@ -484,9 +484,10 @@ function quotedTextOf(items: Record<string, unknown>[]): string | undefined {
     messageItem && isRecord(messageItem.text_item)
       ? messageItem.text_item
       : null;
-  const text = readString(textItem, "text") ?? readString(ref, "title");
-  const trimmed = text?.trim();
-  return trimmed ? trimmed : undefined;
+  const text = [readString(textItem, "text"), readString(ref, "title")]
+    .map((candidate) => candidate?.trim())
+    .find((candidate) => candidate);
+  return text;
 }
 
 /** A downloadable image, or `null` when the item has no CDN parameter. */

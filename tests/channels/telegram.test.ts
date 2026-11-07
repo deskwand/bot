@@ -177,10 +177,7 @@ describe("parseInbound", () => {
   });
 
   it("reply_to_message caption becomes quotedText", async () => {
-    const { calls, fetchImpl } = fakeFetch([
-      { status: 200, body: { ok: true, result: { file_path: "photos/file_7.png" } } },
-      { status: 200, bytes: pngBytes() },
-    ]);
+    const { calls, fetchImpl } = fakeFetch();
     const adapter = makeAdapter(fetchImpl);
 
     const event = await adapter.parseInbound({
@@ -199,7 +196,11 @@ describe("parseInbound", () => {
       },
     });
 
-    expect(event).toMatchObject({ quotedText: "🤖 盯盘：见图" });
+    expect(event).toMatchObject({
+      text: "那明天再看",
+      quotedText: "🤖 盯盘：见图",
+    });
+    expect("images" in event!).toBe(false);
     // The quoted photo belongs to the earlier message; it is not re-downloaded.
     expect(calls).toHaveLength(0);
   });
