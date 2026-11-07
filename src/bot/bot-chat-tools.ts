@@ -1,6 +1,10 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
-import type { BotControl as ManagementControl } from "../butler/bot-tools";
+import {
+  durationError,
+  durationRangeError,
+  type BotControl as ManagementControl,
+} from "../butler/bot-tools";
 import { searchRunsTool, setNextWakeTool, type BotControl } from "./bot-tools";
 import { RULES_DOC } from "./docs";
 import { MAX_WAKE_MS, MIN_WAKE_MS, parseDuration } from "./wake";
@@ -32,8 +36,6 @@ const Pause = Type.Object({});
 const Resume = Type.Object({
   wake_now: Type.Optional(Type.Boolean()),
 });
-
-const DURATION_HINT = "（示例：30m、2h、1d）";
 
 function output(text: string) {
   return { output: [{ type: "text" as const, text }] };
@@ -107,10 +109,10 @@ export function createBotChatTools(
       try {
         const intervalMs = parseDuration(interval);
         if (intervalMs === null) {
-          return output(`时长格式无效：${interval}${DURATION_HINT}`);
+          return output(durationError(interval));
         }
         if (intervalMs < MIN_WAKE_MS || intervalMs > MAX_WAKE_MS) {
-          return output(`时长超出范围：${interval}（最短 5m，最长 30d）`);
+          return output(durationRangeError(interval));
         }
         const result = await self().setDefaultInterval(intervalMs);
         if (result === null) return output("机器人不存在");

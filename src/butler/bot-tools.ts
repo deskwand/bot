@@ -91,11 +91,11 @@ function iso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
-function durationError(text: string): string {
+export function durationError(text: string): string {
   return `时长格式无效：${text}${DURATION_HINT}`;
 }
 
-function durationRangeError(text: string): string {
+export function durationRangeError(text: string): string {
   return `时长超出范围：${text}（最短 5m，最长 30d）`;
 }
 

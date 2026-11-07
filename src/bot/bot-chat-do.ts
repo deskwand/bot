@@ -88,7 +88,11 @@ export class BotChatDO extends Agent<Env> {
       sections: [
         {
           key: "bot-chat",
-          render: async () => this.prompt,
+          // A turn resumed in a fresh instance has no in-memory prompt, so
+          // rebuild it from the bot snapshot. Such a turn's reply is not sent:
+          // the Butler's original RPC already failed (accepted limit, see the
+          // plan's "和 spec 不同的地方" item 1).
+          render: async () => this.prompt || (await this.refreshPrompt()),
         },
       ],
     });
@@ -148,17 +152,14 @@ export class BotChatDO extends Agent<Env> {
     this.rulesWritten = null;
 
     const locale = ownerLocale(this.env);
-    const snapshot = await this.self().snapshot();
-    if (snapshot === null) {
+    const prompt = await this.refreshPrompt();
+    if (prompt === "") {
       await this.butler().notifyFromBot(
         input.botId,
         t(locale, "butler.botChat.deleted"),
       );
       return;
     }
-
-    const ownerProfile = await this.butler().ownerProfile();
-    this.prompt = botChatSystemPrompt(snapshot, ownerProfile);
 
     await this.ensureModel();
 
@@ -190,6 +191,21 @@ export class BotChatDO extends Agent<Env> {
     if (text.length > 0) {
       await this.butler().notifyFromBot(input.botId, text);
     }
+  }
+
+  /**
+   * Reads the bot snapshot and owner profile and stores the rendered system
+   * prompt. Returns "" when the bot no longer exists.
+   */
+  private async refreshPrompt(): Promise<string> {
+    const snapshot = await this.self().snapshot();
+    if (snapshot === null) {
+      this.prompt = "";
+      return "";
+    }
+    const ownerProfile = await this.butler().ownerProfile();
+    this.prompt = botChatSystemPrompt(snapshot, ownerProfile);
+    return this.prompt;
   }
 
   /** Appends the code-generated confirmation after a rules write. */

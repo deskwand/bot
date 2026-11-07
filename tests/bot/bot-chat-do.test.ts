@@ -1,5 +1,5 @@
 import type { TranscriptContext } from "@earendil-works/pi-ai";
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   setBotChatOverrides,
@@ -242,6 +242,21 @@ describe("bot chat", () => {
     expect(butler.notices.at(-1)).toEqual({ botId, text: "第二轮回答" });
   });
 
+  it("persists the bot id for a resumed turn", async () => {
+    const bot = fakeSelf();
+    install(bot, fakeButler().butler);
+    const botId = "persist-bot-id";
+    setModelOverride(scriptedModel([{ text: "好" }]));
+    const stub = chatStub(botId);
+
+    await chat(stub, botId, "你好", "e-persist-bot-id");
+
+    const stored = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.kv.get("botId"),
+    );
+    expect(stored).toBe(botId);
+  });
+
   it("answers from the bot's snapshot", async () => {
     const bot = fakeSelf(
       snapshot(
@@ -283,9 +298,11 @@ describe("bot chat", () => {
 
     expect(prompt).toContain("盯盘");
     expect(prompt).toContain("盯着价格");
-    expect(prompt).toContain("已暂停");
-    expect(prompt).toContain(new Date(Date.UTC(2030, 0, 1, 9)).toISOString());
-    expect(prompt).toContain("1d");
+    expect(prompt).toContain("状态：已暂停");
+    expect(prompt).toContain(
+      `下次唤醒：${new Date(Date.UTC(2030, 0, 1, 9)).toISOString()}`,
+    );
+    expect(prompt).toContain("默认间隔：1d");
     expect(prompt).toContain("不要半夜通知");
     expect(prompt).toContain("盯盘方法");
     expect(prompt).toContain("先看主站");
@@ -498,11 +515,38 @@ describe("bot chat", () => {
     expect(tool).toBe("时长超出范围：1m（最短 5m，最长 30d）");
   });
 
+  it("set_interval rejects an unparseable interval", async () => {
+    const bot = fakeSelf();
+    install(bot, fakeButler().butler);
+    const botId = "set-interval-invalid-bot";
+    let tool = "";
+
+    setModelOverride(
+      scriptedModel([
+        {
+          toolCalls: [{ name: "set_interval", args: { interval: "abc" } }],
+        },
+        {
+          text: "好",
+          observe: (context) => {
+            tool = toolResultText(context);
+          },
+        },
+      ]),
+    );
+
+    await chat(chatStub(botId), botId, "改成 abc", "e-set-interval-invalid");
+
+    expect(withoutSnapshot(bot.state.calls)).toEqual([]);
+    expect(tool).toBe("时长格式无效：abc（示例：30m、2h、1d）");
+  });
+
   it("set_interval applies a valid interval", async () => {
     const bot = fakeSelf();
+    const nextWakeAt = Date.UTC(2030, 0, 1, 10);
     bot.state.intervalResult = {
       defaultIntervalMs: 600_000,
-      nextWakeAt: Date.UTC(2030, 0, 1, 10),
+      nextWakeAt,
     };
     install(bot, fakeButler().butler);
     const botId = "set-interval-bot";
@@ -527,7 +571,9 @@ describe("bot chat", () => {
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       { method: "setDefaultInterval", args: [600_000] },
     ]);
-    expect(tool).toContain("10m");
+    expect(tool).toBe(
+      `已将默认间隔改为 10m，下次唤醒：${new Date(nextWakeAt).toISOString()}`,
+    );
   });
 
   it("pause pauses the bot", async () => {
@@ -567,6 +613,25 @@ describe("bot chat", () => {
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       { method: "resume", args: [true] },
+    ]);
+  });
+
+  it("resume without wake_now does not wake the bot", async () => {
+    const bot = fakeSelf();
+    install(bot, fakeButler().butler);
+    const botId = "resume-default-bot";
+
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "resume", args: {} }] },
+        { text: "好" },
+      ]),
+    );
+
+    await chat(chatStub(botId), botId, "继续吧", "e-resume-default");
+
+    expect(withoutSnapshot(bot.state.calls)).toEqual([
+      { method: "resume", args: [false] },
     ]);
   });
 
