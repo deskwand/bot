@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -14,6 +15,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/deployment"
+	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/navigation"
 	"github.com/deskwand/bot/desktop/internal/netproxy"
 	"github.com/deskwand/bot/desktop/internal/platform"
@@ -221,6 +223,13 @@ func main() {
 		}
 	})
 	mygo.App.WhenReady(func() {
+		// The page cannot render without the WebView2 Runtime, and a window
+		// that shows nothing is not diagnosable: explain it and quit.
+		if guardMissingWebView(runtime.GOOS, platform.Available, func() {
+			explainMissingWebView(locale.Current(), mygo.Dialog.Message, mygo.Shell.OpenExternal)
+		}, mygo.App.Quit) {
+			return
+		}
 		window = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "DeskWand Bot",
 			Width:     1024,
@@ -238,6 +247,43 @@ func main() {
 
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// guardMissingWebView handles the missing runtime before the first window. It
+// reports whether it took over the launch: the prompt must be on screen before
+// the process ends, so quit runs after prompt returns.
+func guardMissingWebView(goos string, available func() bool, prompt, quit func()) bool {
+	if goos != "windows" || !platform.NeedsWebViewRuntimePrompt(goos, available()) {
+		return false
+	}
+	defer quit()
+	prompt()
+	return true
+}
+
+// explainMissingWebView offers the download page using injectable native calls.
+func explainMissingWebView(locale string, message func(mygo.MessageOptions) (mygo.MessageResult, error), openExternal func(string) error) {
+	result, err := message(mygo.MessageOptions{
+		Type:    mygo.MessageError,
+		Title:   i18n.T(locale, "app.webViewMissingTitle"),
+		Message: i18n.T(locale, "app.webViewMissingMessage"),
+		Buttons: []string{
+			i18n.T(locale, "app.webViewMissingDownload"),
+			i18n.T(locale, "app.webViewMissingQuit"),
+		},
+		DefaultButton: 0,
+		CancelButton:  1,
+	})
+	if err != nil {
+		log.Printf("webview prompt: %v", err)
+		return
+	}
+	if result.Button != 0 {
+		return
+	}
+	if err := openExternal(platform.WebViewDownloadURL); err != nil {
+		log.Printf("open the WebView2 download page: %v", err)
 	}
 }
 
