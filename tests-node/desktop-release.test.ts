@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   changelogHasVersion,
   checkPublishedVersion,
   compareVersions,
   findArchive,
+  isEntryPoint,
   manifestUrl,
   parseTarget,
   verifyPublished,
@@ -687,5 +689,32 @@ describe("verifyPublishedAssets", () => {
         env: {},
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("isEntryPoint", () => {
+  // A release run from a symlinked path (macOS /tmp -> /private/tmp) used to
+  // look "imported", so main() never ran and the process still exited 0.
+  it("recognizes an entry path that reaches the module through a symlink", () => {
+    const dir = tempDir();
+    const real = join(dir, "desktop-release.ts");
+    const link = join(dir, "link.ts");
+    writeFileSync(real, "");
+    symlinkSync(real, link);
+    const moduleUrl = pathToFileURL(real).href;
+    expect(isEntryPoint(link, moduleUrl)).toBe(true);
+    expect(isEntryPoint(real, moduleUrl)).toBe(true);
+  });
+
+  it("rejects a different file and a missing argument", () => {
+    const dir = tempDir();
+    const real = join(dir, "desktop-release.ts");
+    const other = join(dir, "other.ts");
+    writeFileSync(real, "");
+    writeFileSync(other, "");
+    const moduleUrl = pathToFileURL(real).href;
+    expect(isEntryPoint(other, moduleUrl)).toBe(false);
+    expect(isEntryPoint(undefined, moduleUrl)).toBe(false);
+    expect(isEntryPoint(join(dir, "missing.ts"), moduleUrl)).toBe(false);
   });
 });

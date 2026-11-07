@@ -11,9 +11,9 @@
  * manifest. It never touches R2 or a signing key.
  */
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/;
@@ -456,7 +456,26 @@ async function main(): Promise<void> {
 }
 
 // Only run when executed directly, so helpers stay importable in tests.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+//
+// The comparison resolves both paths first: on macOS /tmp is a symlink to
+// /private/tmp, so a plain string compare of `import.meta.url` against
+// `pathToFileURL(argv[1])` says "imported" and main() never runs — the process
+// still exits 0, which silently skips preflight, the remote version check and
+// the post-upload verification.
+export function isEntryPoint(
+  argv1: string | undefined,
+  moduleUrl: string,
+  realpath: (path: string) => string = realpathSync,
+): boolean {
+  if (argv1 === undefined) return false;
+  try {
+    return realpath(argv1) === realpath(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   try {
     await main();
   } catch (error) {
