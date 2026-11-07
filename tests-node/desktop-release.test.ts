@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,12 +8,18 @@ import {
   checkPublishedVersion,
   compareVersions,
   findArchive,
+  manifestUrl,
+  parseTarget,
   verifyPublished,
+  verifyPublishedAssets,
   versionsInSync,
 } from "../scripts/desktop-release";
 
 const MANIFEST_URL = "https://updates.example.com/bot/update-darwin-arm64.json";
 const ARCHIVE = "deskwand-bot-0.1.6-darwin-arm64.tar.gz";
+const WINDOWS_ARCHIVE = "deskwand-bot-0.1.6-windows-amd64.tar.gz";
+const DARWIN_INSTALLER = "deskwand-bot-0.1.6-arm64.dmg";
+const WINDOWS_INSTALLER = "deskwand-bot-setup-0.1.6-amd64.exe";
 
 const tempDirs: string[] = [];
 
@@ -77,17 +84,25 @@ describe("findArchive", () => {
     const dir = tempDir();
     const archive = join(dir, ARCHIVE);
     writeFileSync(archive, "abc");
-    expect(findArchive(dir, "0.1.6")).toBe(archive);
+    expect(findArchive(dir, "0.1.6", "darwin-arm64")).toBe(archive);
   });
 
   it("rejects zero or many", () => {
     const empty = tempDir();
-    expect(() => findArchive(empty, "0.1.6")).toThrow();
+    expect(() => findArchive(empty, "0.1.6", "darwin-arm64")).toThrow();
 
     const many = tempDir();
     writeFileSync(join(many, ARCHIVE), "abc");
     writeFileSync(join(many, "old-0.1.6-darwin-arm64.tar.gz"), "abc");
-    expect(() => findArchive(many, "0.1.6")).toThrow();
+    expect(() => findArchive(many, "0.1.6", "darwin-arm64")).toThrow();
+  });
+
+  it("finds the windows archive and ignores the darwin one", () => {
+    const dir = tempDir();
+    const windows = join(dir, "deskwand-bot-0.1.6-windows-amd64.tar.gz");
+    writeFileSync(windows, "abc");
+    writeFileSync(join(dir, ARCHIVE), "abc");
+    expect(findArchive(dir, "0.1.6", "windows-amd64")).toBe(windows);
   });
 });
 
@@ -285,5 +300,347 @@ describe("verifyPublished", () => {
     await expect(
       verifyPublished({ manifestUrl: MANIFEST_URL, version: "0.1.6", localArchive: local, fetchFn }),
     ).rejects.toThrow();
+  });
+});
+
+describe("parseTarget", () => {
+  it("accepts the two published targets", () => {
+    expect(parseTarget("darwin-arm64")).toBe("darwin-arm64");
+    expect(parseTarget("windows-amd64")).toBe("windows-amd64");
+  });
+
+  it("rejects anything else", () => {
+    expect(() => parseTarget("windows/amd64")).toThrow();
+    expect(() => parseTarget("linux-amd64")).toThrow();
+    expect(() => parseTarget("")).toThrow();
+  });
+});
+
+describe("manifestUrl", () => {
+  it("derives the manifest from the target", () => {
+    expect(manifestUrl("darwin-arm64", {})).toBe(
+      "https://updates.example.com/bot/update-darwin-arm64.json",
+    );
+    expect(manifestUrl("windows-amd64", {})).toBe(
+      "https://updates.example.com/bot/update-windows-amd64.json",
+    );
+  });
+
+  it("reads DESKWAND_UPDATE_BASE and trims trailing slashes", () => {
+    expect(manifestUrl("windows-amd64", { DESKWAND_UPDATE_BASE: "https://example.com/bot/" })).toBe(
+      "https://example.com/bot/update-windows-amd64.json",
+    );
+    expect(manifestUrl("windows-amd64", { DESKWAND_UPDATE_BASE: "https://example.com/bot///" })).toBe(
+      "https://example.com/bot/update-windows-amd64.json",
+    );
+  });
+
+  it("falls back to the default base for an empty or blank override", () => {
+    for (const value of ["", "   "]) {
+      expect(manifestUrl("darwin-arm64", { DESKWAND_UPDATE_BASE: value })).toBe(
+        "https://updates.example.com/bot/update-darwin-arm64.json",
+      );
+    }
+  });
+});
+
+type Artifact = { name: string; content: string };
+
+const DARWIN_ARTIFACTS: Artifact[] = [
+  { name: ARCHIVE, content: "darwin archive" },
+  { name: DARWIN_INSTALLER, content: "darwin dmg" },
+  { name: "install.sh", content: "#!/bin/sh\n" },
+];
+
+const WINDOWS_ARTIFACTS: Artifact[] = [
+  { name: WINDOWS_ARCHIVE, content: "windows archive" },
+  { name: WINDOWS_INSTALLER, content: "windows exe" },
+  { name: "install.ps1", content: "Write-Output windows\n" },
+];
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function materialize(dir: string, artifacts: Artifact[]): void {
+  for (const artifact of artifacts) writeFileSync(join(dir, artifact.name), artifact.content);
+}
+
+function sumsFor(artifacts: Artifact[], separator = "  ", eol = "\n"): string {
+  return artifacts.map((a) => `${sha256(a.content)}${separator}${a.name}`).join(eol) + eol;
+}
+
+function releaseFetch(options: {
+  sums: string;
+  remote: Artifact[];
+  sumsStatus?: number;
+  remoteOverride?: Record<string, string>;
+  unavailable?: string[];
+}): { fetchFn: typeof fetch; requested: string[] } {
+  const requested: string[] = [];
+  const bodies = new Map(options.remote.map((artifact) => [artifact.name, artifact.content]));
+  const fetchFn = fakeFetch((url) => {
+    requested.push(url);
+    const name = decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
+    if (name === "SHA256SUMS") {
+      return new Response(options.sums, { status: options.sumsStatus ?? 200 });
+    }
+    if (options.unavailable?.includes(name)) return new Response("", { status: 404 });
+    const body = options.remoteOverride?.[name] ?? bodies.get(name);
+    if (body === undefined) return new Response("", { status: 404 });
+    return new Response(body, { status: 200 });
+  });
+  return { fetchFn, requested };
+}
+
+describe("verifyPublishedAssets", () => {
+  it("verifies the macOS installer, script and archive", async () => {
+    const dir = tempDir();
+    materialize(dir, DARWIN_ARTIFACTS);
+    const { fetchFn } = releaseFetch({ sums: sumsFor(DARWIN_ARTIFACTS), remote: DARWIN_ARTIFACTS });
+
+    await expect(
+      verifyPublishedAssets({
+        target: "darwin-arm64",
+        version: "0.1.6",
+        buildDir: dir,
+        fetchFn,
+        env: {},
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("verifies the Windows installer, script and archive", async () => {
+    const dir = tempDir();
+    materialize(dir, WINDOWS_ARTIFACTS);
+    const { fetchFn } = releaseFetch({
+      sums: sumsFor(WINDOWS_ARTIFACTS),
+      remote: WINDOWS_ARTIFACTS,
+    });
+
+    await expect(
+      verifyPublishedAssets({
+        target: "windows-amd64",
+        version: "0.1.6",
+        buildDir: dir,
+        fetchFn,
+        env: {},
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("accepts sha256sum's star separator and CRLF line endings", async () => {
+    const dir = tempDir();
+    materialize(dir, WINDOWS_ARTIFACTS);
+    const { fetchFn } = releaseFetch({
+      sums: sumsFor(WINDOWS_ARTIFACTS, " *", "\r\n"),
+      remote: WINDOWS_ARTIFACTS,
+    });
+
+    await expect(
+      verifyPublishedAssets({
+        target: "windows-amd64",
+        version: "0.1.6",
+        buildDir: dir,
+        fetchFn,
+        env: {},
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("uses a cache-busting query for SHA256SUMS", async () => {
+    const dir = tempDir();
+    materialize(dir, DARWIN_ARTIFACTS);
+    const { fetchFn, requested } = releaseFetch({
+      sums: sumsFor(DARWIN_ARTIFACTS),
+      remote: DARWIN_ARTIFACTS,
+    });
+
+    await verifyPublishedAssets({
+      target: "darwin-arm64",
+      version: "0.1.6",
+      buildDir: dir,
+      fetchFn,
+      env: {},
+      now: () => 11,
+    });
+
+    const sumsRequest = requested.find((url) => url.includes("SHA256SUMS"));
+    expect(sumsRequest).toBe("https://updates.example.com/bot/SHA256SUMS?t=11");
+  });
+
+  it("rejects a missing local installer", async () => {
+    const dir = tempDir();
+    materialize(
+      dir,
+      DARWIN_ARTIFACTS.filter((artifact) => artifact.name !== DARWIN_INSTALLER),
+    );
+    const { fetchFn } = releaseFetch({ sums: sumsFor(DARWIN_ARTIFACTS), remote: DARWIN_ARTIFACTS });
+
+    await expect(
+      verifyPublishedAssets({
+        target: "darwin-arm64",
+        version: "0.1.6",
+        buildDir: dir,
+        fetchFn,
+        env: {},
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects a local file that does not match the published checksum", async () => {
+    const dir = tempDir();
+    materialize(dir, WINDOWS_ARTIFACTS);
+    writeFileSync(join(dir, WINDOWS_INSTALLER), "tampered exe");
+    const { fetchFn } = releaseFetch({
+      sums: sumsFor(WINDOWS_ARTIFACTS),
+      remote: WINDOWS_ARTIFACTS,
+    });
+
+    await expect(
+      verifyPublishedAssets({
+        target: "windows-amd64",
+        version: "0.1.6",
+        buildDir: dir,
+        fetchFn,
+        env: {},
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects an unreachable or different remote script", async () => {
+    const dir = tempDir();
+    materialize(dir, DARWIN_ARTIFACTS);
+
+    await expect(
+      verifyPublishedAssets({
+        target: "darwin-arm64",
+        version: "0.1.6",
+        buildDir: dir,
+        env: {},
+        fetchFn: releaseFetch({
+          sums: sumsFor(DARWIN_ARTIFACTS),
+          remote: DARWIN_ARTIFACTS,
+          unavailable: ["install.sh"],
+        }).fetchFn,
+      }),
+    ).rejects.toThrow();
+
+    await expect(
+      verifyPublishedAssets({
+        target: "darwin-arm64",
+        version: "0.1.6",
+        buildDir: dir,
+        env: {},
+        fetchFn: releaseFetch({
+          sums: sumsFor(DARWIN_ARTIFACTS),
+          remote: DARWIN_ARTIFACTS,
+          remoteOverride: { "install.sh": "#!/bin/sh\necho other\n" },
+        }).fetchFn,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects a missing or duplicate checksum line", async () => {
+    const dir = tempDir();
+    materialize(dir, WINDOWS_ARTIFACTS);
+
+    const missing = WINDOWS_ARTIFACTS.filter((artifact) => artifact.name !== "install.ps1");
+    await expect(
+      verifyPublishedAssets({
+        target: "windows-amd64",
+        version: "0.1.6",
+        buildDir: dir,
+        env: {},
+        fetchFn: releaseFetch({ sums: sumsFor(missing), remote: WINDOWS_ARTIFACTS }).fetchFn,
+      }),
+    ).rejects.toThrow();
+
+    const duplicated = `${sumsFor(WINDOWS_ARTIFACTS)}${sha256("windows exe")}  ${WINDOWS_INSTALLER}\n`;
+    await expect(
+      verifyPublishedAssets({
+        target: "windows-amd64",
+        version: "0.1.6",
+        buildDir: dir,
+        env: {},
+        fetchFn: releaseFetch({ sums: duplicated, remote: WINDOWS_ARTIFACTS }).fetchFn,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects an unreadable or malformed SHA256SUMS", async () => {
+    const dir = tempDir();
+    materialize(dir, DARWIN_ARTIFACTS);
+
+    await expect(
+      verifyPublishedAssets({
+        target: "darwin-arm64",
+        version: "0.1.6",
+        buildDir: dir,
+        env: {},
+        fetchFn: releaseFetch({
+          sums: sumsFor(DARWIN_ARTIFACTS),
+          remote: DARWIN_ARTIFACTS,
+          sumsStatus: 503,
+        }).fetchFn,
+      }),
+    ).rejects.toThrow();
+
+    for (const sums of ["not a checksum line\n", `${sha256("x")} ${DARWIN_INSTALLER}\n`, ""]) {
+      await expect(
+        verifyPublishedAssets({
+          target: "darwin-arm64",
+          version: "0.1.6",
+          buildDir: dir,
+          env: {},
+          fetchFn: releaseFetch({ sums, remote: DARWIN_ARTIFACTS }).fetchFn,
+        }),
+      ).rejects.toThrow();
+    }
+  });
+
+  it("keeps the first platform's line when publishing the second", async () => {
+    const dir = tempDir();
+    materialize(dir, WINDOWS_ARTIFACTS);
+    writeFileSync(join(dir, ARCHIVE), "darwin archive");
+
+    const both = [...WINDOWS_ARTIFACTS, ...DARWIN_ARTIFACTS];
+    await expect(
+      verifyPublishedAssets({
+        target: "windows-amd64",
+        version: "0.1.6",
+        buildDir: dir,
+        otherTarget: "darwin-arm64",
+        env: {},
+        fetchFn: releaseFetch({ sums: sumsFor(both), remote: both }).fetchFn,
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      verifyPublishedAssets({
+        target: "windows-amd64",
+        version: "0.1.6",
+        buildDir: dir,
+        otherTarget: "darwin-arm64",
+        env: {},
+        fetchFn: releaseFetch({ sums: sumsFor(WINDOWS_ARTIFACTS), remote: both }).fetchFn,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("does not require the other platform when publishing alone", async () => {
+    const dir = tempDir();
+    materialize(dir, DARWIN_ARTIFACTS);
+    const { fetchFn } = releaseFetch({ sums: sumsFor(DARWIN_ARTIFACTS), remote: DARWIN_ARTIFACTS });
+
+    await expect(
+      verifyPublishedAssets({
+        target: "darwin-arm64",
+        version: "0.1.6",
+        buildDir: dir,
+        fetchFn,
+        env: {},
+      }),
+    ).resolves.toBeUndefined();
   });
 });
