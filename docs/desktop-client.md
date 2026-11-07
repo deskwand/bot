@@ -359,12 +359,12 @@ npm run release:desktop                # 拒绝执行：本地脚本不再上传
 2. `check:i18n`、根 `typecheck`、`tests-node/desktop-release.test.ts`、`go vet ./...` + `go test -race ./...`（Windows job 先断言 runner 是 `x86_64` 且 `gcc` 可用，以 `CGO_ENABLED=1` 跑 race；缺失即失败）；
 3. `desktop-release.ts preflight <version>`：三处版本一致、CHANGELOG 含当前版本；
 4. `desktop-release.ts check-remote <target> <version>`：只有 404 视为该平台首发，线上版本相同或更高都拒绝；
-5. 把两把私钥写入 `$RUNNER_TEMP` 下的临时文件（`chmod 600`），job 结束时删除；
+5. 把 Worker 发布私钥写入 `$RUNNER_TEMP` 下的临时文件（`chmod 600`），job 结束时删除；客户端更新私钥不落盘，只作为 `MYGO_UPDATER_PRIVATE_KEY` 环境变量传给构建步骤；
 6. `prepare_worker_bundle` 生成并签名 Worker 发布包、嵌入客户端 → `npm --prefix desktop/frontend run generate` 生成 MyGo TS 绑定 → `npm --prefix desktop/frontend run build`。顺序不能换：`mygo build -skip-build-command` 自己不会再生成绑定；
 7. `publish` 用 `mygo build -skip-build-command -upload` 上传；`dry-run` 只构建，不读 R2 凭据；
 8. 断言本平台目录下的归档、`update-<target>.json`、`install.sh` / `install.ps1` 与 dmg / setup exe 都存在，且共享的 `desktop/build/SHA256SUMS` 存在；
-9. `publish` 再跑 `verify`：manifest 的版本、归档大小与 SHA-256，以及 dmg / 安装脚本与公网 `SHA256SUMS` 逐字节核对；
-10. 无论成败，把本平台构建目录与 `SHA256SUMS` 存成 artifact（保留 14 天），供审阅与恢复。
+9. `publish` 再跑 `verify`：manifest 的版本、归档大小与 SHA-256，以及 dmg / 安装脚本与公网 `SHA256SUMS` 逐字节核对；Windows job 在 `platforms=both` 时额外带上 `darwin-arm64` 参数，校验共享 `SHA256SUMS` 里仍保留 macOS 归档的校验行；
+10. `prepare` 步骤成功且 job 未被取消时（`!cancelled() && steps.prepare.outcome == 'success'`），把本平台构建目录与 `SHA256SUMS` 存成 artifact（保留 14 天），供审阅与恢复；prepare 之前就失败时没有 artifact 可存。
 
 **单平台重试**：一个平台已发布、另一个还没发时，重新 dispatch 并选那个平台（例如 `platforms=windows`）。`macos` job 被 skip、`windows` job 照常执行，所以不会被 macOS 的同版本检查阻断；`platforms=both` 时 macOS 失败会连带跳过 Windows。
 
@@ -376,6 +376,7 @@ npm run release:desktop                # 拒绝执行：本地脚本不再上传
 deskwand-bot-<version>-darwin-arm64.tar.gz           自动更新归档
 deskwand-bot-<from>-to-<version>-darwin-arm64.delta  增量包（有上一版本时）
 deskwand-bot-<version>-arm64.dmg                     macOS 首次安装 / 手动下载
+install.sh                                           macOS 脚本安装入口
 deskwand-bot-<version>-windows-amd64.tar.gz          Windows 自动更新归档
 deskwand-bot-setup-<version>-amd64.exe               Windows NSIS 安装包
 install.ps1                                          Windows 脚本安装入口
