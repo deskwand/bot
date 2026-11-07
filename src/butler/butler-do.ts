@@ -1248,11 +1248,14 @@ export class ButlerDO extends Agent<Env> {
         text.length > 0 ? text : summary.length > 0 ? summary : undefined;
       await this.sendBestEffort({
         text: clampMessage(taskCompletedText(locale, label, row.title, body)),
+        priority: "critical",
       });
       await this.deliverArtifacts(artifacts, locale);
       return;
     }
-    if (text.length > 0) await this.sendBestEffort({ text });
+    if (text.length > 0) {
+      await this.sendBestEffort({ text, priority: "critical" });
+    }
     await this.deliverArtifacts(artifacts, locale);
   }
 

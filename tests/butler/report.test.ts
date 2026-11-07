@@ -398,7 +398,7 @@ describe("ButlerDO.report", () => {
     expect(channel.edits).toEqual([]);
   });
 
-  it("marks terminal and approval messages as critical", async () => {
+  it("marks terminal, result and approval messages as critical", async () => {
     setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
     const stub = butler("report-priority");
     await seedTask(stub);
@@ -464,10 +464,69 @@ describe("ButlerDO.report", () => {
     expect(
       sent.find((message) => message.text.includes("已完成"))?.priority,
     ).toBe("critical");
-    // The completion report itself is an ordinary message.
+    // The completion report is the answer itself, not a progress frame.
     expect(
       sent.find((message) => message.text === "t1 结论：ok")?.priority,
-    ).toBeUndefined();
+    ).toBe("critical");
+  });
+
+  it("marks the single WeChat terminal message as critical", async () => {
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+    const stub = butler("report-priority-wechat");
+    await seedTask(stub, { ref: wechatRef("route-a") });
+
+    const sent: OutboundMessage[] = [];
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as {
+          channels(): {
+            currentRoute(): Promise<{
+              channel: "wechat";
+              routeKey: string;
+            }>;
+            isAdmissionCurrent(): Promise<boolean>;
+            editCurrent(): Promise<boolean>;
+            sendCurrent(msg: OutboundMessage): Promise<{
+              channel: "wechat";
+              conversationId: string;
+              routeKey: string;
+              messageId: string | null;
+            }>;
+          };
+        }
+      ).channels = () => ({
+        currentRoute: async () => ({
+          channel: "wechat",
+          routeKey: "route-a",
+        }),
+        isAdmissionCurrent: async () => true,
+        editCurrent: async () => false,
+        sendCurrent: async (msg) => {
+          sent.push(msg);
+          return {
+            channel: "wechat",
+            conversationId: "wx-owner",
+            routeKey: "route-a",
+            messageId: null,
+          };
+        },
+      });
+    });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "ok",
+      artifacts: [],
+    });
+
+    expect(sent).toEqual([
+      {
+        text: "t1 查天气：t1 结论：ok",
+        priority: "critical",
+      },
+    ]);
   });
 
   it("falls back to the task summary when the report produces no text", async () => {
