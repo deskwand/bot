@@ -177,8 +177,8 @@ export class TaskDO extends Agent<Env> {
    */
   private readonly runningTools = new Map<string, string>();
 
-  /** True while this instance has an active `wait` for the current run. */
-  private watching = false;
+  /** Runs currently attached to this instance through `watchRun`. */
+  private watchers = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -206,7 +206,17 @@ export class TaskDO extends Agent<Env> {
 
     this.approvals = new ApprovalGate(
       this.db,
-      (body) => this.emitProgress(body),
+      (body) => {
+        // An approval round-trip is a wait, not a stall; keep its activity
+        // fresh so the timeout is measured from the request or the decision.
+        if (
+          body.type === "approval_requested" ||
+          body.type === "approval_resolved"
+        ) {
+          this.touchActivity();
+        }
+        return this.emitProgress(body);
+      },
       undefined,
       () => ownerLocale(this.env),
     );
@@ -454,6 +464,10 @@ export class TaskDO extends Agent<Env> {
       } else {
         const operationId = this.readMeta("operation_id");
         if (operationId) this.ctx.waitUntil(this.watchRun(operationId));
+        // A re-attached run must keep its stall watch; no bot run is watched.
+        if (this.spec?.botId === undefined) {
+          await this.armStallCheckFromActivity();
+        }
       }
     }
   }
@@ -641,10 +655,14 @@ export class TaskDO extends Agent<Env> {
   async liveness(): Promise<{ state: TaskState; reattached: boolean }> {
     await this.flushOutbox();
     const state = this.currentState();
+    // Repair a chain whose scheduled check was lost with an eviction.
+    if (state === "running" && this.spec?.botId === undefined) {
+      await this.armStallCheckFromActivity();
+    }
     const operationId = this.readMeta("operation_id");
     if (
       state !== "running" ||
-      this.watching ||
+      this.watchers > 0 ||
       this.hasCompletedEvent() ||
       operationId === undefined
     ) {
@@ -921,7 +939,7 @@ export class TaskDO extends Agent<Env> {
   private async watchRun(operationId: string): Promise<void> {
     // Set before the first await: startup calls this through `waitUntil`, and
     // a liveness probe must see the re-attachment as soon as it is requested.
-    this.watching = true;
+    this.watchers += 1;
     try {
       // Re-attaching resumes Pi work, so it must wait out the lease. Startup
       // will re-attach from the persisted operation id on the next alarm.
@@ -965,7 +983,7 @@ export class TaskDO extends Agent<Env> {
       }
       await this.finish(summary, []);
     } finally {
-      this.watching = false;
+      this.watchers -= 1;
     }
   }
 
@@ -1220,6 +1238,11 @@ export class TaskDO extends Agent<Env> {
     }
 
     const now = Date.now();
+    // An unanswered approval is a legitimate wait; only postpone the check.
+    if (this.approvals.pending().length > 0) {
+      await this.scheduleStallCheck(now + STALL_AFTER_MS, schedule?.id);
+      return;
+    }
     const watch = this.stallWatch();
     const check = watch.check(now);
     if (check.due === "notify") {
@@ -1242,9 +1265,22 @@ export class TaskDO extends Agent<Env> {
 
   /** Start watching a run that just moved to `running`. */
   private async beginStallWatch(): Promise<void> {
+    if (this.spec?.botId !== undefined) return;
     const now = Date.now();
     this.stallWatch().record({ kind: "waiting_model" }, now);
     await this.scheduleStallCheck(now + STALL_AFTER_MS);
+  }
+
+  /**
+   * Re-arm the watch from the stored activity. A run that was never observed
+   * (no `activity_at`) starts its clock now, as `waiting_model`.
+   */
+  private async armStallCheckFromActivity(): Promise<void> {
+    if (this.readMeta("activity_at") === undefined) {
+      this.recordActivity({ kind: "waiting_model" });
+    }
+    const activityAt = Number(this.readMeta("activity_at") ?? Date.now());
+    await this.scheduleStallCheck(activityAt + STALL_AFTER_MS);
   }
 
   private onToolStart(call: { id: string; name: string }): void {
@@ -1273,7 +1309,34 @@ export class TaskDO extends Agent<Env> {
   }
 
   private recordActivity(activity: TaskActivity): void {
-    this.stallWatch().record(activity, Date.now());
+    try {
+      this.stallWatch().record(activity, Date.now());
+    } catch (error) {
+      // Activity is bookkeeping: a storage hiccup must not block a tool.
+      console.warn(
+        `task activity record failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /** Re-record the current activity, e.g. when an approval changes state. */
+  private touchActivity(): void {
+    try {
+      const raw = this.readMeta("activity_state");
+      const activity: TaskActivity =
+        raw === undefined
+          ? { kind: "waiting_model" }
+          : (JSON.parse(raw) as TaskActivity);
+      this.stallWatch().record(activity, Date.now());
+    } catch (error) {
+      console.warn(
+        `task activity record failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private stallWatch(): StallWatch {

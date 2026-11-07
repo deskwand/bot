@@ -32,6 +32,14 @@ type StallInternals = {
   beginStallWatch(): Promise<void>;
   checkStall(payload?: unknown, schedule?: unknown): Promise<void>;
   emitProgress(body: TaskEventBody): Promise<void>;
+  liveness(): Promise<{ state: TaskState; reattached: boolean }>;
+  approvals: {
+    request(tool: string, args: unknown, signal: AbortSignal): Promise<string>;
+    resolve(
+      approvalId: string,
+      decision: "approved" | "rejected",
+    ): Promise<{ ok: boolean; message: string }>;
+  };
   __delivered?: TaskEvent[];
 };
 
@@ -256,6 +264,114 @@ describe("TaskDO stall watch", () => {
     expect(await stalled(stub)).toEqual([]);
 
     await cancelSchedules(stub);
+  });
+
+  it("stays quiet during an approval and restarts the clock when it resolves", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = new Date("2030-01-01T00:00:00Z");
+    vi.setSystemTime(start);
+    const { taskId, stub } = taskStub();
+    await prepareTask(stub, taskId);
+
+    let requesting: Promise<string> | undefined;
+    await runInDurableObject(stub, async (instance) => {
+      const target = instance as unknown as StallInternals;
+      await target.beginStallWatch();
+      target.onToolStart({ id: "call-1", name: "http_request" });
+    });
+    // The approval arrives a moment after the tool started waiting.
+    vi.setSystemTime(start.getTime() + 1);
+    await runInDurableObject(stub, async (instance) => {
+      const target = instance as unknown as StallInternals;
+      requesting = target.approvals.request(
+        "http_request",
+        { url: "https://example.com" },
+        new AbortController().signal,
+      );
+    });
+
+    // The approval timeout equals STALL_AFTER_MS: an unanswered approval is
+    // a wait, not a stall.
+    vi.setSystemTime(start.getTime() + STALL_AFTER_MS);
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as StallInternals).checkStall();
+    });
+    expect(await stalled(stub)).toEqual([]);
+
+    const resolvedAt = start.getTime() + STALL_AFTER_MS + 1_000;
+    vi.setSystemTime(resolvedAt);
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as StallInternals).approvals.resolve(
+        "ap1",
+        "approved",
+      );
+    });
+    await requesting;
+
+    // The resolution counts as activity: the next warning is measured from it.
+    vi.setSystemTime(resolvedAt + STALL_AFTER_MS - 1);
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as StallInternals).checkStall();
+    });
+    expect(await stalled(stub)).toEqual([]);
+
+    vi.setSystemTime(resolvedAt + STALL_AFTER_MS);
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as StallInternals).checkStall();
+    });
+    expect(await stalled(stub)).toEqual([
+      expect.objectContaining({
+        type: "stalled",
+        activity: { kind: "running_tool", tool: "http_request" },
+        idleMs: STALL_AFTER_MS,
+      }),
+    ]);
+
+    await cancelSchedules(stub);
+  });
+
+  it("arms one stall check when liveness re-attaches a run", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = new Date("2030-01-01T00:00:00Z");
+    vi.setSystemTime(start);
+    const { taskId, stub } = taskStub();
+    await prepareTask(stub, taskId);
+
+    // Startup may have armed one; start this case without any schedule.
+    await cancelSchedules(stub);
+    expect(await pendingStallChecks(stub)).toEqual([]);
+
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as StallInternals).liveness();
+    });
+
+    const pending = await pendingStallChecks(stub);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].time * 1000).toBe(start.getTime() + STALL_AFTER_MS);
+
+    // A second probe must not add a second check.
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as StallInternals).liveness();
+    });
+    expect(await pendingStallChecks(stub)).toHaveLength(1);
+
+    await cancelSchedules(stub);
+  });
+
+  it("arms no stall check for a bot run", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = new Date("2030-01-01T00:00:00Z");
+    vi.setSystemTime(start);
+    const { taskId, stub } = taskStub();
+    await prepareTask(stub, taskId, { botId: "bot-1" });
+
+    await runInDurableObject(stub, async (instance) => {
+      const target = instance as unknown as StallInternals;
+      await target.beginStallWatch();
+      await target.liveness();
+    });
+
+    expect(await pendingStallChecks(stub)).toEqual([]);
   });
 
   it("keeps one pending checkStall schedule and resumes after a restart", async () => {

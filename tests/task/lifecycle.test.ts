@@ -490,6 +490,9 @@ describe("TaskDO lifecycle", () => {
   it("only connects MCP tools when the task is queued or running", async () => {
     const taskId = `t-mcp-${crypto.randomUUID()}`;
     const stub = task(taskId);
+    // Let the lifecycle finish startup first, so the onStart calls below do
+    // not recursively restart it through a scheduler write.
+    await stub.status();
 
     const result = await runInDurableObject(stub, async (instance) => {
       const target = instance as unknown as {
@@ -599,7 +602,7 @@ describe("TaskDO.liveness", () => {
     await stub.status();
     await seedRunning(stub, taskId);
     await runInDurableObject(stub, (instance) => {
-      (instance as unknown as { watching: boolean }).watching = false;
+      (instance as unknown as { watchers: number }).watchers = 0;
     });
 
     expect(await stub.liveness()).toEqual({
@@ -619,7 +622,7 @@ describe("TaskDO.liveness", () => {
     await stub.status();
     await seedRunning(stub, taskId);
     await runInDurableObject(stub, (instance) => {
-      (instance as unknown as { watching: boolean }).watching = true;
+      (instance as unknown as { watchers: number }).watchers = 1;
     });
 
     expect(await stub.liveness()).toEqual({
