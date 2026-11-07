@@ -8,7 +8,7 @@ export const mcp: Messages["mcp"] = {
     "This service does not support automatic registration (DCR)",
   MCP_AUTH_REQUIRED: "Sign in from the desktop app to authorize",
   reauthNotice:
-    "🔑 {name} authorization expired; sign in again in the desktop app",
+    "{name} authorization expired; sign in again in the desktop app",
   callbackSuccess:
     "Authorization complete. You can return to the desktop app.",
   callbackFailure:

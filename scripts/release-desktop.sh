@@ -29,6 +29,7 @@ EOF
 
 dry_run=false
 platform=""
+platform_set=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)
@@ -38,10 +39,12 @@ while [ "$#" -gt 0 ]; do
     --platform)
       [ "$#" -ge 2 ] || { usage; exit 1; }
       platform="$2"
+      platform_set=true
       shift 2
       ;;
     --platform=*)
       platform="${1#--platform=}"
+      platform_set=true
       shift
       ;;
     -h|--help)
@@ -64,6 +67,12 @@ host_platform() {
     *) return 1 ;;
   esac
 }
+
+if [ "$platform_set" = true ] && [ -z "$platform" ]; then
+  echo "--platform 需要一个非空值：macos、windows 或 both" >&2
+  usage
+  exit 1
+fi
 
 if [ -z "$platform" ]; then
   platform="$(host_platform)" || {

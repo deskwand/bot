@@ -294,13 +294,13 @@ describe("ButlerDO bot runs", () => {
 
     expect(channel.sent).toHaveLength(1);
     expect(channel.sent[0]?.text).toBe(
-      "🤖 价格哨兵 🔐 t1 请求执行 web_fetch\nhttps://example.com",
+      "「价格哨兵」t1 请求执行 web_fetch\nhttps://example.com",
     );
     // A bot task has no owner handle: the hint always names the internal id.
     expect(channel.sent[0]?.buttons).toEqual([
       [
-        { label: "✅ 批准", data: "a:approve:t1:ap1", hint: "批准 t1 ap1" },
-        { label: "❌ 拒绝", data: "a:reject:t1:ap1", hint: "拒绝 t1 ap1" },
+        { label: "批准", data: "a:approve:t1:ap1", hint: "批准 t1 ap1" },
+        { label: "拒绝", data: "a:reject:t1:ap1", hint: "拒绝 t1 ap1" },
       ],
     ]);
   });
@@ -324,7 +324,7 @@ describe("ButlerDO bot runs", () => {
 
     expect(channel.sent).toHaveLength(1);
     expect(channel.sent[0]?.text).toBe(
-      "🤖 价格哨兵 🔐 t1 请求执行 web_fetch\n⚠️ 涉及付款\nhttps://example.com",
+      "「价格哨兵」t1 请求执行 web_fetch\n涉及付款\nhttps://example.com",
     );
   });
 
@@ -338,7 +338,7 @@ describe("ButlerDO bot runs", () => {
 
     expect(delivered).toBe(true);
     expect(channel.sent).toEqual([
-      { chatId: "42", text: "🤖 价格哨兵：降价了" },
+      { chatId: "42", text: "【价格哨兵】降价了" },
     ]);
   });
 
@@ -353,7 +353,7 @@ describe("ButlerDO bot runs", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "42",
-        text: "⏳ #1 查天气：已开始",
+        text: "#1 查天气：已开始",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
         ],

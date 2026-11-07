@@ -587,6 +587,7 @@ export class ChannelDO extends Agent<Env> {
       conversationId,
       text: outbound.text,
       buttons: outbound.buttons ?? null,
+      priority: msg.priority,
     });
     if (dropped > 0) {
       console.error(`channel: outbound queue dropped ${dropped} oldest rows`);

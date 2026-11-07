@@ -237,7 +237,7 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。客户端启
 
 菜单里的「检查更新…」和“更新”页的「检查更新」会打开同一个更新窗口，可以随时手动检查。
 
-首个带更新器的版本（macOS 为 0.1.6）需要手动安装，此后才会收到自动更新。Windows 版本从 0.1.25 开始发布：先手动运行 NSIS 安装器，之后由客户端自动更新。两个平台各有自己的更新 manifest（`update-darwin-arm64.json` 与 `update-windows-amd64.json`），互不影响；任一方未发布时，该平台的手动检查会报告更新源没有对应 manifest。
+首个带更新器的版本（macOS 为 0.1.6）需要手动安装，此后才会收到自动更新。Windows 版本从 0.1.26 开始发布：先手动运行 NSIS 安装器，之后由客户端自动更新。两个平台各有自己的更新 manifest（`update-darwin-arm64.json` 与 `update-windows-amd64.json`），互不影响；任一方未发布时，该平台的手动检查会报告更新源没有对应 manifest。
 
 客户端更新与 Worker 发布包不能互相替代：Worker 发布包不能安装成桌面更新，桌面更新也不会携带或替换云端代码。
 
@@ -302,7 +302,7 @@ Windows 目标先准备并嵌入签名 Worker 包，再 `npm --prefix desktop/fr
 - 客户端更新私钥 `$HOME/.deskwand-bot/client-update.key`（可用 `DESKWAND_CLIENT_UPDATE_KEY_FILE` 覆盖）：脚本以 `MYGO_UPDATER_PRIVATE_KEY` 传给 MyGo，缺失就不会生成 `update-windows-amd64.json`；
 - UTF-8 locale：NSIS 在 `LC_ALL=C` 或 `LANG=""` 下会 `std::bad_alloc` 崩溃，脚本只对 windows 构建的子进程设 `LANG`/`LC_ALL=en_US.UTF-8`，macOS 打包不受影响。
 
-0.1.25 已在本机实测通过（macOS arm64 交叉构建 windows/amd64）：`desktop/build/windows-amd64/DeskWand Bot.exe`（30.2 MB）、`deskwand-bot-setup-0.1.25-amd64.exe`（7.9 MB）、`deskwand-bot-0.1.25-windows-amd64.tar.gz`（10.2 MB）、`update-windows-amd64.json`、`install.ps1`，共享校验和 `desktop/build/SHA256SUMS`。构建通过只说明产物能生成；安装、运行、WebView2 与自动更新仍未验收。
+0.1.26 已在本机实测通过（macOS arm64 交叉构建 windows/amd64）：`desktop/build/windows-amd64/DeskWand Bot.exe`（约 30.2 MB）、`deskwand-bot-setup-0.1.26-amd64.exe`（约 8.0 MB）、`deskwand-bot-0.1.26-windows-amd64.tar.gz`（约 10.3 MB）、`update-windows-amd64.json`、`install.ps1`，共享校验和 `desktop/build/SHA256SUMS`。构建通过只说明产物能生成；安装、运行、WebView2 与自动更新仍未验收。
 
 发布包 manifest 的 `upgrade.minFromVersion` 是能直接升级到本版本的最低版本，由 `build:desktop` 传入，默认 `0.1.0`（首个对外发布版本），可用 `DESKWAND_MIN_FROM_VERSION` 覆盖。它必须不高于本次发布的版本号，否则构建直接失败：那样的 manifest 会让旧部署永远报 `UPGRADE_REQUIRES_INTERMEDIATE`。只有当某个版本要求先经过中间版本时才提高它。
 
@@ -310,7 +310,7 @@ Windows 目标先准备并嵌入签名 Worker 包，再 `npm --prefix desktop/fr
 - macOS：`.app` + `.dmg`，`minimumSystemVersion` 12.0；
 - Windows：NSIS 安装器，当前用户安装，不需要管理员权限。
 
-macOS 默认 ad-hoc 签名，仅适合本机或内部测试。
+macOS 默认 ad-hoc 签名，仅适合本机或内部测试。单独运行 `npm run build:desktop`（macOS 默认）只生成 `.app` 与 `.dmg`；更新归档与 `update-darwin-arm64.json` 由发布脚本在上传步骤用客户端更新私钥重新生成。
 
 **应用图标**：母版是 `desktop/icon/icon.svg`（轨道星球，设计见 `docs/superpowers/specs/2026-11-02-app-icon-design.md`）。`desktop/mygo.json` 的 `icon` 指向 `icon/icon.png`，MyGo 由它生成 macOS `.icns` 与 Windows `.ico`。修改图标：改 SVG → 运行 `bash desktop/scripts/render-icon.sh` → 同时提交 SVG 与 PNG。渲染需要本机 Google Chrome（可用 `CHROME=` 指定路径）；构建只读已提交的 PNG，不需要 Chrome。图标源文件不放在 `desktop/resources/`：MyGo 会把该目录的全部内容打进应用。`desktop/icon_test.go` 校验 PNG 尺寸、透明角和关键配色。
 
@@ -393,7 +393,7 @@ update-windows-amd64.json                            Windows manifest，最后�
 
 旧版本文件全部保留：MyGo 生成 delta 需要前 3 个版本的归档，发布脚本从不删除 R2 上的对象。manifest 最后上传，中途失败不会让已安装的客户端看到缺文件的版本；发布后核验不一致时 `verify` 报错并提示人工处理，不回滚、不删除。
 
-**首次上线**：0.1.5 及更早的版本没有更新器，第一个带自动更新的版本需要用户手动下载 dmg 安装，之后才会自动更新。Windows 在 0.1.25 首次发布，同样需要先手动跑一次 NSIS 安装器。ad-hoc 签名下，自动更新不受 Gatekeeper 拦截，但首次手动安装 dmg 仍会提示「无法验证开发者」；Windows 安装器未签名，可能触发 SmartScreen 警告。
+**首次上线**：0.1.5 及更早的版本没有更新器，第一个带自动更新的版本需要用户手动下载 dmg 安装，之后才会自动更新。Windows 在 0.1.26 首次发布，同样需要先手动跑一次 NSIS 安装器。ad-hoc 签名下，自动更新不受 Gatekeeper 拦截，但首次手动安装 dmg 仍会提示「无法验证开发者」；Windows 安装器未签名，可能触发 SmartScreen 警告。
 
 ### 12.5 CI（只做验证）
 
@@ -417,4 +417,4 @@ CI 不发布。发布入口是 12.4 的本机脚本；CI 只验证代码与构�
 - `docs/verification/2026-11-01-client-capabilities.md`
 - `docs/verification/desktop-acceptance.md`
 
-控制面单元测试、本机打包和 Playwright 通过，都不等于干净机器安装或真实微信 / Telegram 收发已经验收。Windows 安装包已在本机构建通过（0.1.25，见 12.2），但 Windows 实机安装与运行、WebView2 缺失表现、自动更新替换，以及任何 R2 上传或公开发布仍是 NOT RUN。根目录完整 `npm test` 当前为 FAIL（workerd 阶段测试全过，但有两个未处理错误导致 Node 阶段没有执行），细节记在 `docs/verification/desktop-acceptance.md`。
+控制面单元测试、本机打包和 Playwright 通过，都不等于干净机器安装或真实微信 / Telegram 收发已经验收。Windows 安装包已在本机构建通过（0.1.26，见 12.2），但 Windows 实机安装与运行、WebView2 缺失表现、自动更新替换，以及任何 R2 上传或公开发布仍是 NOT RUN。根目录完整 `npm test` 当前为 FAIL（workerd 阶段测试全过，但有两个未处理错误导致 Node 阶段没有执行），细节记在 `docs/verification/desktop-acceptance.md`。

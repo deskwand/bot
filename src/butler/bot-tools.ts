@@ -359,7 +359,7 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
         const row = bots.get(id);
         if (!row) return output(`没有机器人 ${id}`);
         // Whitespace and format characters (zero-width space, BOM) would make
-        // the bot invisible in list_bots and in the `🤖 <name>：` prefix.
+        // the bot invisible in list_bots and in the `【<name>】` prefix.
         if (/^[\s\p{Cf}]*$/u.test(name)) return output("名字不能为空");
         const trimmed = name.trim();
         // The index write is local and fails cheaply; the BotDO write is an

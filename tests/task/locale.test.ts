@@ -138,7 +138,7 @@ describe("approval copy", () => {
     expect(approvalDecisionText("zh", "approved")).toBe("已批准");
     expect(approvalDecisionText("zh", "rejected")).toBe("已拒绝");
     expect(autoApprovedText("zh", "http_request", "按指令保存")).toBe(
-      "✔️ 自动放行 http_request：按指令保存",
+      "自动放行 http_request：按指令保存",
     );
     expect(proposedRulesText("zh", "踩坑", "新规则")).toBe(
       "理由：踩坑\n新守则：\n新规则",
@@ -204,7 +204,7 @@ describe("approval copy", () => {
 
   it("approval card is English", () => {
     const card = approvalCardText("en", {
-      prefix: "🤖 Price scout ",
+      prefix: '"Price scout" ',
       label: "#1",
       tool: "http_request",
       reason: "Pays a bill",

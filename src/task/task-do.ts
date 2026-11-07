@@ -9,7 +9,10 @@ import { PiHarness } from "agents/harness/pi";
 import { contentText, Type } from "@earendil-works/pi-ai";
 import {
   createRegistry,
+  GenerationTask,
   Harness,
+  hook,
+  ToolTask,
   type ReportInfo,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
@@ -91,6 +94,7 @@ import { Outbox } from "./outbox";
 import { reviewAction, type ReviewComplete } from "./review";
 import { taskSystemPrompt } from "./prompt";
 import { taskApprovalMode, taskGates } from "./gates";
+import { STALL_AFTER_MS, StallWatch, type TaskActivity } from "./stall";
 
 export type TaskState =
   | "queued"
@@ -166,6 +170,16 @@ export class TaskDO extends Agent<Env> {
 
   private outbox: Outbox | undefined;
 
+  /**
+   * Tool calls currently running, in start order (`call.id` → tool name).
+   * In memory only: after an eviction the last activity written to storage is
+   * still the best available answer.
+   */
+  private readonly runningTools = new Map<string, string>();
+
+  /** Runs currently attached to this instance through `watchRun`. */
+  private watchers = 0;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
@@ -192,7 +206,17 @@ export class TaskDO extends Agent<Env> {
 
     this.approvals = new ApprovalGate(
       this.db,
-      (body) => this.emitProgress(body),
+      (body) => {
+        // An approval round-trip is a wait, not a stall; keep its activity
+        // fresh so the timeout is measured from the request or the decision.
+        if (
+          body.type === "approval_requested" ||
+          body.type === "approval_resolved"
+        ) {
+          this.touchActivity();
+        }
+        return this.emitProgress(body);
+      },
       undefined,
       () => ownerLocale(this.env),
     );
@@ -254,6 +278,23 @@ export class TaskDO extends Agent<Env> {
     this.registry.install({
       name: "task",
       tools: [finishTask],
+      hooks: [
+        hook(ToolTask, {
+          beforeTool: (call) => {
+            this.onToolStart(call);
+            return undefined;
+          },
+          afterTool: (call) => {
+            this.onToolEnd(call);
+            return undefined;
+          },
+        }),
+        hook(GenerationTask, {
+          afterResponse: () => {
+            this.onModelResponse();
+          },
+        }),
+      ],
       sections: [
         {
           key: "task",
@@ -423,6 +464,10 @@ export class TaskDO extends Agent<Env> {
       } else {
         const operationId = this.readMeta("operation_id");
         if (operationId) this.ctx.waitUntil(this.watchRun(operationId));
+        // A re-attached run must keep its stall watch; no bot run is watched.
+        if (this.spec?.botId === undefined) {
+          await this.armStallCheckFromActivity();
+        }
       }
     }
   }
@@ -584,6 +629,7 @@ export class TaskDO extends Agent<Env> {
       return;
     }
     this.setMeta("state", "running");
+    await this.beginStallWatch();
 
     this.ctx.waitUntil(this.watchRun(operationId));
   }
@@ -598,6 +644,32 @@ export class TaskDO extends Agent<Env> {
     }[]
   > {
     return this.approvals.pending();
+  }
+
+  /**
+   * Cheap liveness probe for the Butler's cron. Normally `onStart` has
+   * already re-attached to a running run; this is the fallback for an
+   * instance that could not, so the next probe can tell whether the run is
+   * still being watched.
+   */
+  async liveness(): Promise<{ state: TaskState; reattached: boolean }> {
+    await this.flushOutbox();
+    const state = this.currentState();
+    // Repair a chain whose scheduled check was lost with an eviction.
+    if (state === "running" && this.spec?.botId === undefined) {
+      await this.armStallCheckFromActivity();
+    }
+    const operationId = this.readMeta("operation_id");
+    if (
+      state !== "running" ||
+      this.watchers > 0 ||
+      this.hasCompletedEvent() ||
+      operationId === undefined
+    ) {
+      return { state, reattached: false };
+    }
+    this.ctx.waitUntil(this.watchRun(operationId));
+    return { state, reattached: true };
   }
 
   async status(): Promise<{ state: TaskState; title: string }> {
@@ -675,6 +747,7 @@ export class TaskDO extends Agent<Env> {
     // parked, followed by an ordinary run failure: re-attach to the run below.
     await this.harness.session().retry();
     this.setMeta("state", "running");
+    await this.beginStallWatch();
     await this.outboxFor(taskId).emit({ type: "started" });
 
     const operationId = this.readMeta("operation_id") ?? `task:${taskId}`;
@@ -864,47 +937,54 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async watchRun(operationId: string): Promise<void> {
-    // Re-attaching resumes Pi work, so it must wait out the lease. Startup
-    // will re-attach from the persisted operation id on the next alarm.
-    if (await this.deferStartupIfMaintenance()) return;
-    let summary = "";
+    // Set before the first await: startup calls this through `waitUntil`, and
+    // a liveness probe must see the re-attachment as soon as it is requested.
+    this.watchers += 1;
     try {
-      const result = await this.harness.wait(operationId);
-      if (result.status === "unanswered") {
-        // Pi resolves `wait` for failed/aborted/withdrawn runs; they are not
-        // completions, even when they carry no text.
-        let modelError: string | undefined;
-        if (result.reason === "model_error") {
-          try {
-            modelError = lastModelError(
-              await this.harness.session().messages(),
-            );
-          } catch (error) {
-            const reason =
-              error instanceof Error ? error.message : String(error);
-            console.warn(
-              `task ${this.currentTaskId() ?? "unknown"} could not read the transcript after a model error: ${reason}`,
-            );
+      // Re-attaching resumes Pi work, so it must wait out the lease. Startup
+      // will re-attach from the persisted operation id on the next alarm.
+      if (await this.deferStartupIfMaintenance()) return;
+      let summary = "";
+      try {
+        const result = await this.harness.wait(operationId);
+        if (result.status === "unanswered") {
+          // Pi resolves `wait` for failed/aborted/withdrawn runs; they are not
+          // completions, even when they carry no text.
+          let modelError: string | undefined;
+          if (result.reason === "model_error") {
+            try {
+              modelError = lastModelError(
+                await this.harness.session().messages(),
+              );
+            } catch (error) {
+              const reason =
+                error instanceof Error ? error.message : String(error);
+              console.warn(
+                `task ${this.currentTaskId() ?? "unknown"} could not read the transcript after a model error: ${reason}`,
+              );
+            }
           }
+          await this.fail(
+            userTextForModelError(modelError, ownerLocale(this.env)) ??
+              result.reason ??
+              taskIncompleteText(ownerLocale(this.env)),
+          );
+          return;
         }
-        await this.fail(
-          userTextForModelError(modelError, ownerLocale(this.env)) ??
-            result.reason ??
-            taskIncompleteText(ownerLocale(this.env)),
-        );
+        summary = result.text ?? "";
+      } catch (error) {
+        await this.fail(error);
         return;
       }
-      summary = result.text ?? "";
-    } catch (error) {
-      await this.fail(error);
-      return;
-    }
 
-    // `finish_task` may already have completed the task.
-    if (this.readMeta("state") !== "running" || this.hasCompletedEvent()) {
-      return;
+      // `finish_task` may already have completed the task.
+      if (this.readMeta("state") !== "running" || this.hasCompletedEvent()) {
+        return;
+      }
+      await this.finish(summary, []);
+    } finally {
+      this.watchers -= 1;
     }
-    await this.finish(summary, []);
   }
 
   /**
@@ -1141,6 +1221,163 @@ export class TaskDO extends Agent<Env> {
     schedule?: Schedule<unknown>,
   ): Promise<void> {
     await this.flushOutbox(schedule?.id);
+  }
+
+  /**
+   * Scheduled callback: decide whether the current run has gone quiet for too
+   * long. Reports at most once per stretch of inactivity; `StallWatch` clears
+   * the notification flag on the next recorded activity.
+   */
+  async checkStall(
+    _payload?: unknown,
+    schedule?: Schedule<unknown>,
+  ): Promise<void> {
+    // A check can land after the run ended; a bot run never notifies the owner.
+    if (this.currentState() !== "running" || this.spec?.botId !== undefined) {
+      return;
+    }
+
+    const now = Date.now();
+    // An unanswered approval is a legitimate wait; only postpone the check.
+    if (this.approvals.pending().length > 0) {
+      await this.scheduleStallCheck(now + STALL_AFTER_MS, schedule?.id);
+      return;
+    }
+    const watch = this.stallWatch();
+    const check = watch.check(now);
+    if (check.due === "notify") {
+      await this.emitProgress({
+        type: "stalled",
+        activity: check.activity,
+        idleMs: check.idleMs,
+      });
+      watch.markNotified(now);
+    }
+
+    // After a notification, only new activity can re-arm the watch; keep
+    // checking at the same cadence so a full threshold of new silence is
+    // measured from that activity.
+    await this.scheduleStallCheck(
+      check.due === "notify" ? now + STALL_AFTER_MS : check.at,
+      schedule?.id,
+    );
+  }
+
+  /** Start watching a run that just moved to `running`. */
+  private async beginStallWatch(): Promise<void> {
+    if (this.spec?.botId !== undefined) return;
+    const now = Date.now();
+    this.stallWatch().record({ kind: "waiting_model" }, now);
+    await this.scheduleStallCheck(now + STALL_AFTER_MS);
+  }
+
+  /**
+   * Re-arm the watch from the stored activity. A run that was never observed
+   * (no `activity_at`) starts its clock now, as `waiting_model`.
+   */
+  private async armStallCheckFromActivity(): Promise<void> {
+    if (this.readMeta("activity_at") === undefined) {
+      this.recordActivity({ kind: "waiting_model" });
+    }
+    const activityAt = Number(this.readMeta("activity_at") ?? Date.now());
+    await this.scheduleStallCheck(activityAt + STALL_AFTER_MS);
+  }
+
+  private onToolStart(call: { id: string; name: string }): void {
+    this.runningTools.set(call.id, call.name);
+    this.recordActivity({ kind: "running_tool", tool: call.name });
+  }
+
+  private onToolEnd(call: { id: string }): void {
+    this.runningTools.delete(call.id);
+    // A parallel round can still have tools in flight; name the last one that
+    // started, which is the one most likely to be the current bottleneck.
+    const remaining = [...this.runningTools.values()];
+    const tool = remaining[remaining.length - 1];
+    this.recordActivity(
+      tool === undefined
+        ? { kind: "waiting_model" }
+        : { kind: "running_tool", tool },
+    );
+  }
+
+  private onModelResponse(): void {
+    // Tools in flight will update the activity themselves when they finish;
+    // the model answering for them must not hide a running tool.
+    if (this.runningTools.size > 0) return;
+    this.recordActivity({ kind: "waiting_model" });
+  }
+
+  private recordActivity(activity: TaskActivity): void {
+    try {
+      this.stallWatch().record(activity, Date.now());
+    } catch (error) {
+      // Activity is bookkeeping: a storage hiccup must not block a tool.
+      console.warn(
+        `task activity record failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /** Re-record the current activity, e.g. when an approval changes state. */
+  private touchActivity(): void {
+    try {
+      const raw = this.readMeta("activity_state");
+      const activity: TaskActivity =
+        raw === undefined
+          ? { kind: "waiting_model" }
+          : (JSON.parse(raw) as TaskActivity);
+      this.stallWatch().record(activity, Date.now());
+    } catch (error) {
+      console.warn(
+        `task activity record failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private stallWatch(): StallWatch {
+    return new StallWatch({
+      read: (key) => this.readMeta(key),
+      write: (key, value) => this.setMeta(key, value),
+    });
+  }
+
+  /**
+   * Keep exactly one pending stall check. Like the outbox retry, a schedule
+   * that is already due is ignored: it is running or about to run, and would
+   * otherwise suppress its successor.
+   */
+  private async scheduleStallCheck(
+    atMs: number,
+    excludeId?: string,
+  ): Promise<void> {
+    try {
+      const now = Date.now();
+      const pending = await this.listSchedules();
+      if (
+        pending.some(
+          (schedule) =>
+            schedule.callback === "checkStall" &&
+            schedule.id !== excludeId &&
+            schedule.time * 1000 > now,
+        )
+      ) {
+        return;
+      }
+
+      const at = Math.max(atMs, now + 60_000);
+      await this.schedule((at - now) / 1000, "checkStall");
+    } catch (error) {
+      console.error(
+        `task stall check schedule failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private outboxFor(taskId: string): Outbox {

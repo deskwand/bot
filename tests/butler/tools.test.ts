@@ -110,6 +110,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async () => {
@@ -156,6 +157,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async (_title, _instructions, attachments) => {
@@ -215,6 +217,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async (_title, _instructions, attachments) => {
@@ -264,6 +267,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async () => {
@@ -321,6 +325,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async () => {
@@ -374,6 +379,7 @@ describe("butler control tools", () => {
               retried = true;
               return { ok: true, message: "已重试" };
             },
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async () => "t2",
@@ -477,7 +483,7 @@ describe("butler control tools", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "42",
-        text: "⏳ #1 查天气：已开始",
+        text: "#1 查天气：已开始",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
         ],
@@ -487,7 +493,7 @@ describe("butler control tools", () => {
       {
         chatId: "42",
         messageId: "1",
-        text: "⏳ #1 查天气：早期进度",
+        text: "#1 查天气：早期进度",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
         ],
@@ -529,7 +535,7 @@ describe("butler control tools", () => {
     expect(result?.message).toBe("boom");
     expect(result?.row).toMatchObject({ status: "failed", summary: "boom" });
     expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "1", text: "❌ #1 坏任务：boom" },
+      { chatId: "42", messageId: "1", text: "#1 坏任务：boom" },
     ]);
   });
 

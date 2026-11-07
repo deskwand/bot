@@ -82,18 +82,18 @@ describe("channel sends the owner's language", () => {
     try {
       const hub = await seedWechatAddress("locale-en-hints");
       await hub.sendCurrent({
-        text: "🔐 t3 requests to run web_fetch",
+        text: "t3 requests to run web_fetch",
         buttons: [
           [
-            { label: "✅ Approve", data: "a:approve:t3:ap1" },
-            { label: "❌ Reject", data: "a:reject:t3:ap1" },
+            { label: "Approve", data: "a:approve:t3:ap1" },
+            { label: "Reject", data: "a:reject:t3:ap1" },
           ],
         ],
       });
 
       expect(wx.sent).toHaveLength(1);
       expect(wx.sent[0]?.msg.text).toBe(
-        '🔐 t3 requests to run web_fetch\nReply "approve t3 ap1"\nReply "reject t3 ap1"',
+        't3 requests to run web_fetch\nReply "approve t3 ap1"\nReply "reject t3 ap1"',
       );
       expect(wx.sent[0]?.msg.text).not.toMatch(HAN);
       expect(wx.sent[0]?.msg.buttons).toBeUndefined();

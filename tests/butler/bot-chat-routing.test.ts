@@ -151,7 +151,7 @@ describe("bot chat routing", () => {
     );
 
     expect(channel.sent).toEqual([
-      { chatId: "42", text: "🤖 路由甲：价格回落了" },
+      { chatId: "42", text: "【路由甲】价格回落了" },
     ]);
     const messages = await runInDurableObject(stub, (instance) =>
       instance.harness.session().messages(),
@@ -174,7 +174,7 @@ describe("bot chat routing", () => {
     );
 
     expect(channel.sent).toEqual([
-      { chatId: "42", text: "🤖 路由乙：明天见" },
+      { chatId: "42", text: "【路由乙】明天见" },
     ]);
   });
 
@@ -291,7 +291,7 @@ describe("bot chat routing", () => {
       { type: "image", data: PNG_B64, mimeType: "image/png" },
     ]);
     expect(channel.sent).toEqual([
-      { chatId: "42", text: "🤖 路由己：看到了" },
+      { chatId: "42", text: "【路由己】看到了" },
     ]);
   });
 
@@ -321,7 +321,7 @@ describe("bot chat routing", () => {
     );
 
     expect(channel.sent).toEqual([
-      { chatId: "42", text: "🤖 路由庚：命名回答" },
+      { chatId: "42", text: "【路由庚】命名回答" },
     ]);
     const named = env.BOT_CHAT.get(
       env.BOT_CHAT.idFromName(`route-b9@${createdAt}`),

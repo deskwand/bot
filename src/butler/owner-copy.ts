@@ -1,5 +1,6 @@
 import { t, type Locale, type MessageKey } from "../i18n";
 import type { ActionKind } from "../protocol";
+import type { TaskActivity } from "../task/stall";
 import { taskLabel } from "./tasks-repo";
 
 export type ApprovalDecision = "approved" | "rejected" | "expired";
@@ -119,6 +120,28 @@ export function taskProgressText(
   detail: string,
 ): string {
   return t(locale, "butler.task.progress", { label, title, detail });
+}
+
+/**
+ * One notice naming where a running task stopped: the model or the last tool.
+ * It reports only observable facts, never a guessed cause or an ETA.
+ */
+export function taskStalledText(
+  locale: Locale,
+  label: string,
+  title: string,
+  activity: TaskActivity,
+  idleMs: number,
+): string {
+  const minutes = Math.floor(idleMs / 60_000);
+  return activity.kind === "running_tool"
+    ? t(locale, "butler.task.stalledTool", {
+        label,
+        title,
+        tool: activity.tool,
+        minutes,
+      })
+    : t(locale, "butler.task.stalledModel", { label, title, minutes });
 }
 
 export function taskCompletedText(

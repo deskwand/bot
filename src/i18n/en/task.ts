@@ -44,6 +44,6 @@ export const task: Messages["task"] = {
     expired: "This approval has expired",
     approved: "Approved",
     rejected: "Rejected",
-    autoApproved: "✔️ Auto-approved {tool}: {reason}",
+    autoApproved: "Auto-approved {tool}: {reason}",
   },
 };

@@ -47,6 +47,7 @@ export type TaskControl = {
   steer(text: string): Promise<{ ok: boolean; message: string }>;
   cancel(): Promise<{ ok: boolean; message: string }>;
   retryTask(): Promise<{ ok: boolean; message: string }>;
+  liveness(): Promise<{ state: string; reattached: boolean }>;
   pendingApprovals(): Promise<
     {
       approvalId: string;

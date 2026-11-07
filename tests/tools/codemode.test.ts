@@ -151,7 +151,7 @@ describe("TaskDO codemode",()=>{
     await complete(stub);
     expect(sent).toBe(1);
     expect(await stub.pendingApprovals()).toEqual([]);
-    expect(progress.mock.calls).toContainEqual([id,"✔️ 自动放行 http_request：按指令提交"]);
+    expect(progress.mock.calls).toContainEqual([id,"自动放行 http_request：按指令提交"]);
     expect(result?.isError).toBe(false);expect(text(result!)).toContain("201");
   });
   it("runs an HTTP POST directly in autonomous mode",async()=>{
@@ -164,7 +164,7 @@ describe("TaskDO codemode",()=>{
     expect(sent).toBe(1);
     expect(await stub.pendingApprovals()).toEqual([]);
     expect(result.isError).toBe(false);expect(text(result)).toContain("201");
-    expect(progress.mock.calls).not.toContainEqual([expect.anything(),expect.stringMatching(/^✔️ 自动放行/)]);
+    expect(progress.mock.calls).not.toContainEqual([expect.anything(),expect.stringMatching(/^自动放行/)]);
   });
   it("asks when the reviewer fails",async()=>{
     let sent=0;vi.spyOn(globalThis,"fetch").mockImplementation(async()=>{sent++;return new Response("created",{status:201,headers:{"content-type":"text/plain"}});});

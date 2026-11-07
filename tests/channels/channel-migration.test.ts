@@ -212,7 +212,7 @@ describe("migration from the previous schema", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "42",
-        text: "⏳ t7 旧任务：继续",
+        text: "t7 旧任务：继续",
         buttons: [
           [{ label: "取消", data: "a:cancel:t7", hint: "取消 t7" }],
         ],

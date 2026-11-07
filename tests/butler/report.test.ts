@@ -313,7 +313,7 @@ describe("ButlerDO.report", () => {
     await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "a" });
     // `started` assigns a handle to a migrated row without one.
     expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "77", text: "⏳ #1 查天气：a", buttons: [
+      { chatId: "42", messageId: "77", text: "#1 查天气：a", buttons: [
         [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
       ] },
     ]);
@@ -326,7 +326,7 @@ describe("ButlerDO.report", () => {
     await vi.waitFor(() => {
       expect(channel.edits).toHaveLength(2);
     });
-    expect(channel.edits[1]?.text).toBe("⏳ #1 查天气：c");
+    expect(channel.edits[1]?.text).toBe("#1 查天气：c");
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "running" });
   });
 
@@ -342,7 +342,7 @@ describe("ButlerDO.report", () => {
 
     clock.advance(60_001);
     await vi.waitFor(() => expect(channel.sent).toHaveLength(1));
-    expect(channel.sent[0]?.text).toBe("⏳ t1 查天气：a");
+    expect(channel.sent[0]?.text).toBe("t1 查天气：a");
 
     // Updates inside the next window collapse into one heartbeat.
     await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
@@ -351,7 +351,7 @@ describe("ButlerDO.report", () => {
 
     clock.advance(200_000);
     await vi.waitFor(() => expect(channel.sent).toHaveLength(2));
-    expect(channel.sent[1]?.text).toBe("⏳ t1 查天气：c");
+    expect(channel.sent[1]?.text).toBe("t1 查天气：c");
     expect(channel.edits).toEqual([]);
   });
 
@@ -375,7 +375,7 @@ describe("ButlerDO.report", () => {
     });
 
     expect(channel.sent).toEqual([
-      { chatId: "wx-owner", text: "✅ t1 查天气：抓到了价格" },
+      { chatId: "wx-owner", text: "t1 查天气：抓到了价格" },
     ]);
   });
 
@@ -393,9 +393,140 @@ describe("ButlerDO.report", () => {
     });
 
     expect(channel.sent).toEqual([
-      { chatId: "wx-owner", text: "✅ t1 查天气：t1 结论：ok" },
+      { chatId: "wx-owner", text: "t1 查天气：t1 结论：ok" },
     ]);
     expect(channel.edits).toEqual([]);
+  });
+
+  it("marks terminal, result and approval messages as critical", async () => {
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+    const stub = butler("report-priority");
+    await seedTask(stub);
+
+    const sent: OutboundMessage[] = [];
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as {
+          channels(): {
+            currentRoute(): Promise<{
+              channel: "telegram";
+              routeKey: string;
+            }>;
+            isAdmissionCurrent(): Promise<boolean>;
+            editCurrent(): Promise<boolean>;
+            sendCurrent(msg: OutboundMessage): Promise<{
+              channel: "telegram";
+              conversationId: string;
+              routeKey: string;
+              messageId: string;
+            }>;
+          };
+        }
+      ).channels = () => ({
+        currentRoute: async () => ({
+          channel: "telegram",
+          routeKey: "test-route",
+        }),
+        isAdmissionCurrent: async () => true,
+        editCurrent: async () => false,
+        sendCurrent: async (msg) => {
+          sent.push(msg);
+          return {
+            channel: "telegram",
+            conversationId: "42",
+            routeKey: "test-route",
+            messageId: "99",
+          };
+        },
+      });
+    });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "approval_requested",
+      approvalId: "ap1",
+      tool: "web_fetch",
+      argsSummary: "a",
+    });
+    await stub.report({
+      taskId: "t1",
+      seq: 2,
+      type: "completed",
+      summary: "ok",
+      artifacts: [],
+    });
+
+    expect(
+      sent.find((message) => message.text.includes("请求执行 web_fetch"))
+        ?.priority,
+    ).toBe("critical");
+    expect(
+      sent.find((message) => message.text.includes("已完成"))?.priority,
+    ).toBe("critical");
+    // The completion report is the answer itself, not a progress frame.
+    expect(
+      sent.find((message) => message.text === "t1 结论：ok")?.priority,
+    ).toBe("critical");
+  });
+
+  it("marks the single WeChat terminal message as critical", async () => {
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+    const stub = butler("report-priority-wechat");
+    await seedTask(stub, { ref: wechatRef("route-a") });
+
+    const sent: OutboundMessage[] = [];
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as {
+          channels(): {
+            currentRoute(): Promise<{
+              channel: "wechat";
+              routeKey: string;
+            }>;
+            isAdmissionCurrent(): Promise<boolean>;
+            editCurrent(): Promise<boolean>;
+            sendCurrent(msg: OutboundMessage): Promise<{
+              channel: "wechat";
+              conversationId: string;
+              routeKey: string;
+              messageId: string | null;
+            }>;
+          };
+        }
+      ).channels = () => ({
+        currentRoute: async () => ({
+          channel: "wechat",
+          routeKey: "route-a",
+        }),
+        isAdmissionCurrent: async () => true,
+        editCurrent: async () => false,
+        sendCurrent: async (msg) => {
+          sent.push(msg);
+          return {
+            channel: "wechat",
+            conversationId: "wx-owner",
+            routeKey: "route-a",
+            messageId: null,
+          };
+        },
+      });
+    });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "ok",
+      artifacts: [],
+    });
+
+    expect(sent).toEqual([
+      {
+        text: "t1 查天气：t1 结论：ok",
+        priority: "critical",
+      },
+    ]);
   });
 
   it("falls back to the task summary when the report produces no text", async () => {
@@ -412,7 +543,7 @@ describe("ButlerDO.report", () => {
     });
 
     expect(channel.sent).toEqual([
-      { chatId: "wx-owner", text: "✅ t1 查天气：抓到了价格" },
+      { chatId: "wx-owner", text: "t1 查天气：抓到了价格" },
     ]);
   });
 
@@ -443,7 +574,7 @@ describe("ButlerDO.report", () => {
     await vi.waitFor(() => {
       expect(channel.edits).toHaveLength(2);
     });
-    expect(channel.edits[1]?.text).toBe("⏳ t1 查天气：c");
+    expect(channel.edits[1]?.text).toBe("t1 查天气：c");
   });
 
   it("sends an approval request with buttons and resolves it in place", async () => {
@@ -467,11 +598,11 @@ describe("ButlerDO.report", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "42",
-        text: "🔐 t1 请求执行 web_fetch\nhttps://example.com",
+        text: "t1 请求执行 web_fetch\nhttps://example.com",
         buttons: [
           [
-            { label: "✅ 批准", data: "a:approve:t1:ap1", hint: "批准" },
-            { label: "❌ 拒绝", data: "a:reject:t1:ap1", hint: "拒绝" },
+            { label: "批准", data: "a:approve:t1:ap1", hint: "批准" },
+            { label: "拒绝", data: "a:reject:t1:ap1", hint: "拒绝" },
           ],
         ],
       },
@@ -489,7 +620,7 @@ describe("ButlerDO.report", () => {
       {
         chatId: "42",
         messageId: "1",
-        text: "🔐 t1 请求执行 web_fetch\nhttps://example.com\n→ 已批准",
+        text: "t1 请求执行 web_fetch\nhttps://example.com\n→ 已批准",
       },
     ]);
   });
@@ -526,16 +657,16 @@ describe("ButlerDO.report", () => {
     // The first request was unambiguous when it was sent.
     expect(channel.sent[0]?.buttons).toEqual([
       [
-        { label: "✅ 批准", data: "a:approve:t1:ap1", hint: "批准" },
-        { label: "❌ 拒绝", data: "a:reject:t1:ap1", hint: "拒绝" },
+        { label: "批准", data: "a:approve:t1:ap1", hint: "批准" },
+        { label: "拒绝", data: "a:reject:t1:ap1", hint: "拒绝" },
       ],
     ]);
     // With two pending, the hint has to name the internal id: approval ids
     // are per task and handles are reused.
     expect(channel.sent[1]?.buttons).toEqual([
       [
-        { label: "✅ 批准", data: "a:approve:t1:ap2", hint: "批准 t1 ap2" },
-        { label: "❌ 拒绝", data: "a:reject:t1:ap2", hint: "拒绝 t1 ap2" },
+        { label: "批准", data: "a:approve:t1:ap2", hint: "批准 t1 ap2" },
+        { label: "拒绝", data: "a:reject:t1:ap2", hint: "拒绝 t1 ap2" },
       ],
     ]);
   });
@@ -556,7 +687,7 @@ describe("ButlerDO.report", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "42",
-        text: "⏳ #1 查天气：已开始",
+        text: "#1 查天气：已开始",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
         ],
@@ -741,7 +872,7 @@ describe("ButlerDO.report", () => {
     expect(edits).toHaveLength(1);
     expect(edits[0].body.message_id).toBe(saved);
     expect(edits[0].body.text).toBe(
-      `🔐 t1 请求执行 web_fetch\n${argsSummary}\n→ 已批准`,
+      `t1 请求执行 web_fetch\n${argsSummary}\n→ 已批准`,
     );
     expect(edits[0].body.text.endsWith("\n→ 已批准")).toBe(true);
   });
@@ -765,7 +896,7 @@ describe("ButlerDO.report", () => {
     });
 
     expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "77", text: "✅ t1 查天气：已完成" },
+      { chatId: "42", messageId: "77", text: "t1 查天气：已完成" },
     ]);
     expect(channel.sent).toEqual([{ chatId: "42", text: "t1 完成：ok" }]);
     expect(await taskRow(stub, "t1")).toMatchObject({
@@ -871,8 +1002,8 @@ describe("ButlerDO.report", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(channel.edits.map((edit) => edit.text)).toEqual([
-      "⏳ t1 查天气：a",
-      "✅ t1 查天气：已完成",
+      "t1 查天气：a",
+      "t1 查天气：已完成",
     ]);
   });
 
@@ -904,7 +1035,7 @@ describe("ButlerDO.report", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "42",
-        text: "⏳ t1 查天气：b",
+        text: "t1 查天气：b",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
         ],
@@ -967,7 +1098,7 @@ describe("ButlerDO.report", () => {
       {
         chatId: "42",
         messageId: "77",
-        text: "❌ t1 查天气：模型错误\n回复\"重试\"可继续",
+        text: "t1 查天气：模型错误\n回复\"重试\"可继续",
       },
     ]);
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "failed" });
@@ -989,7 +1120,7 @@ describe("ButlerDO.report", () => {
       text: "x".repeat(300),
     });
     expect(channel.edits[0]?.text).toBe(
-      `⏳ t1 查天气：${"x".repeat(199)}…`,
+      `t1 查天气：${"x".repeat(199)}…`,
     );
 
     await stub.report({
@@ -1016,7 +1147,7 @@ describe("ButlerDO.report", () => {
     await stub.report({ taskId: "t1", seq: 1, type: "cancelled" });
 
     expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "77", text: "🚫 t1 查天气：已取消" },
+      { chatId: "42", messageId: "77", text: "t1 查天气：已取消" },
     ]);
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
   });
@@ -1034,7 +1165,7 @@ describe("ButlerDO.report", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "42",
-        text: "⏳ t1 查天气：a",
+        text: "t1 查天气：a",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
         ],
@@ -1043,7 +1174,7 @@ describe("ButlerDO.report", () => {
 
     await stub.report({ taskId: "t1", seq: 2, type: "cancelled" });
     expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "1", text: "🚫 t1 查天气：已取消" },
+      { chatId: "42", messageId: "1", text: "t1 查天气：已取消" },
     ]);
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
   });
@@ -1096,7 +1227,7 @@ describe("ButlerDO.report", () => {
     // new message instead of being dropped until the next event.
     expect(sent).toEqual([
       {
-        text: "⏳ t1 查天气：a",
+        text: "t1 查天气：a",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
         ],
@@ -1108,13 +1239,13 @@ describe("ButlerDO.report", () => {
     await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
     expect(sent).toEqual([
       {
-        text: "⏳ t1 查天气：a",
+        text: "t1 查天气：a",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
         ],
       },
       {
-        text: "⏳ t1 查天气：b",
+        text: "t1 查天气：b",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
         ],
@@ -1139,13 +1270,156 @@ describe("ButlerDO.report", () => {
     expect(channel.sent).toEqual([
       {
         chatId: "42",
-        text: "⏳ t1 查天气：a",
+        text: "t1 查天气：a",
         buttons: [
           [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
         ],
       },
     ]);
     expect(await progressMessageId(stub, "t1")).toBe("1");
+  });
+});
+
+describe("ButlerDO.report stalled", () => {
+  type Boundary = {
+    currentRoute(): Promise<{ channel: "telegram"; routeKey: string }>;
+    isAdmissionCurrent(): Promise<boolean>;
+    editCurrent(ref: ChannelMessageRef): Promise<boolean>;
+    sendCurrent(msg: OutboundMessage): Promise<ChannelMessageRef>;
+  };
+
+  async function capture(stub: ButlerStub): Promise<{
+    sent: OutboundMessage[];
+    edited: ChannelMessageRef[];
+  }> {
+    const sent: OutboundMessage[] = [];
+    const edited: ChannelMessageRef[] = [];
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { channels(): Boundary }).channels = () => ({
+        currentRoute: async () => ({
+          channel: "telegram",
+          routeKey: "test-route",
+        }),
+        isAdmissionCurrent: async () => true,
+        editCurrent: async (ref) => {
+          edited.push(ref);
+          return true;
+        },
+        sendCurrent: async (msg) => {
+          sent.push(msg);
+          return {
+            channel: "telegram",
+            conversationId: "42",
+            routeKey: "test-route",
+            messageId: String(sent.length),
+          };
+        },
+      });
+    });
+    return { sent, edited };
+  }
+
+  const stalledTool = {
+    activity: { kind: "running_tool" as const, tool: "web_fetch" },
+    idleMs: 600_000,
+  };
+
+  it("sends one alert for a stalled tool", async () => {
+    const stub = butler("report-stalled-tool");
+    const { sent } = await capture(stub);
+    await seedTask(stub, { status: "running" });
+
+    await stub.report({ taskId: "t1", seq: 1, type: "stalled", ...stalledTool });
+
+    expect(sent).toEqual([
+      {
+        text: expect.stringContaining(
+          "最后一步是「web_fetch」，已经 10 分钟没有返回",
+        ),
+        priority: "alert",
+      },
+    ]);
+  });
+
+  it("says it is waiting for the model", async () => {
+    const stub = butler("report-stalled-model");
+    const { sent } = await capture(stub);
+    await seedTask(stub, { status: "running" });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "stalled",
+      activity: { kind: "waiting_model" },
+      idleMs: 600_000,
+    });
+
+    expect(sent.at(-1)?.text).toContain("在等模型响应");
+    expect(sent.at(-1)?.text).toContain("已经 10 分钟没有进展");
+  });
+
+  it("ignores a stalled event for a task that already ended", async () => {
+    const stub = butler("report-stalled-finished");
+    const { sent } = await capture(stub);
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+    await seedTask(stub, { status: "running" });
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "ok",
+      artifacts: [],
+    });
+    const before = sent.length;
+
+    await stub.report({ taskId: "t1", seq: 2, type: "stalled", ...stalledTool });
+
+    expect(sent).toHaveLength(before);
+  });
+
+  it("ignores a stalled event for a bot task", async () => {
+    const stub = butler("report-stalled-bot");
+    const { sent } = await capture(stub);
+    await seedTask(stub, { id: "b1", status: "running" });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`UPDATE tasks SET bot_id = 'bot-a' WHERE id = 'b1'`);
+    });
+
+    await stub.report({ taskId: "b1", seq: 1, type: "stalled", ...stalledTool });
+
+    expect(sent).toEqual([]);
+  });
+
+  it("does not overwrite the progress message reference", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const fake = fakeClock();
+    setClockOverride(fake.clock);
+    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
+
+    const stub = butler("report-stalled-ref");
+    await seedTask(stub, { status: "running" });
+
+    await stub.report({ taskId: "t1", seq: 1, type: "started" });
+    await stub.report({ taskId: "t1", seq: 2, type: "stalled", ...stalledTool });
+    expect(channel.sent.map((message) => message.text).join("\n")).toContain(
+      "最后一步是「web_fetch」",
+    );
+
+    await stub.report({
+      taskId: "t1",
+      seq: 3,
+      type: "completed",
+      summary: "ok",
+      artifacts: [],
+    });
+
+    expect(channel.edits.at(-1)).toMatchObject({
+      messageId: "77",
+      text: "#1 查天气：已完成",
+    });
+    expect(await progressMessageId(stub, "t1")).toBe("77");
   });
 });
 

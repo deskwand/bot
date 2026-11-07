@@ -125,6 +125,39 @@ describe("resolveBotAddress", () => {
         resolveBotAddress({ text: "hi", quotedText: "🤖 重名：x" }, bots),
       ).toEqual({ kind: "ambiguous", name: "重名", matches: [b4, b5] });
     });
+
+    it("finds the bot from the new Chinese notice", () => {
+      expect(
+        resolveBotAddress(
+          { text: "那明天再看", quotedText: "【盯盘】价格回落了" },
+          bots,
+        ),
+      ).toEqual({ kind: "bot", bot: b1, text: "那明天再看" });
+    });
+
+    it("finds the bot from the new English notice", () => {
+      expect(
+        resolveBotAddress({ text: "hello", quotedText: "[News] hello" }, bots),
+      ).toMatchObject({ kind: "bot", bot: { name: "News" } });
+    });
+
+    it("still accepts the legacy robot notices", () => {
+      expect(
+        resolveBotAddress({ text: "x", quotedText: "🤖 盯盘：价格回落了" }, bots),
+      ).toMatchObject({ kind: "bot", bot: { name: "盯盘" } });
+      expect(
+        resolveBotAddress({ text: "x", quotedText: "🤖 News: hello" }, bots),
+      ).toMatchObject({ kind: "bot", bot: { name: "News" } });
+    });
+
+    it("does not route a quoted approval card of a bot task", () => {
+      expect(
+        resolveBotAddress(
+          { text: "批准", quotedText: "「盯盘」#2 请求执行 http_request" },
+          bots,
+        ),
+      ).toEqual({ kind: "none" });
+    });
   });
 
   describe("a name with a space", () => {

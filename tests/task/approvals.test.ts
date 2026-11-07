@@ -608,7 +608,7 @@ describe("ReviewedGate", () => {
     });
     expect(outcome.rows[0]!.args_summary).toHaveLength(200);
     expect(outcome.progress).toEqual([
-      "✔️ 自动放行 http_request：按指令保存",
+      "自动放行 http_request：按指令保存",
     ]);
   });
 

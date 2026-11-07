@@ -68,6 +68,94 @@ describe("OutboundQueue", () => {
     expect(dropped).toBe(1);
   });
 
+  it("drops the oldest normal row before any alert or critical", async () => {
+    const { texts, dropped } = await withQueue((_queue, sql) => {
+      const q = new OutboundQueue(sql, 3);
+      q.enqueue({ conversationId: "c", text: "n1", buttons: null });
+      q.enqueue({ conversationId: "c", text: "a1", buttons: null, priority: "alert" });
+      q.enqueue({ conversationId: "c", text: "n2", buttons: null });
+      const { dropped } = q.enqueue({
+        conversationId: "c",
+        text: "done",
+        buttons: null,
+        priority: "critical",
+      });
+      return { texts: q.list().map((m) => m.text), dropped };
+    });
+
+    expect(dropped).toBe(1);
+    expect(texts).toEqual(["a1", "n2", "done"]);
+  });
+
+  it("drops an alert only when no normal row is left", async () => {
+    const { texts, dropped } = await withQueue((_queue, sql) => {
+      const q = new OutboundQueue(sql, 2);
+      q.enqueue({ conversationId: "c", text: "a1", buttons: null, priority: "alert" });
+      q.enqueue({ conversationId: "c", text: "a2", buttons: null, priority: "alert" });
+      const { dropped } = q.enqueue({
+        conversationId: "c",
+        text: "c1",
+        buttons: null,
+        priority: "critical",
+      });
+      return { texts: q.list().map((m) => m.text), dropped };
+    });
+
+    expect(dropped).toBe(1);
+    expect(texts).toEqual(["a2", "c1"]);
+  });
+
+  it("never drops critical rows, even past the limit", async () => {
+    const texts = await withQueue((_queue, sql) => {
+      const q = new OutboundQueue(sql, 2);
+      for (const text of ["c1", "c2", "c3"]) {
+        q.enqueue({ conversationId: "c", text, buttons: null, priority: "critical" });
+      }
+      return q.list().map((m) => m.text);
+    });
+
+    expect(texts).toEqual(["c1", "c2", "c3"]);
+  });
+
+  it("reads rows written before the priority column as normal", async () => {
+    // A Butler has its own SQLite database and does not create this table.
+    const hub = env.BUTLER.get(
+      env.BUTLER.idFromName(`queue-${crypto.randomUUID()}`),
+    );
+    const { texts, dropped } = await runInDurableObject(
+      hub,
+      (_instance, state) => {
+        // The table as an older release left it, without a priority column.
+        state.storage.sql.exec(
+          `CREATE TABLE outbound_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            buttons_json TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            created_at INTEGER NOT NULL
+          )`,
+        );
+        state.storage.sql.exec(
+          `INSERT INTO outbound_queue (conversation_id, text, created_at)
+           VALUES ('wx', 'old', 0)`,
+        );
+        const q = new OutboundQueue(state.storage.sql, 1);
+        const { dropped } = q.enqueue({
+          conversationId: "wx",
+          text: "c1",
+          buttons: null,
+          priority: "critical",
+        });
+        return { texts: q.list().map((m) => m.text), dropped };
+      },
+    );
+
+    expect(dropped).toBe(1);
+    expect(texts).toEqual(["c1"]);
+  });
+
   it("round-trips buttons through JSON", async () => {
     const buttons = [[{ label: "取消", data: "cancel:t1" }]];
     const rows = await withQueue((queue) => {

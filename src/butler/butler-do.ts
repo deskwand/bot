@@ -10,6 +10,7 @@ import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
 import type { BotChatInput } from "../bot/bot-chat-do";
 import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
+import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
 import { isInboxKey } from "../channels/inbox";
 import { parseActiveChannel } from "../channels/route-identity";
@@ -57,6 +58,7 @@ import {
   taskProgressText,
   taskStartedText,
   taskStartFailedText,
+  taskStalledText,
   unsupportedMessageNotice,
   voiceUnavailableNotice,
 } from "./owner-copy";
@@ -112,6 +114,8 @@ const PROGRESS_HEARTBEAT_FIRST_MS = 60_000;
 const PROGRESS_DETAIL_MAX = 200;
 const MESSAGE_MAX = 4096;
 const BOT_HEAL_KEY = "bot_heal_at";
+const TASK_HEAL_KEY = "task_heal_at";
+const TASK_PROBE_FAILURES_PREFIX = "task_probe_failures:";
 
 /** The part of a bot chat stub the Butler uses. */
 type BotChatStub = {
@@ -394,6 +398,67 @@ export class ButlerDO extends Agent<Env> {
       }
     }
     return { checked: bots.length, healed };
+  }
+
+  /**
+   * Probes every running task from the cron. A probe that fails twice in a
+   * row means the run is gone: the Task DO cannot report its own death, so
+   * the failure is recorded here through the ordinary failed path.
+   */
+  async healTasks(): Promise<{
+    checked: number;
+    interrupted: number;
+  } | null> {
+    const now = getClock().now();
+    const last = Number(this.schedules.getMeta(TASK_HEAL_KEY) ?? NaN);
+    if (Number.isFinite(last) && now - last < STALL_AFTER_MS) return null;
+    this.schedules.setMeta(TASK_HEAL_KEY, String(now));
+
+    const running = this.repo
+      .list({ active: true })
+      .filter((row) => row.status === "running");
+    let interrupted = 0;
+    for (const row of running) {
+      const failureKey = `${TASK_PROBE_FAILURES_PREFIX}${row.id}`;
+      let probeFailed = false;
+      try {
+        const probed = await this.taskFor(row.id).liveness();
+        // `liveness` flushes the outbox first, so a run that finished would
+        // already have reported and flipped the row. A row still `running`
+        // while the probe says otherwise is as dead as a thrown probe.
+        probeFailed =
+          probed.state !== "running" &&
+          this.repo.get(row.id)?.status === "running";
+        if (probeFailed) {
+          console.error(
+            `task probe failed: ${row.id} state=${probed.state}`,
+          );
+        }
+      } catch (error) {
+        // A deploy or a short network blip can fail one probe; only the
+        // second consecutive failure is treated as a lost run.
+        console.error("task probe failed:", row.id, error);
+        probeFailed = true;
+      }
+      if (!probeFailed) {
+        this.schedules.deleteMeta(failureKey);
+        continue;
+      }
+      const failures = Number(this.schedules.getMeta(failureKey) ?? "0") + 1;
+      if (failures < 2) {
+        this.schedules.setMeta(failureKey, String(failures));
+        continue;
+      }
+      this.schedules.deleteMeta(failureKey);
+      await this.handleFailed(
+        row.id,
+        t(ownerLocale(this.env), "butler.task.interrupted"),
+        false,
+        now,
+      );
+      interrupted += 1;
+    }
+    return { checked: running.length, interrupted };
   }
 
   async backupSchema(): Promise<DbSchema> {
@@ -750,13 +815,19 @@ export class ButlerDO extends Agent<Env> {
         await this.handleApprovalResolved(taskId, body.approvalId, body.decision);
         break;
       case "completed":
+        this.schedules.deleteMeta(`${TASK_PROBE_FAILURES_PREFIX}${taskId}`);
         await this.handleCompleted(taskId, body.summary, body.artifacts, now);
         break;
       case "failed":
+        this.schedules.deleteMeta(`${TASK_PROBE_FAILURES_PREFIX}${taskId}`);
         await this.handleFailed(taskId, body.reason, body.retryable, now);
         break;
       case "cancelled":
+        this.schedules.deleteMeta(`${TASK_PROBE_FAILURES_PREFIX}${taskId}`);
         await this.handleCancelled(taskId, now);
+        break;
+      case "stalled":
+        await this.handleStalled(taskId, body);
         break;
     }
 
@@ -943,6 +1014,34 @@ export class ButlerDO extends Agent<Env> {
     this.scheduleProgressFlush(taskId, now);
   }
 
+  /**
+   * A stalled run gets one standalone notice, so the progress message keeps
+   * its reference and the terminal event still edits that same message. Bot
+   * tasks never alert the owner, and a report that arrives after the task
+   * ended must not resurrect it.
+   */
+  private async handleStalled(
+    taskId: string,
+    body: Extract<TaskEventBody, { type: "stalled" }>,
+  ): Promise<void> {
+    const row = this.repo.get(taskId);
+    if (!row || row.status !== "running" || row.botId !== null) return;
+
+    const locale = ownerLocale(this.env);
+    await this.sendBestEffort({
+      text: clampMessage(
+        taskStalledText(
+          locale,
+          taskLabel(row),
+          row.title,
+          body.activity,
+          body.idleMs,
+        ),
+      ),
+      priority: "alert",
+    });
+  }
+
   private scheduleProgressFlush(taskId: string, now: number): void {
     if (this.progressTimers.has(taskId)) return;
     const dueAt = this.throttle.dueAt(taskId) ?? this.heartbeat.dueAt(taskId);
@@ -1032,7 +1131,12 @@ export class ButlerDO extends Agent<Env> {
     const row = this.repo.get(taskId);
     if (!row) return;
 
-    const message: OutboundMessage = { text: clampMessage(text) };
+    // A terminal status is the answer the owner has been waiting for: the
+    // WeChat queue must not evict it behind progress frames.
+    const message: OutboundMessage = {
+      text: clampMessage(text),
+      priority: "critical",
+    };
     if (row.progressMessageRef !== null) {
       const outcome = await this.editBestEffort(row.progressMessageRef, message);
       if (outcome === "edited") return;
@@ -1068,7 +1172,12 @@ export class ButlerDO extends Agent<Env> {
 
     const locale = ownerLocale(this.env);
     const bot = row.botId === null ? null : this.bots.get(row.botId);
-    const prefix = row.botId === null ? "" : `🤖 ${bot?.name ?? row.botId} `;
+    const prefix =
+      row.botId === null
+        ? ""
+        : t(locale, "butler.notice.botTaskPrefix", {
+            name: bot?.name ?? row.botId,
+          });
     const label = taskLabel(row);
     const text = clampMessage(
       approvalCardText(locale, {
@@ -1087,6 +1196,7 @@ export class ButlerDO extends Agent<Env> {
     const explicit = { taskId, approvalId: approval.approvalId };
     const ref = await this.sendBestEffort({
       text,
+      priority: "critical",
       buttons: [
         [
           {
@@ -1237,11 +1347,14 @@ export class ButlerDO extends Agent<Env> {
         text.length > 0 ? text : summary.length > 0 ? summary : undefined;
       await this.sendBestEffort({
         text: clampMessage(taskCompletedText(locale, label, row.title, body)),
+        priority: "critical",
       });
       await this.deliverArtifacts(artifacts, locale);
       return;
     }
-    if (text.length > 0) await this.sendBestEffort({ text });
+    if (text.length > 0) {
+      await this.sendBestEffort({ text, priority: "critical" });
+    }
     await this.deliverArtifacts(artifacts, locale);
   }
 

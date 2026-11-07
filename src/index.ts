@@ -76,5 +76,13 @@ export default {
     } catch (error) {
       console.error("bot heal failed:", error);
     }
+
+    // Same sweep idea for tasks: a Task DO that stopped responding cannot
+    // report its own failure, so the cron probes the running ones.
+    try {
+      await butler(env).healTasks();
+    } catch (error) {
+      console.error("task heal failed:", error);
+    }
   },
 } satisfies ExportedHandler<Env>;
