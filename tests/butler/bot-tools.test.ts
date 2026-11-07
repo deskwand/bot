@@ -54,6 +54,7 @@ function fakeTask(calls: string[]): TaskControl {
       return { ok: true, message: "" };
     },
     retryTask: async () => ({ ok: true, message: "" }),
+    liveness: async () => ({ state: "running", reattached: false }),
     pendingApprovals: async () => [],
   };
 }

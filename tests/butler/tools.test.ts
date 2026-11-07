@@ -110,6 +110,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async () => {
@@ -156,6 +157,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async (_title, _instructions, attachments) => {
@@ -215,6 +217,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async (_title, _instructions, attachments) => {
@@ -264,6 +267,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async () => {
@@ -321,6 +325,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async () => {
@@ -374,6 +379,7 @@ describe("butler control tools", () => {
               retried = true;
               return { ok: true, message: "已重试" };
             },
+            liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
           spawn: async () => "t2",

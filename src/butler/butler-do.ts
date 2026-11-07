@@ -10,6 +10,7 @@ import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
 import type { BotChatInput } from "../bot/bot-chat-do";
 import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
+import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
 import { isInboxKey } from "../channels/inbox";
 import { parseActiveChannel } from "../channels/route-identity";
@@ -113,6 +114,8 @@ const PROGRESS_HEARTBEAT_FIRST_MS = 60_000;
 const PROGRESS_DETAIL_MAX = 200;
 const MESSAGE_MAX = 4096;
 const BOT_HEAL_KEY = "bot_heal_at";
+const TASK_HEAL_KEY = "task_heal_at";
+const TASK_PROBE_FAILURES_PREFIX = "task_probe_failures:";
 
 /** The part of a bot chat stub the Butler uses. */
 type BotChatStub = {
@@ -395,6 +398,56 @@ export class ButlerDO extends Agent<Env> {
       }
     }
     return { checked: bots.length, healed };
+  }
+
+  /**
+   * Probes every running task from the cron. A probe that fails twice in a
+   * row means the run is gone: the Task DO cannot report its own death, so
+   * the failure is recorded here through the ordinary failed path.
+   */
+  async healTasks(): Promise<{
+    checked: number;
+    interrupted: number;
+  } | null> {
+    const now = getClock().now();
+    const last = Number(this.schedules.getMeta(TASK_HEAL_KEY) ?? NaN);
+    if (Number.isFinite(last) && now - last < STALL_AFTER_MS) return null;
+    this.schedules.setMeta(TASK_HEAL_KEY, String(now));
+
+    const running = this.repo
+      .list({ active: true })
+      .filter((row) => row.status === "running");
+    let interrupted = 0;
+    for (const row of running) {
+      const failureKey = `${TASK_PROBE_FAILURES_PREFIX}${row.id}`;
+      try {
+        await this.taskFor(row.id).liveness();
+      } catch (error) {
+        // A deploy or a short network blip can fail one probe; only the
+        // second consecutive failure is treated as a lost run.
+        const failures =
+          Number(this.schedules.getMeta(failureKey) ?? "0") + 1;
+        console.error("task probe failed:", row.id, error);
+        if (failures < 2) {
+          this.schedules.setMeta(failureKey, String(failures));
+          continue;
+        }
+        this.db.exec(
+          `DELETE FROM schedules_meta WHERE key = ?`,
+          failureKey,
+        );
+        await this.handleFailed(
+          row.id,
+          t(ownerLocale(this.env), "butler.task.interrupted"),
+          false,
+          now,
+        );
+        interrupted += 1;
+        continue;
+      }
+      this.db.exec(`DELETE FROM schedules_meta WHERE key = ?`, failureKey);
+    }
+    return { checked: running.length, interrupted };
   }
 
   async backupSchema(): Promise<DbSchema> {

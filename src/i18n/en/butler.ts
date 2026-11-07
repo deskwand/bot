@@ -23,6 +23,7 @@ export const butler: Messages["butler"] = {
     done: "Completed",
     failed: "{label} {title}: {reason}",
     cancelled: "{label} {title}: Cancelled",
+    interrupted: "the task was interrupted; the worker stopped responding",
     retryHint: 'Reply "retry" to continue',
     cancelButton: "Cancel",
     missing: "Task not found",

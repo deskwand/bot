@@ -562,6 +562,74 @@ describe("TaskDO lifecycle", () => {
   });
 });
 
+describe("TaskDO.liveness", () => {
+  async function seedRunning(stub: ReturnType<typeof task>, taskId: string) {
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO meta (key, value) VALUES
+          ('task_id', ?), ('title', ?), ('spec', ?),
+          ('state', 'running'), ('operation_id', ?)`,
+        taskId,
+        `Task ${taskId}`,
+        JSON.stringify(spec(taskId)),
+        `task:${taskId}`,
+      );
+    });
+  }
+
+  function interceptWatchRun(
+    instance: unknown,
+    watched: string[],
+  ): void {
+    (instance as { watchRun(id: string): Promise<void> }).watchRun = async (
+      id,
+    ) => {
+      watched.push(id);
+    };
+  }
+
+  it("re-attaches a running task that nothing is watching", async () => {
+    const taskId = "t-liveness-idle";
+    const stub = task(taskId);
+    const watched: string[] = [];
+    await runInDurableObject(stub, (instance) => {
+      interceptWatchRun(instance, watched);
+    });
+    // Let startup finish first; it has no run to attach to yet.
+    await stub.status();
+    await seedRunning(stub, taskId);
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { watching: boolean }).watching = false;
+    });
+
+    expect(await stub.liveness()).toEqual({
+      state: "running",
+      reattached: true,
+    });
+    expect(watched).toEqual([`task:${taskId}`]);
+  });
+
+  it("reports a watched task as is", async () => {
+    const taskId = "t-liveness-watched";
+    const stub = task(taskId);
+    const watched: string[] = [];
+    await runInDurableObject(stub, (instance) => {
+      interceptWatchRun(instance, watched);
+    });
+    await stub.status();
+    await seedRunning(stub, taskId);
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { watching: boolean }).watching = true;
+    });
+
+    expect(await stub.liveness()).toEqual({
+      state: "running",
+      reattached: false,
+    });
+    expect(watched).toEqual([]);
+  });
+});
+
 describe("TaskDO workspace", () => {
   it("gives the task a workspace the model can write and read", async () => {
     let readText = "";

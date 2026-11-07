@@ -177,6 +177,9 @@ export class TaskDO extends Agent<Env> {
    */
   private readonly runningTools = new Map<string, string>();
 
+  /** True while this instance has an active `wait` for the current run. */
+  private watching = false;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
@@ -629,6 +632,28 @@ export class TaskDO extends Agent<Env> {
     return this.approvals.pending();
   }
 
+  /**
+   * Cheap liveness probe for the Butler's cron. Normally `onStart` has
+   * already re-attached to a running run; this is the fallback for an
+   * instance that could not, so the next probe can tell whether the run is
+   * still being watched.
+   */
+  async liveness(): Promise<{ state: TaskState; reattached: boolean }> {
+    await this.flushOutbox();
+    const state = this.currentState();
+    const operationId = this.readMeta("operation_id");
+    if (
+      state !== "running" ||
+      this.watching ||
+      this.hasCompletedEvent() ||
+      operationId === undefined
+    ) {
+      return { state, reattached: false };
+    }
+    this.ctx.waitUntil(this.watchRun(operationId));
+    return { state, reattached: true };
+  }
+
   async status(): Promise<{ state: TaskState; title: string }> {
     await this.flushOutbox();
     return {
@@ -894,47 +919,54 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async watchRun(operationId: string): Promise<void> {
-    // Re-attaching resumes Pi work, so it must wait out the lease. Startup
-    // will re-attach from the persisted operation id on the next alarm.
-    if (await this.deferStartupIfMaintenance()) return;
-    let summary = "";
+    // Set before the first await: startup calls this through `waitUntil`, and
+    // a liveness probe must see the re-attachment as soon as it is requested.
+    this.watching = true;
     try {
-      const result = await this.harness.wait(operationId);
-      if (result.status === "unanswered") {
-        // Pi resolves `wait` for failed/aborted/withdrawn runs; they are not
-        // completions, even when they carry no text.
-        let modelError: string | undefined;
-        if (result.reason === "model_error") {
-          try {
-            modelError = lastModelError(
-              await this.harness.session().messages(),
-            );
-          } catch (error) {
-            const reason =
-              error instanceof Error ? error.message : String(error);
-            console.warn(
-              `task ${this.currentTaskId() ?? "unknown"} could not read the transcript after a model error: ${reason}`,
-            );
+      // Re-attaching resumes Pi work, so it must wait out the lease. Startup
+      // will re-attach from the persisted operation id on the next alarm.
+      if (await this.deferStartupIfMaintenance()) return;
+      let summary = "";
+      try {
+        const result = await this.harness.wait(operationId);
+        if (result.status === "unanswered") {
+          // Pi resolves `wait` for failed/aborted/withdrawn runs; they are not
+          // completions, even when they carry no text.
+          let modelError: string | undefined;
+          if (result.reason === "model_error") {
+            try {
+              modelError = lastModelError(
+                await this.harness.session().messages(),
+              );
+            } catch (error) {
+              const reason =
+                error instanceof Error ? error.message : String(error);
+              console.warn(
+                `task ${this.currentTaskId() ?? "unknown"} could not read the transcript after a model error: ${reason}`,
+              );
+            }
           }
+          await this.fail(
+            userTextForModelError(modelError, ownerLocale(this.env)) ??
+              result.reason ??
+              taskIncompleteText(ownerLocale(this.env)),
+          );
+          return;
         }
-        await this.fail(
-          userTextForModelError(modelError, ownerLocale(this.env)) ??
-            result.reason ??
-            taskIncompleteText(ownerLocale(this.env)),
-        );
+        summary = result.text ?? "";
+      } catch (error) {
+        await this.fail(error);
         return;
       }
-      summary = result.text ?? "";
-    } catch (error) {
-      await this.fail(error);
-      return;
-    }
 
-    // `finish_task` may already have completed the task.
-    if (this.readMeta("state") !== "running" || this.hasCompletedEvent()) {
-      return;
+      // `finish_task` may already have completed the task.
+      if (this.readMeta("state") !== "running" || this.hasCompletedEvent()) {
+        return;
+      }
+      await this.finish(summary, []);
+    } finally {
+      this.watching = false;
     }
-    await this.finish(summary, []);
   }
 
   /**

@@ -21,6 +21,7 @@ export const butler = {
     done: "已完成",
     failed: "{label} {title}：{reason}",
     cancelled: "{label} {title}：已取消",
+    interrupted: "任务中断了，后台没有响应",
     retryHint: '回复"重试"可继续',
     cancelButton: "取消",
     missing: "任务不存在",
