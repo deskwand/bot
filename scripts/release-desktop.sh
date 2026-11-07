@@ -209,8 +209,20 @@ done
 
 echo "==> 2/7 发布预检与线上版本检查"
 node --experimental-strip-types "$root/scripts/desktop-release.ts" preflight "$version"
+# 公网 manifest 的读取会偶发 fetch failed（本机实测），失败即中止发布会让人误以为
+# 版本冲突。这里只对网络读取重试 3 次；版本冲突等确定性错误仍会连续失败并中止。
 for target in "${targets[@]}"; do
-  node --experimental-strip-types "$root/scripts/desktop-release.ts" check-remote "$(target_of "$target")" "$version"
+  t="$(target_of "$target")"
+  attempt=1
+  until node --experimental-strip-types "$root/scripts/desktop-release.ts" check-remote "$t" "$version"; do
+    if [ "$attempt" -ge 3 ]; then
+      echo "读取 ${t} 的公网 manifest 连续失败 3 次，停止发布" >&2
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    echo "重试 ${t} 的公网 manifest 检查（第 ${attempt} 次）" >&2
+    sleep 2
+  done
 done
 
 echo "==> 3/7 逐平台构建产物"
