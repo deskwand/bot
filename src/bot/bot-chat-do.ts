@@ -1,5 +1,7 @@
 import { Agent } from "agents";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { PiHarness, type PiModel } from "agents/harness/pi";
+import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { ownerLocale, t, type Locale } from "../i18n";
 import { createModelsForEnv, resolveModel } from "../llm/models";
@@ -59,9 +61,6 @@ export class BotChatDO extends Agent<Env> {
 
   readonly harness: PiHarness;
 
-  /** The model last applied to this chat's session (see `ensureModel`). */
-  private appliedModel: PiModel | undefined;
-
   /** The system prompt built from the snapshot for the current turn. */
   private prompt = "";
 
@@ -114,7 +113,6 @@ export class BotChatDO extends Agent<Env> {
             readRuntimeConfig(chat.env).models.butler,
             chat.env,
           );
-          chat.appliedModel = model;
           return model;
         } catch (error) {
           if (error instanceof RuntimeConfigError) return undefined;
@@ -172,7 +170,13 @@ export class BotChatDO extends Agent<Env> {
         return;
       }
 
-      await this.ensureModel();
+      try {
+        await this.ensureModel();
+      } catch (error) {
+        if (!(error instanceof ModelSwitchError)) throw error;
+        await this.sendNotice(input.botId, error.message);
+        return;
+      }
 
       const images = input.images ?? [];
       const blocked = turnBlocker(this.env, images.length > 0);
@@ -274,14 +278,22 @@ export class BotChatDO extends Agent<Env> {
       readRuntimeConfig(this.env).models.butler,
       this.env,
     );
-    if (
-      this.appliedModel?.provider === model.provider &&
-      this.appliedModel.id === model.id
-    ) {
+    // Same guard as the Butler: read the persisted model and refuse a switch
+    // that shrinks the context window too far.
+    const conversation = await (await this.harness.pi()).root(
+      BACKGROUND_CONTEXT,
+    );
+    const active = (await conversation.agent(BACKGROUND_CONTEXT)).model;
+    if (active?.provider === model.provider && active.modelId === model.id) {
       return;
     }
+    assertModelWindowSwitch(
+      createModelsForEnv(this.env),
+      active ? { provider: active.provider, id: active.modelId } : undefined,
+      model,
+      ownerLocale(this.env),
+    );
     await this.harness.session().setModel(model);
-    this.appliedModel = model;
   }
 
   private botIdNow(): string | undefined {

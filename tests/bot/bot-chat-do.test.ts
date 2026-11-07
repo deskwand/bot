@@ -888,6 +888,42 @@ describe("bot chat", () => {
     ]);
   });
 
+  it("a much smaller model is refused like the Butler's model switch", async () => {
+    const bot = fakeSelf();
+    const { butler, notices } = fakeButler();
+    install(bot, butler);
+    const botId = "window-downgrade-bot";
+    let smallCalls = 0;
+
+    const large = scriptedModel([{ text: "大窗口回答" }], {
+      contextWindow: 128000,
+    });
+    const small = scriptedModel(
+      [
+        {
+          text: "不应出现",
+          observe: () => {
+            smallCalls += 1;
+          },
+        },
+      ],
+      { contextWindow: 16000 },
+    );
+
+    const stub = chatStub(botId);
+    setModelOverride(large);
+    await chat(stub, botId, "你好", "e-window-large");
+
+    setModelOverride(small);
+    await chat(stub, botId, "再说一次", "e-window-small");
+
+    expect(smallCalls).toBe(0);
+    expect(notices[0]).toEqual({ botId, text: "大窗口回答" });
+    expect(notices).toHaveLength(2);
+    expect(notices[1]?.text).toContain("128000");
+    expect(notices[1]?.text).toContain("16000");
+  });
+
   it("a missing snapshot answers deleted without calling the model", async () => {
     const bot = fakeSelf(null);
     const { butler, notices } = fakeButler();
