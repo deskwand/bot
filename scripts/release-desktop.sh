@@ -52,8 +52,19 @@ github_tag_and_release() {
     git -C "$root" tag -a "$tag" -m "DeskWand Bot ${version}"
     echo "已创建 tag ${tag}"
   fi
-  if [ -z "$(git -C "$root" ls-remote --tags origin "refs/tags/${tag}")" ]; then
-    git -C "$root" push origin "$tag"
+  # git 的网络操作同样会偶发超时（本机实测 SSL connection timeout）：远端查不到就
+  # 直接推送，推送本身幂等，失败重试 3 次而不是让整轮发布停在一个已经成功的版本上。
+  if [ -z "$(git -C "$root" ls-remote --tags origin "refs/tags/${tag}" 2>/dev/null)" ]; then
+    attempt=1
+    until git -C "$root" push origin "$tag"; do
+      if [ "$attempt" -ge 3 ]; then
+        echo "推送 tag ${tag} 连续失败 3 次" >&2
+        return 1
+      fi
+      attempt=$((attempt + 1))
+      echo "重试推送 tag ${tag}（第 ${attempt} 次）" >&2
+      sleep 2
+    done
   fi
 
   local missing=""
