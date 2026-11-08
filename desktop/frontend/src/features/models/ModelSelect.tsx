@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import { Popover } from "radix-ui";
 import { cn } from "cn";
@@ -31,12 +32,15 @@ export function ModelSelect({
   value,
   onChange,
   options,
+  trailing,
 }: {
   id: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: ProviderOption[];
+  /** Rendered after the model picker on the same row, e.g. a thinking level. */
+  trailing?: ReactNode;
 }) {
   const t = useT();
   const current = parseModelKey(value);
@@ -131,7 +135,14 @@ export function ModelSelect({
 
   return (
     <div className="@container" ref={rootRef}>
-      <div className="grid gap-2 @sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+      <div
+        className={cn(
+          "grid gap-2",
+          trailing === undefined
+            ? "@sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
+            : "@sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto]",
+        )}
+      >
         <Select
           value={providerID}
           onValueChange={(next) => {
@@ -267,6 +278,7 @@ export function ModelSelect({
             </Popover.Content>
           </Popover.Portal>
         </Popover.Root>
+        {trailing}
       </div>
     </div>
   );

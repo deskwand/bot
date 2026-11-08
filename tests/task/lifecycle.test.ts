@@ -1,3 +1,4 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { PiHarness, PiSession } from "agents/harness/pi";
 import { Type, type ToolResultMessage, type TranscriptContext } from "@earendil-works/pi-ai";
 import {
@@ -147,6 +148,59 @@ async function workspaceKeys(taskId: string): Promise<string[]> {
 }
 
 describe("TaskDO lifecycle", () => {
+  /** The level pi actually holds for this task's root conversation. */
+  async function storedLevel(stub: ReturnType<typeof task>): Promise<string> {
+    return runInDurableObject(stub, async (instance) => {
+      const conversation = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      return (await conversation.agent(BACKGROUND_CONTEXT)).thinkingLevel;
+    });
+  }
+
+  function taskConfig(thinkingLevel?: string): Record<string, unknown> {
+    return {
+      DESKWAND_CONFIG: {
+        schemaVersion: 1,
+        owner: { telegramUserIds: [100000001] },
+        models: {
+          butler: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+          task: {
+            provider: "opencode-go",
+            id: "deepseek-v4.1-flash",
+            ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+          },
+        },
+        mcpServers: [],
+      },
+    };
+  }
+
+  // A model whose default differs from the role model's, so the two cases
+  // cannot pass by accident. The model override bypasses the key check.
+  const PINNED = { provider: "anthropic", id: "claude-haiku-4-5" };
+
+  it("keeps the role's level when the task pins another model", async () => {
+    setEnv(taskConfig("low"));
+    setModelOverride(scriptedModel([{ text: "done" }]));
+    const taskId = "t-pinned-role-level";
+    const stub = task(taskId);
+
+    await stub.start({ ...spec(taskId), model: PINNED });
+
+    expect(await storedLevel(stub)).toBe("low");
+  });
+
+  it("uses the pinned model's default when the role has no level", async () => {
+    setEnv(taskConfig());
+    setModelOverride(scriptedModel([{ text: "done" }]));
+    const taskId = "t-pinned-default";
+    const stub = task(taskId);
+
+    await stub.start({ ...spec(taskId), model: PINNED });
+
+    // Claude Haiku 4.5 offers off, minimal, low, medium, high.
+    expect(await storedLevel(stub)).toBe("medium");
+  });
+
   it("fails non-retryably when the model key is missing", async () => {
     setEnv({
       DESKWAND_CONFIG: {

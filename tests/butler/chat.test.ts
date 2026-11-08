@@ -81,7 +81,10 @@ function restoreEnv(): void {
 }
 
 /** A readable configuration whose butler role carries `thinkingLevel`. */
-function configureButler(thinkingLevel?: string): void {
+function configureButler(
+  thinkingLevel?: string,
+  modelId = "deepseek-v4.1-flash",
+): void {
   setEnv({
     DESKWAND_CONFIG: {
       schemaVersion: 1,
@@ -89,7 +92,7 @@ function configureButler(thinkingLevel?: string): void {
       models: {
         butler: {
           provider: "opencode-go",
-          id: "deepseek-v4.1-flash",
+          id: modelId,
           ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
         },
         task: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
@@ -406,13 +409,51 @@ describe("butler chat", () => {
     expect(await storedThinkingLevel(stub)).toBe("high");
   });
 
-  it("leaves the level at the default when the role omits it", async () => {
+  it("falls back to the model's middle level when the role omits it", async () => {
     configureButler();
     setChannelOverride("telegram", fakeChannel().adapter);
     setModelOverride(scriptedModel([{ text: "好" }]));
     const stub = butler("thinking-default");
     await stub.handleMessage(message({ text: "你好", eventId: "tg:thinking-default" }));
+    // opencode-go/deepseek-v4.1-flash offers low, high, max.
+    expect(await storedThinkingLevel(stub)).toBe("high");
+  });
+
+  it("keeps an explicit off instead of the middle", async () => {
+    configureButler("off", "deepseek-v4-pro");
+    setChannelOverride("telegram", fakeChannel().adapter);
+    setModelOverride(scriptedModel([{ text: "好" }]));
+    const stub = butler("thinking-explicit-off");
+    await stub.handleMessage(message({ text: "你好", eventId: "tg:thinking-off" }));
     expect(await storedThinkingLevel(stub)).toBe("off");
+  });
+
+  it("applies an explicit off to an existing conversation", async () => {
+    configureButler("high", "deepseek-v4-pro");
+    setChannelOverride("telegram", fakeChannel().adapter);
+    setModelOverride(scriptedModel([{ text: "好" }, { text: "好" }]));
+    const stub = butler("thinking-off-existing");
+    await stub.handleMessage(message({ text: "你好", eventId: "tg:off:first" }));
+    expect(await storedThinkingLevel(stub)).toBe("high");
+
+    // A downgrade is the one case where "already off" and "configured to off"
+    // would otherwise look the same.
+    configureButler("off", "deepseek-v4-pro");
+    await stub.handleMessage(message({ text: "再来", eventId: "tg:off:second" }));
+    expect(await storedThinkingLevel(stub)).toBe("off");
+  });
+
+  it("falls back to the middle after the level is removed from the config", async () => {
+    configureButler("low");
+    setChannelOverride("telegram", fakeChannel().adapter);
+    setModelOverride(scriptedModel([{ text: "好" }, { text: "好" }]));
+    const stub = butler("thinking-removed");
+    await stub.handleMessage(message({ text: "你好", eventId: "tg:removed:first" }));
+    expect(await storedThinkingLevel(stub)).toBe("low");
+
+    configureButler();
+    await stub.handleMessage(message({ text: "再来", eventId: "tg:removed:second" }));
+    expect(await storedThinkingLevel(stub)).toBe("high");
   });
 
   it("applies a level published after the conversation already exists", async () => {

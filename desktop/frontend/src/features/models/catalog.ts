@@ -60,9 +60,10 @@ export function modelKey(model: ModelDTO | null): string {
 const THINKING_LEVEL_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /**
- * The levels to offer for the model behind `key`. A custom endpoint declares
- * no capability map, and pi treats its models as non-reasoning, so it offers
- * only "off" — as does a model the catalog does not list.
+ * The levels to offer for the model behind `key`, in pi's order (lowest
+ * first). A custom endpoint declares no capability map, and pi treats its
+ * models as non-reasoning, so it offers only "off" — as does a model the
+ * catalog does not list.
  */
 export function thinkingLevelsFor(options: ProviderOption[], key: string): string[] {
   const model = parseModelKey(key);

@@ -1,18 +1,20 @@
 import {
   createModels,
   createProvider,
+  getSupportedThinkingLevels,
   type Models,
   type MutableModels,
   type Provider,
 } from "@earendil-works/pi-ai/models";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
-import type { AuthContext, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { Api, AuthContext, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { PiModel } from "agents/harness/pi";
 import { ownerLocale } from "../i18n";
 import { readRuntimeConfig, RuntimeConfigError } from "../runtime-config";
 import { BUILTIN_PROVIDERS } from "./catalog.generated";
 import { modelKeyAuth } from "./model-key-auth";
+import { defaultLevelFrom } from "./thinking-level";
 import {
   modelKeyMissingText,
   modelUnavailableText,
@@ -34,7 +36,7 @@ export type Role = "butler" | "task";
 /**
  * One role's model, as the deployment configuration stores it. `thinkingLevel`
  * rides along because the desktop edits the whole object at once; absent means
- * the role keeps pi's default (off).
+ * the model's default level (see `defaultThinkingLevel`).
  */
 export type ModelRef = {
   provider: string;
@@ -65,6 +67,17 @@ export function resolveModel(ref: ModelRef, _env: Env): PiModel {
   // Pi only stores and resolves the `provider`/`id` pair; the model is looked
   // up again in the `Models` collection the harness was opened with.
   return modelOverride ?? ref;
+}
+
+/**
+ * The level a model nobody configured uses. Undefined when the model is not in
+ * the collection, which leaves whatever the conversation already stored.
+ */
+export function defaultThinkingLevel(
+  model: Model<Api> | undefined,
+): ModelThinkingLevel | undefined {
+  if (model === undefined) return undefined;
+  return defaultLevelFrom(getSupportedThinkingLevels(model));
 }
 
 /**
