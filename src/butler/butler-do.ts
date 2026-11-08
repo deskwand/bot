@@ -2,7 +2,14 @@ import { Agent, type Schedule } from "agents";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
 import { PiHarness, type PiModel, type PiOperationResult } from "agents/harness/pi";
-import { createRegistry, Harness, LiveDoc, type LiveState, type Storage } from "@earendil-works/pi-durable";
+import {
+  createRegistry,
+  Harness,
+  LiveDoc,
+  type LiveState,
+  type Storage,
+  type SubmissionRecord,
+} from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
 import { artifactNameFromKey } from "../artifact";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
@@ -85,7 +92,7 @@ import {
   TURN_CHECK_EVERY_MS,
   TURN_PARKED_GRACE_MS,
 } from "./turn";
-import { TurnStore } from "./turn-store";
+import { TurnStore, type TurnRow } from "./turn-store";
 import {
   MemoryStore,
   renderMemorySection,
@@ -229,6 +236,8 @@ export class ButlerDO extends Agent<Env> {
 
   /** Single-flight guard for the first-token receipt. */
   private acking: Promise<void> | null = null;
+  /** Serializes "interrupt, then submit" so two messages cannot race it. */
+  private admitting: Promise<unknown> = Promise.resolve();
   /** The turns the receipt in flight announces. */
   private ackingFor: ReadonlySet<string> = new Set();
 
@@ -1599,6 +1608,14 @@ export class ButlerDO extends Agent<Env> {
     operationId: string,
     result: PiOperationResult,
   ): Promise<void> {
+    // A superseded turn settles `unanswered` by design: it never had an answer
+    // to deliver, so drop the row without a message. A `done` result settled
+    // before the abort landed and must still reach the owner.
+    const row = this.turns().get(operationId);
+    if (row?.supersededAt != null && result.status === "unanswered") {
+      this.turns().remove(operationId);
+      return;
+    }
     // Every operation a merged run answers gets the same answer id. The first
     // one to claim it delivers; the rest drop their ledger row silently.
     const answer = await this.answerIdOf(operationId);
@@ -1613,23 +1630,90 @@ export class ButlerDO extends Agent<Env> {
   }
 
   /**
+   * A new owner message interrupts a turn that has not used a tool yet, so
+   * the model re-answers with the new message in context instead of finishing
+   * an answer to half the thought. Returns whether the interrupted turn had
+   * already sent its receipt.
+   */
+  private async supersedeIdleThinking(
+    eventId: string,
+  ): Promise<{ acked: boolean }> {
+    try {
+      // A redelivery must not abort anything: pi rejects the duplicate, so
+      // the interrupted turn would have no replacement. The ledger row is
+      // gone once a turn is answered, so ask pi, which keeps the submission.
+      if ((await this.submissionOf(eventId)) !== undefined) {
+        return { acked: false };
+      }
+
+      const pending = await this.harness.pending();
+      const running = pending.filter(
+        (operation) => operation.status === "running",
+      );
+      // An abort also withdraws everything queued behind the run, such as a
+      // task report waiting its turn, so only a run with nothing behind it is
+      // interrupted. A task report in the run must finish on its own; it is
+      // not a thought the owner can extend.
+      if (
+        running.length === 0 ||
+        running.length !== pending.length ||
+        running.some((operation) =>
+          operation.operationId.startsWith(TASK_REPORT_PREFIX),
+        )
+      ) {
+        return { acked: false };
+      }
+
+      const entries: number[] = [];
+      for (const operation of running) {
+        const record = await this.submissionOf(operation.operationId);
+        if (record?.entry !== undefined) entries.push(record.entry);
+      }
+      if (entries.length === 0) return { acked: false };
+
+      // Tools run only after their assistant entry committed, so an assistant
+      // entry without a tool call means the turn had no side effect yet.
+      const firstEntry = Math.min(...entries);
+      const messages = await this.harness.messages();
+      const usedTool = messages.some(
+        (entry) =>
+          entry.id > firstEntry &&
+          entry.model?.some(
+            (message) =>
+              message.role === "assistant" &&
+              message.content.some((content) => content.type === "toolCall"),
+          ),
+      );
+      if (usedTool) return { acked: false };
+
+      const store = this.turns();
+      const rows = running
+        .map((operation) => store.get(operation.operationId))
+        .filter((row): row is TurnRow => row !== undefined);
+      const now = getClock().now();
+      // A receipt still on its way counts as sent.
+      const acked = rows.some(
+        (row) => row.ackAt !== null || this.ackingFor.has(row.operationId),
+      );
+      for (const row of rows) store.supersede(row.operationId, now);
+      await this.abortTurn(running[0].operationId);
+      return { acked };
+    } catch (error) {
+      // Interrupting by mistake is worse than letting the turn finish.
+      console.error("butler supersede check failed:", error);
+      return { acked: false };
+    }
+  }
+
+  /**
    * The entry id pi settled this operation with, when it has one. `storage()`
-   * is `@internal` on `PiHarness`, so the cast is deliberate: it is the only
-   * read of the submission record, whose answer id is shared by every
-   * operation merged into the run (see the batching spec §8.5).
+   * is `@internal` on `PiHarness`, so it is read through `submissionOf`: the
+   * answer id is shared by every operation merged into the run (see the
+   * batching spec §8.5).
    */
   private async answerIdOf(operationId: string): Promise<string | undefined> {
     try {
-      const pi = await this.harness.pi();
-      const root = await pi.root(BACKGROUND_CONTEXT);
-      const storage = await (
-        this.harness as unknown as { storage(): Promise<Storage> }
-      ).storage();
-      const record = await storage.submissionByRequest(
-        root.id,
-        operationId,
-        BACKGROUND_CONTEXT,
-      );
+      const record = await this.submissionOf(operationId);
       return record?.type === "input" && record.status === "done"
         ? String(record.answer)
         : undefined;
@@ -1638,6 +1722,25 @@ export class ButlerDO extends Agent<Env> {
       console.error("butler answer id lookup failed:", error);
       return undefined;
     }
+  }
+
+  /**
+   * One operation's submission record, as pi stored it. `storage()` is
+   * `@internal` on `PiHarness`, so the cast is deliberate.
+   */
+  private async submissionOf(
+    operationId: string,
+  ): Promise<SubmissionRecord | undefined> {
+    const pi = await this.harness.pi();
+    const root = await pi.root(BACKGROUND_CONTEXT);
+    const storage = await (
+      this.harness as unknown as { storage(): Promise<Storage> }
+    ).storage();
+    return await storage.submissionByRequest(
+      root.id,
+      operationId,
+      BACKGROUND_CONTEXT,
+    );
   }
 
   /** One committed read of what pi is doing right now. */
@@ -2027,7 +2130,16 @@ export class ButlerDO extends Agent<Env> {
 
     const operationId = evt.eventId;
     const input = toUserInput(evt.text, images, files);
-    const receipt = await this.harness.submit(input, { operationId });
+    // The interruption sits right before `submit`: every earlier return has
+    // already passed, so a blocked message cannot abort a turn it will not
+    // replace.
+    const admitted = this.admitting.then(async () => {
+      const superseded = await this.supersedeIdleThinking(operationId);
+      const receipt = await this.harness.submit(input, { operationId });
+      return { superseded, receipt };
+    });
+    this.admitting = admitted.catch(() => {});
+    const { superseded, receipt } = await admitted;
     // Telegram redelivered an update we already accepted: never answer twice.
     if (!receipt.accepted) return;
     // Only an accepted turn gets a row: a row always has a submission behind it.
@@ -2035,6 +2147,8 @@ export class ButlerDO extends Agent<Env> {
       operationId,
       submittedAt: getClock().now(),
     });
+    // The interrupted turn already said "received": one receipt is enough.
+    if (superseded.acked) this.turns().ack(operationId, getClock().now());
 
     await this.ensureTurnCheck();
     try {

@@ -16,6 +16,8 @@ export type ScriptedTurn = {
   toolCalls?: { name: string; args: unknown }[];
   /** Ends the turn with a model error carrying this message. */
   error?: string;
+  /** The model answers only after this resolves. */
+  gate?: Promise<void>;
   /** Called with the request context when the model is asked for this turn. */
   observe?: (context: TranscriptContext) => void;
 };
@@ -52,12 +54,17 @@ export function scriptedModel(
       stopReason,
       ...(turn.error === undefined ? {} : { errorMessage: turn.error }),
     });
-    return turn.observe
-      ? (context: TranscriptContext) => {
-          turn.observe!(context);
-          return message;
-        }
-      : message;
+    const respond = (context: TranscriptContext) => {
+      turn.observe?.(context);
+      return message;
+    };
+    if (turn.gate) {
+      return async (context: TranscriptContext) => {
+        await turn.gate;
+        return respond(context);
+      };
+    }
+    return turn.observe ? respond : message;
   });
   faux.setResponses(steps);
 

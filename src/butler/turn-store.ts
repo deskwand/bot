@@ -12,6 +12,7 @@ export type TurnRow = {
   retriedAt: number | null;
   retryAt: number | null;
   abandonedAt: number | null;
+  supersededAt: number | null;
 };
 
 type Row = {
@@ -28,6 +29,7 @@ type Row = {
   retried_at: number | null;
   retry_at: number | null;
   abandoned_at: number | null;
+  superseded_at: number | null;
 };
 
 function toTurn(row: Row): TurnRow {
@@ -44,6 +46,7 @@ function toTurn(row: Row): TurnRow {
     retriedAt: row.retried_at,
     retryAt: row.retry_at,
     abandonedAt: row.abandoned_at,
+    supersededAt: row.superseded_at,
   };
 }
 
@@ -77,6 +80,7 @@ export class TurnStore {
     for (const column of [
       { name: "retry_at", type: "INTEGER" },
       { name: "abandoned_at", type: "INTEGER" },
+      { name: "superseded_at", type: "INTEGER" },
     ]) {
       if (!columns.some((entry) => entry.name === column.name)) {
         this.sql.exec(
@@ -237,6 +241,19 @@ export class TurnStore {
   retried(operationId: string, now: number): void {
     this.sql.exec(
       `UPDATE butler_turns SET retried_at = ? WHERE operation_id = ?`,
+      now,
+      operationId,
+    );
+  }
+
+  /**
+   * Marks a turn a newer message replaced. Only the first mark counts: the
+   * abort that follows must not move it under a settled answer.
+   */
+  supersede(operationId: string, now: number): void {
+    this.sql.exec(
+      `UPDATE butler_turns SET superseded_at = ?
+       WHERE operation_id = ? AND superseded_at IS NULL`,
       now,
       operationId,
     );

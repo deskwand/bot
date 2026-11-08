@@ -145,6 +145,16 @@ describe("TurnStore", () => {
     expect(claims).toEqual({ old: true, recent: false });
   });
 
+  it("marks a turn superseded once", async () => {
+    const row = await withStore("turns-supersede", (store) => {
+      store.insertIfAbsent({ operationId: "a", submittedAt: 0 });
+      store.supersede("a", 100);
+      store.supersede("a", 200);
+      return store.get("a");
+    });
+    expect(row?.supersededAt).toBe(100);
+  });
+
   it("forgets a delivered turn", async () => {
     const row = await withStore("turns-remove", (store) => {
       store.insertIfAbsent({ operationId: "a", submittedAt: 0 });
