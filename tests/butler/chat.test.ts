@@ -1127,7 +1127,7 @@ describe("butler chat", () => {
       message({ text: "你好", eventId: "tg:108" }),
     );
 
-    expect(sends.at(-1)).toEqual({ text: "done" });
+    expect(sends.at(-1)).toEqual({ text: "done", priority: "critical" });
     // The Butler never caches or names an output channel itself.
     expect(explicitTargets).toEqual([]);
   });

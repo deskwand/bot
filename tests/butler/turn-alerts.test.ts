@@ -1,0 +1,301 @@
+import { env, runInDurableObject } from "cloudflare:test";
+import { Type } from "@earendil-works/pi-ai";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setClockOverride } from "../../src/butler/notifier";
+import { TURN_ACK_MS, TURN_PARKED_GRACE_MS } from "../../src/butler/turn";
+import { setModelOverride } from "../../src/llm/models";
+import { setChannelOverride } from "../../src/channels/override";
+import type { AdmittedMessage, OutboundMessage } from "../../src/protocol";
+import { seedOwnerAddress } from "../helpers/channel-ref";
+import { scriptedModel } from "../helpers/scripted-model";
+
+declare module "cloudflare:test" {
+  interface ProvidedEnv extends Env {}
+}
+
+type SlowControl = { started: boolean; released: boolean };
+
+type TurnInternals = {
+  checkTurn(): Promise<void>;
+  turns(): import("../../src/butler/turn-store").TurnStore;
+  sendBestEffort(message: OutboundMessage): Promise<unknown>;
+  lease: { acquire(op: "export", opId: string): unknown };
+  harness: {
+    pending(): Promise<unknown[]>;
+    retry(): Promise<boolean>;
+    abort(options?: { operationId?: string }): Promise<boolean>;
+  };
+};
+
+const START = Date.UTC(2030, 0, 1, 9, 0, 0);
+let now = START;
+
+function butler(name: string) {
+  return env.BUTLER.get(env.BUTLER.idFromName(name));
+}
+
+function message(eventId: string): AdmittedMessage {
+  return {
+    type: "message",
+    channel: "telegram",
+    chatId: "42",
+    userId: "1",
+    text: "查一下",
+    eventId,
+    routeKey: "test",
+  };
+}
+
+/** Captures what the Butler sends, including the priority. */
+async function captureSends(
+  stub: ReturnType<typeof butler>,
+): Promise<OutboundMessage[]> {
+  const sent: OutboundMessage[] = [];
+  await runInDurableObject(stub, (instance) => {
+    (instance as unknown as { channels(): unknown }).channels = () => ({
+      currentRoute: async () => ({ channel: "telegram", routeKey: "test" }),
+      isAdmissionCurrent: async () => true,
+      editCurrent: async () => true,
+      sendCurrent: async (msg: OutboundMessage) => {
+        sent.push(msg);
+        return {
+          channel: "telegram",
+          conversationId: "42",
+          routeKey: "test",
+          messageId: String(sent.length),
+        };
+      },
+    });
+  });
+  return sent;
+}
+
+const SlowWait = Type.Object({});
+
+/** A tool that keeps the Butler's turn running until the test releases it. */
+async function installSlowWait(stub: ReturnType<typeof butler>): Promise<void> {
+  await runInDurableObject(stub, (instance) => {
+    const control: SlowControl = { started: false, released: false };
+    (instance as { slowControl?: SlowControl }).slowControl = control;
+    const tool: ToolRegistration<typeof SlowWait> = {
+      name: "slow_wait",
+      description: "Wait until the test releases the turn.",
+      parameters: SlowWait,
+      async execute() {
+        control.started = true;
+        while (!control.released) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return { output: [{ type: "text", text: "released" }] };
+      },
+    };
+    instance.registry.install({ name: "test-slow", tools: [tool] });
+  });
+}
+
+async function slowStarted(stub: ReturnType<typeof butler>): Promise<boolean> {
+  return runInDurableObject(
+    stub,
+    (instance) =>
+      (instance as { slowControl?: SlowControl }).slowControl?.started ?? false,
+  );
+}
+
+async function releaseSlow(stub: ReturnType<typeof butler>): Promise<void> {
+  await runInDurableObject(stub, (instance) => {
+    const control = (instance as { slowControl?: SlowControl }).slowControl;
+    if (control) control.released = true;
+  });
+}
+
+beforeEach(async () => {
+  now = START;
+  setClockOverride({
+    now: () => now,
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+  });
+  await seedOwnerAddress("42");
+});
+
+afterEach(() => {
+  setClockOverride(null);
+  setModelOverride(null);
+  setChannelOverride("telegram", null);
+  vi.restoreAllMocks();
+});
+
+describe("turn alerts", () => {
+  it("acknowledges a slow turn once and still delivers the answer", async () => {
+    const stub = butler("turn-ack");
+    const sent = await captureSends(stub);
+    await installSlowWait(stub);
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "slow_wait", args: {} }] },
+        { text: "查完了" },
+      ]),
+    );
+
+    const running = stub.handleMessage(message("tg:ack"));
+    await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
+
+    now += TURN_ACK_MS + 1;
+    await runInDurableObject(stub, (instance) =>
+      (instance as unknown as TurnInternals).checkTurn(),
+    );
+    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理"]);
+    expect(sent[0]?.priority).toBe("normal");
+
+    await releaseSlow(stub);
+    await running;
+    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理", "查完了"]);
+    expect(sent[1]?.priority).toBe("critical");
+  });
+
+  it("does not acknowledge a turn that answered within the deadline", async () => {
+    const stub = butler("turn-spoke");
+    const sent = await captureSends(stub);
+    setModelOverride(scriptedModel([{ text: "很快答完" }]));
+
+    await stub.handleMessage(message("tg:spoke"));
+    now += TURN_ACK_MS + 1;
+    await runInDurableObject(stub, (instance) =>
+      (instance as unknown as TurnInternals).checkTurn(),
+    );
+
+    expect(sent.map((msg) => msg.text)).toEqual(["很快答完"]);
+  });
+
+  it("marks every pending turn as spoken when a message goes out", async () => {
+    const stub = butler("turn-spoke-mark");
+    const sent = await captureSends(stub);
+    const spoke = await runInDurableObject(stub, async (instance) => {
+      const target = instance as unknown as TurnInternals;
+      // Keep the background recovery sweep off these hand-made rows.
+      target.lease.acquire("export", "test");
+      target.turns().insertIfAbsent({
+        operationId: "tg:spoke-a",
+        submittedAt: now,
+      });
+      target.turns().insertIfAbsent({
+        operationId: "tg:spoke-b",
+        submittedAt: now,
+      });
+      await target.sendBestEffort({ text: "任务 t1 已开始" });
+      return target
+        .turns()
+        .list()
+        .map((row) => row.spokeAt);
+    });
+
+    expect(spoke).toEqual([now, now]);
+    expect(sent.map((msg) => msg.text)).toEqual(["任务 t1 已开始"]);
+  });
+
+  it("sends one ack for two queued messages and answers both in order", async () => {
+    const stub = butler("turn-two");
+    const sent = await captureSends(stub);
+    await installSlowWait(stub);
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "slow_wait", args: {} }] },
+        { text: "第一条答案" },
+        { text: "第二条答案" },
+      ]),
+    );
+
+    const first = stub.handleMessage(message("tg:one"));
+    await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
+    const second = stub.handleMessage(message("tg:two"));
+
+    now += TURN_ACK_MS + 1;
+    await runInDurableObject(stub, (instance) =>
+      (instance as unknown as TurnInternals).checkTurn(),
+    );
+    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理"]);
+
+    await releaseSlow(stub);
+    await first;
+    await second;
+    expect(sent.map((msg) => msg.text)).toEqual([
+      "收到，正在处理",
+      "第一条答案",
+      "第二条答案",
+    ]);
+  });
+
+  it("stays silent and keeps the ledger untouched while the lease is held", async () => {
+    const stub = butler("turn-lease");
+    const sent = await captureSends(stub);
+    const before = await runInDurableObject(stub, async (instance) => {
+      const target = instance as unknown as TurnInternals;
+      target.lease.acquire("export", "test");
+      target.turns().insertIfAbsent({
+        operationId: "tg:lease",
+        submittedAt: now,
+      });
+      await target.checkTurn();
+      return target.turns().get("tg:lease");
+    });
+
+    expect(sent).toEqual([]);
+    expect(before).toMatchObject({ ackAt: null, signature: null });
+  });
+
+  it("retries a parked turn once before reporting it", async () => {
+    const stub = butler("turn-parked");
+    await captureSends(stub);
+    const retries = await runInDurableObject(stub, async (instance) => {
+      const target = instance as unknown as TurnInternals;
+      target.turns().insertIfAbsent({
+        operationId: "tg:parked",
+        submittedAt: now,
+      });
+      let calls = 0;
+      target.harness.pending = async () => [
+        { operationId: "tg:parked", session: "1", status: "parked" },
+      ];
+      target.harness.retry = async () => {
+        calls += 1;
+        return true;
+      };
+      await target.checkTurn();
+      await target.checkTurn();
+      return calls;
+    });
+
+    expect(retries).toBe(1);
+  });
+
+  it("withdraws a parked turn that retry did not revive", async () => {
+    const stub = butler("turn-parked-giveup");
+    const sent = await captureSends(stub);
+    const aborts = await runInDurableObject(stub, async (instance) => {
+      const target = instance as unknown as TurnInternals;
+      target.turns().insertIfAbsent({
+        operationId: "tg:parked2",
+        submittedAt: now,
+      });
+      let calls = 0;
+      target.harness.pending = async () => [
+        { operationId: "tg:parked2", session: "1", status: "parked" },
+      ];
+      target.harness.retry = async () => true;
+      target.harness.abort = async () => {
+        calls += 1;
+        return true;
+      };
+      await target.checkTurn();
+      now += TURN_PARKED_GRACE_MS + 1;
+      await target.checkTurn();
+      return calls;
+    });
+
+    expect(aborts).toBe(1);
+    expect(sent.map((msg) => msg.text)).toEqual([
+      "刚才那条没能答完，再发一次就行",
+    ]);
+  });
+});

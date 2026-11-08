@@ -84,5 +84,12 @@ export default {
     } catch (error) {
       console.error("task heal failed:", error);
     }
+
+    // The Butler is awake here anyway; this recovers turns whose wait was lost.
+    try {
+      await butler(env).healTurns();
+    } catch (error) {
+      console.error("turn heal failed:", error);
+    }
   },
 } satisfies ExportedHandler<Env>;

@@ -29,6 +29,13 @@ export const butler = {
     stalledTool: "{label} {title}：最后一步是「{tool}」，已经 {minutes} 分钟没有返回",
     artifactFailed: "产物「{name}」未能送达（{reason}）",
   },
+  turn: {
+    ack: "收到，正在处理",
+    stalledModel: "已经 {minutes} 分钟没有进展，还在等模型响应",
+    stalledTool: "最后一步「{tool}」已经 {minutes} 分钟没有返回",
+    interrupted: "刚才那条没能答完，再发一次就行",
+    emptyAnswer: "这次没有答出内容，再问一次试试",
+  },
   notice: {
     maintenance: "维护中",
     maintenanceRetry: "维护中，稍后再试",

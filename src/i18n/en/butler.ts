@@ -33,6 +33,13 @@ export const butler: Messages["butler"] = {
       '{label} {title}: last step "{tool}" has not returned for {minutes} min',
     artifactFailed: "Artifact “{name}” was not delivered ({reason})",
   },
+  turn: {
+    ack: "Got it, working on it",
+    stalledModel: "No progress for {minutes} min; still waiting on the model",
+    stalledTool: 'Last step "{tool}" has not returned for {minutes} min',
+    interrupted: "That message could not be answered; send it again",
+    emptyAnswer: "That turn produced no answer; try asking again",
+  },
   notice: {
     maintenance: "Under maintenance",
     maintenanceRetry: "Under maintenance, try again later",

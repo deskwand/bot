@@ -1,8 +1,8 @@
-import { Agent } from "agents";
+import { Agent, type Schedule } from "agents";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
-import { PiHarness, type PiModel } from "agents/harness/pi";
-import { createRegistry, Harness } from "@earendil-works/pi-durable";
+import { PiHarness, type PiModel, type PiOperationResult } from "agents/harness/pi";
+import { createRegistry, Harness, LiveDoc, type LiveState } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
 import { artifactNameFromKey } from "../artifact";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
@@ -59,6 +59,10 @@ import {
   taskStartedText,
   taskStartFailedText,
   taskStalledText,
+  turnAckText,
+  turnEmptyAnswerText,
+  turnInterruptedText,
+  turnStalledText,
   unsupportedMessageNotice,
   voiceUnavailableNotice,
 } from "./owner-copy";
@@ -68,6 +72,15 @@ import {
   ProgressThrottle,
   type ProgressPolicy,
 } from "./notifier";
+import {
+  activityOf,
+  planTurnCheck,
+  retryDelayMs,
+  signatureOf,
+  TURN_ACK_MS,
+  TURN_PARKED_GRACE_MS,
+} from "./turn";
+import { TurnStore } from "./turn-store";
 import {
   MemoryStore,
   renderMemorySection,
@@ -116,6 +129,8 @@ const MESSAGE_MAX = 4096;
 const BOT_HEAL_KEY = "bot_heal_at";
 const TASK_HEAL_KEY = "task_heal_at";
 const TASK_PROBE_FAILURES_PREFIX = "task_probe_failures:";
+/** Operation prefix of a turn that only reports a finished task. */
+const TASK_REPORT_PREFIX = "task-completed:";
 
 /** The part of a bot chat stub the Butler uses. */
 type BotChatStub = {
@@ -195,6 +210,17 @@ export class ButlerDO extends Agent<Env> {
 
   /** The disabled-selection notice is logged once per instance, not per cron. */
   private disabledScheduleLogged = false;
+
+  private turnStore: TurnStore | null = null;
+
+  /** Delivery in progress in this instance. */
+  private readonly deliveringTurns = new Set<string>();
+
+  /** One sweep at a time: `checkTurn` and the cron can overlap. */
+  private sweeping = false;
+
+  /** Single-flight guard for arming the next turn check. */
+  private turnCheckArming: Promise<void> | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -505,6 +531,35 @@ export class ButlerDO extends Agent<Env> {
       return;
     }
     await super.alarm();
+  }
+
+  override async onStart(props?: object): Promise<void> {
+    await super.onStart(props);
+    // Do not block startup: the sweep talks to pi.
+    this.ctx.waitUntil(this.resumeTurns());
+  }
+
+  /** Re-attach every undelivered turn, then keep one check armed. */
+  async resumeTurns(): Promise<void> {
+    if (this.lease.current() !== null) return;
+    // Ordinary wakes have an empty ledger: skip opening pi for nothing. The
+    // crash between `submit` and the row insert is left to the minute cron.
+    if (this.turns().list().length === 0) return;
+    try {
+      await this.sweepTurns(getClock().now());
+      await this.ensureTurnCheck();
+    } catch (error) {
+      console.error("butler turn resume failed:", error);
+    }
+  }
+
+  /** Cron sweep: the backstop for a lost alarm or a lost `wait`. */
+  async healTurns(): Promise<{ outstanding: number }> {
+    if (this.lease.current() !== null) return { outstanding: 0 };
+    await this.sweepTurns(getClock().now());
+    const outstanding = this.turns().list().length;
+    if (outstanding > 0) await this.ensureTurnCheck();
+    return { outstanding };
   }
 
   /**
@@ -1309,7 +1364,7 @@ export class ButlerDO extends Agent<Env> {
     artifacts: Artifact[],
     append: boolean,
   ): Promise<void> {
-    const operationId = `task-completed:${row.id}`;
+    const operationId = `${TASK_REPORT_PREFIX}${row.id}`;
     const locale = ownerLocale(this.env);
     const label = taskLabel(row);
     const lines = [
@@ -1446,15 +1501,288 @@ export class ButlerDO extends Agent<Env> {
       .toArray()[0];
   }
 
+  private turns(): TurnStore {
+    this.turnStore ??= new TurnStore(this.db);
+    return this.turnStore;
+  }
+
+  /** Chat text for a settled turn; the caller sends it and clears the row. */
+  private async turnResultText(result: PiOperationResult): Promise<string> {
+    const locale = ownerLocale(this.env);
+    if (result.status === "done") {
+      const text = result.text?.trim() ?? "";
+      return text.length > 0 ? text : turnEmptyAnswerText(locale);
+    }
+    if (result.reason === "model_error") {
+      return unansweredText(
+        result.reason,
+        () => this.harness.session().messages(),
+        locale,
+      );
+    }
+    return turnInterruptedText(locale);
+  }
+
+  /** Sends the terminal message for one turn, then settles its ledger row. */
+  private async sendTerminal(
+    operationId: string,
+    text: string,
+    keep = false,
+  ): Promise<void> {
+    const store = this.turns();
+    const row = store.get(operationId);
+    if (
+      row === undefined ||
+      row.abandonedAt !== null ||
+      this.deliveringTurns.has(operationId)
+    ) {
+      return;
+    }
+    const now = getClock().now();
+    if (row.retryAt !== null && row.retryAt > now) return;
+    // Another isolate may be mid-send; wait for it rather than send twice.
+    if (row.deliveringAt !== null && now - row.deliveringAt < 60_000) return;
+
+    this.deliveringTurns.add(operationId);
+    store.delivering(operationId, now);
+    try {
+      // No `clampMessage` here: the Butler's answer went out unclamped before
+      // this change, and truncating it would lose real content.
+      const ref = await this.sendBestEffort({ text, priority: "critical" });
+      if (ref === null) {
+        const attempts = store.fail(operationId);
+        if (attempts >= 3) {
+          console.error(
+            "butler turn dropped after three failed sends:",
+            operationId,
+          );
+          if (keep) store.abandon(operationId, now);
+          else store.remove(operationId);
+          return;
+        }
+        store.retryAt(operationId, now + retryDelayMs(attempts));
+        return;
+      }
+      if (keep) store.abandon(operationId, now);
+      else store.remove(operationId);
+    } finally {
+      this.deliveringTurns.delete(operationId);
+    }
+  }
+
+  /** Stops a pi operation we are giving up on, so it leaves `pending()`. */
+  private async abortTurn(operationId: string): Promise<void> {
+    try {
+      await this.harness.abort({ operationId });
+    } catch (error) {
+      console.warn("butler turn abort failed:", operationId, error);
+    }
+  }
+
+  private async deliverResult(
+    operationId: string,
+    result: PiOperationResult,
+  ): Promise<void> {
+    await this.sendTerminal(operationId, await this.turnResultText(result));
+  }
+
+  /** One committed read of what pi is doing right now. */
+  private async liveState(): Promise<LiveState | undefined> {
+    const pi = await this.harness.pi();
+    const root = await pi.root(BACKGROUND_CONTEXT);
+    return await pi.snapshot(LiveDoc, root.id, BACKGROUND_CONTEXT);
+  }
+
+  /** Keep exactly one pending `checkTurn`, like `TaskDO.scheduleStallCheck`. */
+  private async ensureTurnCheck(atMs?: number): Promise<void> {
+    this.turnCheckArming ??= this.armTurnCheck(atMs).finally(() => {
+      this.turnCheckArming = null;
+    });
+    await this.turnCheckArming;
+  }
+
+  private async armTurnCheck(atMs?: number): Promise<void> {
+    try {
+      const now = getClock().now();
+      const pending = await this.listSchedules();
+      // The scheduler stamps rows with wall-clock seconds, so compare against
+      // the real clock rather than the injectable business clock.
+      const realNow = Date.now();
+      if (
+        pending.some(
+          (schedule) =>
+            schedule.callback === "checkTurn" && schedule.time * 1000 > realNow,
+        )
+      ) {
+        return;
+      }
+      const at = Math.max(atMs ?? now + TURN_ACK_MS, now + 1_000);
+      await this.schedule((at - now) / 1000, "checkTurn");
+    } catch (error) {
+      console.error("butler turn check schedule failed:", error);
+    }
+  }
+
+  /** One sweep: deliver settled turns, report stalls, decide the next look. */
+  private async sweepTurns(now: number): Promise<number | null> {
+    // `checkTurn`, `resumeTurns` and the minute cron can overlap; two sweeps
+    // would both see an unsent ack and both send it.
+    if (this.sweeping) return null;
+    this.sweeping = true;
+    try {
+      return await this.runSweep(now);
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  private async runSweep(now: number): Promise<number | null> {
+    const store = this.turns();
+    const rows = store.list();
+    const pending = await this.harness.pending();
+    const byId = new Map(
+      pending.map((operation) => [operation.operationId, operation]),
+    );
+    let rebuilt = 0;
+    for (const operation of pending) {
+      // Task reports keep their own path; only owner messages are tracked.
+      if (operation.operationId.startsWith(TASK_REPORT_PREFIX)) continue;
+      if (
+        store.insertIfAbsent({
+          operationId: operation.operationId,
+          submittedAt: now,
+        })
+      ) {
+        rebuilt += 1;
+      }
+    }
+    if (rows.length === 0 && rebuilt === 0) return null;
+    let nextAt: number | null = null;
+
+    for (const row of rows) {
+      const operation = byId.get(row.operationId);
+      if (operation === undefined) {
+        if (row.retryAt !== null && row.retryAt > now) continue;
+        // Settled while nobody was waiting: resolve immediately and deliver.
+        await this.deliverResult(
+          row.operationId,
+          await this.harness.wait(row.operationId),
+        );
+        continue;
+      }
+      if (operation.status === "parked") {
+        if (row.retriedAt === null) {
+          store.retried(row.operationId, now);
+          await this.harness.retry();
+          nextAt ??= now + 60_000;
+          continue;
+        }
+        if (now - row.retriedAt >= TURN_PARKED_GRACE_MS) {
+          // pi's crash-loop guard already stopped it and retry did not revive
+          // it. Withdraw so it leaves `pending()`, then tell the owner.
+          await this.abortTurn(row.operationId);
+          await this.sendTerminal(
+            row.operationId,
+            turnInterruptedText(ownerLocale(this.env)),
+            true,
+          );
+          continue;
+        }
+        store.start(row.operationId, now, true);
+        nextAt ??= now + 60_000;
+        continue;
+      }
+      if (operation.status !== "running") {
+        // Queued: the ack clock must not run yet.
+        store.start(row.operationId, now, true);
+        nextAt ??= now + 60_000;
+        continue;
+      }
+
+      store.start(row.operationId, now, false);
+      const live = await this.liveState();
+      store.observe(row.operationId, signatureOf(live), now);
+      const current = store.get(row.operationId);
+      if (current === undefined) continue;
+
+      const locale = ownerLocale(this.env);
+      const plan = planTurnCheck({
+        now,
+        phase: operation.status,
+        activity: activityOf(live),
+        startedAt: current.startedAt,
+        activityAt: current.activityAt,
+        ackAt: current.ackAt,
+        spokeAt: current.spokeAt,
+        noticeAt: current.noticeAt,
+      });
+      nextAt = Math.min(nextAt ?? Number.POSITIVE_INFINITY, plan.nextAt);
+      if (plan.send?.kind === "ack") {
+        const ref = await this.sendBestEffort({
+          text: turnAckText(locale),
+          priority: "normal",
+        });
+        if (ref !== null) store.ack(row.operationId, now);
+      } else if (plan.send?.kind === "stall") {
+        const ref = await this.sendBestEffort({
+          text: turnStalledText(locale, plan.send.activity, plan.send.idleMs),
+          priority: "alert",
+        });
+        if (ref !== null) store.notice(row.operationId, now);
+      }
+    }
+
+    return nextAt ??
+      (store.list().length === 0 ? null : now + 60_000);
+  }
+
+  /** Scheduled callback: acknowledge, report a stall, and rescue lost waits. */
+  async checkTurn(
+    _payload?: unknown,
+    schedule?: Schedule<unknown>,
+  ): Promise<void> {
+    if (this.lease.current() !== null) {
+      await this.ensureTurnCheck(getClock().now() + 60_000);
+      return;
+    }
+    const nextAt = await this.sweepTurns(getClock().now());
+    if (nextAt === null) return;
+
+    const now = getClock().now();
+    const pending = await this.listSchedules();
+    const realNow = Date.now();
+    if (
+      pending.some(
+        (entry) =>
+          entry.callback === "checkTurn" &&
+          entry.id !== schedule?.id &&
+          entry.time * 1000 > realNow,
+      )
+    ) {
+      return;
+    }
+    await this.schedule(Math.max(nextAt - now, 1_000) / 1000, "checkTurn");
+  }
+
   private async sendBestEffort(
     message: OutboundMessage,
   ): Promise<ChannelMessageRef | null> {
+    let ref: ChannelMessageRef | null;
     try {
-      return await this.channels().sendCurrent(message);
+      ref = await this.channels().sendCurrent(message);
     } catch (error) {
       console.error("butler channel send failed:", error);
       return null;
     }
+    if (ref !== null) {
+      try {
+        // Every pending turn counts: the owner just heard from the Butler.
+        this.turns().spokeAll(getClock().now());
+      } catch (error) {
+        console.warn("butler turn spoke mark failed:", error);
+      }
+    }
+    return ref;
   }
 
   private async editBestEffort(
@@ -1620,21 +1948,24 @@ export class ButlerDO extends Agent<Env> {
     const receipt = await this.harness.submit(input, { operationId });
     // Telegram redelivered an update we already accepted: never answer twice.
     if (!receipt.accepted) return;
+    // Only an accepted turn gets a row: a row always has a submission behind it.
+    this.turns().insertIfAbsent({
+      operationId,
+      submittedAt: getClock().now(),
+    });
 
-    const result = await this.harness.wait(operationId);
-    if (result.status === "unanswered") {
-      await this.sendBestEffort({
-        text: await unansweredText(
-          result.reason,
-          () => this.harness.session().messages(),
-          locale,
-        ),
-      });
-      this.kickReconcile();
-      return;
-    }
-    if (result.text) {
-      await this.sendBestEffort({ text: result.text });
+    await this.ensureTurnCheck();
+    try {
+      const result = await this.harness.wait(operationId);
+      await this.deliverResult(operationId, result);
+    } catch (error) {
+      // Settle the ledger with one plain notice: the outer catch must not add
+      // a second message for the same turn. Abort so a pending operation does
+      // not come back as a rebuilt row, and keep the tombstone for the same
+      // reason.
+      console.error("butler turn failed:", error);
+      await this.abortTurn(operationId);
+      await this.sendTerminal(operationId, turnInterruptedText(locale), true);
     }
     this.kickReconcile();
   }

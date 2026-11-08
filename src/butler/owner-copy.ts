@@ -1,6 +1,7 @@
 import { t, type Locale, type MessageKey } from "../i18n";
 import type { ActionKind } from "../protocol";
 import type { TaskActivity } from "../task/stall";
+import type { TurnActivity } from "./turn";
 import { taskLabel } from "./tasks-repo";
 
 export type ApprovalDecision = "approved" | "rejected" | "expired";
@@ -142,6 +143,31 @@ export function taskStalledText(
         minutes,
       })
     : t(locale, "butler.task.stalledModel", { label, title, minutes });
+}
+
+/** The one-line receipt for a turn that has not answered yet. */
+export function turnAckText(locale: Locale): string {
+  return t(locale, "butler.turn.ack");
+}
+
+export function turnInterruptedText(locale: Locale): string {
+  return t(locale, "butler.turn.interrupted");
+}
+
+export function turnEmptyAnswerText(locale: Locale): string {
+  return t(locale, "butler.turn.emptyAnswer");
+}
+
+/** Where the Butler's own turn stopped, with the same facts as a task stall. */
+export function turnStalledText(
+  locale: Locale,
+  activity: TurnActivity,
+  idleMs: number,
+): string {
+  const minutes = Math.max(1, Math.floor(idleMs / 60_000));
+  return activity.kind === "running_tool"
+    ? t(locale, "butler.turn.stalledTool", { tool: activity.tool, minutes })
+    : t(locale, "butler.turn.stalledModel", { minutes });
 }
 
 export function taskCompletedText(
