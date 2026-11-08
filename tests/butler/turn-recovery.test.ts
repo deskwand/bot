@@ -159,7 +159,7 @@ describe("turn recovery", () => {
     await stub.handleMessage(message("tg:same"));
     await stub.handleMessage(message("tg:same"));
 
-    expect(sent.map((msg) => msg.text)).toEqual(["只答一次"]);
+    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理", "只答一次"]);
     const rows = await runInDurableObject(stub, (instance) =>
       (instance as unknown as TurnInternals).turns().list(),
     );
@@ -184,6 +184,7 @@ describe("turn recovery", () => {
     });
 
     expect(sent.map((msg) => msg.text)).toEqual([
+      "收到，正在处理",
       "刚才那条没能答完，再发一次就行",
     ]);
     const rows = await runInDurableObject(stub, (instance) =>
@@ -208,6 +209,7 @@ describe("turn recovery", () => {
 
     await stub.handleMessage(message("tg:throws-pending"));
     expect(sent.map((msg) => msg.text)).toEqual([
+      "收到，正在处理",
       "刚才那条没能答完，再发一次就行",
     ]);
 
@@ -220,6 +222,7 @@ describe("turn recovery", () => {
       });
     }
     expect(sent.map((msg) => msg.text)).toEqual([
+      "收到，正在处理",
       "刚才那条没能答完，再发一次就行",
     ]);
   });

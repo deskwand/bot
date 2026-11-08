@@ -63,6 +63,8 @@ let route: RouteSnapshot;
 
 const ENV = env as unknown as Record<string, unknown>;
 const savedEnv = new Map<string, unknown>();
+/** The receipt every accepted message earns before its answer. */
+const RECEIPT = { chatId: "42", text: "收到，正在处理" };
 
 /** Mutates the env seen by Durable Objects created after this call. */
 function setEnv(patch: Record<string, unknown>): void {
@@ -321,7 +323,10 @@ describe("butler chat", () => {
       message({ text: "你好", eventId: "tg:101" }),
     );
 
-    expect(channel.sent).toEqual([{ chatId: "42", text: "你好！" }]);
+    expect(channel.sent).toEqual([
+      RECEIPT,
+      { chatId: "42", text: "你好！" },
+    ]);
   });
 
   it("opens the pi harness with the slow progress policy", async () => {
@@ -358,6 +363,7 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([
+      RECEIPT,
       { chatId: "42", text: QUOTA_EXHAUSTED_TEXT },
     ]);
   });
@@ -372,6 +378,7 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([
+      RECEIPT,
       { chatId: "42", text: PAID_PLAN_REQUIRED_TEXT },
     ]);
   });
@@ -385,7 +392,10 @@ describe("butler chat", () => {
       message({ text: "你好", eventId: "tg:model-error" }),
     );
 
-    expect(channel.sent).toEqual([{ chatId: "42", text: "出错了，稍后再试" }]);
+    expect(channel.sent).toEqual([
+      RECEIPT,
+      { chatId: "42", text: "出错了，稍后再试" },
+    ]);
   });
 
   it("keeps the fallback reply when the transcript cannot be read", async () => {
@@ -401,7 +411,10 @@ describe("butler chat", () => {
       message({ text: "你好", eventId: "tg:transcript-unreadable" }),
     );
 
-    expect(channel.sent).toEqual([{ chatId: "42", text: "出错了，稍后再试" }]);
+    expect(channel.sent).toEqual([
+      RECEIPT,
+      { chatId: "42", text: "出错了，稍后再试" },
+    ]);
   });
 
   it("applies the butler role's thinking level to the conversation", async () => {
@@ -514,7 +527,10 @@ describe("butler chat", () => {
     await butler("chat-102").handleMessage(evt);
     await butler("chat-102").handleMessage(evt);
 
-    expect(channel.sent).toEqual([{ chatId: "42", text: "只回一次" }]);
+    expect(channel.sent).toEqual([
+      RECEIPT,
+      { chatId: "42", text: "只回一次" },
+    ]);
   });
 
   it("rejects non-text messages without calling the model", async () => {
@@ -570,7 +586,10 @@ describe("butler chat", () => {
       { type: "text", text: "图里写了什么？" },
       { type: "image", data: PNG_B64, mimeType: "image/png" },
     ]);
-    expect(channel.sent).toEqual([{ chatId: "42", text: "看到了" }]);
+    expect(channel.sent).toEqual([
+      RECEIPT,
+      { chatId: "42", text: "看到了" },
+    ]);
   });
 
   it("lists an image's inbox key next to the image", async () => {
@@ -612,7 +631,10 @@ describe("butler chat", () => {
       },
       { type: "image", data: PNG_B64, mimeType: "image/png" },
     ]);
-    expect(channel.sent).toEqual([{ chatId: "42", text: "看到了" }]);
+    expect(channel.sent).toEqual([
+      RECEIPT,
+      { chatId: "42", text: "看到了" },
+    ]);
   });
 
   it("accepts a message that only carries a file", async () => {
@@ -649,7 +671,10 @@ describe("butler chat", () => {
     expect(last?.content).toBe(
       "[附件] a.pdf · application/pdf · 2.0 KB · key: inbox/tg:1/a.pdf",
     );
-    expect(channel.sent).toEqual([{ chatId: "42", text: "收到文件" }]);
+    expect(channel.sent).toEqual([
+      RECEIPT,
+      { chatId: "42", text: "收到文件" },
+    ]);
   });
 
   it("still hands a file to the model when the image could not be prepared", async () => {
@@ -687,7 +712,10 @@ describe("butler chat", () => {
     expect(last?.content).toBe(
       "[附件] a.pdf · application/pdf · 2.0 KB · key: inbox/tg:1/a.pdf",
     );
-    expect(channel.sent).toEqual([{ chatId: "42", text: "收到附件" }]);
+    expect(channel.sent).toEqual([
+      RECEIPT,
+      { chatId: "42", text: "收到附件" },
+    ]);
   });
 
   it("appends attachment lines after the text", async () => {
@@ -724,7 +752,7 @@ describe("butler chat", () => {
     expect(last?.content).toBe(
       "总结一下\n[附件] a.pdf · application/pdf · 2.0 KB · key: inbox/tg:1/a.pdf",
     );
-    expect(channel.sent).toEqual([{ chatId: "42", text: "好的" }]);
+    expect(channel.sent).toEqual([RECEIPT, { chatId: "42", text: "好的" }]);
   });
 
   it("tells the owner a file was too large", async () => {
@@ -816,7 +844,10 @@ describe("butler chat", () => {
     expect(last?.content).toEqual([
       { type: "image", data: PNG_B64, mimeType: "image/png" },
     ]);
-    expect(channel.sent).toEqual([{ chatId: "42", text: "是一张纯色图" }]);
+    expect(channel.sent).toEqual([
+      RECEIPT,
+      { chatId: "42", text: "是一张纯色图" },
+    ]);
   });
 
   it("drops an empty text block when the image is the whole message", async () => {
@@ -846,7 +877,10 @@ describe("butler chat", () => {
     expect(last?.content).toEqual([
       { type: "image", data: PNG_B64, mimeType: "image/png" },
     ]);
-    expect(channel.sent).toEqual([{ chatId: "42", text: "是一张纯色图" }]);
+    expect(channel.sent).toEqual([
+      RECEIPT,
+      { chatId: "42", text: "是一张纯色图" },
+    ]);
   });
 
   it("says so when an image could not be fetched", async () => {

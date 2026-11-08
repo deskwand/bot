@@ -24,7 +24,6 @@ type TurnInternals = {
     operationId: string,
     result: PiOperationResult,
   ): Promise<void>;
-  ackStarted(): Promise<void>;
 };
 
 const START = Date.UTC(2030, 0, 1, 9, 0, 0);
@@ -230,7 +229,7 @@ describe("supersede a thinking turn", () => {
     expect(texts.filter((text) => text === "第二条答案")).toHaveLength(1);
   });
 
-  it("carries the receipt over to the new turn", async () => {
+  it("acknowledges both the replaced message and its replacement", async () => {
     const stub = butler("supersede-receipt");
     const sent = await captureSends(stub);
     const held = gate();
@@ -242,14 +241,6 @@ describe("supersede a thinking turn", () => {
     );
 
     const first = stub.handleMessage(message("tg:one", "一"));
-    await vi.waitFor(async () =>
-      expect(await runningIds(stub)).toContain("tg:one"),
-    );
-    // Faux resolves the whole message before emitting a token, so the real
-    // first-token callback is invoked here instead of by the gated stream.
-    await runInDurableObject(stub, (instance) =>
-      (instance as unknown as TurnInternals).ackStarted(),
-    );
     await vi.waitFor(() =>
       expect(sent.filter((msg) => msg.text === "收到，正在处理")).toHaveLength(1),
     );
@@ -258,7 +249,7 @@ describe("supersede a thinking turn", () => {
     held.open();
     await Promise.all([first, second]);
 
-    expect(sent.filter((msg) => msg.text === "收到，正在处理")).toHaveLength(1);
+    expect(sent.filter((msg) => msg.text === "收到，正在处理")).toHaveLength(2);
     expect(sent.map((msg) => msg.text)).toContain("完整答案");
   });
 

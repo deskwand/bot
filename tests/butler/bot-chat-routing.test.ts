@@ -266,7 +266,10 @@ describe("bot chat routing", () => {
       }),
     );
 
-    expect(channel.sent).toEqual([{ chatId: "42", text: "文件收到了" }]);
+    expect(channel.sent).toEqual([
+      { chatId: "42", text: "收到，正在处理" },
+      { chatId: "42", text: "文件收到了" },
+    ]);
   });
 
   it("an image is forwarded to the bot chat", async () => {
@@ -304,7 +307,10 @@ describe("bot chat routing", () => {
       message({ text: "随便问问", eventId: "tg:route-8" }),
     );
 
-    expect(channel.sent).toEqual([{ chatId: "42", text: "普通回答" }]);
+    expect(channel.sent).toEqual([
+      { chatId: "42", text: "收到，正在处理" },
+      { chatId: "42", text: "普通回答" },
+    ]);
   });
 
   it("names each bot chat after the bot id and its creation time", async () => {

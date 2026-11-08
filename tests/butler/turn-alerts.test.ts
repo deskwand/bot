@@ -164,32 +164,34 @@ afterEach(() => {
 });
 
 describe("turn alerts", () => {
-  it("acknowledges on the first token and still delivers the answer", async () => {
+  it("acknowledges as soon as the message is accepted", async () => {
     const stub = butler("turn-ack");
     const sent = await captureSends(stub);
-    await installSlowWait(stub);
-    setModelOverride(
-      scriptedModel([
-        { toolCalls: [{ name: "slow_wait", args: {} }] },
-        { text: "查完了" },
-      ]),
-    );
+    let openModel = () => {};
+    const modelGate = new Promise<void>((resolve) => {
+      openModel = resolve;
+    });
+    setModelOverride(scriptedModel([{ text: "查完了", gate: modelGate }]));
 
     const running = stub.handleMessage(message("tg:ack"));
-    await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
-
+    // The receipt does not wait for the model: it is out while the model is
+    // still held at its gate.
     await vi.waitFor(() =>
       expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理"]),
     );
     expect(sent[0]?.priority).toBe("normal");
+    const waiting = await runInDurableObject(stub, (instance) =>
+      (instance as unknown as TurnInternals).turns().get("tg:ack"),
+    );
+    expect(waiting?.ackAt).not.toBeNull();
 
-    await releaseSlow(stub);
+    openModel();
     await running;
     expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理", "查完了"]);
     expect(sent[1]?.priority).toBe("critical");
   });
 
-  it("acknowledges once across a tool loop", async () => {
+  it("acknowledges once for a message across a tool loop", async () => {
     const stub = butler("turn-ack-loop");
     const sent = await captureSends(stub);
     await installSlowWait(stub);
@@ -209,7 +211,7 @@ describe("turn alerts", () => {
     expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理", "查完了"]);
   });
 
-  it("acknowledges the follow-up turn after the previous answer", async () => {
+  it("acknowledges each message while the previous turn still runs", async () => {
     const stub = butler("turn-follow-up");
     const sent = await captureSends(stub);
     await installSlowWait(stub);
@@ -226,8 +228,12 @@ describe("turn alerts", () => {
     const first = stub.handleMessage(message("tg:one"));
     await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
     const second = stub.handleMessage(message("tg:two"));
+    // Each accepted message says so at once, before either answer.
     await vi.waitFor(() =>
-      expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理"]),
+      expect(sent.map((msg) => msg.text)).toEqual([
+        "收到，正在处理",
+        "收到，正在处理",
+      ]),
     );
 
     await releaseSlow(stub);
@@ -235,8 +241,8 @@ describe("turn alerts", () => {
     await vi.waitFor(() =>
       expect(sent.map((msg) => msg.text)).toEqual([
         "收到，正在处理",
-        "第一条答案",
         "收到，正在处理",
+        "第一条答案",
       ]),
     );
 
@@ -245,16 +251,20 @@ describe("turn alerts", () => {
     await second;
     expect(sent.map((msg) => msg.text)).toEqual([
       "收到，正在处理",
-      "第一条答案",
       "收到，正在处理",
+      "第一条答案",
       "第二条答案",
     ]);
   });
 
-  it("retries the ack on the next first token after a failed send", async () => {
-    const stub = butler("turn-ack-retry");
+  it("does not retry a failed receipt", async () => {
+    const stub = butler("turn-ack-fail");
     const sent: OutboundMessage[] = [];
     let ackAttempts = 0;
+    let openModel = () => {};
+    const modelGate = new Promise<void>((resolve) => {
+      openModel = resolve;
+    });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as { channels(): unknown }).channels = () => ({
         currentRoute: async () => ({ channel: "telegram", routeKey: "test" }),
@@ -263,7 +273,7 @@ describe("turn alerts", () => {
         sendCurrent: async (msg: OutboundMessage) => {
           if (msg.text === "收到，正在处理") {
             ackAttempts += 1;
-            if (ackAttempts === 1) return null;
+            return null;
           }
           sent.push(msg);
           return {
@@ -275,38 +285,26 @@ describe("turn alerts", () => {
         },
       });
     });
-    await installSlowWait(stub);
-    await installHold(stub);
-    setModelOverride(
-      scriptedModel([
-        { toolCalls: [{ name: "slow_wait", args: {} }] },
-        { toolCalls: [{ name: "hold_after_ack", args: {} }] },
-        { text: "查完了" },
-      ]),
-    );
+    setModelOverride(scriptedModel([{ text: "查完了", gate: modelGate }]));
 
-    const running = stub.handleMessage(message("tg:ack-retry"));
-    await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
+    const running = stub.handleMessage(message("tg:ack-fail"));
     await vi.waitFor(() => expect(ackAttempts).toBe(1));
-
+    await vi.waitFor(async () => {
+      const row = await runInDurableObject(stub, (instance) =>
+        (instance as unknown as TurnInternals).turns().get("tg:ack-fail"),
+      );
+      expect(row).toBeDefined();
+    });
+    // One attempt, no retry: the failed receipt leaves the ledger untouched.
     const waiting = await runInDurableObject(stub, (instance) =>
-      (instance as unknown as TurnInternals).turns().get("tg:ack-retry"),
+      (instance as unknown as TurnInternals).turns().get("tg:ack-fail"),
     );
     expect(waiting?.ackAt).toBeNull();
 
-    await releaseSlow(stub);
-    await vi.waitFor(async () => expect(await holdStarted(stub)).toBe(true));
-    await vi.waitFor(async () => {
-      const row = await runInDurableObject(stub, (instance) =>
-        (instance as unknown as TurnInternals).turns().get("tg:ack-retry"),
-      );
-      expect(row?.ackAt).not.toBeNull();
-    });
-    expect(ackAttempts).toBe(2);
-
-    await releaseHold(stub);
+    openModel();
     await running;
-    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理", "查完了"]);
+    expect(ackAttempts).toBe(1);
+    expect(sent.map((msg) => msg.text)).toEqual(["查完了"]);
   });
 
   it("stays silent and keeps the ledger untouched while the lease is held", async () => {

@@ -35,7 +35,6 @@ import {
   resolveModel,
 } from "../llm/models";
 import { PI_PROGRESS } from "../llm/pi-settings";
-import { withFirstToken } from "../llm/first-token";
 import {
   encodeAction,
   type Address,
@@ -234,12 +233,8 @@ export class ButlerDO extends Agent<Env> {
   /** Single-flight guard for arming the next turn check. */
   private turnCheckArming: Promise<void> | null = null;
 
-  /** Single-flight guard for the first-token receipt. */
-  private acking: Promise<void> | null = null;
   /** Serializes "interrupt, then submit" so two messages cannot race it. */
   private admitting: Promise<unknown> = Promise.resolve();
-  /** The turns the receipt in flight announces. */
-  private ackingFor: ReadonlySet<string> = new Set();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -370,9 +365,7 @@ export class ButlerDO extends Agent<Env> {
         Harness.open(
           storage,
           {
-            models: withFirstToken(createModelsForEnv(this.env), () =>
-              this.ctx.waitUntil(this.ackStarted()),
-            ),
+            models: createModelsForEnv(this.env),
             registry: this.registry,
             onWake,
             settings: {
@@ -1569,8 +1562,6 @@ export class ButlerDO extends Agent<Env> {
     this.deliveringTurns.add(operationId);
     store.delivering(operationId, now);
     try {
-      // A receipt still in flight must land before the answer it announces.
-      if (this.ackingFor.has(operationId)) await this.acking;
       // No `clampMessage` here: the Butler's answer went out unclamped before
       // this change, and truncating it would lose real content.
       const ref = await this.sendBestEffort({ text, priority: "critical" });
@@ -1632,18 +1623,15 @@ export class ButlerDO extends Agent<Env> {
   /**
    * A new owner message interrupts a turn that has not used a tool yet, so
    * the model re-answers with the new message in context instead of finishing
-   * an answer to half the thought. Returns whether the interrupted turn had
-   * already sent its receipt.
+   * an answer to half the thought.
    */
-  private async supersedeIdleThinking(
-    eventId: string,
-  ): Promise<{ acked: boolean }> {
+  private async supersedeIdleThinking(eventId: string): Promise<void> {
     try {
       // A redelivery must not abort anything: pi rejects the duplicate, so
       // the interrupted turn would have no replacement. The ledger row is
       // gone once a turn is answered, so ask pi, which keeps the submission.
       if ((await this.submissionOf(eventId)) !== undefined) {
-        return { acked: false };
+        return;
       }
 
       const pending = await this.harness.pending();
@@ -1661,7 +1649,7 @@ export class ButlerDO extends Agent<Env> {
           operation.operationId.startsWith(TASK_REPORT_PREFIX),
         )
       ) {
-        return { acked: false };
+        return;
       }
 
       const entries: number[] = [];
@@ -1669,7 +1657,7 @@ export class ButlerDO extends Agent<Env> {
         const record = await this.submissionOf(operation.operationId);
         if (record?.entry !== undefined) entries.push(record.entry);
       }
-      if (entries.length === 0) return { acked: false };
+      if (entries.length === 0) return;
 
       // Tools run only after their assistant entry committed, so an assistant
       // entry without a tool call means the turn had no side effect yet.
@@ -1684,24 +1672,18 @@ export class ButlerDO extends Agent<Env> {
               message.content.some((content) => content.type === "toolCall"),
           ),
       );
-      if (usedTool) return { acked: false };
+      if (usedTool) return;
 
       const store = this.turns();
       const rows = running
         .map((operation) => store.get(operation.operationId))
         .filter((row): row is TurnRow => row !== undefined);
       const now = getClock().now();
-      // A receipt still on its way counts as sent.
-      const acked = rows.some(
-        (row) => row.ackAt !== null || this.ackingFor.has(row.operationId),
-      );
       for (const row of rows) store.supersede(row.operationId, now);
       await this.abortTurn(running[0].operationId);
-      return { acked };
     } catch (error) {
       // Interrupting by mistake is worse than letting the turn finish.
       console.error("butler supersede check failed:", error);
-      return { acked: false };
     }
   }
 
@@ -1748,53 +1730,6 @@ export class ButlerDO extends Agent<Env> {
     const pi = await this.harness.pi();
     const root = await pi.root(BACKGROUND_CONTEXT);
     return await pi.snapshot(LiveDoc, root.id, BACKGROUND_CONTEXT);
-  }
-
-  /**
-   * The model produced its first token: tell the owner the turn is underway.
-   * This runs from the provider stream, before progress is throttled into
-   * storage, so it is the earliest honest "we are working on it".
-   */
-  private async ackStarted(): Promise<void> {
-    this.acking ??= (async () => {
-      try {
-        // Yield once: a response that finishes at once is its own receipt, so
-        // a turn that has already settled gets none.
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        const pending = await this.harness.pending();
-        const store = this.turns();
-        const targets: string[] = [];
-        for (const operation of pending) {
-          if (operation.status !== "running") continue;
-          if (operation.operationId.startsWith(TASK_REPORT_PREFIX)) continue;
-          const row = store.get(operation.operationId);
-          // An answer already being delivered is enough for the owner.
-          if (
-            row === undefined ||
-            row.ackAt !== null ||
-            row.deliveringAt !== null
-          ) {
-            continue;
-          }
-          targets.push(operation.operationId);
-        }
-        if (targets.length === 0) return;
-        this.ackingFor = new Set(targets);
-        const ref = await this.sendBestEffort({
-          text: turnAckText(ownerLocale(this.env)),
-          priority: "normal",
-        });
-        if (ref === null) return;
-        const now = getClock().now();
-        for (const operationId of targets) store.ack(operationId, now);
-      } catch (error) {
-        console.error("butler first-token ack failed:", error);
-      }
-    })().finally(() => {
-      this.acking = null;
-      this.ackingFor = new Set();
-    });
-    return this.acking;
   }
 
   /** Keep exactly one pending `checkTurn`, like `TaskDO.scheduleStallCheck`. */
@@ -2134,21 +2069,28 @@ export class ButlerDO extends Agent<Env> {
     // already passed, so a blocked message cannot abort a turn it will not
     // replace.
     const admitted = this.admitting.then(async () => {
-      const superseded = await this.supersedeIdleThinking(operationId);
-      const receipt = await this.harness.submit(input, { operationId });
-      return { superseded, receipt };
+      await this.supersedeIdleThinking(operationId);
+      return await this.harness.submit(input, { operationId });
     });
     this.admitting = admitted.catch(() => {});
-    const { superseded, receipt } = await admitted;
+    const receipt = await admitted;
     // Telegram redelivered an update we already accepted: never answer twice.
     if (!receipt.accepted) return;
+    // A receipt is about the queue, not the model: send it as soon as pi
+    // accepts the input, so a slow or failing model still tells the owner the
+    // message arrived. It goes out before the row exists, so not even a sweep
+    // that resolves the turn meanwhile can deliver the answer ahead of it.
+    const receiptRef = await this.sendBestEffort({
+      text: turnAckText(locale),
+      priority: "normal",
+    });
     // Only an accepted turn gets a row: a row always has a submission behind it.
     this.turns().insertIfAbsent({
       operationId,
       submittedAt: getClock().now(),
     });
-    // The interrupted turn already said "received": one receipt is enough.
-    if (superseded.acked) this.turns().ack(operationId, getClock().now());
+    // `ack_at` is informational now: nothing gates on it.
+    if (receiptRef !== null) this.turns().ack(operationId, getClock().now());
 
     await this.ensureTurnCheck();
     try {
