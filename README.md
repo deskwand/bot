@@ -56,6 +56,28 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 - Telegram：语音为 OGG/Opus，`getFile` 下载后交给 Workers AI 的 `@cf/openai/whisper-large-v3-turbo` 转写（约 46 neurons/音频分钟，免费额度约 3.5 小时/天）。
 - 共通：下载或转写失败时回"收到了语音，但没能转成文字"，不会丢掉整条消息；语音可以带 caption，两段文字都保留。
 
+## 邮箱
+
+配好邮箱账号后，任务可以读主人的邮件：按条件搜标题/发件人/正文、读一封的正文、列出附件。
+
+- 只读：不标已读、不删除、不移动。正文一律用 `BODY.PEEK` 读取，邮箱里的未读状态不变。
+- 只在任务里可用：管家要读邮件时派一个任务，跟 `web_search`、MCP 工具同一层。
+- 每次调用现场连 IMAP（993 隐式 TLS 或 143 STARTTLS），不建索引、不缓存正文。
+- 单封上限 15MB，回给模型的正文截断到 8000 字。
+- 没配或配残（缺密钥、端口越界）时工具完全不出现，模型看不到这套能力。
+
+账号写在 `DESKWAND_CONFIG` 的 `email.accounts`，密码写 secret `EMAIL_SECRET_<ID>`（ID 大写、`-` 换 `_`）。字段级校验在 `src/mail/accounts.ts`，坏账号只丢自己，不影响 Worker 启动。
+
+```jsonc
+"email": {
+  "accounts": [{
+    "id": "main",
+    "user": "me@example.com",
+    "imap": { "host": "imap.example.com", "port": 993, "security": "tls" }
+  }]
+}
+```
+
 ## 自主机器人
 
 对管家说「建一个机器人，盯着 X，有变化告诉我」即可创建。机器人长期存在，有自己的使命与独立记忆，自己决定下次什么时候醒；每次醒来仍由管家派出一个任务执行。管家也能列出、查看、暂停、恢复、改名、删除机器人，或让它立即唤醒一次、追加一句指令。

@@ -28,6 +28,8 @@ export type AppConfig = {
   mcpServers: McpServerConfig[];
   locale?: Locale;
   approvalMode?: ApprovalMode;
+  /** Raw mail section; every field is validated in src/mail/accounts.ts. */
+  email?: { accounts?: unknown[] };
 };
 
 export function configLocale(cfg: AppConfig): Locale {

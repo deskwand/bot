@@ -66,7 +66,9 @@
     "input": {
       "schemaVersion": 1,
       "owner": {
-        "telegramUserIds": [100000001.5]
+        "telegramUserIds": [
+          100000001.5
+        ]
       },
       "models": {
         "butler": {
@@ -87,7 +89,9 @@
     "input": {
       "schemaVersion": 1,
       "owner": {
-        "telegramUserIds": [-7]
+        "telegramUserIds": [
+          -7
+        ]
       },
       "models": {
         "butler": {
@@ -108,7 +112,9 @@
     "input": {
       "schemaVersion": 1,
       "owner": {
-        "telegramUserIds": [9007199254740992]
+        "telegramUserIds": [
+          9007199254740992
+        ]
       },
       "models": {
         "butler": {
@@ -129,7 +135,9 @@
     "input": {
       "schemaVersion": 1,
       "owner": {
-        "telegramUserIds": [100000001]
+        "telegramUserIds": [
+          100000001
+        ]
       },
       "models": {
         "butler": {
@@ -149,7 +157,9 @@
             "Authorization": "env:MCP_TOKEN",
             "X-Trace": "abc-123"
           },
-          "requireApproval": ["create_page"]
+          "requireApproval": [
+            "create_page"
+          ]
         }
       ]
     },
@@ -184,9 +194,15 @@
           "oauth": true,
           "enabled": false,
           "approvalPolicy": "writes",
-          "requireApproval": ["create_page"],
-          "autoApprove": ["search"],
-          "disabledTools": ["delete_page"]
+          "requireApproval": [
+            "create_page"
+          ],
+          "autoApprove": [
+            "search"
+          ],
+          "disabledTools": [
+            "delete_page"
+          ]
         }
       ]
     },
@@ -494,103 +510,171 @@
             "id": "proxy-1",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-2",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-3",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-4",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-5",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-6",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-7",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-8",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-9",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-10",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-11",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-12",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-13",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-14",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-15",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-16",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           },
           {
             "id": "proxy-17",
             "api": "openai-completions",
             "baseUrl": "https://proxy.example.com/v1",
-            "models": [{ "id": "gpt-5.6" }]
+            "models": [
+              {
+                "id": "gpt-5.6"
+              }
+            ]
           }
         ]
       },
@@ -675,5 +759,177 @@
       "mcpServers": []
     },
     "valid": false
+  },
+  {
+    "name": "email accounts accepted",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": [],
+      "email": {
+        "accounts": [
+          {
+            "id": "main",
+            "label": "个人邮箱",
+            "user": "me@example.com",
+            "imap": {
+              "host": "imap.example.com",
+              "port": 993,
+              "security": "tls"
+            },
+            "futureField": {
+              "kept": true
+            }
+          }
+        ]
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "email account id must be a string",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": [],
+      "email": {
+        "accounts": [
+          {
+            "id": 42
+          }
+        ]
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "email keeps more accounts than the client shows",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": [],
+      "email": {
+        "accounts": [
+          {
+            "id": "box0",
+            "user": "u0@example.com",
+            "imap": {
+              "host": "h",
+              "port": 993,
+              "security": "tls"
+            }
+          },
+          {
+            "id": "box1",
+            "user": "u1@example.com",
+            "imap": {
+              "host": "h",
+              "port": 993,
+              "security": "tls"
+            }
+          },
+          {
+            "id": "box2",
+            "user": "u2@example.com",
+            "imap": {
+              "host": "h",
+              "port": 993,
+              "security": "tls"
+            }
+          },
+          {
+            "id": "box3",
+            "user": "u3@example.com",
+            "imap": {
+              "host": "h",
+              "port": 993,
+              "security": "tls"
+            }
+          },
+          {
+            "id": "box4",
+            "user": "u4@example.com",
+            "imap": {
+              "host": "h",
+              "port": 993,
+              "security": "tls"
+            }
+          },
+          {
+            "id": "box5",
+            "user": "u5@example.com",
+            "imap": {
+              "host": "h",
+              "port": 993,
+              "security": "tls"
+            }
+          },
+          {
+            "id": "box6",
+            "user": "u6@example.com",
+            "imap": {
+              "host": "h",
+              "port": 993,
+              "security": "tls"
+            }
+          },
+          {
+            "id": "box7",
+            "user": "u7@example.com",
+            "imap": {
+              "host": "h",
+              "port": 993,
+              "security": "tls"
+            }
+          },
+          {
+            "id": "box8",
+            "user": "u8@example.com",
+            "imap": {
+              "host": "h",
+              "port": 993,
+              "security": "tls"
+            }
+          }
+        ]
+      }
+    },
+    "valid": true
   }
 ]

@@ -33,6 +33,24 @@
       "type": "string",
       "enum": ["autonomous", "reviewed"],
       "description": "How tasks handle write actions. autonomous runs them directly (only tools the owner marked as require-approval and bot rules changes ask); reviewed sends them through the model reviewer first. Absent means autonomous."
+    },
+    "email": {
+      "type": "object",
+      "description": "Mailbox accounts the bot may read. This schema only constrains the structure (no counts or string lengths, which could reject the whole document): field-level checks (id pattern, port range, security enum, presence of the account secret) live in src/mail/accounts.ts, which drops a bad account instead of rejecting the whole document.",
+      "properties": {
+        "accounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true,
