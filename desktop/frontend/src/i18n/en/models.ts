@@ -32,8 +32,10 @@ export const models: Messages["models"] = {
   butlerModel: "Butler model",
   taskModel: "Task model",
   thinkingLevelLabel: "Thinking level",
+  thinkingLevelInline: "Think",
   thinkingLevelHint: "Higher is slower and costs more; project Bots follow the butler model.",
   thinkingLevelFixed: "This model has no thinking level to adjust.",
+  thinkingLevelFloor: "Always thinking: {low} at the lowest, {high} at the highest.",
   thinkingLevel: {
     off: "Off",
     minimal: "Minimal",

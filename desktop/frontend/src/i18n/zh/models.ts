@@ -29,8 +29,10 @@ export const models = {
   butlerModel: "管家模型",
   taskModel: "任务模型",
   thinkingLevelLabel: "思考强度",
+  thinkingLevelInline: "思考",
   thinkingLevelHint: "越高越慢越贵；项目 Bot 跟随管家模型。",
   thinkingLevelFixed: "该模型不支持调整思考强度。",
+  thinkingLevelFloor: "固定思考：最低「{low}」，最高「{high}」。",
   thinkingLevel: {
     off: "关闭",
     minimal: "极低",

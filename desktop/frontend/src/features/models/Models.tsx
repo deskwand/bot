@@ -57,6 +57,7 @@ import {
   secretNameFor,
   thinkingLevelsFor,
 } from "./catalog";
+import { defaultLevelFrom } from "./thinking-level";
 import { ModelSelect } from "./ModelSelect";
 
 const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -86,6 +87,27 @@ function withThinkingLevel(
   return model ? { ...model, thinkingLevel } : undefined;
 }
 
+/**
+ * What is worth knowing about this model's level list: most are unremarkable,
+ * but a model that cannot stop thinking surprises people.
+ */
+function LevelNote({ levels }: { levels: string[] }) {
+  const t = useT();
+  if (levels.length <= 1) {
+    return (
+      <p className="text-xs text-muted-foreground">{t("models.thinkingLevelFixed")}</p>
+    );
+  }
+  if (levels.includes("off")) return null;
+  const low = t(`models.thinkingLevel.${levels[0]}` as MessageKey);
+  const high = t(`models.thinkingLevel.${levels[levels.length - 1]}` as MessageKey);
+  return (
+    <p className="text-xs text-muted-foreground">
+      {t("models.thinkingLevelFloor", { low, high })}
+    </p>
+  );
+}
+
 /** One role's thinking level; only the levels its model supports are offered. */
 function ThinkingLevelSelect({
   id,
@@ -101,24 +123,26 @@ function ThinkingLevelSelect({
   const t = useT();
   const fixed = levels.length <= 1;
   return (
-    <div className="space-y-1">
-      <Label htmlFor={id}>{t("models.thinkingLevelLabel")}</Label>
-      <Select value={value} onValueChange={onChange} disabled={fixed}>
-        <SelectTrigger id={id} aria-label={t("models.thinkingLevelLabel")} data-testid={id}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {levels.map((level) => (
-            <SelectItem key={level} value={level}>
-              {t(`models.thinkingLevel.${level}` as MessageKey)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <p className="text-xs text-muted-foreground">
-        {fixed ? t("models.thinkingLevelFixed") : t("models.thinkingLevelHint")}
-      </p>
-    </div>
+    <Select value={value} onValueChange={onChange} disabled={fixed}>
+      <SelectTrigger
+        id={id}
+        aria-label={t("models.thinkingLevelLabel")}
+        data-testid={id}
+        className="w-32 shrink-0"
+      >
+        <span className="text-xs text-muted-foreground">
+          {t("models.thinkingLevelInline")}
+        </span>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {levels.map((level) => (
+          <SelectItem key={level} value={level}>
+            {t(`models.thinkingLevel.${level}` as MessageKey)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -175,8 +199,8 @@ export function Models() {
   const [customProviders, setCustomProviders] = useState<CustomProviderDTO[]>([]);
   const [butler, setButler] = useState(modelKey(DEFAULT_MODEL));
   const [task, setTask] = useState(modelKey(DEFAULT_MODEL));
-  const [butlerLevel, setButlerLevel] = useState("off");
-  const [taskLevel, setTaskLevel] = useState("off");
+  const [butlerLevel, setButlerLevel] = useState<string | null>(null);
+  const [taskLevel, setTaskLevel] = useState<string | null>(null);
   const [keyDrafts, setKeyDrafts] = useState<
     Record<string, { value: string; clear: boolean }>
   >({});
@@ -204,8 +228,8 @@ export function Models() {
     setCustomProviders(next.customProviders ?? []);
     setButler(modelKey(next.butlerModel) || modelKey(DEFAULT_MODEL));
     setTask(modelKey(next.taskModel) || modelKey(DEFAULT_MODEL));
-    setButlerLevel(next.butlerModel?.thinkingLevel ?? "off");
-    setTaskLevel(next.taskModel?.thinkingLevel ?? "off");
+    setButlerLevel(next.butlerModel?.thinkingLevel ?? null);
+    setTaskLevel(next.taskModel?.thinkingLevel ?? null);
     setKeyDrafts({});
   }, []);
 
@@ -246,6 +270,20 @@ export function Models() {
   const options = useMemo(
     () => providerOptions(catalog ?? { providers: [] }, customProviders),
     [catalog, customProviders],
+  );
+
+  // An unconfigured role uses the middle of what its model offers. The select
+  // and the published value both read this, so they cannot disagree, and a
+  // level the model dropped is clamped instead of rendering as empty.
+  const butlerLevels = thinkingLevelsFor(options, butler);
+  const butlerLevelValue = clampThinkingLevel(
+    butlerLevel ?? defaultLevelFrom(butlerLevels),
+    butlerLevels,
+  );
+  const taskLevels = thinkingLevelsFor(options, task);
+  const taskLevelValue = clampThinkingLevel(
+    taskLevel ?? defaultLevelFrom(taskLevels),
+    taskLevels,
   );
 
   const keylessSelected = useMemo(() => {
@@ -306,19 +344,12 @@ export function Models() {
       keysDirty ||
       modelKey(baseline.butlerModel) !== butler ||
       modelKey(baseline.taskModel) !== task ||
-      (baseline.butlerModel?.thinkingLevel ?? "off") !== butlerLevel ||
-      (baseline.taskModel?.thinkingLevel ?? "off") !== taskLevel ||
+      (baseline.butlerModel?.thinkingLevel ?? null) !== butlerLevel ||
+      (baseline.taskModel?.thinkingLevel ?? null) !== taskLevel ||
       JSON.stringify(baseline.customProviders ?? []) !== JSON.stringify(customProviders)
     );
   }, [baseline, butler, butlerLevel, customProviders, keyDrafts, keyProviders, task, taskLevel]);
   useDirty(dirty);
-
-  // A stored level the model does not offer (hand-edited config, older build)
-  // is clamped in the form, so the select and the published value agree.
-  useEffect(() => {
-    setButlerLevel((level) => clampThinkingLevel(level, thinkingLevelsFor(options, butler)));
-    setTaskLevel((level) => clampThinkingLevel(level, thinkingLevelsFor(options, task)));
-  }, [butler, options, task]);
 
   useEffect(() => {
     if (awaitingFreshConfig) return;
@@ -380,8 +411,8 @@ export function Models() {
       JSON.stringify(baseline?.customProviders ?? []) !== JSON.stringify(customProviders);
     return {
       baseFingerprint: baseline?.fingerprint,
-      butlerModel: withThinkingLevel(parseModelKey(butler), butlerLevel),
-      taskModel: withThinkingLevel(parseModelKey(task), taskLevel),
+      butlerModel: withThinkingLevel(parseModelKey(butler), butlerLevelValue),
+      taskModel: withThinkingLevel(parseModelKey(task), taskLevelValue),
       customProviders: customChanged ? customProviders : undefined,
       secrets,
     };
@@ -638,13 +669,16 @@ export function Models() {
                 value={butler}
                 onChange={setButler}
                 options={options}
+                trailing={
+                  <ThinkingLevelSelect
+                    id="butler-thinking-level"
+                    value={butlerLevelValue}
+                    levels={butlerLevels}
+                    onChange={setButlerLevel}
+                  />
+                }
               />
-              <ThinkingLevelSelect
-                id="butler-thinking-level"
-                value={butlerLevel}
-                levels={thinkingLevelsFor(options, butler)}
-                onChange={setButlerLevel}
-              />
+              <LevelNote levels={butlerLevels} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="task-model">{t("models.taskModel")}</Label>
@@ -654,15 +688,21 @@ export function Models() {
                 value={task}
                 onChange={setTask}
                 options={options}
+                trailing={
+                  <ThinkingLevelSelect
+                    id="task-thinking-level"
+                    value={taskLevelValue}
+                    levels={taskLevels}
+                    onChange={setTaskLevel}
+                  />
+                }
               />
-              <ThinkingLevelSelect
-                id="task-thinking-level"
-                value={taskLevel}
-                levels={thinkingLevelsFor(options, task)}
-                onChange={setTaskLevel}
-              />
+              <LevelNote levels={taskLevels} />
             </div>
           </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {t("models.thinkingLevelHint")}
+          </p>
           <p className="mt-2 text-xs text-muted-foreground">
             {t("models.customHint")}
           </p>

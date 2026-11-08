@@ -36,7 +36,12 @@ import {
   modelUnavailableShortText,
   userTextForModelError,
 } from "../llm/model-errors";
-import { createModelsForEnv, modelReadiness, resolveModel } from "../llm/models";
+import {
+  createModelsForEnv,
+  defaultThinkingLevel,
+  modelReadiness,
+  resolveModel,
+} from "../llm/models";
 import { PI_PROGRESS } from "../llm/pi-settings";
 import type {
   ActionEvent,
@@ -404,10 +409,7 @@ export class TaskDO extends Agent<Env> {
 
     // Model selection happens in `start` once the spec is available. Keeping
     // the constructor config-free lets alarms and control RPCs run without a
-    // readable DESKWAND_CONFIG. The thinking level is a role setting rather
-    // than a per-task one, so the getter below is safe to read here; it runs
-    // when pi opens the session, not in the constructor.
-    const task = this;
+    // readable DESKWAND_CONFIG.
     this.harness = new PiHarness({
       harness: async ({ storage, context, onWake }) => {
         const harness = await Harness.open(
@@ -429,16 +431,6 @@ export class TaskDO extends Agent<Env> {
         );
         dropPiSecondaryIndexes(this.db);
         return harness;
-      },
-      defaults: {
-        get thinkingLevel() {
-          try {
-            return readRuntimeConfig(task.env).models.task.thinkingLevel;
-          } catch (error) {
-            if (error instanceof RuntimeConfigError) return undefined;
-            throw error;
-          }
-        },
       },
     });
 
@@ -586,7 +578,13 @@ export class TaskDO extends Agent<Env> {
     const role = readRuntimeConfig(this.env).models.task;
     const selected = effective.model ?? role;
     await this.harness.session().setModel(resolveModel(selected, this.env));
-    const level = selected.thinkingLevel ?? role.thinkingLevel;
+    // The role's own level stays the owner's stated intent; the model's default
+    // only fills in when the role has none.
+    const models = createModelsForEnv(this.env);
+    const level =
+      selected.thinkingLevel ??
+      role.thinkingLevel ??
+      defaultThinkingLevel(models.getModel(selected.provider, selected.id));
     if (level !== undefined) {
       const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
       if ((await conversation.agent(BACKGROUND_CONTEXT)).thinkingLevel !== level) {
@@ -605,12 +603,7 @@ export class TaskDO extends Agent<Env> {
 
     // Refuse before any tool setup or model work: a missing key or an
     // unavailable model is a permanent failure, not a retryable one.
-    const ref = effective.model ?? readRuntimeConfig(this.env).models.task;
-    const notReady = modelReadiness(
-      this.env,
-      createModelsForEnv(this.env),
-      ref,
-    );
+    const notReady = modelReadiness(this.env, models, selected);
     if (notReady) {
       await this.failWith(notReady, false);
       return;

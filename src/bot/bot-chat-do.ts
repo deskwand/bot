@@ -4,7 +4,11 @@ import { PiHarness, type PiModel } from "agents/harness/pi";
 import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { ownerLocale, t, type Locale } from "../i18n";
-import { createModelsForEnv, resolveModel } from "../llm/models";
+import {
+  createModelsForEnv,
+  defaultThinkingLevel,
+  resolveModel,
+} from "../llm/models";
 import { PI_PROGRESS } from "../llm/pi-settings";
 import type { InboundImage } from "../protocol";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
@@ -114,16 +118,6 @@ export class BotChatDO extends Agent<Env> {
             chat.env,
           );
           return model;
-        } catch (error) {
-          if (error instanceof RuntimeConfigError) return undefined;
-          throw error;
-        }
-      },
-      // Same role entry as the model: the Bot thinks as hard as the Butler
-      // unless the configuration says otherwise.
-      get thinkingLevel() {
-        try {
-          return readRuntimeConfig(chat.env).models.butler.thinkingLevel;
         } catch (error) {
           if (error instanceof RuntimeConfigError) return undefined;
           throw error;
@@ -286,6 +280,7 @@ export class BotChatDO extends Agent<Env> {
   private async ensureAgent(): Promise<void> {
     const ref = readRuntimeConfig(this.env).models.butler;
     const model = resolveModel(ref, this.env);
+    const models = createModelsForEnv(this.env);
     // Same guard as the Butler: read the persisted model and refuse a switch
     // that shrinks the context window too far.
     const conversation = await (await this.harness.pi()).root(
@@ -295,19 +290,20 @@ export class BotChatDO extends Agent<Env> {
     const active = agent.model;
     if (active?.provider !== model.provider || active.modelId !== model.id) {
       assertModelWindowSwitch(
-        createModelsForEnv(this.env),
+        models,
         active ? { provider: active.provider, id: active.modelId } : undefined,
         model,
         ownerLocale(this.env),
       );
       await this.harness.session().setModel(model);
     }
-    // Defaults only reach a new root; a level published later lands here.
-    if (ref.thinkingLevel !== undefined && ref.thinkingLevel !== agent.thinkingLevel) {
-      await conversation.configure(
-        { thinkingLevel: ref.thinkingLevel },
-        BACKGROUND_CONTEXT,
-      );
+    // Defaults only reach a new root; a level published later lands here, and
+    // an unconfigured role falls back to the middle of what the model offers.
+    const level =
+      ref.thinkingLevel ??
+      defaultThinkingLevel(models.getModel(ref.provider, ref.id));
+    if (level !== undefined && level !== agent.thinkingLevel) {
+      await conversation.configure({ thinkingLevel: level }, BACKGROUND_CONTEXT);
     }
   }
 

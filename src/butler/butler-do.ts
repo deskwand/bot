@@ -22,7 +22,11 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
-import { createModelsForEnv, resolveModel } from "../llm/models";
+import {
+  createModelsForEnv,
+  defaultThinkingLevel,
+  resolveModel,
+} from "../llm/models";
 import { PI_PROGRESS } from "../llm/pi-settings";
 import {
   encodeAction,
@@ -339,17 +343,6 @@ export class ButlerDO extends Agent<Env> {
             butler.env,
           );
           return model;
-        } catch (error) {
-          if (error instanceof RuntimeConfigError) return undefined;
-          throw error;
-        }
-      },
-      // The level rides on the role's model entry. A readable configuration
-      // that omits it returns undefined, which leaves pi's stored level (or
-      // its default, off) untouched.
-      get thinkingLevel() {
-        try {
-          return readRuntimeConfig(butler.env).models.butler.thinkingLevel;
         } catch (error) {
           if (error instanceof RuntimeConfigError) return undefined;
           throw error;
@@ -1983,6 +1976,7 @@ export class ButlerDO extends Agent<Env> {
   private async ensureAgent(): Promise<void> {
     const ref = readRuntimeConfig(this.env).models.butler;
     const model = resolveModel(ref, this.env);
+    const models = createModelsForEnv(this.env);
     // Defaults apply only to new roots. Read the persisted model and level on
     // reopen.
     const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
@@ -1990,19 +1984,20 @@ export class ButlerDO extends Agent<Env> {
     const active = agent.model;
     if (active?.provider !== model.provider || active.modelId !== model.id) {
       assertModelWindowSwitch(
-        createModelsForEnv(this.env),
+        models,
         active ? { provider: active.provider, id: active.modelId } : undefined,
         model,
         ownerLocale(this.env),
       );
       await this.harness.session().setModel(model);
     }
-    // A level published after this root was created only reaches it here.
-    if (ref.thinkingLevel !== undefined && ref.thinkingLevel !== agent.thinkingLevel) {
-      await conversation.configure(
-        { thinkingLevel: ref.thinkingLevel },
-        BACKGROUND_CONTEXT,
-      );
+    // A level published after this root was created only reaches it here; an
+    // unconfigured role falls back to the middle of what the model offers.
+    const level =
+      ref.thinkingLevel ??
+      defaultThinkingLevel(models.getModel(ref.provider, ref.id));
+    if (level !== undefined && level !== agent.thinkingLevel) {
+      await conversation.configure({ thinkingLevel: level }, BACKGROUND_CONTEXT);
     }
   }
 

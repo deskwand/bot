@@ -235,13 +235,15 @@ afterEach(() => {
 });
 
 describe("bot chat", () => {
-  it("hands the butler role's thinking level to pi", async () => {
-    setEnv(butlerConfig("high"));
+  it("thinks at the model's middle level when the role omits one", async () => {
+    install(fakeSelf(), fakeButler().butler);
+    setEnv(butlerConfig());
+    setModelOverride(scriptedModel([{ text: "好" }]));
+    const stub = chatStub("thinking-default");
 
-    const defaults = await runInDurableObject(chatStub("thinking-level"), (instance) =>
-      instance.harness.agentDefaults(),
-    );
-    expect(defaults.thinkingLevel).toBe("high");
+    // opencode-go/deepseek-v4.1-flash offers low, high, max.
+    await chat(stub, "b1", "你好", "e-level-default");
+    expect(await storedThinkingLevel(stub)).toBe("high");
   });
 
   it("applies a level published after the chat already exists", async () => {
@@ -257,6 +259,21 @@ describe("bot chat", () => {
     // applied to the conversation itself on the next turn.
     setEnv(butlerConfig("high"));
     await chat(stub, "b1", "再来", "e-level-second");
+    expect(await storedThinkingLevel(stub)).toBe("high");
+  });
+
+  it("falls back to the model's default after the level is removed", async () => {
+    install(fakeSelf(), fakeButler().butler);
+    setEnv(butlerConfig("low"));
+    setModelOverride(scriptedModel([{ text: "好" }, { text: "好" }]));
+    const stub = chatStub("thinking-removed");
+
+    await chat(stub, "b1", "你好", "e-removed-first");
+    expect(await storedThinkingLevel(stub)).toBe("low");
+
+    setEnv(butlerConfig());
+    await chat(stub, "b1", "再来", "e-removed-second");
+    // opencode-go/deepseek-v4.1-flash offers low, high, max.
     expect(await storedThinkingLevel(stub)).toBe("high");
   });
 

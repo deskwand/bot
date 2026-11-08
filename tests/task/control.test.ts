@@ -1,3 +1,4 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { PiHarness } from "agents/harness/pi";
 import { Type } from "@earendil-works/pi-ai";
 import type { ReportInfo, ToolRegistration } from "@earendil-works/pi-durable";
@@ -243,6 +244,21 @@ describe("TaskDO control", () => {
       },
       { timeout: 10_000 },
     );
+  });
+
+  it("starts the session at the task role's default thinking level", async () => {
+    setModelOverride(scriptedModel([{ text: "done" }]));
+    const taskId = "t-thinking";
+    const stub = taskStub(taskId);
+
+    await stub.start(spec(taskId));
+
+    // opencode-go/deepseek-v4.1-flash offers low, high, max.
+    const level = await runInDurableObject(stub, async (instance) => {
+      const conversation = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      return (await conversation.agent(BACKGROUND_CONTEXT)).thinkingLevel;
+    });
+    expect(level).toBe("high");
   });
 
   it("refuses to retry a failure that is not retryable", async () => {
