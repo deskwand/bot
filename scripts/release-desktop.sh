@@ -405,15 +405,25 @@ for target in "${targets[@]}"; do
 done
 
 echo "==> 6/8 公网核验"
+# 核验要下载公网文件，和 check-remote 一样会偶发 fetch failed（本机实测）。核验只读，
+# 失败重试 3 次；内容不符这类确定性错误仍会连续失败并中止。
 for target in "${targets[@]}"; do
   t="$(target_of "$target")"
+  verify_args=("$t" "$version" "$(build_dir_of "$target")")
   if [ "$t" = "windows-amd64" ] && [ "$platform" = "both" ]; then
-    node --experimental-strip-types "$root/scripts/desktop-release.ts" verify \
-      "$t" "$version" "$(build_dir_of "$target")" darwin-arm64
-  else
-    node --experimental-strip-types "$root/scripts/desktop-release.ts" verify \
-      "$t" "$version" "$(build_dir_of "$target")"
+    verify_args+=("darwin-arm64")
   fi
+  attempt=1
+  until node --experimental-strip-types "$root/scripts/desktop-release.ts" verify \
+    "${verify_args[@]}"; do
+    if [ "$attempt" -ge 3 ]; then
+      echo "核验 ${t} 连续失败 3 次，停止发布" >&2
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    echo "重试 ${t} 的公网核验（第 ${attempt} 次）" >&2
+    sleep 2
+  done
 done
 
 echo "==> 7/8 完成"
