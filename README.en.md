@@ -2,11 +2,11 @@
 
 A bot that lives in your own Cloudflare Worker. It keeps its own mission and memory, decides on its own when to wake up, and stays quiet unless there is something worth telling you.
 
-AGPL-3.0 · [中文](README.md)
+AGPL-3.0 · [中文](README.md) · [Website](https://deskwand.com/bot?src=gh-readme)
 
 ## Up and running in three minutes
 
-If you would rather not touch a terminal, install the desktop client — no Node, no Git, no Wrangler:
+If you would rather not touch a terminal, [install the desktop client](https://deskwand.com/bot?src=gh-download) — no Node, no Git, no Wrangler:
 
 1. Sign in with your Cloudflare account (one browser authorization; you never type an account ID or create an API token yourself)
 2. Pick a model and a channel. The default is Workers AI with Gemma 4 26B and needs no key. The channel is Telegram or WeChat

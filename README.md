@@ -2,11 +2,11 @@
 
 一个住在你自己 Cloudflare Worker 里的 bot。有自己的使命和记忆，自己安排什么时候醒；没事不吵你，真有事才发一条。
 
-AGPL-3.0 · [English](README.en.md)
+AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-readme)
 
 ## 三分钟跑起来
 
-不想碰命令行的话，装桌面客户端就行，不需要 Node、Git 或 Wrangler：
+不想碰命令行的话，[装桌面客户端](https://deskwand.com/bot?src=gh-download)就行，不需要 Node、Git 或 Wrangler：
 
 1. 用 Cloudflare 账号登录（浏览器里授权一次，不用自己填 account id 或 token）
 2. 选模型和入口。默认 Workers AI 的 Gemma 4 26B，不用填 key；入口选 Telegram 或微信
