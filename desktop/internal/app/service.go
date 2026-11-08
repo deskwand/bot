@@ -1523,7 +1523,12 @@ func (s *Service) ModelCatalog() (ModelCatalogDTO, error) {
 		}
 		models := make([]ModelEntryDTO, 0, len(provider.Models))
 		for _, model := range provider.Models {
-			models = append(models, ModelEntryDTO{ID: model.ID, Name: model.Name, Input: model.Input})
+			models = append(models, ModelEntryDTO{
+				ID:             model.ID,
+				Name:           model.Name,
+				Input:          model.Input,
+				ThinkingLevels: model.ThinkingLevels,
+			})
 		}
 		providers = append(providers, ModelProviderDTO{
 			ID:      provider.ID,
@@ -1776,7 +1781,7 @@ func summarizeModel(model *ModelDTO) *ModelDTO {
 	if model == nil || model.Provider == "" || model.ID == "" {
 		return nil
 	}
-	return &ModelDTO{Provider: model.Provider, ID: model.ID}
+	return &ModelDTO{Provider: model.Provider, ID: model.ID, ThinkingLevel: model.ThinkingLevel}
 }
 
 func modelRef(model *ModelDTO) *ModelRefInput {

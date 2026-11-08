@@ -631,5 +631,49 @@
       "mcpServers": []
     },
     "valid": false
+  },
+  {
+    "name": "role model with a thinking level",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash",
+          "thinkingLevel": "high"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": true
+  },
+  {
+    "name": "role model with an unknown thinking level",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash",
+          "thinkingLevel": "turbo"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": []
+    },
+    "valid": false
   }
 ]

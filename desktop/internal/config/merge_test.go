@@ -223,6 +223,70 @@ func TestMergeReplacesModelRawJSON(t *testing.T) {
 	}
 }
 
+func TestMergeKeepsModelFieldsTheClientOmits(t *testing.T) {
+	base := baseSnapshot(t)
+	// A deployment whose butler already carries a level and a provider field
+	// this client does not know about.
+	base.ConfigJSON = bytes.ReplaceAll(
+		[]byte(baseConfigDocument),
+		[]byte(`"provider":"opencode-go","id":"deepseek-v4.1-flash"`),
+		[]byte(`"provider":"opencode-go","id":"deepseek-v4.1-flash","thinkingLevel":"high","baseURL":"https://proxy.example.com/v1"`),
+	)
+	levelAfter := func(t *testing.T, patch string) (string, string) {
+		t.Helper()
+		plan, err := Merge(base, domain.Change{
+			BaseFingerprint: base.Fingerprint,
+			Patch:           domain.EditablePatch{ButlerModel: rawModel(t, patch)},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document struct {
+			Models struct {
+				Butler struct {
+					ID            string `json:"id"`
+					ThinkingLevel string `json:"thinkingLevel"`
+					BaseURL       string `json:"baseURL"`
+				} `json:"butler"`
+			} `json:"models"`
+		}
+		if err := json.Unmarshal(plan.ConfigJSON, &document); err != nil {
+			t.Fatal(err)
+		}
+		if document.Models.Butler.BaseURL != "https://proxy.example.com/v1" {
+			t.Fatalf("provider field was dropped: %#v", document.Models.Butler)
+		}
+		return document.Models.Butler.ID, document.Models.Butler.ThinkingLevel
+	}
+
+	t.Run("a client that does not send the level keeps it", func(t *testing.T) {
+		id, level := levelAfter(t, `{"provider":"opencode-go","id":"deepseek-v4.1-flash"}`)
+		if level != "high" {
+			t.Fatalf("level = %q, want high", level)
+		}
+		if id != "deepseek-v4.1-flash" {
+			t.Fatalf("id = %q", id)
+		}
+	})
+
+	t.Run("a client that sends the level replaces it", func(t *testing.T) {
+		_, level := levelAfter(t, `{"provider":"opencode-go","id":"deepseek-v4.1-flash","thinkingLevel":"low"}`)
+		if level != "low" {
+			t.Fatalf("level = %q, want low", level)
+		}
+	})
+
+	t.Run("changing the model keeps the level", func(t *testing.T) {
+		id, level := levelAfter(t, `{"provider":"opencode-go","id":"deepseek-v4-pro"}`)
+		if id != "deepseek-v4-pro" {
+			t.Fatalf("id = %q, want the patched model", id)
+		}
+		if level != "high" {
+			t.Fatalf("level = %q, want high", level)
+		}
+	})
+}
+
 func TestMergeWritesCustomProviders(t *testing.T) {
 	base := baseSnapshot(t)
 	providers := rawModel(t, `[{"id":"my-proxy","name":"My Proxy","api":"openai-completions","baseUrl":"https://proxy.example.com/v1","models":[{"id":"gpt-5.6"}]}]`)

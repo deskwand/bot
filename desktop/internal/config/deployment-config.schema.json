@@ -89,6 +89,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "thinkingLevel": {
+          "type": "string",
+          "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+          "description": "Reasoning level this role's model requests use. Absent means the runtime default (off)."
         }
       },
       "additionalProperties": true

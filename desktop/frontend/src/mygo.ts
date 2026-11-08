@@ -319,11 +319,13 @@ export interface ModelCatalogDTO {
 
 /**
  * ModelDTO is the provider and model id shown in the UI. Provider-specific
- * settings in the stored JSON are preserved but not exposed.
+ * settings in the stored JSON are preserved but not exposed, except the
+ * thinking level, which the UI edits next to the model.
  */
 export interface ModelDTO {
   provider: string;
   id: string;
+  thinkingLevel?: string;
 }
 
 /** ModelEntryDTO is one model listed by a built-in provider. */
@@ -331,6 +333,8 @@ export interface ModelEntryDTO {
   id: string;
   name: string;
   input?: string[];
+  /** ThinkingLevels is empty when the model has nothing to choose. */
+  thinkingLevels?: string[];
 }
 
 /** ModelProviderDTO is one built-in provider from the shared catalog. */

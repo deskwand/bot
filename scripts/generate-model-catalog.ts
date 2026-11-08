@@ -18,6 +18,7 @@ import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CLOUDFLARE_WORKERS_AI_MODELS } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai.models";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 
 export type CatalogModel = {
   id: string;
@@ -26,6 +27,7 @@ export type CatalogModel = {
   baseUrl: string;
   input?: ("text" | "image")[];
   contextWindow: number;
+  thinkingLevels?: string[];
 };
 
 export type CatalogProvider = {
@@ -47,6 +49,20 @@ type PiModel = {
   baseUrl: string;
   contextWindow: number;
 };
+
+/**
+ * The levels the desktop may offer for this model. pi owns the rule, so ask it
+ * rather than re-deriving anything here; a model with nothing to choose stays
+ * without the field.
+ */
+function thinkingLevels(model: PiModel): { thinkingLevels?: string[] } {
+  // The catalog type is a structural subset of pi's Model; pi still decides
+  // which levels exist.
+  const levels = getSupportedThinkingLevels(
+    model as unknown as Parameters<typeof getSupportedThinkingLevels>[0],
+  );
+  return levels.length > 1 ? { thinkingLevels: levels } : {};
+}
 
 type PiProvider = {
   id: string;
@@ -86,6 +102,7 @@ function workersAiProvider(): CatalogProvider {
       baseUrl: model.baseUrl,
       input: model.input,
       contextWindow: model.contextWindow,
+      ...thinkingLevels(model),
     }))
     .sort((left, right) => left.id.localeCompare(right.id, "en"));
   return {
@@ -163,6 +180,7 @@ export async function buildCatalog(): Promise<Catalog> {
         api: model.api,
         baseUrl: model.baseUrl,
         contextWindow: model.contextWindow,
+        ...thinkingLevels(model),
       }))
       .sort((left, right) => left.id.localeCompare(right.id, "en"));
     if (models.length === 0) continue;

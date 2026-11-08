@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CATALOG_PATH,
@@ -47,6 +48,35 @@ describe("generated model catalog", () => {
 
   it("does not import a factory for keyless providers", async () => {
     expect(renderCatalogTs(await buildCatalog())).not.toContain("workers-ai");
+  });
+
+  it("states each model's thinking levels the way pi does", async () => {
+    const catalog = await buildCatalog();
+    const deepseek = catalog.providers
+      .flatMap((provider) => provider.models)
+      .find((model) => model.id === "deepseek-flash");
+    // pi excludes the levels the model maps to null: minimal, medium, xhigh.
+    expect(deepseek?.thinkingLevels).toEqual(["off", "low", "high", "max"]);
+    // A model with nothing to choose carries no field at all.
+    expect(
+      catalog.providers
+        .flatMap((provider) => provider.models)
+        .some((model) => model.thinkingLevels === undefined),
+    ).toBe(true);
+  });
+
+  it("uses only the thinking levels the deployment schema allows", async () => {
+    const catalog = await buildCatalog();
+    const schema = JSON.parse(
+      readFileSync(resolve("contracts/deployment-config.schema.json"), "utf8"),
+    ) as {
+      $defs: { ModelRef: { properties: { thinkingLevel: { enum: string[] } } } };
+    };
+    const allowed = new Set(schema.$defs.ModelRef.properties.thinkingLevel.enum);
+    const used = catalog.providers
+      .flatMap((provider) => provider.models)
+      .flatMap((model) => model.thinkingLevels ?? []);
+    expect(used.filter((level) => !allowed.has(level))).toEqual([]);
   });
 
   it("excludes non-api-key providers", async () => {

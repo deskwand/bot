@@ -1,5 +1,6 @@
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createInlineCodemodeSandbox } from "@earendil-works/pi-codemode/cloudflare";
 import { httpRequestTool, safeRequestUrl } from "../tools/http-request";
 import { getArtifactTool, safeArtifactRef } from "../tools/get-artifact";
@@ -403,7 +404,10 @@ export class TaskDO extends Agent<Env> {
 
     // Model selection happens in `start` once the spec is available. Keeping
     // the constructor config-free lets alarms and control RPCs run without a
-    // readable DESKWAND_CONFIG.
+    // readable DESKWAND_CONFIG. The thinking level is a role setting rather
+    // than a per-task one, so the getter below is safe to read here; it runs
+    // when pi opens the session, not in the constructor.
+    const task = this;
     this.harness = new PiHarness({
       harness: async ({ storage, context, onWake }) => {
         const harness = await Harness.open(
@@ -425,6 +429,16 @@ export class TaskDO extends Agent<Env> {
         );
         dropPiSecondaryIndexes(this.db);
         return harness;
+      },
+      defaults: {
+        get thinkingLevel() {
+          try {
+            return readRuntimeConfig(task.env).models.task.thinkingLevel;
+          } catch (error) {
+            if (error instanceof RuntimeConfigError) return undefined;
+            throw error;
+          }
+        },
       },
     });
 
@@ -566,15 +580,19 @@ export class TaskDO extends Agent<Env> {
     const outbox = this.outboxFor(effective.taskId);
 
     // The harness defaults are built in the constructor, before a fresh DO
-    // knows its spec, so the model is chosen per session here.
-    await this.harness
-      .session()
-      .setModel(
-        resolveModel(
-          effective.model ?? readRuntimeConfig(this.env).models.task,
-          this.env,
-        ),
-      );
+    // knows its spec, so the model is chosen per session here. A resumed task
+    // already has a root the defaults never reached, but it also already has
+    // the level applied below, since only the first start gets here.
+    const role = readRuntimeConfig(this.env).models.task;
+    const selected = effective.model ?? role;
+    await this.harness.session().setModel(resolveModel(selected, this.env));
+    const level = selected.thinkingLevel ?? role.thinkingLevel;
+    if (level !== undefined) {
+      const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
+      if ((await conversation.agent(BACKGROUND_CONTEXT)).thinkingLevel !== level) {
+        await conversation.configure({ thinkingLevel: level }, BACKGROUND_CONTEXT);
+      }
+    }
 
     // Durable before submit and only once: retries and very fast runs must not
     // let `completed` get a lower seq than `started`.

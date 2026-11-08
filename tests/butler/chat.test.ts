@@ -80,6 +80,33 @@ function restoreEnv(): void {
   savedEnv.clear();
 }
 
+/** A readable configuration whose butler role carries `thinkingLevel`. */
+function configureButler(thinkingLevel?: string): void {
+  setEnv({
+    DESKWAND_CONFIG: {
+      schemaVersion: 1,
+      owner: { telegramUserIds: [100000001] },
+      models: {
+        butler: {
+          provider: "opencode-go",
+          id: "deepseek-v4.1-flash",
+          ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+        },
+        task: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+      },
+      mcpServers: [],
+    },
+  });
+}
+
+async function storedThinkingLevel(stub: ReturnType<typeof butler>): Promise<string> {
+  return runInDurableObject(stub, async (instance) => {
+    const harness = (instance as unknown as { harness: PiHarness }).harness;
+    const conversation = await (await harness.pi()).root(BACKGROUND_CONTEXT);
+    return (await conversation.agent(BACKGROUND_CONTEXT)).thinkingLevel;
+  });
+}
+
 function message(evt: {
   text: string | null;
   eventId: string;
@@ -368,6 +395,39 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([{ chatId: "42", text: "出错了，稍后再试" }]);
+  });
+
+  it("applies the butler role's thinking level to the conversation", async () => {
+    configureButler("high");
+    setChannelOverride("telegram", fakeChannel().adapter);
+    setModelOverride(scriptedModel([{ text: "好" }]));
+    const stub = butler("thinking-level");
+    await stub.handleMessage(message({ text: "你好", eventId: "tg:thinking" }));
+    expect(await storedThinkingLevel(stub)).toBe("high");
+  });
+
+  it("leaves the level at the default when the role omits it", async () => {
+    configureButler();
+    setChannelOverride("telegram", fakeChannel().adapter);
+    setModelOverride(scriptedModel([{ text: "好" }]));
+    const stub = butler("thinking-default");
+    await stub.handleMessage(message({ text: "你好", eventId: "tg:thinking-default" }));
+    expect(await storedThinkingLevel(stub)).toBe("off");
+  });
+
+  it("applies a level published after the conversation already exists", async () => {
+    configureButler("low");
+    setChannelOverride("telegram", fakeChannel().adapter);
+    setModelOverride(scriptedModel([{ text: "好" }, { text: "好" }]));
+    const stub = butler("thinking-reopen");
+    await stub.handleMessage(message({ text: "你好", eventId: "tg:reopen:first" }));
+    expect(await storedThinkingLevel(stub)).toBe("low");
+
+    // Defaults never reach a root that already exists, so the change has to be
+    // applied to the conversation itself on the next message.
+    configureButler("high");
+    await stub.handleMessage(message({ text: "再来", eventId: "tg:reopen:second" }));
+    expect(await storedThinkingLevel(stub)).toBe("high");
   });
 
   it("tells the owner which model key is missing before submitting", async () => {

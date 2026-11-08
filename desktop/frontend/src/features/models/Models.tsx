@@ -42,17 +42,20 @@ import type {
   CustomModelDTO,
   CustomProviderDTO,
   ModelCatalogDTO,
+  ModelDTO,
   ResultDTO,
   SecretEditDTO,
   StatusItemDTO,
 } from "@/services/types";
 import {
   DEFAULT_MODEL,
+  clampThinkingLevel,
   modelKey,
   parseModelKey,
   providerNeedsKey,
   providerOptions,
   secretNameFor,
+  thinkingLevelsFor,
 } from "./catalog";
 import { ModelSelect } from "./ModelSelect";
 
@@ -73,6 +76,50 @@ function parseModelIDs(value: string): string[] {
     .split(/[\s,，]+/)
     .map((part) => part.trim())
     .filter(Boolean);
+}
+
+/** The role model patch, carrying the level the select currently shows. */
+function withThinkingLevel(
+  model: ModelDTO | null,
+  thinkingLevel: string,
+): ModelDTO | undefined {
+  return model ? { ...model, thinkingLevel } : undefined;
+}
+
+/** One role's thinking level; only the levels its model supports are offered. */
+function ThinkingLevelSelect({
+  id,
+  value,
+  levels,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  levels: string[];
+  onChange: (value: string) => void;
+}) {
+  const t = useT();
+  const fixed = levels.length <= 1;
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={id}>{t("models.thinkingLevelLabel")}</Label>
+      <Select value={value} onValueChange={onChange} disabled={fixed}>
+        <SelectTrigger id={id} aria-label={t("models.thinkingLevelLabel")} data-testid={id}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {levels.map((level) => (
+            <SelectItem key={level} value={level}>
+              {t(`models.thinkingLevel.${level}` as MessageKey)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        {fixed ? t("models.thinkingLevelFixed") : t("models.thinkingLevelHint")}
+      </p>
+    </div>
+  );
 }
 
 function customDraftError(
@@ -128,6 +175,8 @@ export function Models() {
   const [customProviders, setCustomProviders] = useState<CustomProviderDTO[]>([]);
   const [butler, setButler] = useState(modelKey(DEFAULT_MODEL));
   const [task, setTask] = useState(modelKey(DEFAULT_MODEL));
+  const [butlerLevel, setButlerLevel] = useState("off");
+  const [taskLevel, setTaskLevel] = useState("off");
   const [keyDrafts, setKeyDrafts] = useState<
     Record<string, { value: string; clear: boolean }>
   >({});
@@ -155,6 +204,8 @@ export function Models() {
     setCustomProviders(next.customProviders ?? []);
     setButler(modelKey(next.butlerModel) || modelKey(DEFAULT_MODEL));
     setTask(modelKey(next.taskModel) || modelKey(DEFAULT_MODEL));
+    setButlerLevel(next.butlerModel?.thinkingLevel ?? "off");
+    setTaskLevel(next.taskModel?.thinkingLevel ?? "off");
     setKeyDrafts({});
   }, []);
 
@@ -255,10 +306,19 @@ export function Models() {
       keysDirty ||
       modelKey(baseline.butlerModel) !== butler ||
       modelKey(baseline.taskModel) !== task ||
+      (baseline.butlerModel?.thinkingLevel ?? "off") !== butlerLevel ||
+      (baseline.taskModel?.thinkingLevel ?? "off") !== taskLevel ||
       JSON.stringify(baseline.customProviders ?? []) !== JSON.stringify(customProviders)
     );
-  }, [baseline, butler, customProviders, keyDrafts, keyProviders, task]);
+  }, [baseline, butler, butlerLevel, customProviders, keyDrafts, keyProviders, task, taskLevel]);
   useDirty(dirty);
+
+  // A stored level the model does not offer (hand-edited config, older build)
+  // is clamped in the form, so the select and the published value agree.
+  useEffect(() => {
+    setButlerLevel((level) => clampThinkingLevel(level, thinkingLevelsFor(options, butler)));
+    setTaskLevel((level) => clampThinkingLevel(level, thinkingLevelsFor(options, task)));
+  }, [butler, options, task]);
 
   useEffect(() => {
     if (awaitingFreshConfig) return;
@@ -320,8 +380,8 @@ export function Models() {
       JSON.stringify(baseline?.customProviders ?? []) !== JSON.stringify(customProviders);
     return {
       baseFingerprint: baseline?.fingerprint,
-      butlerModel: parseModelKey(butler) ?? undefined,
-      taskModel: parseModelKey(task) ?? undefined,
+      butlerModel: withThinkingLevel(parseModelKey(butler), butlerLevel),
+      taskModel: withThinkingLevel(parseModelKey(task), taskLevel),
       customProviders: customChanged ? customProviders : undefined,
       secrets,
     };
@@ -572,11 +632,35 @@ export function Models() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="butler-model">{t("models.butlerModel")}</Label>
-              <ModelSelect id="butler-model" label={t("models.butlerModel")} value={butler} onChange={setButler} options={options} />
+              <ModelSelect
+                id="butler-model"
+                label={t("models.butlerModel")}
+                value={butler}
+                onChange={setButler}
+                options={options}
+              />
+              <ThinkingLevelSelect
+                id="butler-thinking-level"
+                value={butlerLevel}
+                levels={thinkingLevelsFor(options, butler)}
+                onChange={setButlerLevel}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="task-model">{t("models.taskModel")}</Label>
-              <ModelSelect id="task-model" label={t("models.taskModel")} value={task} onChange={setTask} options={options} />
+              <ModelSelect
+                id="task-model"
+                label={t("models.taskModel")}
+                value={task}
+                onChange={setTask}
+                options={options}
+              />
+              <ThinkingLevelSelect
+                id="task-thinking-level"
+                value={taskLevel}
+                levels={thinkingLevelsFor(options, task)}
+                onChange={setTaskLevel}
+              />
             </div>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">

@@ -30,7 +30,7 @@ async function captureError(run: () => Promise<unknown>): Promise<CapturedError>
   };
 }
 
-type ButlerModelPath = { ensureModel(): Promise<void> };
+type ButlerAgentPath = { ensureAgent(): Promise<void> };
 type TaskMcpPath = { ensureMcpTools(): Promise<void> };
 
 describe("Durable Objects without DESKWAND_CONFIG", () => {
@@ -42,7 +42,7 @@ describe("Durable Objects without DESKWAND_CONFIG", () => {
       return {
         schedules: await instance.listSchedules(),
         model: await captureError(() =>
-          (instance as unknown as ButlerModelPath).ensureModel(),
+          (instance as unknown as ButlerAgentPath).ensureAgent(),
         ),
       };
     });

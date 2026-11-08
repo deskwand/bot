@@ -318,6 +318,17 @@ export class ButlerDO extends Agent<Env> {
           throw error;
         }
       },
+      // The level rides on the role's model entry. A readable configuration
+      // that omits it returns undefined, which leaves pi's stored level (or
+      // its default, off) untouched.
+      get thinkingLevel() {
+        try {
+          return readRuntimeConfig(butler.env).models.butler.thinkingLevel;
+        } catch (error) {
+          if (error instanceof RuntimeConfigError) return undefined;
+          throw error;
+        }
+      },
     };
 
     this.harness = new PiHarness({
@@ -1319,7 +1330,7 @@ export class ButlerDO extends Agent<Env> {
     let text = "";
     try {
       // Reports observe the same model-switch guard as incoming messages.
-      await this.ensureModel();
+      await this.ensureAgent();
       const receipt = await this.harness.submit(lines.join("\n"), {
         operationId,
         entry: {
@@ -1590,7 +1601,7 @@ export class ButlerDO extends Agent<Env> {
 
     // Tests replace the model per message; in production this is a no-op after
     // the first message of an object instance.
-    await this.ensureModel();
+    await this.ensureAgent();
 
     // Processing starts at `submit`; a stale input never reaches it.
     if (!(await this.admissionHolds(evt))) return;
@@ -1638,22 +1649,30 @@ export class ButlerDO extends Agent<Env> {
     return false;
   }
 
-  private async ensureModel(): Promise<void> {
-    const model = resolveModel(
-      readRuntimeConfig(this.env).models.butler,
-      this.env,
-    );
-    // Defaults apply only to new roots. Read the persisted model on reopen.
+  private async ensureAgent(): Promise<void> {
+    const ref = readRuntimeConfig(this.env).models.butler;
+    const model = resolveModel(ref, this.env);
+    // Defaults apply only to new roots. Read the persisted model and level on
+    // reopen.
     const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
-    const active = (await conversation.agent(BACKGROUND_CONTEXT)).model;
-    if (active?.provider === model.provider && active.modelId === model.id) return;
-    assertModelWindowSwitch(
-      createModelsForEnv(this.env),
-      active ? { provider: active.provider, id: active.modelId } : undefined,
-      model,
-      ownerLocale(this.env),
-    );
-    await this.harness.session().setModel(model);
+    const agent = await conversation.agent(BACKGROUND_CONTEXT);
+    const active = agent.model;
+    if (active?.provider !== model.provider || active.modelId !== model.id) {
+      assertModelWindowSwitch(
+        createModelsForEnv(this.env),
+        active ? { provider: active.provider, id: active.modelId } : undefined,
+        model,
+        ownerLocale(this.env),
+      );
+      await this.harness.session().setModel(model);
+    }
+    // A level published after this root was created only reaches it here.
+    if (ref.thinkingLevel !== undefined && ref.thinkingLevel !== agent.thinkingLevel) {
+      await conversation.configure(
+        { thinkingLevel: ref.thinkingLevel },
+        BACKGROUND_CONTEXT,
+      );
+    }
   }
 
   private async sendErrorReply(text: string): Promise<void> {

@@ -27,6 +27,9 @@ type Model struct {
 	BaseURL       string   `json:"baseUrl"`
 	Input         []string `json:"input,omitempty"`
 	ContextWindow int      `json:"contextWindow"`
+	// ThinkingLevels is what pi offers for this model; absent means there is
+	// nothing to choose (the model does not reason).
+	ThinkingLevels []string `json:"thinkingLevels,omitempty"`
 }
 
 // Provider is one built-in provider from the shared catalog.

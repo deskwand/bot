@@ -208,16 +208,33 @@ func applyPatch(document map[string]any, patch domain.EditablePatch) error {
 		if err != nil {
 			return err
 		}
-		models["butler"] = value
+		models["butler"] = mergeRoleModel(models["butler"], value)
 	}
 	if patch.TaskModel != nil {
 		value, err := decodeModel(*patch.TaskModel)
 		if err != nil {
 			return err
 		}
-		models["task"] = value
+		models["task"] = mergeRoleModel(models["task"], value)
 	}
 	return nil
+}
+
+// mergeRoleModel keeps stored fields the client did not send. A client that
+// predates a field (thinkingLevel) sends only the fields it knows about;
+// replacing the object wholesale would erase the rest. Everything the patch
+// does carry wins. Note the consequence: an absent field means "keep", so a
+// role model field cannot be deleted through a patch at all.
+func mergeRoleModel(existing any, incoming map[string]any) map[string]any {
+	previous, ok := existing.(map[string]any)
+	if !ok {
+		return incoming
+	}
+	merged := copyObject(previous)
+	for field, value := range incoming {
+		merged[field] = value
+	}
+	return merged
 }
 
 func objectAt(document map[string]any, key string) (map[string]any, error) {
@@ -237,7 +254,7 @@ func objectAt(document map[string]any, key string) (map[string]any, error) {
 	return object, nil
 }
 
-func decodeModel(raw json.RawMessage) (any, error) {
+func decodeModel(raw json.RawMessage) (map[string]any, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return nil, domain.Error{
@@ -252,13 +269,14 @@ func decodeModel(raw json.RawMessage) (any, error) {
 			Message: "a model patch is not valid JSON",
 		}
 	}
-	if _, ok := value.(map[string]any); !ok {
+	object, ok := value.(map[string]any)
+	if !ok {
 		return nil, domain.Error{
 			Code:    domain.UNSUPPORTED_SCHEMA,
 			Message: "a model patch must be a JSON object",
 		}
 	}
-	return value, nil
+	return object, nil
 }
 
 func decodeMcpServers(raw json.RawMessage) ([]any, error) {

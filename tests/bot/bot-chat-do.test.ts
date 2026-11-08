@@ -1,4 +1,5 @@
 import type { TranscriptContext } from "@earendil-works/pi-ai";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -43,6 +44,25 @@ function restoreEnv(): void {
 
 function chatStub(name: string) {
   return env.BOT_CHAT.get(env.BOT_CHAT.idFromName(name));
+}
+
+/** A readable configuration whose butler role carries `thinkingLevel`. */
+function butlerConfig(thinkingLevel?: string): Record<string, unknown> {
+  return {
+    DESKWAND_CONFIG: {
+      schemaVersion: 1,
+      owner: { telegramUserIds: [100000001] },
+      models: {
+        butler: {
+          provider: "opencode-go",
+          id: "deepseek-v4.1-flash",
+          ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+        },
+        task: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+      },
+      mcpServers: [],
+    },
+  };
 }
 
 type ChatStub = ReturnType<typeof chatStub>;
@@ -200,6 +220,14 @@ function chat(
   return stub.chat({ botId, text, eventId });
 }
 
+/** The level pi actually holds for this chat's root conversation. */
+async function storedThinkingLevel(stub: ChatStub): Promise<string> {
+  return runInDurableObject(stub, async (instance) => {
+    const conversation = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+    return (await conversation.agent(BACKGROUND_CONTEXT)).thinkingLevel;
+  });
+}
+
 afterEach(() => {
   setBotChatOverrides({ butler: null, bot: null });
   setModelOverride(null);
@@ -207,6 +235,31 @@ afterEach(() => {
 });
 
 describe("bot chat", () => {
+  it("hands the butler role's thinking level to pi", async () => {
+    setEnv(butlerConfig("high"));
+
+    const defaults = await runInDurableObject(chatStub("thinking-level"), (instance) =>
+      instance.harness.agentDefaults(),
+    );
+    expect(defaults.thinkingLevel).toBe("high");
+  });
+
+  it("applies a level published after the chat already exists", async () => {
+    install(fakeSelf(), fakeButler().butler);
+    setEnv(butlerConfig("low"));
+    setModelOverride(scriptedModel([{ text: "好" }, { text: "好" }]));
+    const stub = chatStub("thinking-reopen");
+
+    await chat(stub, "b1", "你好", "e-level-first");
+    expect(await storedThinkingLevel(stub)).toBe("low");
+
+    // Defaults never reach a root that already exists, so the change has to be
+    // applied to the conversation itself on the next turn.
+    setEnv(butlerConfig("high"));
+    await chat(stub, "b1", "再来", "e-level-second");
+    expect(await storedThinkingLevel(stub)).toBe("high");
+  });
+
   it("destroy clears the transcript", async () => {
     const bot = fakeSelf();
     const butler = fakeButler();

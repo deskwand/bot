@@ -119,6 +119,16 @@ export class BotChatDO extends Agent<Env> {
           throw error;
         }
       },
+      // Same role entry as the model: the Bot thinks as hard as the Butler
+      // unless the configuration says otherwise.
+      get thinkingLevel() {
+        try {
+          return readRuntimeConfig(chat.env).models.butler.thinkingLevel;
+        } catch (error) {
+          if (error instanceof RuntimeConfigError) return undefined;
+          throw error;
+        }
+      },
     };
 
     this.harness = new PiHarness({
@@ -171,7 +181,7 @@ export class BotChatDO extends Agent<Env> {
       }
 
       try {
-        await this.ensureModel();
+        await this.ensureAgent();
       } catch (error) {
         if (!(error instanceof ModelSwitchError)) throw error;
         await this.sendNotice(input.botId, error.message);
@@ -273,27 +283,32 @@ export class BotChatDO extends Agent<Env> {
     if (!sent) console.warn(`bot chat ${botId}: notice not sent, dropping`);
   }
 
-  private async ensureModel(): Promise<void> {
-    const model = resolveModel(
-      readRuntimeConfig(this.env).models.butler,
-      this.env,
-    );
+  private async ensureAgent(): Promise<void> {
+    const ref = readRuntimeConfig(this.env).models.butler;
+    const model = resolveModel(ref, this.env);
     // Same guard as the Butler: read the persisted model and refuse a switch
     // that shrinks the context window too far.
     const conversation = await (await this.harness.pi()).root(
       BACKGROUND_CONTEXT,
     );
-    const active = (await conversation.agent(BACKGROUND_CONTEXT)).model;
-    if (active?.provider === model.provider && active.modelId === model.id) {
-      return;
+    const agent = await conversation.agent(BACKGROUND_CONTEXT);
+    const active = agent.model;
+    if (active?.provider !== model.provider || active.modelId !== model.id) {
+      assertModelWindowSwitch(
+        createModelsForEnv(this.env),
+        active ? { provider: active.provider, id: active.modelId } : undefined,
+        model,
+        ownerLocale(this.env),
+      );
+      await this.harness.session().setModel(model);
     }
-    assertModelWindowSwitch(
-      createModelsForEnv(this.env),
-      active ? { provider: active.provider, id: active.modelId } : undefined,
-      model,
-      ownerLocale(this.env),
-    );
-    await this.harness.session().setModel(model);
+    // Defaults only reach a new root; a level published later lands here.
+    if (ref.thinkingLevel !== undefined && ref.thinkingLevel !== agent.thinkingLevel) {
+      await conversation.configure(
+        { thinkingLevel: ref.thinkingLevel },
+        BACKGROUND_CONTEXT,
+      );
+    }
   }
 
   private botIdNow(): string | undefined {

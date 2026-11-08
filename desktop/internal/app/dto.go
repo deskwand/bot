@@ -58,10 +58,12 @@ type LocaleDTO struct {
 }
 
 // ModelDTO is the provider and model id shown in the UI. Provider-specific
-// settings in the stored JSON are preserved but not exposed.
+// settings in the stored JSON are preserved but not exposed, except the
+// thinking level, which the UI edits next to the model.
 type ModelDTO struct {
-	Provider string `json:"provider"`
-	ID       string `json:"id"`
+	Provider      string  `json:"provider"`
+	ID            string  `json:"id"`
+	ThinkingLevel *string `json:"thinkingLevel,omitempty"`
 }
 
 // ModelEntryDTO is one model listed by a built-in provider.
@@ -69,6 +71,8 @@ type ModelEntryDTO struct {
 	ID    string   `json:"id"`
 	Name  string   `json:"name"`
 	Input []string `json:"input,omitempty"`
+	// ThinkingLevels is empty when the model has nothing to choose.
+	ThinkingLevels []string `json:"thinkingLevels,omitempty"`
 }
 
 // ModelProviderDTO is one built-in provider from the shared catalog.

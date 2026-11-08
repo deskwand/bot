@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-ai/models";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
-import type { AuthContext } from "@earendil-works/pi-ai";
+import type { AuthContext, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { PiModel } from "agents/harness/pi";
 import { ownerLocale } from "../i18n";
 import { readRuntimeConfig, RuntimeConfigError } from "../runtime-config";
@@ -31,7 +31,16 @@ import {
 
 export type Role = "butler" | "task";
 
-export type ModelRef = { provider: string; id: string };
+/**
+ * One role's model, as the deployment configuration stores it. `thinkingLevel`
+ * rides along because the desktop edits the whole object at once; absent means
+ * the role keeps pi's default (off).
+ */
+export type ModelRef = {
+  provider: string;
+  id: string;
+  thinkingLevel?: ModelThinkingLevel;
+};
 
 /**
  * Test-only model override. When set, `resolveModel` returns it regardless of

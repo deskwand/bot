@@ -290,6 +290,34 @@ func TestPendingRestoreMapsRecord(t *testing.T) {
 	}
 }
 
+func TestConfigReadsBackTheModelThinkingLevel(t *testing.T) {
+	f := newBackupFixture(t)
+	f.snapshots.snapshot = serviceSnapshot()
+	f.snapshots.snapshot.ConfigJSON = []byte(`{
+		"schemaVersion": 1,
+		"owner": {"telegramUserIds": [42]},
+		"models": {
+			"butler": {"provider": "anthropic", "id": "claude-sonnet-5-5", "thinkingLevel": "high"},
+			"task": {"provider": "opencode-go", "id": "kimi-k3"}
+		},
+		"mcpServers": []
+	}`)
+
+	config, err := f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ButlerModel == nil || config.ButlerModel.ThinkingLevel == nil {
+		t.Fatalf("butler model = %#v, want a thinking level", config.ButlerModel)
+	}
+	if got := *config.ButlerModel.ThinkingLevel; got != "high" {
+		t.Fatalf("thinking level = %q, want high", got)
+	}
+	if config.TaskModel == nil || config.TaskModel.ThinkingLevel != nil {
+		t.Fatalf("task model = %#v, want no level", config.TaskModel)
+	}
+}
+
 func TestSecretStatusesHideAdminToken(t *testing.T) {
 	f := newBackupFixture(t)
 	f.snapshots.snapshot = serviceSnapshot()
