@@ -2,7 +2,7 @@ import { Agent, type Schedule } from "agents";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
 import { PiHarness, type PiModel, type PiOperationResult } from "agents/harness/pi";
-import { createRegistry, Harness, LiveDoc, type LiveState } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, LiveDoc, type LiveState, type Storage } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
 import { artifactNameFromKey } from "../artifact";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
@@ -28,6 +28,7 @@ import {
   resolveModel,
 } from "../llm/models";
 import { PI_PROGRESS } from "../llm/pi-settings";
+import { withFirstToken } from "../llm/first-token";
 import {
   encodeAction,
   type Address,
@@ -81,7 +82,7 @@ import {
   planTurnCheck,
   retryDelayMs,
   signatureOf,
-  TURN_ACK_MS,
+  TURN_CHECK_EVERY_MS,
   TURN_PARKED_GRACE_MS,
 } from "./turn";
 import { TurnStore } from "./turn-store";
@@ -226,6 +227,11 @@ export class ButlerDO extends Agent<Env> {
   /** Single-flight guard for arming the next turn check. */
   private turnCheckArming: Promise<void> | null = null;
 
+  /** Single-flight guard for the first-token receipt. */
+  private acking: Promise<void> | null = null;
+  /** The turns the receipt in flight announces. */
+  private ackingFor: ReadonlySet<string> = new Set();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
@@ -355,10 +361,16 @@ export class ButlerDO extends Agent<Env> {
         Harness.open(
           storage,
           {
-            models: createModelsForEnv(this.env),
+            models: withFirstToken(createModelsForEnv(this.env), () =>
+              this.ctx.waitUntil(this.ackStarted()),
+            ),
             registry: this.registry,
             onWake,
-            settings: { progress: PI_PROGRESS },
+            settings: {
+              progress: PI_PROGRESS,
+              followUpMode: "all",
+              afterFailedRun: "continue",
+            },
           },
           context,
         ),
@@ -549,6 +561,7 @@ export class ButlerDO extends Agent<Env> {
   /** Cron sweep: the backstop for a lost alarm or a lost `wait`. */
   async healTurns(): Promise<{ outstanding: number }> {
     if (this.lease.current() !== null) return { outstanding: 0 };
+    this.turns().pruneAnswers(getClock().now() - 86_400_000);
     await this.sweepTurns(getClock().now());
     const outstanding = this.turns().list().length;
     if (outstanding > 0) await this.ensureTurnCheck();
@@ -1390,7 +1403,15 @@ export class ButlerDO extends Agent<Env> {
       // event with a higher seq): do not send the report twice.
       if (!receipt.accepted) return;
       const result = await this.harness.wait(operationId);
-      text = result.status === "done" && result.text ? result.text : "";
+      if (result.status === "done" && result.text) {
+        // A merged run settles the owner's turn and this report with one
+        // answer: only the first claimant sends its text.
+        const answer = await this.answerIdOf(operationId);
+        const mine =
+          answer === undefined ||
+          this.turns().claimAnswer(answer, operationId, getClock().now());
+        text = mine ? result.text : "";
+      }
     } catch (error) {
       // A blocked model switch must not suppress the completed task's result
       // on Telegram, whose terminal status and result are separate messages.
@@ -1539,6 +1560,8 @@ export class ButlerDO extends Agent<Env> {
     this.deliveringTurns.add(operationId);
     store.delivering(operationId, now);
     try {
+      // A receipt still in flight must land before the answer it announces.
+      if (this.ackingFor.has(operationId)) await this.acking;
       // No `clampMessage` here: the Butler's answer went out unclamped before
       // this change, and truncating it would lose real content.
       const ref = await this.sendBestEffort({ text, priority: "critical" });
@@ -1576,7 +1599,45 @@ export class ButlerDO extends Agent<Env> {
     operationId: string,
     result: PiOperationResult,
   ): Promise<void> {
+    // Every operation a merged run answers gets the same answer id. The first
+    // one to claim it delivers; the rest drop their ledger row silently.
+    const answer = await this.answerIdOf(operationId);
+    if (
+      answer !== undefined &&
+      !this.turns().claimAnswer(answer, operationId, getClock().now())
+    ) {
+      this.turns().remove(operationId);
+      return;
+    }
     await this.sendTerminal(operationId, await this.turnResultText(result));
+  }
+
+  /**
+   * The entry id pi settled this operation with, when it has one. `storage()`
+   * is `@internal` on `PiHarness`, so the cast is deliberate: it is the only
+   * read of the submission record, whose answer id is shared by every
+   * operation merged into the run (see the batching spec §8.5).
+   */
+  private async answerIdOf(operationId: string): Promise<string | undefined> {
+    try {
+      const pi = await this.harness.pi();
+      const root = await pi.root(BACKGROUND_CONTEXT);
+      const storage = await (
+        this.harness as unknown as { storage(): Promise<Storage> }
+      ).storage();
+      const record = await storage.submissionByRequest(
+        root.id,
+        operationId,
+        BACKGROUND_CONTEXT,
+      );
+      return record?.type === "input" && record.status === "done"
+        ? String(record.answer)
+        : undefined;
+    } catch (error) {
+      // A duplicate answer beats a lost one: deliver without the claim.
+      console.error("butler answer id lookup failed:", error);
+      return undefined;
+    }
   }
 
   /** One committed read of what pi is doing right now. */
@@ -1584,6 +1645,53 @@ export class ButlerDO extends Agent<Env> {
     const pi = await this.harness.pi();
     const root = await pi.root(BACKGROUND_CONTEXT);
     return await pi.snapshot(LiveDoc, root.id, BACKGROUND_CONTEXT);
+  }
+
+  /**
+   * The model produced its first token: tell the owner the turn is underway.
+   * This runs from the provider stream, before progress is throttled into
+   * storage, so it is the earliest honest "we are working on it".
+   */
+  private async ackStarted(): Promise<void> {
+    this.acking ??= (async () => {
+      try {
+        // Yield once: a response that finishes at once is its own receipt, so
+        // a turn that has already settled gets none.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const pending = await this.harness.pending();
+        const store = this.turns();
+        const targets: string[] = [];
+        for (const operation of pending) {
+          if (operation.status !== "running") continue;
+          if (operation.operationId.startsWith(TASK_REPORT_PREFIX)) continue;
+          const row = store.get(operation.operationId);
+          // An answer already being delivered is enough for the owner.
+          if (
+            row === undefined ||
+            row.ackAt !== null ||
+            row.deliveringAt !== null
+          ) {
+            continue;
+          }
+          targets.push(operation.operationId);
+        }
+        if (targets.length === 0) return;
+        this.ackingFor = new Set(targets);
+        const ref = await this.sendBestEffort({
+          text: turnAckText(ownerLocale(this.env)),
+          priority: "normal",
+        });
+        if (ref === null) return;
+        const now = getClock().now();
+        for (const operationId of targets) store.ack(operationId, now);
+      } catch (error) {
+        console.error("butler first-token ack failed:", error);
+      }
+    })().finally(() => {
+      this.acking = null;
+      this.ackingFor = new Set();
+    });
+    return this.acking;
   }
 
   /** Keep exactly one pending `checkTurn`, like `TaskDO.scheduleStallCheck`. */
@@ -1609,7 +1717,7 @@ export class ButlerDO extends Agent<Env> {
       ) {
         return;
       }
-      const at = Math.max(atMs ?? now + TURN_ACK_MS, now + 1_000);
+      const at = Math.max(atMs ?? now + TURN_CHECK_EVERY_MS, now + 1_000);
       await this.schedule((at - now) / 1000, "checkTurn");
     } catch (error) {
       console.error("butler turn check schedule failed:", error);
@@ -1619,7 +1727,7 @@ export class ButlerDO extends Agent<Env> {
   /** One sweep: deliver settled turns, report stalls, decide the next look. */
   private async sweepTurns(now: number): Promise<number | null> {
     // `checkTurn`, `resumeTurns` and the minute cron can overlap; two sweeps
-    // would both see an unsent ack and both send it.
+    // would both see an unsent stall notice and both send it.
     if (this.sweeping) return null;
     this.sweeping = true;
     try {
@@ -1686,7 +1794,7 @@ export class ButlerDO extends Agent<Env> {
         continue;
       }
       if (operation.status !== "running") {
-        // Queued: the ack clock must not run yet.
+        // Queued: the stall clock must not run yet.
         store.start(row.operationId, now, true);
         nextAt ??= now + 60_000;
         continue;
@@ -1703,20 +1811,11 @@ export class ButlerDO extends Agent<Env> {
         now,
         phase: operation.status,
         activity: activityOf(live),
-        startedAt: current.startedAt,
         activityAt: current.activityAt,
-        ackAt: current.ackAt,
-        spokeAt: current.spokeAt,
         noticeAt: current.noticeAt,
       });
       nextAt = Math.min(nextAt ?? Number.POSITIVE_INFINITY, plan.nextAt);
-      if (plan.send?.kind === "ack") {
-        const ref = await this.sendBestEffort({
-          text: turnAckText(locale),
-          priority: "normal",
-        });
-        if (ref !== null) store.ack(row.operationId, now);
-      } else if (plan.send?.kind === "stall") {
+      if (plan.send?.kind === "stall") {
         const ref = await this.sendBestEffort({
           text: turnStalledText(locale, plan.send.activity, plan.send.idleMs),
           priority: "alert",
@@ -1760,22 +1859,12 @@ export class ButlerDO extends Agent<Env> {
   private async sendBestEffort(
     message: OutboundMessage,
   ): Promise<ChannelMessageRef | null> {
-    let ref: ChannelMessageRef | null;
     try {
-      ref = await this.channels().sendCurrent(message);
+      return await this.channels().sendCurrent(message);
     } catch (error) {
       console.error("butler channel send failed:", error);
       return null;
     }
-    if (ref !== null) {
-      try {
-        // Every pending turn counts: the owner just heard from the Butler.
-        this.turns().spokeAll(getClock().now());
-      } catch (error) {
-        console.warn("butler turn spoke mark failed:", error);
-      }
-    }
-    return ref;
   }
 
   private async editBestEffort(

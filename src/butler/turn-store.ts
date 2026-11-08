@@ -4,7 +4,6 @@ export type TurnRow = {
   submittedAt: number;
   startedAt: number | null;
   ackAt: number | null;
-  spokeAt: number | null;
   noticeAt: number | null;
   signature: string | null;
   activityAt: number;
@@ -37,7 +36,6 @@ function toTurn(row: Row): TurnRow {
     submittedAt: row.submitted_at,
     startedAt: row.started_at,
     ackAt: row.ack_at,
-    spokeAt: row.spoke_at,
     noticeAt: row.notice_at,
     signature: row.signature,
     activityAt: row.activity_at,
@@ -86,12 +84,19 @@ export class TurnStore {
         );
       }
     }
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS butler_answers (
+        answer_id TEXT PRIMARY KEY,
+        operation_id TEXT NOT NULL,
+        claimed_at INTEGER NOT NULL
+      )`,
+    );
   }
 
   /** True when this call created the row; false when it already existed. */
   insertIfAbsent(row: { operationId: string; submittedAt: number }): boolean {
     if (this.get(row.operationId) !== undefined) return false;
-    // Optimistic: an idle conversation starts the run on submit, so the ack
+    // Optimistic: an idle conversation starts the run on submit, so the stall
     // clock counts from here. A queued turn clears it again in `start`.
     this.sql.exec(
       `INSERT INTO butler_turns (operation_id, submitted_at, started_at, activity_at)
@@ -126,7 +131,7 @@ export class TurnStore {
   }
 
   /**
-   * `queued`: this turn has not started yet, so its ack clock must not run.
+   * `queued`: this turn has not started yet, so its stall clock must not run.
    * `running`: keep the optimistic start, or start the clock now for a turn
    * that had queued behind another one.
    */
@@ -157,19 +162,6 @@ export class TurnStore {
       `UPDATE butler_turns SET ack_at = ? WHERE operation_id = ? AND ack_at IS NULL`,
       now,
       operationId,
-    );
-  }
-
-  /**
-   * Any message sent during the conversation counts: the owner just heard from
-   * the Butler, so a generic receipt would be noise for every pending turn.
-   */
-  spokeAll(now: number): void {
-    this.sql.exec(
-      `UPDATE butler_turns
-       SET spoke_at = ?
-       WHERE spoke_at IS NULL AND abandoned_at IS NULL`,
-      now,
     );
   }
 
@@ -254,6 +246,34 @@ export class TurnStore {
     this.sql.exec(
       `DELETE FROM butler_turns WHERE operation_id = ?`,
       operationId,
+    );
+  }
+
+  /**
+   * Claims the one answer a merged turn settles every queued operation with.
+   * True when this operation owns it, including on its own retry.
+   */
+  claimAnswer(answerId: string, operationId: string, now: number): boolean {
+    this.sql.exec(
+      `INSERT OR IGNORE INTO butler_answers (answer_id, operation_id, claimed_at)
+       VALUES (?, ?, ?)`,
+      answerId,
+      operationId,
+      now,
+    );
+    const row = this.sql
+      .exec<{ operation_id: string }>(
+        `SELECT operation_id FROM butler_answers WHERE answer_id = ?`,
+        answerId,
+      )
+      .toArray()[0];
+    return row?.operation_id === operationId;
+  }
+
+  pruneAnswers(before: number): void {
+    this.sql.exec(
+      `DELETE FROM butler_answers WHERE claimed_at < ?`,
+      before,
     );
   }
 }

@@ -5,7 +5,6 @@ import {
   planTurnCheck,
   retryDelayMs,
   signatureOf,
-  TURN_ACK_MS,
   TURN_CHECK_EVERY_MS,
   TURN_STALL_MS,
   type TurnCheckInput,
@@ -20,10 +19,7 @@ function input(patch: Partial<TurnCheckInput> = {}): TurnCheckInput {
     now: 10_000,
     phase: "running",
     activity: { kind: "waiting_model" },
-    startedAt: 0,
     activityAt: 0,
-    ackAt: null,
-    spokeAt: null,
     noticeAt: null,
     ...patch,
   };
@@ -107,22 +103,10 @@ describe("activityOf", () => {
 });
 
 describe("planTurnCheck", () => {
-  it("stays quiet before the ack deadline", () => {
-    expect(planTurnCheck(input({ now: TURN_ACK_MS - 1 })).send).toBeNull();
-  });
-
-  it("acknowledges at the deadline", () => {
-    expect(planTurnCheck(input({ now: TURN_ACK_MS })).send).toEqual({
-      kind: "ack",
-    });
-  });
-
-  it("does not acknowledge a turn that already spoke", () => {
-    expect(planTurnCheck(input({ now: TURN_ACK_MS, spokeAt: 1 })).send).toBeNull();
-  });
-
-  it("acknowledges once", () => {
-    expect(planTurnCheck(input({ now: TURN_ACK_MS, ackAt: 5 })).send).toBeNull();
+  it("never plans an ack", () => {
+    for (const now of [0, 2_000, TURN_STALL_MS, 10_000_000]) {
+      expect(planTurnCheck(input({ now })).send).not.toEqual({ kind: "ack" });
+    }
   });
 
   it("stays quiet while the turn is queued", () => {
@@ -140,10 +124,6 @@ describe("planTurnCheck", () => {
     });
   });
 
-  it("sends the stall instead of the ack when both are due", () => {
-    expect(planTurnCheck(input({ now: TURN_STALL_MS })).send?.kind).toBe("stall");
-  });
-
   it("does not report the same stall twice", () => {
     expect(
       planTurnCheck(input({ now: TURN_STALL_MS * 2, noticeAt: TURN_STALL_MS }))
@@ -151,20 +131,19 @@ describe("planTurnCheck", () => {
     ).toBeNull();
   });
 
-  it("schedules the earliest of ack, stall, and the regular beat", () => {
-    expect(planTurnCheck(input({ now: 2_000 })).nextAt).toBe(TURN_ACK_MS);
-    expect(planTurnCheck(input({ now: 2_000, ackAt: 1 })).nextAt).toBe(
+  it("schedules the earliest of the regular beat and the stall check", () => {
+    expect(planTurnCheck(input({ now: 2_000 })).nextAt).toBe(
+      Math.min(2_000 + TURN_CHECK_EVERY_MS, TURN_STALL_MS),
+    );
+    expect(planTurnCheck(input({ now: 280_000 })).nextAt).toBe(
+      Math.min(280_000 + TURN_CHECK_EVERY_MS, TURN_STALL_MS),
+    );
+    expect(planTurnCheck(input({ now: 2_000, noticeAt: 1 })).nextAt).toBe(
       2_000 + TURN_CHECK_EVERY_MS,
     );
-    expect(
-      planTurnCheck(input({ now: 2_000, ackAt: 1, noticeAt: 1 })).nextAt,
-    ).toBe(2_000 + TURN_CHECK_EVERY_MS);
   });
 
   it("returns to the regular beat right after speaking", () => {
-    expect(planTurnCheck(input({ now: TURN_ACK_MS })).nextAt).toBe(
-      TURN_ACK_MS + TURN_CHECK_EVERY_MS,
-    );
     expect(planTurnCheck(input({ now: TURN_STALL_MS })).nextAt).toBe(
       TURN_STALL_MS + TURN_CHECK_EVERY_MS,
     );
@@ -172,7 +151,7 @@ describe("planTurnCheck", () => {
 
   it("never returns a time in the past", () => {
     expect(
-      planTurnCheck(input({ now: 10_000, ackAt: 1, noticeAt: 1 })).nextAt,
+      planTurnCheck(input({ now: 10_000, noticeAt: 1 })).nextAt,
     ).toBeGreaterThan(10_000);
   });
 });

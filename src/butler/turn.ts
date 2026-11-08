@@ -1,7 +1,5 @@
 import type { LiveState } from "@earendil-works/pi-durable";
 
-/** How long a turn may run before the owner hears something. */
-export const TURN_ACK_MS = 4_000;
 /** How long a running turn may show no change before it counts as stalled. */
 export const TURN_STALL_MS = 300_000;
 /** The regular beat while a turn is unfinished. */
@@ -28,18 +26,12 @@ export type TurnCheckInput = {
   now: number;
   phase: TurnPhase;
   activity: TurnActivity;
-  startedAt: number | null;
   activityAt: number;
-  ackAt: number | null;
-  spokeAt: number | null;
   noticeAt: number | null;
 };
 
 export type TurnCheckPlan = {
-  send:
-    | null
-    | { kind: "ack" }
-    | { kind: "stall"; activity: TurnActivity; idleMs: number };
+  send: null | { kind: "stall"; activity: TurnActivity; idleMs: number };
   nextAt: number;
 };
 
@@ -83,20 +75,12 @@ export function activityOf(live: LiveState | undefined): TurnActivity {
 /** When this turn next needs a look, and whether it needs to say something now. */
 export function planTurnCheck(input: TurnCheckInput): TurnCheckPlan {
   const running = input.phase === "running";
-  const ackDue =
-    running &&
-    input.startedAt !== null &&
-    input.ackAt === null &&
-    input.spokeAt === null &&
-    input.noticeAt === null;
   const stallDue = running && input.noticeAt === null;
 
   const idleMs = input.now - input.activityAt;
   let send: TurnCheckPlan["send"] = null;
   if (running && idleMs >= TURN_STALL_MS && input.noticeAt === null) {
     send = { kind: "stall", activity: input.activity, idleMs };
-  } else if (ackDue && input.now >= (input.startedAt as number) + TURN_ACK_MS) {
-    send = { kind: "ack" };
   }
 
   // Just spoke: the deadline it answered is behind us. Come back on the beat
@@ -106,9 +90,6 @@ export function planTurnCheck(input: TurnCheckInput): TurnCheckPlan {
   }
 
   const candidates = [input.now + TURN_CHECK_EVERY_MS];
-  if (ackDue && input.startedAt !== null) {
-    candidates.push(input.startedAt + TURN_ACK_MS);
-  }
   if (stallDue) candidates.push(input.activityAt + TURN_STALL_MS);
 
   return {

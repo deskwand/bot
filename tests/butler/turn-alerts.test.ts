@@ -3,7 +3,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setClockOverride } from "../../src/butler/notifier";
-import { TURN_ACK_MS, TURN_PARKED_GRACE_MS } from "../../src/butler/turn";
+import { TURN_PARKED_GRACE_MS } from "../../src/butler/turn";
 import { setModelOverride } from "../../src/llm/models";
 import { setChannelOverride } from "../../src/channels/override";
 import type { AdmittedMessage, OutboundMessage } from "../../src/protocol";
@@ -16,10 +16,11 @@ declare module "cloudflare:test" {
 
 type SlowControl = { started: boolean; released: boolean };
 
+type HoldControl = { started: boolean; released: boolean };
+
 type TurnInternals = {
   checkTurn(): Promise<void>;
   turns(): import("../../src/butler/turn-store").TurnStore;
-  sendBestEffort(message: OutboundMessage): Promise<unknown>;
   lease: { acquire(op: "export", opId: string): unknown };
   harness: {
     pending(): Promise<unknown[]>;
@@ -109,6 +110,42 @@ async function releaseSlow(stub: ReturnType<typeof butler>): Promise<void> {
   });
 }
 
+/** Blocks the turn after the ack retry, so the test can inspect the ledger. */
+async function installHold(stub: ReturnType<typeof butler>): Promise<void> {
+  await runInDurableObject(stub, (instance) => {
+    const control: HoldControl = { started: false, released: false };
+    (instance as { holdControl?: HoldControl }).holdControl = control;
+    const tool: ToolRegistration<typeof SlowWait> = {
+      name: "hold_after_ack",
+      description: "Hold the turn until the test releases it.",
+      parameters: SlowWait,
+      async execute() {
+        control.started = true;
+        while (!control.released) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return { output: [{ type: "text", text: "released" }] };
+      },
+    };
+    instance.registry.install({ name: "test-hold", tools: [tool] });
+  });
+}
+
+async function holdStarted(stub: ReturnType<typeof butler>): Promise<boolean> {
+  return runInDurableObject(
+    stub,
+    (instance) =>
+      (instance as { holdControl?: HoldControl }).holdControl?.started ?? false,
+  );
+}
+
+async function releaseHold(stub: ReturnType<typeof butler>): Promise<void> {
+  await runInDurableObject(stub, (instance) => {
+    const control = (instance as { holdControl?: HoldControl }).holdControl;
+    if (control) control.released = true;
+  });
+}
+
 beforeEach(async () => {
   now = START;
   setClockOverride({
@@ -127,7 +164,7 @@ afterEach(() => {
 });
 
 describe("turn alerts", () => {
-  it("acknowledges a slow turn once and still delivers the answer", async () => {
+  it("acknowledges on the first token and still delivers the answer", async () => {
     const stub = butler("turn-ack");
     const sent = await captureSends(stub);
     await installSlowWait(stub);
@@ -141,11 +178,9 @@ describe("turn alerts", () => {
     const running = stub.handleMessage(message("tg:ack"));
     await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
 
-    now += TURN_ACK_MS + 1;
-    await runInDurableObject(stub, (instance) =>
-      (instance as unknown as TurnInternals).checkTurn(),
+    await vi.waitFor(() =>
+      expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理"]),
     );
-    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理"]);
     expect(sent[0]?.priority).toBe("normal");
 
     await releaseSlow(stub);
@@ -154,54 +189,36 @@ describe("turn alerts", () => {
     expect(sent[1]?.priority).toBe("critical");
   });
 
-  it("does not acknowledge a turn that answered within the deadline", async () => {
-    const stub = butler("turn-spoke");
-    const sent = await captureSends(stub);
-    setModelOverride(scriptedModel([{ text: "很快答完" }]));
-
-    await stub.handleMessage(message("tg:spoke"));
-    now += TURN_ACK_MS + 1;
-    await runInDurableObject(stub, (instance) =>
-      (instance as unknown as TurnInternals).checkTurn(),
-    );
-
-    expect(sent.map((msg) => msg.text)).toEqual(["很快答完"]);
-  });
-
-  it("marks every pending turn as spoken when a message goes out", async () => {
-    const stub = butler("turn-spoke-mark");
-    const sent = await captureSends(stub);
-    const spoke = await runInDurableObject(stub, async (instance) => {
-      const target = instance as unknown as TurnInternals;
-      // Keep the background recovery sweep off these hand-made rows.
-      target.lease.acquire("export", "test");
-      target.turns().insertIfAbsent({
-        operationId: "tg:spoke-a",
-        submittedAt: now,
-      });
-      target.turns().insertIfAbsent({
-        operationId: "tg:spoke-b",
-        submittedAt: now,
-      });
-      await target.sendBestEffort({ text: "任务 t1 已开始" });
-      return target
-        .turns()
-        .list()
-        .map((row) => row.spokeAt);
-    });
-
-    expect(spoke).toEqual([now, now]);
-    expect(sent.map((msg) => msg.text)).toEqual(["任务 t1 已开始"]);
-  });
-
-  it("sends one ack for two queued messages and answers both in order", async () => {
-    const stub = butler("turn-two");
+  it("acknowledges once across a tool loop", async () => {
+    const stub = butler("turn-ack-loop");
     const sent = await captureSends(stub);
     await installSlowWait(stub);
     setModelOverride(
       scriptedModel([
         { toolCalls: [{ name: "slow_wait", args: {} }] },
+        { text: "查完了" },
+      ]),
+    );
+
+    const running = stub.handleMessage(message("tg:loop"));
+    await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
+    await releaseSlow(stub);
+    await running;
+
+    expect(sent.filter((msg) => msg.text === "收到，正在处理")).toHaveLength(1);
+    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理", "查完了"]);
+  });
+
+  it("acknowledges the follow-up turn after the previous answer", async () => {
+    const stub = butler("turn-follow-up");
+    const sent = await captureSends(stub);
+    await installSlowWait(stub);
+    await installHold(stub);
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "slow_wait", args: {} }] },
         { text: "第一条答案" },
+        { toolCalls: [{ name: "hold_after_ack", args: {} }] },
         { text: "第二条答案" },
       ]),
     );
@@ -209,21 +226,87 @@ describe("turn alerts", () => {
     const first = stub.handleMessage(message("tg:one"));
     await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
     const second = stub.handleMessage(message("tg:two"));
-
-    now += TURN_ACK_MS + 1;
-    await runInDurableObject(stub, (instance) =>
-      (instance as unknown as TurnInternals).checkTurn(),
+    await vi.waitFor(() =>
+      expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理"]),
     );
-    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理"]);
 
     await releaseSlow(stub);
+    await vi.waitFor(async () => expect(await holdStarted(stub)).toBe(true));
+    await vi.waitFor(() =>
+      expect(sent.map((msg) => msg.text)).toEqual([
+        "收到，正在处理",
+        "第一条答案",
+        "收到，正在处理",
+      ]),
+    );
+
+    await releaseHold(stub);
     await first;
     await second;
     expect(sent.map((msg) => msg.text)).toEqual([
       "收到，正在处理",
       "第一条答案",
+      "收到，正在处理",
       "第二条答案",
     ]);
+  });
+
+  it("retries the ack on the next first token after a failed send", async () => {
+    const stub = butler("turn-ack-retry");
+    const sent: OutboundMessage[] = [];
+    let ackAttempts = 0;
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { channels(): unknown }).channels = () => ({
+        currentRoute: async () => ({ channel: "telegram", routeKey: "test" }),
+        isAdmissionCurrent: async () => true,
+        editCurrent: async () => true,
+        sendCurrent: async (msg: OutboundMessage) => {
+          if (msg.text === "收到，正在处理") {
+            ackAttempts += 1;
+            if (ackAttempts === 1) return null;
+          }
+          sent.push(msg);
+          return {
+            channel: "telegram",
+            conversationId: "42",
+            routeKey: "test",
+            messageId: String(sent.length),
+          };
+        },
+      });
+    });
+    await installSlowWait(stub);
+    await installHold(stub);
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "slow_wait", args: {} }] },
+        { toolCalls: [{ name: "hold_after_ack", args: {} }] },
+        { text: "查完了" },
+      ]),
+    );
+
+    const running = stub.handleMessage(message("tg:ack-retry"));
+    await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
+    await vi.waitFor(() => expect(ackAttempts).toBe(1));
+
+    const waiting = await runInDurableObject(stub, (instance) =>
+      (instance as unknown as TurnInternals).turns().get("tg:ack-retry"),
+    );
+    expect(waiting?.ackAt).toBeNull();
+
+    await releaseSlow(stub);
+    await vi.waitFor(async () => expect(await holdStarted(stub)).toBe(true));
+    await vi.waitFor(async () => {
+      const row = await runInDurableObject(stub, (instance) =>
+        (instance as unknown as TurnInternals).turns().get("tg:ack-retry"),
+      );
+      expect(row?.ackAt).not.toBeNull();
+    });
+    expect(ackAttempts).toBe(2);
+
+    await releaseHold(stub);
+    await running;
+    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理", "查完了"]);
   });
 
   it("stays silent and keeps the ledger untouched while the lease is held", async () => {

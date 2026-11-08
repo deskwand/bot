@@ -336,7 +336,11 @@ describe("butler chat", () => {
 
     expect(open).toHaveBeenCalled();
     for (const call of open.mock.calls) {
-      expect(call[1].settings).toEqual({ progress: PI_PROGRESS });
+      expect(call[1].settings).toEqual({
+        progress: PI_PROGRESS,
+        followUpMode: "all",
+        afterFailedRun: "continue",
+      });
     }
     expect(PI_PROGRESS).toEqual({
       partialIntervalMs: 30_000,
@@ -970,7 +974,9 @@ describe("butler chat", () => {
       message({ text: "帮我查天气", eventId: "tg:104" }),
     );
 
-    const progress = channel.sent[0];
+    const progress = channel.sent.find(
+      (msg) => msg.text === "#1 查天气：已开始",
+    );
     expect(progress).toMatchObject({
       chatId: "42",
       text: "#1 查天气：已开始",
@@ -978,7 +984,7 @@ describe("butler chat", () => {
     expect(progress?.buttons).toEqual([
       [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
     ]);
-    expect(channel.sent[1]).toEqual({ chatId: "42", text: "已安排" });
+    expect(channel.sent.at(-1)).toEqual({ chatId: "42", text: "已安排" });
 
     expect(await stub.status()).toMatchObject({
       state: "running",

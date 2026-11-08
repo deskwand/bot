@@ -82,16 +82,6 @@ describe("TurnStore", () => {
     expect(row).toMatchObject({ noticeAt: null, activityAt: 900 });
   });
 
-  it("marks every unsettled turn as spoken", async () => {
-    const rows = await withStore("turns-spoke-all", (store) => {
-      store.insertIfAbsent({ operationId: "a", submittedAt: 0 });
-      store.insertIfAbsent({ operationId: "b", submittedAt: 1 });
-      store.spokeAll(500);
-      return store.list();
-    });
-    expect(rows.map((row) => row.spokeAt)).toEqual([500, 500]);
-  });
-
   it("hides an abandoned turn without letting it be re-created", async () => {
     const state = await withStore("turns-abandon", (store) => {
       store.insertIfAbsent({ operationId: "a", submittedAt: 0 });
@@ -124,6 +114,35 @@ describe("TurnStore", () => {
       return store.get("a");
     });
     expect(row).toMatchObject({ deliveringAt: null, attempts: 1 });
+  });
+
+  it("claimAnswer lets only the first operation claim an answer", async () => {
+    const claims = await withStore("answers-claim", (store) => [
+      store.claimAnswer("a1", "op1", 100),
+      store.claimAnswer("a1", "op2", 200),
+    ]);
+    expect(claims).toEqual([true, false]);
+  });
+
+  it("claimAnswer is idempotent for the claimant", async () => {
+    const claims = await withStore("answers-idempotent", (store) => [
+      store.claimAnswer("a1", "op1", 100),
+      store.claimAnswer("a1", "op1", 200),
+    ]);
+    expect(claims).toEqual([true, true]);
+  });
+
+  it("pruneAnswers removes only old claims", async () => {
+    const claims = await withStore("answers-prune", (store) => {
+      store.claimAnswer("a1", "op1", 100);
+      store.claimAnswer("a2", "op2", 900);
+      store.pruneAnswers(500);
+      return {
+        old: store.claimAnswer("a1", "op3", 600),
+        recent: store.claimAnswer("a2", "op3", 600),
+      };
+    });
+    expect(claims).toEqual({ old: true, recent: false });
   });
 
   it("forgets a delivered turn", async () => {
