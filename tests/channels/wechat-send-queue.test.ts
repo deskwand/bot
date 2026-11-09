@@ -214,14 +214,14 @@ describe("WeChat outbound queue", () => {
       const original = proto.dispatchMessage;
       proto.dispatchMessage = () => {};
       try {
-        (
+        await (
           instance as unknown as {
             dispatchWeChatUpdates(
               updates: unknown[],
               cursor: string,
               credentials: typeof CREDS,
               routeKey: string,
-            ): void;
+            ): Promise<"accepted" | "maintenance">;
           }
         ).dispatchWeChatUpdates(
           [
@@ -231,6 +231,7 @@ describe("WeChat outbound queue", () => {
               contextToken: "ctx-2",
               text: "hi",
               messageType: 1,
+              media: [],
               voice: false,
             },
           ],

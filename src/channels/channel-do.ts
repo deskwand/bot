@@ -60,6 +60,7 @@ import {
   parseCredentials,
   type WeChatCredentials,
   type WeChatFileRef,
+  type WeChatMediaItem,
   type WeChatUpdate,
 } from "./wechat/ilink";
 import type { WeChatImageRef } from "./wechat/media";
@@ -1092,16 +1093,22 @@ export class ChannelDO extends Agent<Env> {
             channel: "wechat",
             event: "poll_ok",
           });
-          this.updateWeChatState({
-            cursor: batch.cursor,
-            last_poll_at: Date.now(),
-          });
-          this.dispatchWeChatUpdates(
+          // 下载和解码可能要几秒，先把心跳刷新掉，别让 ensurePolling 以为
+          // 这条链死了而再起一条。
+          this.updateWeChatState({ last_poll_at: Date.now() });
+          // 先处理再记 cursor：媒体处理途中被杀掉时游标没有前进，下一轮
+          // iLink 会把这一批重发；反过来先存 cursor，这一批就永久丢了。
+          const outcome = await this.dispatchWeChatUpdates(
             batch.updates,
             batch.cursor,
             credentials,
             run.routeKey,
           );
+          if (outcome === "maintenance") return;
+          this.updateWeChatState({
+            cursor: batch.cursor,
+            last_poll_at: Date.now(),
+          });
           this.weChatBackoffMs = null;
         } catch (error) {
           if (!(await ownsRun())) return;
@@ -1144,15 +1151,16 @@ export class ChannelDO extends Agent<Env> {
     console.warn("channel: wechat session expired, run the login script");
   }
 
-  private dispatchWeChatUpdates(
+  private async dispatchWeChatUpdates(
     updates: WeChatUpdate[],
     cursor: string,
     credentials: WeChatCredentials,
     routeKey: string,
-  ): void {
+  ): Promise<"accepted" | "maintenance"> {
     // A lease can be acquired while getUpdates is in flight. Do not admit the
     // batch or write session context into a database that is being restored.
-    if (this.lease.current() !== null) return;
+    if (this.lease.current() !== null) return "maintenance";
+    const media: Array<{ event: MessageEvent; item: WeChatMediaItem }> = [];
     updates.forEach((update, index) => {
       if (
         update.messageType !== 1 ||
@@ -1204,24 +1212,44 @@ export class ChannelDO extends Agent<Env> {
         return;
       }
 
-      if (update.image) {
-        this.ctx.waitUntil(this.dispatchWeChatImage(event, update.image, routeKey));
-        return;
-      }
-
-      if (update.file) {
-        this.ctx.waitUntil(this.dispatchWeChatFile(event, update.file, routeKey));
+      if (update.media.length > 0) {
+        // 一条消息可以带多个图片或文件（多选发送、合并转发），每个 item 单独
+        // 下发：单张图的 base64 必须留在 ChannelDO → ButlerDO 的大小上限以内，
+        // 一张失败也不会牵连同一条消息里的其他图。文字只跟第一个 item 走，
+        // 其余 item 只带附件，避免同一句说明重复进模型上下文。
+        update.media.forEach((item, i) => {
+          const itemEvent: MessageEvent = {
+            ...event,
+            ...(i === 0 ? {} : { text: null }),
+            eventId:
+              update.media.length === 1 ? eventId : `${eventId}:${i}`,
+          };
+          media.push({ event: itemEvent, item });
+        });
         return;
       }
 
       this.dispatchMessage(event, routeKey);
     });
+
+    // 一个接一个地下载和解码：Photon 的 wasm 堆不收缩，几张图同时解码就把
+    // isolate 的内存撞满，整批一起进不了管家。等到这里全部处理完，调用方
+    // 才推进 cursor；中途被杀掉时 cursor 没动，iLink 会重发这一批。
+    for (const entry of media) {
+      if (this.lease.current() !== null) return "maintenance";
+      if (entry.item.kind === "image") {
+        await this.dispatchWeChatImage(entry.event, entry.item.image, routeKey);
+      } else {
+        await this.dispatchWeChatFile(entry.event, entry.item.file, routeKey);
+      }
+    }
+    return "accepted";
   }
 
   /**
-   * WeChat hands over an image as an encrypted CDN object. Downloading and
-   * decrypting it happens off the poll loop, so one slow image does not hold
-   * the rest of the batch.
+   * WeChat hands over an image as an encrypted CDN object. The caller runs one
+   * of these at a time: decoding is the memory-heavy step, and two at once can
+   * take an isolate down with the whole batch.
    */
   private async dispatchWeChatImage(
     event: MessageEvent,

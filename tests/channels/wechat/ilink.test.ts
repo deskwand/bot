@@ -118,8 +118,7 @@ describe("getUpdates", () => {
         contextToken: "ctx-1",
         text: "hello\nworld",
         messageType: 1,
-        image: null,
-        file: null,
+        media: [],
         voice: false,
       },
       {
@@ -128,8 +127,7 @@ describe("getUpdates", () => {
         contextToken: "",
         text: null,
         messageType: 1,
-        image: null,
-        file: null,
+        media: [],
         voice: false,
       },
     ]);
@@ -276,12 +274,58 @@ describe("getUpdates", () => {
 
     const result = await client(fetchImpl).getUpdates(CREDS, "");
 
-    expect(result.updates[0].image).toEqual({
-      encryptQueryParam: "param-1",
-      aesKeyHex: "00112233445566778899aabbccddeeff",
-      mediaAesKey: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
-    });
+    expect(result.updates[0].media).toEqual([
+      {
+        kind: "image",
+        image: {
+          encryptQueryParam: "param-1",
+          aesKeyHex: "00112233445566778899aabbccddeeff",
+          mediaAesKey: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+        },
+      },
+    ]);
     expect(result.updates[0].text).toBeNull();
+  });
+
+  it("keeps every image and file of one message, in item order", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({
+        msgs: [
+          {
+            message_id: 10,
+            from_user_id: "u-1",
+            message_type: 1,
+            item_list: [
+              { type: 1, text_item: { text: "看看这几张" } },
+              { type: 2, image_item: { media: { encrypt_query_param: "p-1" } } },
+              { type: 2, image_item: { media: { encrypt_query_param: "p-2" } } },
+              {
+                type: 4,
+                file_item: {
+                  media: { encrypt_query_param: "p-3" },
+                  file_name: "报价单.pdf",
+                  len: "2048",
+                },
+              },
+              { type: 2, image_item: { media: { encrypt_query_param: "p-4" } } },
+            ],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await client(fetchImpl).getUpdates(CREDS, "");
+
+    expect(result.updates[0].text).toBe("看看这几张");
+    expect(result.updates[0].media).toEqual([
+      { kind: "image", image: { encryptQueryParam: "p-1" } },
+      { kind: "image", image: { encryptQueryParam: "p-2" } },
+      {
+        kind: "file",
+        file: { encryptQueryParam: "p-3", name: "报价单.pdf", size: 2048 },
+      },
+      { kind: "image", image: { encryptQueryParam: "p-4" } },
+    ]);
   });
 
   it("parses a file item", async () => {
@@ -309,12 +353,17 @@ describe("getUpdates", () => {
 
     const result = await client(fetchImpl).getUpdates(CREDS, "");
 
-    expect(result.updates[0].file).toEqual({
-      encryptQueryParam: "q",
-      mediaAesKey: "k",
-      name: "合同.docx",
-      size: 1234,
-    });
+    expect(result.updates[0].media).toEqual([
+      {
+        kind: "file",
+        file: {
+          encryptQueryParam: "q",
+          mediaAesKey: "k",
+          name: "合同.docx",
+          size: 1234,
+        },
+      },
+    ]);
   });
 
   it("ignores a file item without a download parameter", async () => {
@@ -338,7 +387,7 @@ describe("getUpdates", () => {
 
     const result = await client(fetchImpl).getUpdates(CREDS, "");
 
-    expect(result.updates[0].file).toBeNull();
+    expect(result.updates[0].media).toEqual([]);
   });
 
   it("downloads and decrypts a file through the CDN", async () => {

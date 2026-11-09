@@ -84,14 +84,24 @@ export type WeChatFileRef = {
   size?: number;
 };
 
+/**
+ * 一条消息里的一个图片或文件，按 `item_list` 的顺序排列。
+ *
+ * 微信允许一条消息带多个媒体 item：多选发送和合并转发都会这样到达，
+ * 所以这里保留全部，而不是只取第一个。
+ */
+export type WeChatMediaItem =
+  | { kind: "image"; image: WeChatImageRef }
+  | { kind: "file"; file: WeChatFileRef };
+
 export type WeChatUpdate = {
   messageId: string | null;
   fromUserId: string;
   contextToken: string;
   text: string | null;
   messageType: number;
-  image: WeChatImageRef | null;
-  file: WeChatFileRef | null;
+  /** 该条消息的图片与文件，按 item 顺序；可能是多个。 */
+  media: WeChatMediaItem[];
   /** 该条消息的 item 里有 `voice_item`，即这是一条语音。 */
   voice: boolean;
   /** 被引用消息的文本；引用里没有文本时缺省。 */
@@ -433,16 +443,12 @@ function toWeChatUpdate(value: Record<string, unknown>): WeChatUpdate {
       isRecord(item.text_item) ? (readString(item.text_item, "text") ?? "") : "",
     )
     .filter((text) => text !== "");
-  const image =
-    items
-      .filter((item) => item.type === IMAGE_ITEM_TYPE)
-      .map(toImageRef)
-      .find((ref) => ref !== null) ?? null;
-  const file =
-    items
-      .filter((item) => item.type === FILE_ITEM_TYPE)
-      .map(toFileRef)
-      .find((ref) => ref !== null) ?? null;
+  const media: WeChatMediaItem[] = items.flatMap((item): WeChatMediaItem[] => {
+    const image = item.type === IMAGE_ITEM_TYPE ? toImageRef(item) : null;
+    if (image) return [{ kind: "image", image }];
+    const file = item.type === FILE_ITEM_TYPE ? toFileRef(item) : null;
+    return file ? [{ kind: "file", file }] : [];
+  });
 
   // WeChat recognizes voice on its side and ships the transcript in the item.
   // Nothing is downloaded or decoded: no SILK, no audio model, no CPU cost.
@@ -465,8 +471,7 @@ function toWeChatUpdate(value: Record<string, unknown>): WeChatUpdate {
     contextToken,
     text: texts.length > 0 ? texts.join("\n") : (voiceText ?? null),
     messageType,
-    image,
-    file,
+    media,
     voice,
     ...(quotedText ? { quotedText } : {}),
   };
