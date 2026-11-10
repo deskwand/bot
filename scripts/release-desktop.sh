@@ -405,8 +405,11 @@ for target in "${targets[@]}"; do
 done
 
 echo "==> 6/8 公网核验"
-# 核验要下载公网文件，和 check-remote 一样会偶发 fetch failed（本机实测）。核验只读，
-# 失败重试 3 次；内容不符这类确定性错误仍会连续失败并中止。
+# 刚上传的对象不会立刻在公网上可读（0.1.35 实测：核验第一次读到 404，约半分钟后正常），
+# 先等几秒再核验，避免把「还没生效」当成发布失败。
+sleep 5
+# 核验要下载公网文件，两类瞬时失败都会遇到：fetch failed，以及刚上传的对象还读到 404。
+# 核验只读，失败重试 8 次；内容不符这类确定性错误仍会连续失败并中止。
 for target in "${targets[@]}"; do
   t="$(target_of "$target")"
   verify_args=("$t" "$version" "$(build_dir_of "$target")")
@@ -416,13 +419,14 @@ for target in "${targets[@]}"; do
   attempt=1
   until node --experimental-strip-types "$root/scripts/desktop-release.ts" verify \
     "${verify_args[@]}"; do
-    if [ "$attempt" -ge 5 ]; then
-      echo "核验 ${t} 连续失败 5 次，停止发布" >&2
+    if [ "$attempt" -ge 8 ]; then
+      echo "核验 ${t} 连续失败 8 次，停止发布" >&2
       exit 1
     fi
     attempt=$((attempt + 1))
     echo "重试 ${t} 的公网核验（第 ${attempt} 次）" >&2
-    sleep "$((attempt * 2))"
+    # 逐渐拉长到 20 秒，给 CDN 生效留出约两分钟。
+    sleep "$((attempt * 5 > 20 ? 20 : attempt * 5))"
   done
 done
 
