@@ -338,13 +338,13 @@ for target in "${targets[@]}"; do
   t="$(target_of "$target")"
   attempt=1
   until node --experimental-strip-types "$root/scripts/desktop-release.ts" check-remote "$t" "$version"; do
-    if [ "$attempt" -ge 3 ]; then
-      echo "读取 ${t} 的公网 manifest 连续失败 3 次，停止发布" >&2
+    if [ "$attempt" -ge 5 ]; then
+      echo "读取 ${t} 的公网 manifest 连续失败 5 次，停止发布" >&2
       exit 1
     fi
     attempt=$((attempt + 1))
     echo "重试 ${t} 的公网 manifest 检查（第 ${attempt} 次）" >&2
-    sleep 2
+    sleep "$((attempt * 2))"
   done
 done
 
@@ -416,13 +416,13 @@ for target in "${targets[@]}"; do
   attempt=1
   until node --experimental-strip-types "$root/scripts/desktop-release.ts" verify \
     "${verify_args[@]}"; do
-    if [ "$attempt" -ge 3 ]; then
-      echo "核验 ${t} 连续失败 3 次，停止发布" >&2
+    if [ "$attempt" -ge 5 ]; then
+      echo "核验 ${t} 连续失败 5 次，停止发布" >&2
       exit 1
     fi
     attempt=$((attempt + 1))
     echo "重试 ${t} 的公网核验（第 ${attempt} 次）" >&2
-    sleep 2
+    sleep "$((attempt * 2))"
   done
 done
 
