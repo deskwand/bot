@@ -1,6 +1,5 @@
 import { Agent, type Schedule } from "agents";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { contentText } from "@earendil-works/pi-ai";
 import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
 import { PiHarness, type PiModel, type PiOperationResult } from "agents/harness/pi";
 import {
@@ -20,7 +19,6 @@ import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
-import { fitForPhone, type PhoneFitDeps } from "../phone/fit";
 import { phoneRules } from "../phone/style";
 import { isInboxKey } from "../channels/inbox";
 import { parseActiveChannel } from "../channels/route-identity";
@@ -32,7 +30,6 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
-import { modelUnavailableShortText } from "../llm/model-errors";
 import {
   createModelsForEnv,
   defaultThinkingLevel,
@@ -850,19 +847,17 @@ export class ButlerDO extends Agent<Env> {
     const bot = this.bots.get(botId);
     if (!bot) return false;
     const locale = ownerLocale(this.env);
-    const fitted = await fitForPhone(text, locale, this.phoneFitDeps());
     const ref = await this.sendBestEffort({
-      text: clampMessage(botNoticeText(locale, bot.name, fitted.text)),
+      text: clampMessage(botNoticeText(locale, bot.name, text)),
     });
     if (ref === null) return false;
     this.writeBotLedger(
       botId,
       t(locale, "phone.ledgerBotMessage", {
         name: bot.name,
-        snippet: snippet(fitted.text),
+        snippet: snippet(text),
       }),
     );
-    await this.deliverArtifacts(fitted.attachments, locale);
     return true;
   }
 
@@ -1438,20 +1433,19 @@ export class ButlerDO extends Agent<Env> {
       console.error("butler ledger write failed:", error);
     }
 
-    const fitted = await fitForPhone(summary, locale, this.phoneFitDeps());
     if (append) {
       await this.sendBestEffort({
         text: clampMessage(
-          taskCompletedText(locale, label, row.title, fitted.text || undefined),
+          taskCompletedText(locale, label, row.title, summary || undefined),
         ),
         priority: "critical",
       });
-    } else if (fitted.text.length > 0) {
+    } else if (summary.length > 0) {
       // Telegram already edited the progress message to the status line, so
       // the result is the summary by itself.
-      await this.sendBestEffort({ text: fitted.text, priority: "critical" });
+      await this.sendBestEffort({ text: summary, priority: "critical" });
     }
-    await this.deliverArtifacts([...artifacts, ...fitted.attachments], locale);
+    await this.deliverArtifacts(artifacts, locale);
   }
 
   /** 逐个下发产物；一个失败只影响它自己，主人会收到一句告知。 */
@@ -1558,7 +1552,6 @@ export class ButlerDO extends Agent<Env> {
     operationId: string,
     text: string,
     keep = false,
-    fit = false,
   ): Promise<void> {
     const store = this.turns();
     const row = store.get(operationId);
@@ -1577,20 +1570,10 @@ export class ButlerDO extends Agent<Env> {
     this.deliveringTurns.add(operationId);
     store.delivering(operationId, now);
     try {
-      const locale = ownerLocale(this.env);
-      // Compression is expensive and writes an R2 original, so only do it
-      // for an eligible send and only for the model's own answer.
-      let sendText = text;
-      let attachments: Artifact[] = [];
-      if (fit) {
-        const fitted = await fitForPhone(text, locale, this.phoneFitDeps());
-        sendText = fitted.text;
-        attachments = fitted.attachments;
-      }
       // No `clampMessage` here: the Butler's answer went out unclamped before
       // this change, and truncating it would lose real content.
       const ref = await this.sendBestEffort({
-        text: sendText,
+        text,
         priority: "critical",
       });
       if (ref === null) {
@@ -1607,7 +1590,6 @@ export class ButlerDO extends Agent<Env> {
         store.retryAt(operationId, now + retryDelayMs(attempts));
         return;
       }
-      await this.deliverArtifacts(attachments, locale);
       if (keep) store.abandon(operationId, now);
       else store.remove(operationId);
     } finally {
@@ -1652,49 +1634,7 @@ export class ButlerDO extends Agent<Env> {
       this.turns().remove(operationId);
       return;
     }
-    const text = await this.turnResultText(result);
-    // Only the model's own answer is checked. Fixed copy (interrupted turns,
-    // model errors) is written by code and must go out as it is.
-    const shouldFit =
-      result.status === "done" && (result.text?.trim() ?? "") !== "";
-    await this.sendTerminal(operationId, text, false, shouldFit);
-  }
-
-  /** Dependencies `fitForPhone` uses: the task model and the artifacts bucket. */
-  private phoneFitDeps(): PhoneFitDeps {
-    const locale = ownerLocale(this.env);
-    return {
-      complete: async (system, user, signal) => {
-        const models = createModelsForEnv(this.env);
-        const ref = resolveModel(readRuntimeConfig(this.env).models.task, this.env);
-        const model = models.getModel(ref.provider, ref.id);
-        if (!model) {
-          throw new Error(
-            modelUnavailableShortText(locale, ref.provider, ref.id),
-          );
-        }
-        const result = await models.completeSimple(
-          model,
-          {
-            systemPrompt: system,
-            messages: [{ role: "user", content: user, timestamp: Date.now() }],
-          },
-          { signal },
-        );
-        if (result.stopReason === "error" || result.stopReason === "aborted") {
-          throw new Error(result.errorMessage ?? result.stopReason);
-        }
-        return contentText(result.content);
-      },
-      saveOriginal: async (text) => {
-        const name = t(locale, "phone.originalName");
-        const key = `phone/${crypto.randomUUID()}/${name}`;
-        await this.env.ARTIFACTS.put(key, text, {
-          httpMetadata: { contentType: "text/markdown; charset=utf-8" },
-        });
-        return { name, key };
-      },
-    };
+    await this.sendTerminal(operationId, await this.turnResultText(result));
   }
 
   /**
