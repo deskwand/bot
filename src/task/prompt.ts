@@ -1,5 +1,6 @@
 import { t, type Locale } from "../i18n";
 import { attachmentLine } from "../channels/inbox";
+import { phoneRules } from "../phone/style";
 import type { ChannelId, TaskSpec } from "../protocol";
 
 const CHANNEL_NAMES: Record<ChannelId, string> = {
@@ -22,16 +23,6 @@ export function taskSystemPrompt(
     spec.botId !== undefined
       ? `Your \`finish_task\` summary goes to the bot's run log, not to the owner. Messages you send with \`notify_owner\` reach the owner as chat messages on an asynchronous messaging channel${channelSuffix}. They usually read them on a phone, away from a computer, and may read them hours later.`
       : `Your summary is delivered to the owner as a chat message on an asynchronous messaging channel${channelSuffix}. They usually read it on a phone, away from a computer, and may read it hours later.`;
-  const phoneContext = [
-    deliveryLine,
-    "- Lead with the outcome in one or two sentences; detail comes after.",
-    "- Keep it short enough to read on one phone screen. Use short paragraphs and brief lists only: no tables, no multi-level headings.",
-    '- Every message must stand on its own: no "the above", no references to earlier turns.',
-    spec.botId !== undefined
-      ? "- Long material goes into an artifact, not into the message."
-      : "- Long material goes into an artifact, not into the summary.",
-    "- If you had to assume something, say so in one line at the end.",
-  ];
   return [
     `You are the background worker for task ${spec.taskId}: ${spec.title}.`,
     "",
@@ -61,7 +52,8 @@ export function taskSystemPrompt(
     "first (with `save_artifact`) and pass its key in the `finish_task`",
     "artifacts list instead of pasting the content into the summary.",
     "",
-    ...phoneContext,
+    deliveryLine,
+    "- If you had to assume something, say so in one line at the end.",
     "",
     'Use read, write, edit and list for drafts in your private workspace (the owner never sees it; files over 1 MB are refused; there is no shell). Build long documents there, then deliver the final file with save_artifact using `draft: "<path>"` instead of pasting its content. Saved artifacts and owner attachments are read with get_artifact.',
     "The only shared exception is /skills/, which holds skills every task can read and that persist across tasks. Writing there installs a skill for the next new task; it is not how you hand the owner a file.",
@@ -88,5 +80,6 @@ export function taskSystemPrompt(
         ]),
     "",
     t(locale, "prompt.replyLanguage"),
+    phoneRules(locale, { conversational: false }),
   ].join("\n");
 }

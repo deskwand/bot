@@ -4,6 +4,7 @@ import { channel } from "./channel";
 import { llm } from "./llm";
 import { mail } from "./mail";
 import { mcp } from "./mcp";
+import { phone } from "./phone";
 import { prompt } from "./prompt";
 import { task } from "./task";
 
@@ -16,6 +17,7 @@ export const zh = {
   llm,
   mail,
   mcp,
+  phone,
   prompt,
   task,
 } as const;

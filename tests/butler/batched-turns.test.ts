@@ -234,7 +234,7 @@ describe("batched turns", () => {
     expect(sent.map((msg) => msg.text)).toContain("后续答案");
   });
 
-  it("sends a task report's text once when it shares a turn with the owner", async () => {
+  it("delivers a task report outside the owner's turn", async () => {
     const stub = butler("batched-report");
     const sent = await captureSends(stub);
     await installSlowWait(stub);
@@ -242,7 +242,7 @@ describe("batched turns", () => {
       scriptedModel([
         { toolCalls: [{ name: "slow_wait", args: {} }] },
         { text: "第一条答案" },
-        { text: "合并答案" },
+        { text: "第二条答案" },
       ]),
     );
 
@@ -259,7 +259,7 @@ describe("batched turns", () => {
     const second = stub.handleMessage(message("tg:two", "二"));
     await vi.waitFor(async () => {
       const pending = await pendingIds(stub);
-      expect(pending).toContain("task-completed:t1");
+      expect(pending).not.toContain("task-completed:t1");
       expect(pending).toContain("tg:two");
     });
     await releaseSlow(stub);
@@ -267,7 +267,9 @@ describe("batched turns", () => {
     await report;
     await second;
 
-    // The report may wrap the answer in its completion copy.
-    expect(sent.filter((msg) => msg.text?.includes("合并答案"))).toHaveLength(1);
+    const texts = sent.map((msg) => msg.text);
+    expect(texts.filter((text) => text === "S")).toHaveLength(1);
+    expect(texts).toContain("第一条答案");
+    expect(texts).toContain("第二条答案");
   });
 });

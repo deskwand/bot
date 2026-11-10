@@ -3,16 +3,20 @@ import { en } from "./en";
 import { zh } from "./zh";
 
 /** Recursively widens every dictionary leaf to `string`. */
-export type DeepString<T> = {
-  readonly [K in keyof T]: T[K] extends string ? string : DeepString<T[K]>;
-};
+export type DeepString<T> = T extends string
+  ? string
+  : T extends readonly (infer U)[]
+    ? readonly DeepString<U>[]
+    : { readonly [K in keyof T]: DeepString<T[K]> };
 
 export type Messages = DeepString<typeof zh>;
 
 type DotPaths<T, Prefix extends string = ""> = {
   [K in keyof T & string]: T[K] extends string
     ? `${Prefix}${K}`
-    : DotPaths<T[K], `${Prefix}${K}.`>;
+    : T[K] extends readonly unknown[]
+      ? never
+      : DotPaths<T[K], `${Prefix}${K}.`>;
 }[keyof T & string];
 
 export type MessageKey = DotPaths<typeof zh>;

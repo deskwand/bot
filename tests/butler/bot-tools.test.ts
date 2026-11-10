@@ -1,5 +1,6 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BotChatInput } from "../../src/bot/bot-chat-do";
 import { BotStore } from "../../src/bot/bot-store";
 import { BotsRepo } from "../../src/butler/bots-repo";
 import {
@@ -79,7 +80,12 @@ async function runTool(
   butlerName = "bot-tools",
   botOverride?: BotControl,
   destroyChat?: (id: string) => Promise<void>,
-): Promise<{ text: string; rows: { id: string; name: string }[] }> {
+  chat?: (id: string, input: BotChatInput) => Promise<void>,
+): Promise<{
+  text: string;
+  isError: boolean;
+  rows: { id: string; name: string }[];
+}> {
   return runInDurableObject(
     butler(butlerName),
     async (_instance, state) => {
@@ -89,6 +95,7 @@ async function runTool(
         bot: (id) => botOverride ?? botStub(id),
         botChat: (id) => ({
           destroy: () => destroyChat?.(id) ?? Promise.resolve(),
+          chat: (input) => chat?.(id, input) ?? Promise.resolve(),
         }),
         task: () => fakeTask(calls),
       });
@@ -101,6 +108,7 @@ async function runTool(
       );
       return {
         text: (outcome.output?.[0] as { text: string }).text,
+        isError: outcome.isError === true,
         rows: bots.list(),
       };
     },
@@ -670,6 +678,60 @@ describe("butler bot tools", () => {
 
     expect(result.text).toBe("没有机器人 b9");
     expect(result.rows).toEqual([]);
+  });
+
+  it("ask_bot forwards to the bot chat", async () => {
+    await botStub("b1").destroy();
+    await runTool(
+      "create_bot",
+      { name: "价格哨兵", mission: "盯着价格", default_interval: "2h" },
+      [],
+      "bot-tools-ask",
+    );
+    const chats: { id: string; input: BotChatInput }[] = [];
+
+    const result = await runTool(
+      "ask_bot",
+      { id: "b1", text: "刚才的价格怎么了" },
+      [],
+      "bot-tools-ask",
+      undefined,
+      undefined,
+      (id, input) => {
+        chats.push({ id, input });
+        return Promise.resolve();
+      },
+    );
+
+    expect(result.text).toBe("已转给 价格哨兵");
+    expect(result.isError).toBe(false);
+    expect(chats).toHaveLength(1);
+    expect(chats[0]?.id).toBe("b1");
+    expect(chats[0]?.input.botId).toBe("b1");
+    expect(chats[0]?.input.text).toBe("刚才的价格怎么了");
+    expect(chats[0]?.input.images).toEqual([]);
+    expect(chats[0]?.input.eventId.startsWith("ask_bot:")).toBe(true);
+  });
+
+  it("ask_bot reports a missing bot", async () => {
+    let calls = 0;
+
+    const result = await runTool(
+      "ask_bot",
+      { id: "b9", text: "刚才的价格怎么了" },
+      [],
+      "bot-tools-ask-missing",
+      undefined,
+      undefined,
+      () => {
+        calls += 1;
+        return Promise.resolve();
+      },
+    );
+
+    expect(result.text).toBe("没有机器人 b9");
+    expect(result.isError).toBe(true);
+    expect(calls).toBe(0);
   });
 
   it("list_bots shows a self-paused bot as paused", async () => {

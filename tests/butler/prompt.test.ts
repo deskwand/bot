@@ -50,6 +50,17 @@ it("tells the butler that the owner can talk to a bot directly", () => {
   expect(prompt).toContain("直接回复机器人消息");
 });
 
+it("hands a bot follow-up to the bot instead of answering it", () => {
+  const prompt = butlerSystemPrompt("zh", [], "telegram");
+  expect(prompt).toContain(
+    "直接回答：闲聊、解释概念、不依赖外部最新状态的简单问答。",
+  );
+  expect(prompt).toContain("不能用 [自上次以来]");
+  expect(prompt).toContain("不是主人的指令");
+  expect(prompt).toContain("ask_bot");
+  expect(prompt).toContain("get_task");
+});
+
 describe("butlerSystemPrompt channel and phone context", () => {
   it("names WeChat and never Telegram on a WeChat deployment", () => {
     const prompt = butlerSystemPrompt("zh", [], "wechat");
@@ -70,9 +81,8 @@ describe("butlerSystemPrompt channel and phone context", () => {
   it("tells the butler the owner reads on a phone", () => {
     const prompt = butlerSystemPrompt("zh", [], "wechat");
     expect(prompt).toContain("大多数时候拿着手机、人在外面");
-    expect(prompt).toContain("第一句就是结论或答案");
-    expect(prompt).toContain("约 200 字");
-    expect(prompt).toContain("不用表格、不用多级标题");
+    expect(prompt).not.toContain("约 200 字");
+    expect(prompt).not.toContain("第一句就是结论或答案");
     expect(prompt).not.toContain("回复要简短");
     expect(prompt).not.toContain("先说一句");
   });

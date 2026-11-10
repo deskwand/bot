@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
+import type { BotChatInput } from "../bot/bot-chat-do";
 import type { BotInit, BotSnapshot } from "../bot/bot-do";
 import { MEMORY_DOC, RULES_DOC, checkDocWrite, isMethodDoc } from "../bot/docs";
 import {
@@ -28,6 +29,8 @@ const CreateBot = Type.Object({
 const BotId = Type.Object({ id: Type.String() });
 
 const SteerBot = Type.Object({ id: Type.String(), text: Type.String() });
+
+const AskBot = Type.Object({ id: Type.String(), text: Type.String() });
 
 const ResumeBot = Type.Object({
   id: Type.String(),
@@ -75,7 +78,10 @@ export type BotControl = {
 export type BotToolDeps = {
   bots: BotsRepo;
   bot(id: string): BotControl;
-  botChat(id: string): { destroy(): Promise<void> };
+  botChat(id: string): {
+    chat(input: BotChatInput): Promise<void>;
+    destroy(): Promise<void>;
+  };
   task(id: string): TaskControl;
 };
 
@@ -270,6 +276,38 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     },
   };
 
+  // Like `notify_owner`, a restart never replays the call, so the bot cannot
+  // answer the same follow-up twice.
+  const askBot: ToolRegistration<typeof AskBot> = {
+    name: "ask_bot",
+    description:
+      "Hand the owner's message to a bot that should answer it itself, e.g. a follow-up on what the bot just sent. The bot replies to the owner directly; anything you say in this turn is NOT sent.",
+    parameters: AskBot,
+    async execute({ id, text }) {
+      try {
+        const row = bots.get(id);
+        if (!row) {
+          return {
+            output: [{ type: "text" as const, text: `没有机器人 ${id}` }],
+            isError: true,
+          };
+        }
+        await botChat(id).chat({
+          botId: id,
+          text,
+          images: [],
+          eventId: `ask_bot:${crypto.randomUUID()}`,
+        });
+        return output(`已转给 ${row.name}`);
+      } catch (error) {
+        return {
+          output: [{ type: "text" as const, text: errorText(error) }],
+          isError: true,
+        };
+      }
+    },
+  };
+
   const wakeBot: ToolRegistration<typeof BotId> = {
     name: "wake_bot",
     description: "Wake a bot now instead of waiting for its next wake time.",
@@ -409,6 +447,7 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     getBot,
     editBotDoc,
     steerBot,
+    askBot,
     wakeBot,
     pauseBot,
     resumeBot,

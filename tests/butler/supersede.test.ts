@@ -357,7 +357,7 @@ describe("supersede a thinking turn", () => {
     expect(sent.map((msg) => msg.text)).toContain("半句话的答案");
   });
 
-  it("leaves a queued task report alone", async () => {
+  it("does not queue a task report behind the owner's turn", async () => {
     const stub = butler("supersede-queued-report");
     const sent = await captureSends(stub);
     await seedTask(stub);
@@ -365,7 +365,7 @@ describe("supersede a thinking turn", () => {
     setModelOverride(
       scriptedModel([
         { text: "第一条答案", gate: held.wait },
-        { text: "汇报和补充" },
+        { text: "新的回答" },
       ]),
     );
 
@@ -384,7 +384,7 @@ describe("supersede a thinking turn", () => {
       const pending = await runInDurableObject(stub, (instance) =>
         (instance as unknown as { harness: PiHarness }).harness.pending(),
       );
-      expect(pending.map((operation) => operation.operationId)).toContain(
+      expect(pending.map((operation) => operation.operationId)).not.toContain(
         "task-completed:t1",
       );
     });
@@ -396,40 +396,41 @@ describe("supersede a thinking turn", () => {
     held.open();
     await Promise.all([first, report, second]);
 
-    expect(marked).toBeNull();
+    // The report is no longer a queued turn, so it cannot shield the owner's
+    // in-flight thought from the new message.
+    expect(marked).not.toBeNull();
     const texts = sent.map((msg) => msg.text ?? "");
-    expect(texts).toContain("第一条答案");
-    expect(texts.filter((text) => text.includes("汇报和补充"))).toHaveLength(1);
+    expect(texts).not.toContain("第一条答案");
+    expect(texts).toContain("新的回答");
+    expect(texts.filter((text) => text === "S")).toHaveLength(1);
   });
 
-  it("leaves a running task report alone", async () => {
+  it("delivers a task report without starting a butler turn", async () => {
     const stub = butler("supersede-report");
     const sent = await captureSends(stub);
     await seedTask(stub);
-    const held = gate();
+    let modelCalls = 0;
     setModelOverride(
       scriptedModel([
-        { text: "汇报正文", gate: held.wait },
-        { text: "新的回答" },
+        {
+          text: "must not run",
+          observe: () => {
+            modelCalls += 1;
+          },
+        },
       ]),
     );
 
-    const report = stub.report({
+    await stub.report({
       taskId: "t1",
       seq: 1,
       type: "completed",
       summary: "S",
       artifacts: [],
     });
-    await vi.waitFor(async () =>
-      expect(await runningIds(stub)).toContain("task-completed:t1"),
-    );
-    const msg = stub.handleMessage(message("tg:one", "再加一句"));
-    held.open();
-    await Promise.all([report, msg]);
 
-    const texts = sent.map((msg) => msg.text);
-    expect(texts).toContain("汇报正文");
-    expect(texts).toContain("新的回答");
+    expect(modelCalls).toBe(0);
+    expect(await turnRows(stub)).toEqual([]);
+    expect(sent.map((msg) => msg.text)).toContain("S");
   });
 });

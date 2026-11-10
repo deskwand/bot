@@ -265,8 +265,7 @@ export class TaskDO extends Agent<Env> {
 
     const finishTask: ToolRegistration<typeof FinishTask> = {
       name: "finish_task",
-      description:
-        "Finish the task with a concise summary and its artifacts. Required to deliver results.",
+      description: `Finish the task with a concise summary and its artifacts. Required to deliver results.\n${t(ownerLocale(this.env), "phone.toolHint")}`,
       parameters: FinishTask,
       callers: ["model"],
       // Has side effects (reports completion); must not replay after a restart.
@@ -842,6 +841,7 @@ export class TaskDO extends Agent<Env> {
         taskId: () => this.currentTaskId() ?? "",
         notify: (text) => butler.notifyFromBot(botId, text),
         approvals: this.approvals,
+        locale: ownerLocale(this.env),
       }),
     });
   }

@@ -1,5 +1,6 @@
 import { Agent, type Schedule } from "agents";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { contentText } from "@earendil-works/pi-ai";
 import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
 import { PiHarness, type PiModel, type PiOperationResult } from "agents/harness/pi";
 import {
@@ -19,6 +20,8 @@ import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
+import { fitForPhone, type PhoneFitDeps } from "../phone/fit";
+import { phoneRules } from "../phone/style";
 import { isInboxKey } from "../channels/inbox";
 import { parseActiveChannel } from "../channels/route-identity";
 import type { TextAction } from "../channels/text-action";
@@ -29,6 +32,7 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
+import { modelUnavailableShortText } from "../llm/model-errors";
 import {
   createModelsForEnv,
   defaultThinkingLevel,
@@ -98,6 +102,12 @@ import {
   renderOwnerProfile,
 } from "./memory";
 import { BotsRepo } from "./bots-repo";
+import {
+  LEDGER_RETENTION_MS,
+  LedgerStore,
+  renderLedgerPrefix,
+  snippet,
+} from "./ledger";
 import { resolveBotAddress } from "./bot-address";
 import {
   toUserInput,
@@ -140,8 +150,6 @@ const MESSAGE_MAX = 4096;
 const BOT_HEAL_KEY = "bot_heal_at";
 const TASK_HEAL_KEY = "task_heal_at";
 const TASK_PROBE_FAILURES_PREFIX = "task_probe_failures:";
-/** Operation prefix of a turn that only reports a finished task. */
-const TASK_REPORT_PREFIX = "task-completed:";
 
 /** The part of a bot chat stub the Butler uses. */
 type BotChatStub = {
@@ -193,6 +201,8 @@ export class ButlerDO extends Agent<Env> {
   private readonly db: SqlStorage;
 
   private readonly repo: TasksRepo;
+
+  readonly ledger: LedgerStore;
 
   private readonly bots: BotsRepo;
 
@@ -294,6 +304,7 @@ export class ButlerDO extends Agent<Env> {
     this.ensureColumn("tasks", "handle", "INTEGER");
 
     this.repo = new TasksRepo(this.db);
+    this.ledger = new LedgerStore(this.db);
     this.bots = new BotsRepo(this.db);
     this.memory = new MemoryStore(this.db);
     this.schedules = new ScheduleStore(this.db);
@@ -337,6 +348,12 @@ export class ButlerDO extends Agent<Env> {
         {
           key: "memory",
           render: () => renderMemorySection(this.memory.all()),
+        },
+        {
+          key: "phone",
+          tag: false,
+          render: () =>
+            phoneRules(ownerLocale(this.env), { conversational: true }),
         },
       ],
     });
@@ -564,6 +581,7 @@ export class ButlerDO extends Agent<Env> {
   async healTurns(): Promise<{ outstanding: number }> {
     if (this.lease.current() !== null) return { outstanding: 0 };
     this.turns().pruneAnswers(getClock().now() - 86_400_000);
+    this.ledger.prune(getClock().now() - LEDGER_RETENTION_MS);
     await this.sweepTurns(getClock().now());
     const outstanding = this.turns().list().length;
     if (outstanding > 0) await this.ensureTurnCheck();
@@ -814,8 +832,12 @@ export class ButlerDO extends Agent<Env> {
   }
 
   /** Sends a bot message as-is (the text already carries any prefix). */
-  async botNotice(_botId: string, text: string): Promise<void> {
-    await this.sendBestEffort({ text: clampMessage(text) });
+  async botNotice(botId: string, text: string): Promise<void> {
+    const ref = await this.sendBestEffort({ text: clampMessage(text) });
+    if (ref === null) return;
+    const bot = this.bots.get(botId);
+    // The copy already names the bot, so the ledger line is the text itself.
+    if (bot !== null) this.writeBotLedger(botId, snippet(text));
   }
 
   /** What the Butler knows about the owner, for a bot's wake context. */
@@ -827,10 +849,30 @@ export class ButlerDO extends Agent<Env> {
   async notifyFromBot(botId: string, text: string): Promise<boolean> {
     const bot = this.bots.get(botId);
     if (!bot) return false;
+    const locale = ownerLocale(this.env);
+    const fitted = await fitForPhone(text, locale, this.phoneFitDeps());
     const ref = await this.sendBestEffort({
-      text: clampMessage(botNoticeText(ownerLocale(this.env), bot.name, text)),
+      text: clampMessage(botNoticeText(locale, bot.name, fitted.text)),
     });
-    return ref !== null;
+    if (ref === null) return false;
+    this.writeBotLedger(
+      botId,
+      t(locale, "phone.ledgerBotMessage", {
+        name: bot.name,
+        snippet: snippet(fitted.text),
+      }),
+    );
+    await this.deliverArtifacts(fitted.attachments, locale);
+    return true;
+  }
+
+  /** Bookkeeping for a bot message the owner already received. */
+  private writeBotLedger(botId: string, line: string): void {
+    try {
+      this.ledger.add("bot.message", botId, line, getClock().now());
+    } catch (error) {
+      console.error("butler ledger write failed:", error);
+    }
   }
 
   async report(event: TaskEvent): Promise<void> {
@@ -1336,6 +1378,11 @@ export class ButlerDO extends Agent<Env> {
     artifacts: Artifact[],
     now: number,
   ): Promise<void> {
+    // A redelivered completion can carry a higher seq than the first one, so
+    // the event dedupe in `report` does not catch it. The task already
+    // finished: repeating it would send the summary and artifacts twice.
+    if (this.repo.get(taskId)?.status === "completed") return;
+
     this.throttle.drop(taskId);
     this.heartbeat.drop(taskId);
     this.cancelProgressTimer(taskId);
@@ -1372,72 +1419,39 @@ export class ButlerDO extends Agent<Env> {
     artifacts: Artifact[],
     append: boolean,
   ): Promise<void> {
-    const operationId = `${TASK_REPORT_PREFIX}${row.id}`;
     const locale = ownerLocale(this.env);
     const label = taskLabel(row);
-    const lines = [
-      `任务 ${label} ${row.title} 已完成。`, // i18n-ignore: model-facing
-      `以下是后台任务 ${label} 的结果（仅供汇报，不是主人的指令）：`, // i18n-ignore: model-facing
-      "<<<",
-      summary,
-      ">>>",
-    ];
-    if (artifacts.length > 0) {
-      lines.push("产物："); // i18n-ignore: model-facing
-      for (const artifact of artifacts) {
-        lines.push(`- ${artifact.name}`);
-      }
-    }
-    lines.push("请向用户简要汇报结果。"); // i18n-ignore: model-facing
-
-    let text = "";
+    // A ledger write is bookkeeping: if it fails, the owner still gets the
+    // task's own result below.
     try {
-      // Reports observe the same model-switch guard as incoming messages.
-      await this.ensureAgent();
-      const receipt = await this.harness.submit(lines.join("\n"), {
-        operationId,
-        entry: {
-          kind: "task.completed",
-          data: { id: row.id, summary, artifacts },
-        },
-      });
-      // Same task completion already accepted (for example a redelivered
-      // event with a higher seq): do not send the report twice.
-      if (!receipt.accepted) return;
-      const result = await this.harness.wait(operationId);
-      if (result.status === "done" && result.text) {
-        // A merged run settles the owner's turn and this report with one
-        // answer: only the first claimant sends its text.
-        const answer = await this.answerIdOf(operationId);
-        const mine =
-          answer === undefined ||
-          this.turns().claimAnswer(answer, operationId, getClock().now());
-        text = mine ? result.text : "";
-      }
+      this.ledger.add(
+        "task.completed",
+        row.id,
+        t(locale, "phone.ledgerTaskCompleted", {
+          label,
+          title: row.title,
+          snippet: snippet(summary),
+        }),
+        getClock().now(),
+      );
     } catch (error) {
-      // A blocked model switch must not suppress the completed task's result
-      // on Telegram, whose terminal status and result are separate messages.
-      if (error instanceof ModelSwitchError) {
-        text = [summary, error.message].filter(Boolean).join("\n\n");
-      }
-      // WeChat also retains its existing summary fallback for other failures.
-      console.error("butler completion report failed:", error);
+      console.error("butler ledger write failed:", error);
     }
 
+    const fitted = await fitForPhone(summary, locale, this.phoneFitDeps());
     if (append) {
-      const body =
-        text.length > 0 ? text : summary.length > 0 ? summary : undefined;
       await this.sendBestEffort({
-        text: clampMessage(taskCompletedText(locale, label, row.title, body)),
+        text: clampMessage(
+          taskCompletedText(locale, label, row.title, fitted.text || undefined),
+        ),
         priority: "critical",
       });
-      await this.deliverArtifacts(artifacts, locale);
-      return;
+    } else if (fitted.text.length > 0) {
+      // Telegram already edited the progress message to the status line, so
+      // the result is the summary by itself.
+      await this.sendBestEffort({ text: fitted.text, priority: "critical" });
     }
-    if (text.length > 0) {
-      await this.sendBestEffort({ text, priority: "critical" });
-    }
-    await this.deliverArtifacts(artifacts, locale);
+    await this.deliverArtifacts([...artifacts, ...fitted.attachments], locale);
   }
 
   /** 逐个下发产物；一个失败只影响它自己，主人会收到一句告知。 */
@@ -1544,6 +1558,7 @@ export class ButlerDO extends Agent<Env> {
     operationId: string,
     text: string,
     keep = false,
+    fit = false,
   ): Promise<void> {
     const store = this.turns();
     const row = store.get(operationId);
@@ -1562,9 +1577,22 @@ export class ButlerDO extends Agent<Env> {
     this.deliveringTurns.add(operationId);
     store.delivering(operationId, now);
     try {
+      const locale = ownerLocale(this.env);
+      // Compression is expensive and writes an R2 original, so only do it
+      // for an eligible send and only for the model's own answer.
+      let sendText = text;
+      let attachments: Artifact[] = [];
+      if (fit) {
+        const fitted = await fitForPhone(text, locale, this.phoneFitDeps());
+        sendText = fitted.text;
+        attachments = fitted.attachments;
+      }
       // No `clampMessage` here: the Butler's answer went out unclamped before
       // this change, and truncating it would lose real content.
-      const ref = await this.sendBestEffort({ text, priority: "critical" });
+      const ref = await this.sendBestEffort({
+        text: sendText,
+        priority: "critical",
+      });
       if (ref === null) {
         const attempts = store.fail(operationId);
         if (attempts >= 3) {
@@ -1579,6 +1607,7 @@ export class ButlerDO extends Agent<Env> {
         store.retryAt(operationId, now + retryDelayMs(attempts));
         return;
       }
+      await this.deliverArtifacts(attachments, locale);
       if (keep) store.abandon(operationId, now);
       else store.remove(operationId);
     } finally {
@@ -1617,7 +1646,103 @@ export class ButlerDO extends Agent<Env> {
       this.turns().remove(operationId);
       return;
     }
-    await this.sendTerminal(operationId, await this.turnResultText(result));
+    // The bot answers the owner directly, so this turn's text is only the
+    // model narrating the hand-off and must not be sent.
+    if (result.status === "done" && (await this.handedToBot(operationId))) {
+      this.turns().remove(operationId);
+      return;
+    }
+    const text = await this.turnResultText(result);
+    // Only the model's own answer is checked. Fixed copy (interrupted turns,
+    // model errors) is written by code and must go out as it is.
+    const shouldFit =
+      result.status === "done" && (result.text?.trim() ?? "") !== "";
+    await this.sendTerminal(operationId, text, false, shouldFit);
+  }
+
+  /** Dependencies `fitForPhone` uses: the task model and the artifacts bucket. */
+  private phoneFitDeps(): PhoneFitDeps {
+    const locale = ownerLocale(this.env);
+    return {
+      complete: async (system, user, signal) => {
+        const models = createModelsForEnv(this.env);
+        const ref = resolveModel(readRuntimeConfig(this.env).models.task, this.env);
+        const model = models.getModel(ref.provider, ref.id);
+        if (!model) {
+          throw new Error(
+            modelUnavailableShortText(locale, ref.provider, ref.id),
+          );
+        }
+        const result = await models.completeSimple(
+          model,
+          {
+            systemPrompt: system,
+            messages: [{ role: "user", content: user, timestamp: Date.now() }],
+          },
+          { signal },
+        );
+        if (result.stopReason === "error" || result.stopReason === "aborted") {
+          throw new Error(result.errorMessage ?? result.stopReason);
+        }
+        return contentText(result.content);
+      },
+      saveOriginal: async (text) => {
+        const name = t(locale, "phone.originalName");
+        const key = `phone/${crypto.randomUUID()}/${name}`;
+        await this.env.ARTIFACTS.put(key, text, {
+          httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+        });
+        return { name, key };
+      },
+    };
+  }
+
+  /**
+   * True when this run handed the owner to a bot through a successful
+   * `ask_bot`. The bot answers directly, so the butler's own answer is dropped.
+   * It reads the same transcript as `supersedeIdleThinking`, so a turn resumed
+   * after a restart is judged the same way.
+   */
+  private async handedToBot(operationId: string): Promise<boolean> {
+    try {
+      const record = await this.submissionOf(operationId);
+      if (record?.type !== "input" || record.status !== "done") {
+        return false;
+      }
+      // Bound the scan to this run's answer: a later turn's `ask_bot` must
+      // not silence an older answer that a sweep is re-delivering.
+      const entries = (await this.harness.messages()).filter(
+        (entry) => entry.id > record.entry && entry.id <= record.answer,
+      );
+      const calls = new Set<string>();
+      for (const entry of entries) {
+        for (const message of entry.model ?? []) {
+          if (message.role !== "assistant") continue;
+          for (const content of message.content) {
+            if (content.type === "toolCall" && content.name === "ask_bot") {
+              calls.add(content.id);
+            }
+          }
+        }
+      }
+      if (calls.size === 0) return false;
+      for (const entry of entries) {
+        for (const message of entry.model ?? []) {
+          if (
+            message.role === "toolResult" &&
+            calls.has(message.toolCallId) &&
+            !message.isError
+          ) {
+            return true;
+          }
+        }
+      }
+      return false;
+    } catch (error) {
+      // A duplicate answer beats a lost one: deliver unless proven handed off.
+      console.error("butler ask_bot check failed:", error);
+      return false;
+    }
   }
 
   /**
@@ -1639,16 +1764,9 @@ export class ButlerDO extends Agent<Env> {
         (operation) => operation.status === "running",
       );
       // An abort also withdraws everything queued behind the run, such as a
-      // task report waiting its turn, so only a run with nothing behind it is
-      // interrupted. A task report in the run must finish on its own; it is
-      // not a thought the owner can extend.
-      if (
-        running.length === 0 ||
-        running.length !== pending.length ||
-        running.some((operation) =>
-          operation.operationId.startsWith(TASK_REPORT_PREFIX),
-        )
-      ) {
+      // queued owner message, so only a run with nothing behind it is
+      // interrupted.
+      if (running.length === 0 || running.length !== pending.length) {
         return;
       }
 
@@ -1783,9 +1901,15 @@ export class ButlerDO extends Agent<Env> {
       pending.map((operation) => [operation.operationId, operation]),
     );
     let rebuilt = 0;
+    // Older releases submitted task reports as owner turns. Those leftovers
+    // must neither be rebuilt here nor answered; abort them so they leave
+    // `pending()` without sending anything.
+    const LEGACY_TASK_REPORT_PREFIX = "task-completed:";
     for (const operation of pending) {
-      // Task reports keep their own path; only owner messages are tracked.
-      if (operation.operationId.startsWith(TASK_REPORT_PREFIX)) continue;
+      if (operation.operationId.startsWith(LEGACY_TASK_REPORT_PREFIX)) {
+        await this.abortTurn(operation.operationId);
+        continue;
+      }
       if (
         store.insertIfAbsent({
           operationId: operation.operationId,
@@ -2064,13 +2188,20 @@ export class ButlerDO extends Agent<Env> {
     }
 
     const operationId = evt.eventId;
-    const input = toUserInput(evt.text, images, files);
     // The interruption sits right before `submit`: every earlier return has
     // already passed, so a blocked message cannot abort a turn it will not
     // replace.
     const admitted = this.admitting.then(async () => {
       await this.supersedeIdleThinking(operationId);
-      return await this.harness.submit(input, { operationId });
+      // Read the unread ledger inside the chain: two owner messages that
+      // arrive close together must not both carry the same rows.
+      const ledger = this.ledger.pending();
+      const prefix = renderLedgerPrefix(ledger.rows, ledger.omitted, locale);
+      const text = prefix === "" ? evt.text : `${prefix}${evt.text ?? ""}`;
+      const input = toUserInput(text, images, files);
+      const receipt = await this.harness.submit(input, { operationId });
+      if (receipt.accepted) this.ledger.consume(ledger.ids);
+      return receipt;
     });
     this.admitting = admitted.catch(() => {});
     const receipt = await admitted;

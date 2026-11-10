@@ -6,6 +6,7 @@ import {
   rejectionText,
   type ApprovalGateLike,
 } from "../task/approvals";
+import { t, type Locale } from "../i18n";
 import type { RunRow } from "./bot-store";
 import { RULES_DOC, checkDocWrite } from "./docs";
 import { parseDuration } from "./wake";
@@ -31,6 +32,7 @@ export type BotTaskToolDeps = {
   taskId: () => string;
   notify(text: string): Promise<boolean>;
   approvals: ApprovalGateLike;
+  locale?: Locale;
 };
 
 /** Used when the tool context carries no abort signal. */
@@ -163,7 +165,7 @@ export function setNextWakeTool(
 export function createBotTaskTools(
   deps: BotTaskToolDeps,
 ): ToolRegistration[] {
-  const { bot, taskId, notify, approvals } = deps;
+  const { bot, taskId, notify, approvals, locale = "zh" } = deps;
 
   const writeDoc: ToolRegistration<typeof WriteDoc> = {
     name: "write_doc",
@@ -250,7 +252,7 @@ export function createBotTaskTools(
 
   const notifyOwner: ToolRegistration<typeof NotifyOwner> = {
     name: "notify_owner",
-    description: "Send the owner a message right away.",
+    description: `Send the owner a message right away.\n${t(locale, "phone.toolHint")}`,
     parameters: NotifyOwner,
     // Sends a message; must not replay after a restart.
     async execute({ text }) {

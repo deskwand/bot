@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { phoneRules } from "../../src/phone/style";
 import { taskSystemPrompt } from "../../src/task/prompt";
 
 function spec(botId?: string) {
@@ -66,14 +67,13 @@ describe("taskSystemPrompt", () => {
     ).not.toContain("[附件]");
   });
 
-  it("task prompt ends with the reply language", () => {
-    expect(
-      taskSystemPrompt("en", spec(), "telegram").endsWith(
-        "Always reply to the owner in English.",
-      ),
-    ).toBe(true);
-    expect(taskSystemPrompt("zh", spec(), "telegram").endsWith("始终用中文回复主人。")).toBe(
-      true,
+  it("task prompt ends with the phone rules", () => {
+    const prompt = taskSystemPrompt("zh", spec(), "telegram");
+    const rules = phoneRules("zh", { conversational: false });
+
+    expect(prompt.endsWith(rules)).toBe(true);
+    expect(prompt.indexOf(rules)).toBeGreaterThan(
+      prompt.indexOf("Instructions from the user"),
     );
   });
 });
@@ -98,9 +98,8 @@ describe("taskSystemPrompt channel and phone context", () => {
   it("asks for a phone-sized summary", () => {
     const prompt = taskSystemPrompt("zh", spec(), "wechat");
     expect(prompt).toContain("usually read it on a phone");
-    expect(prompt).toContain("Lead with the outcome");
-    expect(prompt).toContain("one phone screen");
-    expect(prompt).toContain("no tables, no multi-level headings");
+    expect(prompt).toContain(phoneRules("zh", { conversational: false }));
+    expect(prompt).not.toContain("one phone screen");
   });
 
   it("gives bot runs the reason not to notify the owner", () => {
@@ -117,7 +116,7 @@ describe("taskSystemPrompt delivery destination", () => {
     expect(prompt).toContain("goes to the bot's run log, not to the owner");
     expect(prompt).toContain("(WeChat)");
     expect(prompt).not.toContain("Your summary is delivered to the owner");
-    expect(prompt).toContain("not into the message.");
+    expect(prompt).toContain("Messages you send with `notify_owner` reach the owner");
   });
 
   it("drops the channel name for a bot run when it is unknown", () => {

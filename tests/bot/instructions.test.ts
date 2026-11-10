@@ -7,6 +7,8 @@ import {
 } from "../../src/bot/instructions";
 import type { RunRow } from "../../src/bot/bot-store";
 import type { BotDoc } from "../../src/bot/docs";
+import { t } from "../../src/i18n";
+import { phoneRules } from "../../src/phone/style";
 
 const docs: BotDoc[] = [
   { name: "守则", content: "凌晨不发消息" },
@@ -199,6 +201,10 @@ describe("buildBotInstructions", () => {
     expect(text).not.toContain("<<<");
   });
 
+  it("leaves the phone rules to the task prompt", () => {
+    expect(render()).not.toContain(t("zh", "phone.rulesTitle"));
+  });
+
   it("keeps method documents in the given order and out of the reserved names", () => {
     const text = render({
       docs: [
@@ -240,14 +246,16 @@ describe("botChatSystemPrompt", () => {
     runs: [],
   };
 
-  it("ends with the reply language line", () => {
+  it("ends with the conversational phone rules", () => {
     expect(
       botChatSystemPrompt(snapshot, "", "en").endsWith(
-        "Always reply to the owner in English.",
+        phoneRules("en", { conversational: true }),
       ),
     ).toBe(true);
-    expect(botChatSystemPrompt(snapshot, "", "zh").endsWith("始终用中文回复主人。")).toBe(
-      true,
-    );
+    expect(
+      botChatSystemPrompt(snapshot, "", "zh").endsWith(
+        phoneRules("zh", { conversational: true }),
+      ),
+    ).toBe(true);
   });
 });
