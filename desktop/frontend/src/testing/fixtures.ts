@@ -55,6 +55,8 @@ type Scenario =
   | "upgrade-required"
   | "upgrade-keys-missing"
   | "model-key-missing"
+  | "search-deepseek"
+  | "search-tavily"
   | "client-update-failed"
   | "catalog-unavailable"
   | "pending-operations"
@@ -107,6 +109,7 @@ interface MockState {
   // publish, like Go's deployment hook.
   publishedLocale: Locale;
   approvalMode: "autonomous" | "reviewed";
+  searchProvider: string;
   localeSaveFails: boolean;
   telemetry: boolean;
   connected: boolean;
@@ -319,6 +322,8 @@ function scenarioFromLocation(): Scenario {
     case "upgrade-required":
     case "upgrade-keys-missing":
     case "model-key-missing":
+    case "search-deepseek":
+    case "search-tavily":
     case "client-update-failed":
     case "catalog-unavailable":
     case "pending-operations":
@@ -407,6 +412,8 @@ function initialState(): MockState {
     "upgrade-required",
     "upgrade-keys-missing",
     "model-key-missing",
+    "search-deepseek",
+    "search-tavily",
     "client-update-failed",
     "pending-operations",
     "pending-other-account",
@@ -448,6 +455,7 @@ function initialState(): MockState {
     systemLocale,
     publishedLocale: "zh",
     approvalMode: "autonomous",
+    searchProvider: scenario === "search-tavily" ? "tavily" : "exa",
     localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
     connected: shellScenario,
@@ -470,6 +478,7 @@ function initialState(): MockState {
       MODEL_KEY_OPENCODE_GO: shellScenario,
       MODEL_KEY_ANTHROPIC: false,
       TELEGRAM_BOT_TOKEN: scenario === "telegram-configured",
+      MODEL_KEY_DEEPSEEK: scenario === "search-deepseek",
       WECHAT_CREDENTIALS: scenario === "user-evidence",
     },
     mcpServers:
@@ -666,6 +675,7 @@ export function createMockClient(): ClientService {
       mcpServers: state.mcpServers,
       locale: state.publishedLocale,
       approvalMode: state.approvalMode,
+      searchProvider: state.searchProvider,
       secrets: Object.keys(state.secrets)
         .sort()
         .map((name) => ({ name, configured: state.secrets[name] === true })),
@@ -690,6 +700,14 @@ export function createMockClient(): ClientService {
     if (input.customProviders) state.customProviders = [...input.customProviders];
     if (input.approvalMode === "autonomous" || input.approvalMode === "reviewed") {
       state.approvalMode = input.approvalMode;
+    }
+    if (
+      input.searchProvider === "exa" ||
+      input.searchProvider === "tavily" ||
+      input.searchProvider === "brave" ||
+      input.searchProvider === "deepseek"
+    ) {
+      state.searchProvider = input.searchProvider;
     }
     for (const edit of input.secrets ?? []) {
       if (edit.operation === "clear") state.secrets[edit.name] = false;

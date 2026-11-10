@@ -34,6 +34,17 @@
       "enum": ["autonomous", "reviewed"],
       "description": "How tasks handle write actions. autonomous runs them directly (only tools the owner marked as require-approval and bot rules changes ask); reviewed sends them through the model reviewer first. Absent means autonomous."
     },
+    "search": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["exa", "tavily", "brave", "deepseek"]
+        }
+      },
+      "description": "Web search provider for the web_search tool. Absent means exa. Keys: SEARCH_KEY_TAVILY, SEARCH_KEY_BRAVE, MODEL_KEY_DEEPSEEK."
+    },
     "email": {
       "type": "object",
       "description": "Mailbox accounts the bot may read. This schema only constrains the structure (no counts or string lengths, which could reject the whole document): field-level checks (id pattern, port range, security enum, presence of the account secret) live in src/mail/accounts.ts, which drops a bad account instead of rejecting the whole document.",

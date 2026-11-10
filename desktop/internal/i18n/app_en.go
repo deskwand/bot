@@ -79,4 +79,5 @@ var enApp = map[string]string{
 	"app.mcpHeaderSecretInvalid": "The header name %s cannot be used as a secret name",
 	"app.mcpNameInvalid":         "A service name may use only lowercase letters, digits and underscores (1-32 characters)",
 	"app.approvalModeInvalid":    "Approval mode must be autonomous or reviewed",
+	"app.searchProviderInvalid":  "Search provider must be exa, tavily, brave or deepseek",
 }

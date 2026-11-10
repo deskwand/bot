@@ -2300,3 +2300,62 @@ func TestServiceConfigEditRejectsUnknownApprovalMode(t *testing.T) {
 		t.Fatalf("error = %v, want %s", err, deployment.CodeInvalidRequest)
 	}
 }
+
+func TestServiceConfigEditRejectsUnknownSearchProvider(t *testing.T) {
+	f := newServiceFixture(t)
+	provider := "bing"
+	_, err := f.service.PublishConfig(ConfigEditDTO{
+		BaseFingerprint: "fingerprint-1",
+		SearchProvider:  &provider,
+	})
+	if !hasCode(err, deployment.CodeInvalidRequest) {
+		t.Fatalf("error = %v, want %s", err, deployment.CodeInvalidRequest)
+	}
+}
+
+func TestServiceConfigEditWritesSearchProviderPatch(t *testing.T) {
+	f := newServiceFixture(t)
+	provider := "tavily"
+	if _, err := f.service.PublishConfig(ConfigEditDTO{
+		BaseFingerprint: "fingerprint-1",
+		SearchProvider:  &provider,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	change := f.publish.lastChange()
+	if change.Patch.SearchProvider == nil || *change.Patch.SearchProvider != "tavily" {
+		t.Fatalf("searchProvider patch = %#v", change.Patch.SearchProvider)
+	}
+}
+
+func TestServiceGetConfigReadsSearchProvider(t *testing.T) {
+	f := newServiceFixture(t)
+	f.snapshots.snapshot.ConfigJSON = []byte(`{
+		"schemaVersion": 1,
+		"owner": {"telegramUserIds": [42]},
+		"models": {
+			"butler": {"provider": "anthropic", "id": "claude-sonnet-5-5"},
+			"task": {"provider": "opencode-go", "id": "kimi-k3"}
+		},
+		"search": {"provider": "deepseek"}
+	}`)
+
+	config, err := f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SearchProvider != "deepseek" {
+		t.Fatalf("searchProvider = %q, want deepseek", config.SearchProvider)
+	}
+}
+
+func TestServiceGetConfigDefaultsSearchProviderToExa(t *testing.T) {
+	f := newServiceFixture(t)
+	config, err := f.service.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SearchProvider != "exa" {
+		t.Fatalf("searchProvider = %q, want exa", config.SearchProvider)
+	}
+}

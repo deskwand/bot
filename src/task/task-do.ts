@@ -341,7 +341,7 @@ export class TaskDO extends Agent<Env> {
       name: "execution",
       tools: [
         withProgress(
-          webSearchTool(),
+          webSearchTool(this.env),
           emitProgress,
           (args) => progressSearchText(ownerLocale(this.env), args.query),
         ),

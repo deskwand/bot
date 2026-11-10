@@ -1,45 +1,31 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
+import { readRuntimeConfig } from "../runtime-config";
+import { braveAdapter } from "./search/brave";
+import { deepseekAdapter } from "./search/deepseek";
+import { exaAdapter } from "./search/exa";
+import { formatResults, truncate } from "./search/format";
+import { tavilyAdapter } from "./search/tavily";
+import {
+  SEARCH_PROVIDER_IDS,
+  type SearchAdapter,
+  type SearchProviderId,
+} from "./search/types";
 
 const Search = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
 });
 
-const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
-const MCP_PROTOCOL_VERSION = "2025-03-26";
-const CLIENT_INFO = { name: "bot-web-search", version: "1.0.0" };
 const DEFAULT_MAX_RESULTS = 5;
 const SEARCH_TIMEOUT_MS = 30_000;
-const MAX_TEXT_CHARS = 20_000;
-const TRUNCATION_MARKER = "\n\n[已截断]";
 
-type JsonRpcRequest = {
-  jsonrpc: "2.0";
-  id?: number;
-  method: string;
-  params?: unknown;
+const SEARCH_KEY_NAMES: Record<SearchProviderId, string | null> = {
+  exa: null,
+  tavily: "SEARCH_KEY_TAVILY",
+  brave: "SEARCH_KEY_BRAVE",
+  deepseek: "MODEL_KEY_DEEPSEEK",
 };
-
-type JsonRpcContent = {
-  type?: string;
-  text?: string;
-};
-
-type JsonRpcResult = {
-  content?: JsonRpcContent[];
-  isError?: boolean;
-  [key: string]: unknown;
-};
-
-type JsonRpcResponse = {
-  jsonrpc?: "2.0";
-  id?: number | string | null;
-  result?: JsonRpcResult;
-  error?: { code: number; message: string; data?: unknown };
-};
-
-let nextId = 1;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -49,141 +35,58 @@ function textResult(text: string) {
   return { output: [{ type: "text" as const, text }] };
 }
 
-function truncate(text: string): string {
-  return text.length <= MAX_TEXT_CHARS
-    ? text
-    : text.slice(0, MAX_TEXT_CHARS) + TRUNCATION_MARKER;
+function timeoutResult() {
+  return textResult(`搜索超时：超过 ${SEARCH_TIMEOUT_MS / 1000} 秒`);
 }
 
-function parseSseMessages(body: string): unknown[] {
-  const events: string[] = [];
-  let dataLines: string[] = [];
-
-  const flush = () => {
-    if (dataLines.length > 0) {
-      events.push(dataLines.join("\n"));
-      dataLines = [];
-    }
-  };
-
-  for (const line of body.split(/\r?\n/)) {
-    if (line === "") {
-      flush();
-      continue;
-    }
-    if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).trimStart());
-    }
-  }
-  flush();
-
-  return events.map((event) => JSON.parse(event) as unknown);
-}
-
-async function parseRpcResponse(response: Response): Promise<JsonRpcResponse> {
-  const raw = await response.text();
-  const contentType = response.headers.get("content-type") ?? "";
-  const trimmed = raw.trimStart();
-  const isSse =
-    contentType.includes("text/event-stream") ||
-    trimmed.startsWith("event:") ||
-    trimmed.startsWith("data:");
-
-  if (isSse) {
-    let messages: JsonRpcResponse[];
-    try {
-      messages = parseSseMessages(raw) as JsonRpcResponse[];
-    } catch {
-      throw new Error("Exa MCP 返回了无效的 SSE 数据");
-    }
-    const message = [...messages]
-      .reverse()
-      .find((item) => item.result !== undefined || item.error !== undefined);
-    if (!message) throw new Error("Exa MCP 返回了空的 SSE 响应");
-    return message;
-  }
-
+/** The configured provider; an unreadable or unknown value means `exa`. */
+export function searchProvider(env: Env): SearchProviderId {
   try {
-    return JSON.parse(raw) as JsonRpcResponse;
+    const provider = readRuntimeConfig(env).search?.provider;
+    return provider !== undefined && SEARCH_PROVIDER_IDS.includes(provider)
+      ? provider
+      : "exa";
   } catch {
-    throw new Error("Exa MCP 返回了无效的 JSON");
+    return "exa";
   }
 }
 
-async function mcpPost(
+/** The provider's key, trimmed; blank or missing means undefined. */
+export function searchKey(
+  env: Env,
+  id: SearchProviderId,
+): string | undefined {
+  const name = SEARCH_KEY_NAMES[id];
+  if (name === null) return undefined;
+  const value = (env as unknown as Record<string, unknown>)[name];
+  if (typeof value !== "string") return undefined;
+  const key = value.trim();
+  return key === "" ? undefined : key;
+}
+
+function createAdapter(
+  id: SearchProviderId,
+  key: string | undefined,
   fetchImpl: typeof fetch,
-  request: JsonRpcRequest,
-  sessionId: string | undefined,
-  signal: AbortSignal,
-): Promise<{ json: JsonRpcResponse; sessionId: string | undefined }> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json, text/event-stream",
-  };
-  if (sessionId) headers["Mcp-Session-Id"] = sessionId;
-
-  const response = await fetchImpl(EXA_MCP_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(request),
-    signal,
-  });
-
-  if (!response.ok) {
-    throw new Error(`Exa MCP 返回 HTTP ${response.status}`);
+): SearchAdapter {
+  switch (id) {
+    case "tavily":
+      return tavilyAdapter(key ?? "", fetchImpl);
+    case "brave":
+      return braveAdapter(key ?? "", fetchImpl);
+    case "deepseek":
+      return deepseekAdapter(key ?? "", fetchImpl);
+    default:
+      return exaAdapter(fetchImpl);
   }
-
-  const nextSessionId =
-    response.headers.get("mcp-session-id") ?? sessionId ?? undefined;
-  const json = await parseRpcResponse(response);
-  if (json.error) {
-    throw new Error(
-      json.error.message || `Exa MCP JSON-RPC 错误 ${json.error.code}`,
-    );
-  }
-  return { json, sessionId: nextSessionId };
-}
-
-async function mcpNotify(
-  fetchImpl: typeof fetch,
-  method: string,
-  params: unknown,
-  sessionId: string,
-  signal: AbortSignal,
-): Promise<void> {
-  const response = await fetchImpl(EXA_MCP_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-      "Mcp-Session-Id": sessionId,
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", method, params }),
-    signal,
-  });
-  if (!response.ok) {
-    throw new Error(`Exa MCP 返回 HTTP ${response.status}`);
-  }
-}
-
-function resultText(result: JsonRpcResult | undefined): string {
-  if (!Array.isArray(result?.content)) return "";
-  return result.content
-    .filter(
-      (item): item is { type: "text"; text: string } =>
-        item?.type === "text" && typeof item.text === "string",
-    )
-    .map((item) => item.text)
-    .join("\n");
 }
 
 /**
- * Search the web through Exa's keyless hosted MCP endpoint. The endpoint uses
- * MCP Streamable HTTP, so each search opens a session (initialize →
- * notifications/initialized → tools/call) and reuses its Mcp-Session-Id.
- * Read-only, so safe to replay after a restart.
+ * Search the web through the configured provider, falling back once to Exa if
+ * that provider fails. Read-only, so safe to replay after a restart.
  */
 export function webSearchTool(
+  env: Env,
   fetchImpl: typeof fetch = fetch,
 ): ToolRegistration<typeof Search> {
   return {
@@ -196,68 +99,53 @@ export function webSearchTool(
       const signal = context.abortSignal
         ? AbortSignal.any([context.abortSignal, timeout])
         : timeout;
+      const max = maxResults ?? DEFAULT_MAX_RESULTS;
+
+      let id = searchProvider(env);
+      const key = searchKey(env, id);
+      if (id !== "exa" && key === undefined) {
+        console.warn(`web_search: ${id} key missing, using exa`);
+        id = "exa";
+      }
+      const selected = createAdapter(
+        id,
+        id === "exa" ? undefined : key,
+        fetchImpl,
+      );
 
       try {
-        const initialize = await mcpPost(
-          fetchImpl,
-          {
-            jsonrpc: "2.0",
-            id: nextId++,
-            method: "initialize",
-            params: {
-              protocolVersion: MCP_PROTOCOL_VERSION,
-              capabilities: {},
-              clientInfo: CLIENT_INFO,
-            },
-          },
-          undefined,
-          signal,
+        const results = await selected.search(query, max, signal);
+        return textResult(
+          results.length > 0
+            ? truncate(formatResults(results))
+            : "没有找到搜索结果。",
         );
-
-        const sessionId = initialize.sessionId;
-        if (sessionId) {
-          await mcpNotify(
-            fetchImpl,
-            "notifications/initialized",
-            {},
-            sessionId,
-            signal,
-          );
-        }
-
-        const call = await mcpPost(
-          fetchImpl,
-          {
-            jsonrpc: "2.0",
-            id: nextId++,
-            method: "tools/call",
-            params: {
-              name: "web_search_exa",
-              arguments: {
-                query,
-                numResults: maxResults ?? DEFAULT_MAX_RESULTS,
-              },
-            },
-          },
-          sessionId,
-          signal,
-        );
-
-        const text = resultText(call.json.result);
-        if (call.json.result?.isError) {
-          return textResult(`搜索失败：${text || "Exa 返回错误"}`);
-        }
-        return textResult(text ? truncate(text) : "没有找到搜索结果。");
       } catch (error) {
         // Caller cancellation must propagate so the run stops; only the
         // tool's own timeout becomes a normal answer.
         if (context.abortSignal?.aborted) throw error;
-        if (timeout.aborted) {
-          return textResult(
-            `搜索超时：超过 ${SEARCH_TIMEOUT_MS / 1000} 秒`,
-          );
+        if (timeout.aborted) return timeoutResult();
+        if (id === "exa") {
+          return textResult(`搜索失败：${errorMessage(error)}`);
         }
-        return textResult(`搜索失败：${errorMessage(error)}`);
+
+        const note = `（${selected.label} 不可用：${errorMessage(error)}，已改用 Exa）\n`;
+        try {
+          const results = await exaAdapter(fetchImpl).search(
+            query,
+            max,
+            signal,
+          );
+          return textResult(
+            results.length > 0
+              ? note + truncate(formatResults(results))
+              : note + "没有找到搜索结果。",
+          );
+        } catch (fallbackError) {
+          if (context.abortSignal?.aborted) throw fallbackError;
+          if (timeout.aborted) return timeoutResult();
+          return textResult(`搜索失败：${errorMessage(fallbackError)}`);
+        }
       }
     },
   };

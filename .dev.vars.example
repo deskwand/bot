@@ -7,6 +7,8 @@ PUBLIC_BASE_URL=http://localhost:8787
 # 可选：使用其他厂商时填写对应的 key，例如：
 # MODEL_KEY_ANTHROPIC=
 # MODEL_KEY_DEEPSEEK=
+# SEARCH_KEY_TAVILY=
+# SEARCH_KEY_BRAVE=
 
 # 必填：可管理配置（单行 JSON）。缺失时业务处理以 CONFIG_MISSING 拒绝。把 owner 换成你的 Telegram 用户 ID。
 DESKWAND_CONFIG={"schemaVersion":1,"owner":{"telegramUserIds":[100000001]},"models":{"butler":{"provider":"opencode-go","id":"deepseek-v4.1-flash"},"task":{"provider":"opencode-go","id":"deepseek-v4.1-flash"}},"mcpServers":[]}

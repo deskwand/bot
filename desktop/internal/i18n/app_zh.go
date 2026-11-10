@@ -79,4 +79,5 @@ var zhApp = map[string]string{
 	"app.mcpHeaderSecretInvalid": "header 名称 %s 无法用于密钥名",
 	"app.mcpNameInvalid":         "服务名称只能使用小写字母、数字和下划线（1-32 个字符）",
 	"app.approvalModeInvalid":    "审批模式只能是自主执行或智能审查",
+	"app.searchProviderInvalid":  "搜索商只能是 Exa、Tavily、Brave 或 DeepSeek",
 }

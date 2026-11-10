@@ -1,6 +1,7 @@
 import type { CustomProviderConfig } from "./llm/providers";
 import type { ModelRef, Role } from "./llm/models";
 import type { Locale } from "./i18n";
+import type { SearchProviderId } from "./tools/search/types";
 
 export type McpServerConfig = {
   name: string;
@@ -28,6 +29,8 @@ export type AppConfig = {
   mcpServers: McpServerConfig[];
   locale?: Locale;
   approvalMode?: ApprovalMode;
+  /** Search provider for `web_search`; absent means `exa`. */
+  search?: { provider?: SearchProviderId };
   /** Raw mail section; every field is validated in src/mail/accounts.ts. */
   email?: { accounts?: unknown[] };
 };

@@ -131,6 +131,27 @@ describe("readRuntimeConfig", () => {
     expect((caught as RuntimeConfigError).code).toBe("CONFIG_SCHEMA_INVALID");
   });
 
+  it("accepts a known search provider", () => {
+    const cfg = readRuntimeConfig(
+      envWith({ ...validConfig, search: { provider: "tavily" } }),
+    );
+    expect(cfg.search?.provider).toBe("tavily");
+  });
+
+  it("rejects an unknown search provider", () => {
+    let caught: unknown;
+    try {
+      readRuntimeConfig(
+        envWith({ ...validConfig, search: { provider: "bing" } }),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(RuntimeConfigError);
+    expect((caught as RuntimeConfigError).code).toBe("CONFIG_SCHEMA_INVALID");
+  });
+
   it("preserves env:NAME MCP header references and literals", () => {
     const testCase = (cases as ConfigCase[]).find(
       (entry) => entry.name === "MCP env:NAME header preserved",

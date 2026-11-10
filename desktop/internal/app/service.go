@@ -892,6 +892,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		McpServers:         json.RawMessage("[]"),
 		Locale:             "zh",
 		ApprovalMode:       "autonomous",
+		SearchProvider:     "exa",
 		Secrets:            s.secretStatuses(snapshot),
 	}
 	if len(snapshot.ConfigJSON) > 0 {
@@ -907,6 +908,9 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 			McpServers   json.RawMessage `json:"mcpServers"`
 			Locale       string          `json:"locale"`
 			ApprovalMode string          `json:"approvalMode"`
+			Search       struct {
+				Provider string `json:"provider"`
+			} `json:"search"`
 		}
 		if err := json.Unmarshal(snapshot.ConfigJSON, &document); err != nil {
 			return dto, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: s.t("app.configInvalidJSON")}
@@ -927,6 +931,9 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		}
 		if document.ApprovalMode == "reviewed" {
 			dto.ApprovalMode = "reviewed"
+		}
+		if validSearchProvider(document.Search.Provider) {
+			dto.SearchProvider = document.Search.Provider
 		}
 	}
 	if s.cache != nil {
@@ -1564,6 +1571,15 @@ func (s *Service) releaseVersionStep(ctx context.Context, target domain.Target) 
 	}, true
 }
 
+func validSearchProvider(provider string) bool {
+	switch provider {
+	case "exa", "tavily", "brave", "deepseek":
+		return true
+	default:
+		return false
+	}
+}
+
 func hasStepID(steps []StepDTO, id string) bool {
 	for _, step := range steps {
 		if step.ID == id {
@@ -1623,6 +1639,13 @@ func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, inpu
 		default:
 			return domain.Change{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.approvalModeInvalid")}
 		}
+	}
+	if input.SearchProvider != nil {
+		if !validSearchProvider(*input.SearchProvider) {
+			return domain.Change{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: s.t("app.searchProviderInvalid")}
+		}
+		provider := *input.SearchProvider
+		change.Patch.SearchProvider = &provider
 	}
 	edited := make(map[string]bool, len(input.Secrets))
 	for _, secret := range input.Secrets {

@@ -124,6 +124,7 @@ export interface ConfigDTO {
   mcpServers: unknown;
   locale: string;
   approvalMode: string;
+  searchProvider: string;
   secrets: SecretNameDTO[];
 }
 
@@ -139,6 +140,7 @@ export interface ConfigEditDTO {
   customProviders?: CustomProviderDTO[];
   mcpServers?: unknown;
   approvalMode?: string;
+  searchProvider?: string;
   secrets?: unknown[];
 }
 

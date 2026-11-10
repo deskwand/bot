@@ -30,7 +30,7 @@
     "type": "json",
     "schemaVersion": 1
   },
-  "secretNamePatterns": ["^MODEL_KEY_[A-Z0-9_]{1,64}$", "^MCP_[A-Z0-9_]{1,64}$"],
+  "secretNamePatterns": ["^MODEL_KEY_[A-Z0-9_]{1,64}$", "^MCP_[A-Z0-9_]{1,64}$", "^SEARCH_KEY_[A-Z0-9_]{1,64}$"],
   "secretNames": [
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",

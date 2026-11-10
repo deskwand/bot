@@ -35,6 +35,8 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 
 每个任务的每一步先落盘再展示，进程被打断就从最后一次提交继续；同一个请求重发返回原结果，不会执行两次。
 
+`web_search` 支持 Exa（默认，免 key）/ Tavily / Brave / DeepSeek，key 分别是 `SEARCH_KEY_TAVILY` / `SEARCH_KEY_BRAVE` / `MODEL_KEY_DEEPSEEK`，在 desktop「搜索」页切换。
+
 ## 消息格式
 
 出站文本按 **Markdown** 书写（模型直接写 Markdown，不改），渲染由各渠道适配器自己负责：

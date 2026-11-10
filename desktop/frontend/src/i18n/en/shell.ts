@@ -7,6 +7,7 @@ export const shell: Messages["shell"] = {
   pages: {
     overview: "Overview",
     models: "Models",
+    search: "Search",
     mcp: "Services",
     entries: "Channels",
     diagnostics: "Diagnostics",

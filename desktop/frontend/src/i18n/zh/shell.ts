@@ -5,6 +5,7 @@ export const shell = {
   pages: {
     overview: "服务概览",
     models: "模型",
+    search: "搜索",
     mcp: "服务",
     entries: "消息入口",
     diagnostics: "诊断",

@@ -189,6 +189,10 @@ func applyPatch(document map[string]any, patch domain.EditablePatch) error {
 		document["approvalMode"] = *patch.ApprovalMode
 	}
 
+	if patch.SearchProvider != nil {
+		document["search"] = map[string]any{"provider": *patch.SearchProvider}
+	}
+
 	if patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil {
 		return nil
 	}
@@ -755,6 +759,7 @@ var templateSecretNames = []string{
 var templateSecretNamePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^MODEL_KEY_[A-Z0-9_]{1,64}$`),
 	regexp.MustCompile(`^MCP_[A-Z0-9_]{1,64}$`),
+	regexp.MustCompile(`^SEARCH_KEY_[A-Z0-9_]{1,64}$`),
 }
 
 // secretNameAllowed reports whether an edit may target name: either it is a

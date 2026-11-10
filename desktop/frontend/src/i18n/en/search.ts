@@ -1,0 +1,41 @@
+import type { Messages } from "../types";
+
+export const search: Messages["search"] = {
+  intro: "Choose the service used for web search. Saving deploys right away.",
+  providerAria: "Search provider",
+  providers: {
+    exa: { name: "Exa", quota: "No key needed, default" },
+    tavily: { name: "Tavily", quota: "About 1,000 free searches per month" },
+    brave: { name: "Brave", quota: "About $5 credit per month, card required" },
+    deepseek: {
+      name: "DeepSeek",
+      quota: "Pay per search, failures are free; shares the model key",
+    },
+  },
+  signup: "Sign up",
+  keyTitle: "Access key",
+  keyDescription: "The key is written to Cloudflare only and is never echoed.",
+  apiKey: "API key",
+  configured: "Configured",
+  notConfigured: "Not configured",
+  keyPlaceholderConfigured: "Configured; enter a new value to replace",
+  keyPlaceholderNew: "Enter a new key",
+  pendingClear: "Pending clear",
+  clearSavedKey: "Clear saved key",
+  keyShared: "Shares the same key as the Models page.",
+  missingKey: "No key configured; Exa will be used",
+  keysNeverEchoed: "Keys are never echoed",
+  submitted: "Submitted",
+  published: "Search settings deployed.",
+  publishPending: "Deployment did not finish; you can continue.",
+  loading: "Reading configuration…",
+  reload: "Reload",
+  reloadConfig: "Reload configuration",
+  cloudUpdatedTitle: "Cloud configuration updated",
+  cloudUpdatedDescription:
+    "A background refresh found a newer version; your edits were not overwritten.",
+  loadLatest: "Load latest",
+  save: "Save and deploy",
+  saving: "Saving…",
+  uneditedKept: "Unedited settings are kept.",
+};

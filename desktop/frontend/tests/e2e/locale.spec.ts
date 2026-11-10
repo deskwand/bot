@@ -129,7 +129,7 @@ test("html lang follows the locale", async ({ page }) => {
 test("formatDateTime follows the locale", async ({ page }) => {
   // Index-based nav keeps working once the shell itself is translated.
   const backupNav = () =>
-    page.locator("#primary-nav").getByRole("button").nth(5);
+    page.locator("#primary-nav").getByRole("button").nth(6);
 
   await page.goto("/test.html?fixture=backup");
   await backupNav().click();

@@ -35,6 +35,8 @@ Command-line deployment, secrets and the `DESKWAND_CONFIG` format are documented
 
 Every step of a task is committed to storage before it is shown, so an interrupted process resumes from the last commit rather than the start. Re-sending the same request returns the stored result instead of running it twice.
 
+`web_search` supports Exa (default, no key) / Tavily / Brave / DeepSeek. Their keys are `SEARCH_KEY_TAVILY` / `SEARCH_KEY_BRAVE` / `MODEL_KEY_DEEPSEEK`; switch providers from the desktop Search page.
+
 ## Requirements
 
 - A Cloudflare account with `npx wrangler login` already run

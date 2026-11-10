@@ -9,6 +9,26 @@ type RecordedCall = {
   body: Record<string, unknown>;
 };
 
+const BASE_CONFIG = {
+  schemaVersion: 1,
+  owner: { telegramUserIds: [] },
+  models: {
+    butler: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+    task: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+  },
+  mcpServers: [],
+};
+
+function envWith(
+  search?: { provider: string },
+  secrets: Record<string, string> = {},
+): Env {
+  return {
+    DESKWAND_CONFIG: search ? { ...BASE_CONFIG, search } : BASE_CONFIG,
+    ...secrets,
+  } as unknown as Env;
+}
+
 function context(signal?: AbortSignal): Context {
   return { abortSignal: signal } as unknown as Context;
 }
@@ -82,6 +102,53 @@ function toolCall(calls: RecordedCall[]): RecordedCall {
   return call;
 }
 
+type Routes = {
+  tavily?: () => Response;
+  brave?: () => Response;
+  deepseek?: () => Response;
+  exa?: (body: Record<string, unknown>) => Response;
+};
+
+/**
+ * Route requests by host. Exa keeps the full MCP session handshake; any other
+ * host must have a route, which makes an unexpected request a loud failure.
+ */
+function providerFetch(
+  routes: Routes,
+  calls: RecordedCall[] = [],
+): typeof fetch {
+  const exa = exaFetch(
+    routes.exa ??
+      (() =>
+        jsonResponse({
+          jsonrpc: "2.0",
+          result: { content: [{ type: "text", text: "Exa result" }] },
+        })),
+    calls,
+  );
+
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const host = new URL(String(input)).host;
+    if (host === "mcp.exa.ai") return exa(input, init);
+
+    calls.push({
+      input,
+      init,
+      body: init?.body ? JSON.parse(String(init.body)) : {},
+    });
+    if (host === "api.tavily.com" && routes.tavily) return routes.tavily();
+    if (host === "api.search.brave.com" && routes.brave) return routes.brave();
+    if (host === "api.deepseek.com" && routes.deepseek) {
+      return routes.deepseek();
+    }
+    throw new Error(`unexpected host: ${host}`);
+  }) as typeof fetch;
+}
+
+function hosts(calls: RecordedCall[]): string[] {
+  return calls.map((call) => new URL(String(call.input)).host);
+}
+
 describe("webSearchTool", () => {
   it("initializes an Exa MCP session and calls web_search_exa", async () => {
     const calls: RecordedCall[] = [];
@@ -103,7 +170,7 @@ describe("webSearchTool", () => {
     );
 
     const controller = new AbortController();
-    const tool = webSearchTool(fakeFetch);
+    const tool = webSearchTool(envWith(), fakeFetch);
     const result = await tool.execute(
       { query: "cloudflare workers" },
       {} as never,
@@ -158,7 +225,7 @@ describe("webSearchTool", () => {
       }),
     );
 
-    const result = await webSearchTool(fakeFetch).execute(
+    const result = await webSearchTool(envWith(), fakeFetch).execute(
       { query: "q" },
       {} as never,
       context(),
@@ -176,7 +243,7 @@ describe("webSearchTool", () => {
       }),
     );
 
-    const result = await webSearchTool(fakeFetch).execute(
+    const result = await webSearchTool(envWith(), fakeFetch).execute(
       { query: "q" },
       {} as never,
       context(),
@@ -197,7 +264,7 @@ describe("webSearchTool", () => {
       }),
     );
 
-    const result = await webSearchTool(fakeFetch).execute(
+    const result = await webSearchTool(envWith(), fakeFetch).execute(
       { query: "q" },
       {} as never,
       context(),
@@ -222,7 +289,7 @@ describe("webSearchTool", () => {
         throw init!.signal!.reason;
       }) as typeof fetch;
 
-      const result = await webSearchTool(fakeFetch).execute(
+      const result = await webSearchTool(envWith(), fakeFetch).execute(
         { query: "q" },
         {} as never,
         context(),
@@ -251,7 +318,7 @@ describe("webSearchTool", () => {
         });
       })) as typeof fetch;
 
-    const tool = webSearchTool(fakeFetch);
+    const tool = webSearchTool(envWith(), fakeFetch);
     setTimeout(() => controller.abort(), 10);
 
     await expect(
@@ -271,7 +338,7 @@ describe("webSearchTool", () => {
       calls,
     );
 
-    await webSearchTool(fakeFetch).execute(
+    await webSearchTool(envWith(), fakeFetch).execute(
       { query: "q", maxResults: 3 },
       {} as never,
       context(),
@@ -292,7 +359,7 @@ describe("webSearchTool", () => {
     );
 
     const text = textOf(
-      await webSearchTool(fakeFetch).execute(
+      await webSearchTool(envWith(), fakeFetch).execute(
         { query: "q" },
         {} as never,
         context(),
@@ -301,5 +368,232 @@ describe("webSearchTool", () => {
 
     expect(text).toHaveLength(20_000 + "\n\n[已截断]".length);
     expect(text.endsWith("[已截断]")).toBe(true);
+  });
+});
+
+describe("webSearchTool provider selection", () => {
+  it("uses the selected provider", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = providerFetch(
+      {
+        tavily: () =>
+          jsonResponse({
+            results: [
+              { title: "T", url: "https://t", content: "tavily snippet" },
+            ],
+          }),
+      },
+      calls,
+    );
+
+    const text = textOf(
+      await webSearchTool(
+        envWith({ provider: "tavily" }, { SEARCH_KEY_TAVILY: "tvly-key" }),
+        fakeFetch,
+      ).execute({ query: "q" }, {} as never, context()),
+    );
+
+    expect(text).toContain("tavily snippet");
+    expect(text).not.toContain("已改用");
+    expect(hosts(calls)).toEqual(["api.tavily.com"]);
+    expect(new Headers(calls[0].init?.headers).get("authorization")).toBe(
+      "Bearer tvly-key",
+    );
+  });
+
+  it("uses exa when the selected provider has no key", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = providerFetch({}, calls);
+
+    const text = textOf(
+      await webSearchTool(
+        envWith({ provider: "brave" }),
+        fakeFetch,
+      ).execute({ query: "q" }, {} as never, context()),
+    );
+
+    expect(text).toContain("Exa result");
+    expect(text).not.toContain("已改用");
+    expect(hosts(calls).every((host) => host === "mcp.exa.ai")).toBe(true);
+  });
+
+  it("uses exa when the selected provider key is blank", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = providerFetch({}, calls);
+
+    const text = textOf(
+      await webSearchTool(
+        envWith(
+          { provider: "tavily" },
+          { SEARCH_KEY_TAVILY: "  \n" },
+        ),
+        fakeFetch,
+      ).execute({ query: "q" }, {} as never, context()),
+    );
+
+    expect(text).toContain("Exa result");
+    expect(text).not.toContain("已改用");
+    expect(hosts(calls).every((host) => host === "mcp.exa.ai")).toBe(true);
+  });
+
+  it("uses exa when the configuration cannot be read", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = providerFetch({}, calls);
+
+    const text = textOf(
+      await webSearchTool(
+        { DESKWAND_CONFIG: "{" } as unknown as Env,
+        fakeFetch,
+      ).execute({ query: "q" }, {} as never, context()),
+    );
+
+    expect(text).toContain("Exa result");
+    expect(hosts(calls).every((host) => host === "mcp.exa.ai")).toBe(true);
+  });
+
+  it("falls back to exa with a note when the selected provider fails", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = providerFetch(
+      {
+        tavily: () => new Response("nope", { status: 429 }),
+        exa: () =>
+          jsonResponse({
+            jsonrpc: "2.0",
+            result: { content: [{ type: "text", text: "exa after fallback" }] },
+          }),
+      },
+      calls,
+    );
+
+    const text = textOf(
+      await webSearchTool(
+        envWith({ provider: "tavily" }, { SEARCH_KEY_TAVILY: "tvly-key" }),
+        fakeFetch,
+      ).execute({ query: "q" }, {} as never, context()),
+    );
+
+    expect(text).toMatch(/^（Tavily 不可用：HTTP 429，已改用 Exa）\n/);
+    expect(text).toContain("exa after fallback");
+  });
+
+  it("does not fall back when the selected provider returns no results", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = providerFetch(
+      { tavily: () => jsonResponse({ results: [] }) },
+      calls,
+    );
+
+    const text = textOf(
+      await webSearchTool(
+        envWith({ provider: "tavily" }, { SEARCH_KEY_TAVILY: "tvly-key" }),
+        fakeFetch,
+      ).execute({ query: "q" }, {} as never, context()),
+    );
+
+    expect(text).toBe("没有找到搜索结果。");
+    expect(hosts(calls)).toEqual(["api.tavily.com"]);
+  });
+
+  it("reports a failure when both providers fail", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = providerFetch(
+      {
+        tavily: () => new Response("nope", { status: 500 }),
+        exa: () => new Response("nope", { status: 500 }),
+      },
+      calls,
+    );
+
+    const text = textOf(
+      await webSearchTool(
+        envWith({ provider: "tavily" }, { SEARCH_KEY_TAVILY: "tvly-key" }),
+        fakeFetch,
+      ).execute({ query: "q" }, {} as never, context()),
+    );
+
+    expect(text.startsWith("搜索失败：")).toBe(true);
+    expect(hosts(calls)).toContain("mcp.exa.ai");
+  });
+
+  it("rethrows a caller abort without falling back", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      calls.push({ input, init, body: {} });
+      throw new DOMException("aborted", "AbortError");
+    }) as typeof fetch;
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      webSearchTool(
+        envWith({ provider: "tavily" }, { SEARCH_KEY_TAVILY: "tvly-key" }),
+        fakeFetch,
+      ).execute({ query: "q" }, {} as never, context(controller.signal)),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(hosts(calls)).not.toContain("mcp.exa.ai");
+  });
+
+  it("reports a selected-provider timeout without falling back", async () => {
+    const timeout = AbortSignal.abort(
+      new DOMException("timed out", "TimeoutError"),
+    );
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(timeout);
+
+    try {
+      const calls: RecordedCall[] = [];
+      const fakeFetch = (async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        calls.push({ input, init, body: {} });
+        throw init!.signal!.reason;
+      }) as typeof fetch;
+
+      const text = textOf(
+        await webSearchTool(
+          envWith({ provider: "tavily" }, { SEARCH_KEY_TAVILY: "tvly-key" }),
+          fakeFetch,
+        ).execute({ query: "q" }, {} as never, context()),
+      );
+
+      expect(text).toContain("搜索超时");
+      expect(hosts(calls)).not.toContain("mcp.exa.ai");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("reuses the model key for deepseek", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = providerFetch(
+      {
+        deepseek: () =>
+          jsonResponse({
+            results: [
+              { title: "D", url: "https://d", summary: "deepseek snippet" },
+            ],
+          }),
+      },
+      calls,
+    );
+
+    const text = textOf(
+      await webSearchTool(
+        envWith({ provider: "deepseek" }, { MODEL_KEY_DEEPSEEK: "ds-key" }),
+        fakeFetch,
+      ).execute({ query: "q" }, {} as never, context()),
+    );
+
+    expect(text).toContain("deepseek snippet");
+    expect(hosts(calls)).toEqual(["api.deepseek.com"]);
+    expect(new Headers(calls[0].init?.headers).get("authorization")).toBe(
+      "Bearer ds-key",
+    );
   });
 });

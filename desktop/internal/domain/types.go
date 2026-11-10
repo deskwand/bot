@@ -165,6 +165,7 @@ type EditablePatch struct {
 	McpServers      *json.RawMessage `json:"mcpServers"`
 	Locale          *string          `json:"locale"`
 	ApprovalMode    *string          `json:"approvalMode"`
+	SearchProvider  *string          `json:"searchProvider"`
 }
 
 // ConfigReference rewrites one existing JSON string in DESKWAND_CONFIG to an

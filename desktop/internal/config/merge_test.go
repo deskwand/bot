@@ -921,3 +921,48 @@ func TestMergeKeepsApprovalModeWhenUnset(t *testing.T) {
 		t.Fatalf("approvalMode = %q, want reviewed", result.ApprovalMode)
 	}
 }
+
+func TestApplyPatchWritesSearch(t *testing.T) {
+	document := map[string]any{}
+	provider := "tavily"
+	if err := applyPatch(document, domain.EditablePatch{SearchProvider: &provider}); err != nil {
+		t.Fatal(err)
+	}
+	search, ok := document["search"].(map[string]any)
+	if !ok {
+		t.Fatalf("search = %#v", document["search"])
+	}
+	if search["provider"] != "tavily" {
+		t.Fatalf("search.provider = %#v, want tavily", search["provider"])
+	}
+}
+
+func TestApplyPatchKeepsSearch(t *testing.T) {
+	document := map[string]any{
+		"search": map[string]any{"provider": "brave"},
+	}
+	mode := "reviewed"
+	if err := applyPatch(document, domain.EditablePatch{ApprovalMode: &mode}); err != nil {
+		t.Fatal(err)
+	}
+	search, ok := document["search"].(map[string]any)
+	if !ok || search["provider"] != "brave" {
+		t.Fatalf("search = %#v, want provider brave", document["search"])
+	}
+}
+
+func TestPatchIsEmptySearch(t *testing.T) {
+	provider := "tavily"
+	if !patchIsEmpty(domain.EditablePatch{SearchProvider: &provider}) {
+		t.Fatal("a search-only patch must not seed an empty deployment")
+	}
+}
+
+func TestSecretNameAllowedSearchKey(t *testing.T) {
+	if !secretNameAllowed("SEARCH_KEY_TAVILY") {
+		t.Fatal("SEARCH_KEY_TAVILY is not allowed")
+	}
+	if secretNameAllowed("SEARCH_TAVILY") {
+		t.Fatal("SEARCH_TAVILY was allowed")
+	}
+}
