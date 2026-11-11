@@ -1,7 +1,7 @@
 import { t } from "../i18n";
 import type { Locale } from "../i18n";
 
-export type LedgerKind = "task.completed" | "bot.message";
+export type LedgerKind = "task.completed" | "bot.message" | "butler.said";
 
 export type LedgerRow = {
   id: number;
@@ -99,6 +99,21 @@ export class LedgerStore {
       .toArray()
       .map((row) => row.id);
     return { rows, ids, omitted: Math.max(0, ids.length - rows.length) };
+  }
+
+  /** The newest `limit` lines of one kind, newest first, read or unread. */
+  recentLines(kind: LedgerKind, limit: number): string[] {
+    return this.sql
+      .exec<{ line: string }>(
+        `SELECT line FROM butler_ledger
+         WHERE kind = ?
+         ORDER BY at DESC, id DESC
+         LIMIT ?`,
+        kind,
+        limit,
+      )
+      .toArray()
+      .map((row) => row.line);
   }
 
   consume(ids: number[]): void {

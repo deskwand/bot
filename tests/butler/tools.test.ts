@@ -2,13 +2,14 @@ import type { PiHarness } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryStore } from "../../src/butler/memory";
+import { setClockOverride } from "../../src/butler/notifier";
 import { TasksRepo } from "../../src/butler/tasks-repo";
 import { createButlerTools, SpawnFailedError } from "../../src/butler/tools";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import type { AdmittedMessage, RouteSnapshot, TaskSpec } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
-import { currentChannelRef, seedOwnerAddress } from "../helpers/channel-ref";
+import { seedOwnerAddress } from "../helpers/channel-ref";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
@@ -78,6 +79,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  setClockOverride(null);
   setModelOverride(null);
   setChannelOverride("telegram", null);
   vi.restoreAllMocks();
@@ -121,6 +123,7 @@ describe("butler control tools", () => {
           createSchedule: async () => "s1",
           listSchedules: () => [],
           removeSchedule: async () => false,
+          lookup: async () => ({ ok: false }),
         });
 
         const spawn = tools.find((tool) => tool.name === "spawn_task");
@@ -169,6 +172,7 @@ describe("butler control tools", () => {
           createSchedule: async () => "s1",
           listSchedules: () => [],
           removeSchedule: async () => false,
+          lookup: async () => ({ ok: false }),
         });
 
         const spawnTask = tools.find((tool) => tool.name === "spawn_task");
@@ -232,6 +236,7 @@ describe("butler control tools", () => {
           createSchedule: async () => "s1",
           listSchedules: () => [],
           removeSchedule: async () => false,
+          lookup: async () => ({ ok: false }),
         });
 
         const spawnTask = tools.find((tool) => tool.name === "spawn_task");
@@ -287,6 +292,7 @@ describe("butler control tools", () => {
           createSchedule: async () => "s1",
           listSchedules: () => [],
           removeSchedule: async () => false,
+          lookup: async () => ({ ok: false }),
         });
 
         const spawnTask = tools.find((tool) => tool.name === "spawn_task");
@@ -337,6 +343,7 @@ describe("butler control tools", () => {
           createSchedule: async () => "s1",
           listSchedules: () => [],
           removeSchedule: async () => false,
+          lookup: async () => ({ ok: false }),
         });
 
         const spawnTask = tools.find((tool) => tool.name === "spawn_task");
@@ -388,6 +395,7 @@ describe("butler control tools", () => {
           createSchedule: async () => "s1",
           listSchedules: () => [],
           removeSchedule: async () => false,
+          lookup: async () => ({ ok: false }),
         });
 
         const retry = tools.find((tool) => tool.name === "retry_task");
@@ -445,7 +453,47 @@ describe("butler control tools", () => {
     expect(result.text).toContain("#1（id t1）[queued] 查天气");
   });
 
-  it("sends the start message before the Task DO can report progress", async () => {
+  it("shows the last tool progress and how long ago it was", async () => {
+    const now = 1_000_000;
+    setClockOverride({
+      now: () => now,
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+    });
+
+    const result = await runInDurableObject(
+      butler("tools-get-progress"),
+      async (instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        repo.insert({ id: "t1", title: "查机票", chatId: "42" });
+        repo.update("t1", {
+          status: "running",
+          lastProgress: "正在搜索 机票",
+          lastProgressAt: now - 120_000,
+        });
+        (
+          instance as unknown as { taskFor(id: string): unknown }
+        ).taskFor = () => ({
+          status: async () => ({ state: "running", title: "查机票" }),
+        });
+
+        const entry = instance.registry
+          .snapshot()
+          .tools()
+          .find(({ tool }) => tool.name === "get_task");
+        const outcome = await entry!.tool.execute(
+          { id: "t1" } as never,
+          {} as never,
+          {} as never,
+        );
+        return (outcome.output?.[0] as { text: string }).text;
+      },
+    );
+
+    expect(result).toContain("进度：正在搜索 机票（2 分钟前）");
+  });
+
+  it("keeps spawn quiet even when the Task DO reports progress immediately", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
 
@@ -475,33 +523,14 @@ describe("butler control tools", () => {
 
     expect(result).toMatchObject({
       id: "t1",
-      progressMessageRef: {
-        ...(await currentChannelRef("1")),
-      },
       status: "queued",
+      lastProgress: "早期进度",
     });
-    expect(channel.sent).toEqual([
-      {
-        chatId: "42",
-        text: "#1 查天气：已开始",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
-        ],
-      },
-    ]);
-    expect(channel.edits).toEqual([
-      {
-        chatId: "42",
-        messageId: "1",
-        text: "#1 查天气：早期进度",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
-        ],
-      },
-    ]);
+    expect(channel.sent).toEqual([]);
+    expect(channel.edits).toEqual([]);
   });
 
-  it("edits the start message when the Task DO cannot start", async () => {
+  it("fails a task without touching the chat when the Task DO cannot start", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
@@ -534,9 +563,8 @@ describe("butler control tools", () => {
 
     expect(result?.message).toBe("boom");
     expect(result?.row).toMatchObject({ status: "failed", summary: "boom" });
-    expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "1", text: "#1 坏任务：boom" },
-    ]);
+    expect(channel.sent).toEqual([]);
+    expect(channel.edits).toEqual([]);
   });
 
   it("marks a task failed when its Task DO cannot start", async () => {
@@ -611,5 +639,90 @@ describe("butler control tools", () => {
     expect(channel.sent.at(-1)).toEqual({ chatId: "42", text: "ok" });
     expect(cancelTranscript[0]).toContain(`任务 ${taskId} 已完成，无法取消`);
     expect(await stub.status()).toMatchObject({ state: "completed" });
+  });
+
+  it("answers from quick_lookup without a replay", async () => {
+    const result = await runInDurableObject(
+      butler("tools-quick-lookup"),
+      async (_instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        const tools = createButlerTools({
+          repo,
+          task: () => ({
+            start: async () => {},
+            status: async () => ({ state: "queued", title: "" }),
+            steer: async () => ({ ok: false, message: "" }),
+            cancel: async () => ({ ok: false, message: "" }),
+            retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
+            pendingApprovals: async () => [],
+          }),
+          spawn: async () => "t1",
+          resolveAttachment: async () => null,
+          memory: new MemoryStore(state.storage.sql),
+          createSchedule: async () => "s1",
+          listSchedules: () => [],
+          removeSchedule: async () => false,
+          lookup: async () => ({ ok: true, answer: "晴" }),
+        });
+
+        const tool = tools.find((entry) => entry.name === "quick_lookup");
+        const outcome = await tool!.execute(
+          { question: "上海天气", queries: ["上海 天气"] } as never,
+          {} as never,
+          {} as never,
+        );
+        return {
+          text: (outcome.output?.[0] as { text: string }).text,
+          replay: tool!.replay,
+        };
+      },
+    );
+
+    expect(result).toEqual({ text: "晴", replay: undefined });
+  });
+
+  it("tells the model to spawn a task when quick_lookup finds nothing", async () => {
+    const result = await runInDurableObject(
+      butler("tools-quick-lookup-empty"),
+      async (_instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        const tools = createButlerTools({
+          repo,
+          task: () => ({
+            start: async () => {},
+            status: async () => ({ state: "queued", title: "" }),
+            steer: async () => ({ ok: false, message: "" }),
+            cancel: async () => ({ ok: false, message: "" }),
+            retryTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
+            pendingApprovals: async () => [],
+          }),
+          spawn: async () => "t1",
+          resolveAttachment: async () => null,
+          memory: new MemoryStore(state.storage.sql),
+          createSchedule: async () => "s1",
+          listSchedules: () => [],
+          removeSchedule: async () => false,
+          lookup: async () => ({ ok: false }),
+        });
+
+        const tool = tools.find((entry) => entry.name === "quick_lookup");
+        const outcome = await tool!.execute(
+          { question: "上海天气", queries: ["上海 天气"] } as never,
+          {} as never,
+          {} as never,
+        );
+        return {
+          text: (outcome.output?.[0] as { text: string }).text,
+          isError: outcome.isError,
+        };
+      },
+    );
+
+    expect(result).toEqual({
+      text: "快查没有结果，改用 spawn_task",
+      isError: true,
+    });
   });
 });

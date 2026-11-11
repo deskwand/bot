@@ -9,36 +9,16 @@ import type {
   RouteSnapshot,
 } from "../../src/protocol";
 import { createTelegramAdapter } from "../../src/channels/telegram";
-import type { ChannelAdapter } from "../../src/channels/types";
 import { ChannelError } from "../../src/channels/types";
 import { setClockOverride, type Clock } from "../../src/butler/notifier";
 import { setModelOverride } from "../../src/llm/models";
 import type { LedgerStore } from "../../src/butler/ledger";
 import { fakeChannel } from "../helpers/fake-channel";
-import { currentChannelRef, seedOwnerAddress } from "../helpers/channel-ref";
+import { seedOwnerAddress } from "../helpers/channel-ref";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
-}
-
-const ENV = env as unknown as Record<string, unknown>;
-const savedEnv = new Map<string, unknown>();
-
-/** Builds an independent env fixture for the next ChannelDO instance. */
-function setEnv(patch: Record<string, unknown>): void {
-  for (const [key, value] of Object.entries(patch)) {
-    if (!savedEnv.has(key)) savedEnv.set(key, ENV[key]);
-    ENV[key] = value;
-  }
-}
-
-function restoreEnv(): void {
-  for (const [key, value] of savedEnv) {
-    if (value === undefined) delete ENV[key];
-    else ENV[key] = value;
-  }
-  savedEnv.clear();
 }
 
 beforeEach(async () => {
@@ -51,10 +31,6 @@ afterEach(() => {
   setChannelOverride("wechat", null);
   setModelOverride(null);
   vi.restoreAllMocks();
-  // A ChannelDO caches its route for the life of the instance and cannot be
-  // evicted while reports still run, so a test that needs another selection
-  // points the Butler at its own hub instead of mutating the shared one.
-  restoreEnv();
 });
 
 /** A Telegram Bot API stand-in that records bodies and hands out message ids. */
@@ -89,62 +65,12 @@ function butler(name: string) {
 
 type ButlerStub = ReturnType<typeof butler>;
 
-type FakeClock = {
-  clock: Clock;
-  now(): number;
-  advance(ms: number): void;
-  fired(): number;
-  fireNextEarly(ms: number): void;
-};
-
-/** A deterministic clock; timers poll the manual time so callbacks stay in the DO. */
-function fakeClock(start = 0): FakeClock {
-  let now = start;
-  let nextId = 1;
-  let fired = 0;
-  const timers = new Map<
-    number,
-    { at: number; run: () => void; cancelled: boolean }
-  >();
-
+/** A clock whose timers never fire; progress no longer schedules any. */
+function fixedClock(now: number): Clock {
   return {
-    clock: {
-      now: () => now,
-      setTimeout(run, delayMs) {
-        const id = nextId++;
-        const timer = { at: now + delayMs, run, cancelled: false };
-        timers.set(id, timer);
-
-        const poll = () => {
-          if (timer.cancelled) return;
-          if (now >= timer.at) {
-            timers.delete(id);
-            fired += 1;
-            run();
-            return;
-          }
-          setTimeout(poll, 1);
-        };
-        setTimeout(poll, 1);
-        return id;
-      },
-      clearTimeout(handle) {
-        if (typeof handle !== "number") return;
-        const timer = timers.get(handle);
-        if (timer === undefined) return;
-        timer.cancelled = true;
-        timers.delete(handle);
-      },
-    },
     now: () => now,
-    advance(ms) {
-      now += ms;
-    },
-    fired: () => fired,
-    fireNextEarly(ms) {
-      const next = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0];
-      if (next) next[1].at -= ms;
-    },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
   };
 }
 
@@ -155,36 +81,18 @@ async function seedTask(
     title?: string;
     status?: string;
     chatId?: string | null;
-    progressMessageId?: string | null;
-    /** Seeds only the pre-migration column, as an older release left it. */
-    legacyMessageId?: string | null;
-    /** Writes this reference verbatim, for channels whose sends carry no id. */
-    ref?: ChannelMessageRef | null;
   } = {},
 ): Promise<void> {
-  const messageId =
-    row.progressMessageId === undefined ? "77" : row.progressMessageId;
-  const ref =
-    row.ref !== undefined
-      ? row.ref
-      : row.legacyMessageId !== undefined
-        ? null
-        : messageId === null
-          ? null
-          : await currentChannelRef(messageId);
-
   await runInDurableObject(stub, (_instance, state) => {
     state.storage.sql.exec(
       `INSERT INTO tasks
-        (id, title, status, created_at, updated_at, chat_id, progress_message_id,
-         progress_message_ref_json, artifacts_json, last_seq)
-       VALUES (?, ?, ?, 0, 0, ?, ?, ?, '[]', 0)`,
+        (id, title, status, created_at, updated_at, chat_id, artifacts_json,
+         last_seq)
+       VALUES (?, ?, ?, 0, 0, ?, '[]', 0)`,
       row.id ?? "t1",
       row.title ?? "查天气",
       row.status ?? "queued",
       row.chatId === undefined ? "42" : row.chatId,
-      row.legacyMessageId ?? null,
-      ref === null ? null : JSON.stringify(ref),
     );
   });
 }
@@ -192,34 +100,33 @@ async function seedTask(
 async function taskRow(
   stub: ButlerStub,
   taskId: string,
-): Promise<{ status: string; summary: string | null } | undefined> {
+): Promise<
+  | {
+      status: string;
+      summary: string | null;
+      last_progress: string | null;
+      last_progress_at: number | null;
+    }
+  | undefined
+> {
   return runInDurableObject(stub, (_instance, state) =>
     state.storage.sql
-      .exec<{ status: string; summary: string | null }>(
-        `SELECT status, summary FROM tasks WHERE id = ?`,
+      .exec<{
+        status: string;
+        summary: string | null;
+        last_progress: string | null;
+        last_progress_at: number | null;
+      }>(
+        `SELECT status, summary, last_progress, last_progress_at
+         FROM tasks WHERE id = ?`,
         taskId,
       )
       .toArray()[0],
   );
 }
 
-async function progressMessageId(
-  stub: ButlerStub,
-  taskId: string,
-): Promise<string | null | undefined> {
-  return runInDurableObject(stub, (_instance, state) => {
-    const json = state.storage.sql
-      .exec<{ progress_message_ref_json: string | null }>(
-        `SELECT progress_message_ref_json FROM tasks WHERE id = ?`,
-        taskId,
-      )
-      .toArray()[0]?.progress_message_ref_json;
-    return json ? (JSON.parse(json) as { messageId: string | null }).messageId : null;
-  });
-}
-
 describe("ButlerDO.report", () => {
-  it("sends the task summary without consulting the butler model", async () => {
+  it("speaks the summary without a butler session turn", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
     let targetRequests = 0;
@@ -243,121 +150,106 @@ describe("ButlerDO.report", () => {
     const before = await snapshot();
     setModelOverride(small);
     await stub.report({ taskId: "t1", seq: 1, type: "completed", summary: "Result: 1 USD = 7.12 CNY", artifacts: [] });
-    expect(targetRequests).toBe(0);
+    // The speaker is its own one-shot call, not a turn in the butler session.
+    expect(targetRequests).toBe(1);
     expect(channel.sent.map((entry) => entry.text).join("\n")).toContain("Result: 1 USD = 7.12 CNY");
     expect(await snapshot()).toEqual(before);
   });
 
-  /** WeChat hub + clock fixture shared by the WeChat cases in this file. */
-  async function wechatButler(name: string): Promise<{
-    stub: ButlerStub;
-    channel: ReturnType<typeof fakeChannel>;
-    clock: FakeClock;
-  }> {
-    const channel = fakeChannel();
-    setChannelOverride("wechat", channel.adapter);
-    setEnv({
-      ACTIVE_CHANNEL: "wechat",
-      WECHAT_CREDENTIALS: JSON.stringify({
-        token: "token-a",
-        baseUrl: "https://ilinkai.weixin.qq.com",
-        accountId: "account-a",
-        userId: "wx-owner",
-      }),
-    });
-    const clock = fakeClock();
-    setClockOverride(clock.clock);
-
-    const hubName = `${name}-hub`;
-    await runInDurableObject(
-      env.CHANNELS.get(env.CHANNELS.idFromName(hubName)),
-      (_instance, state) => {
-        state.storage.sql.exec(
-          `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
-           VALUES ('wechat', 'wx-owner', ?)
-           ON CONFLICT(channel) DO UPDATE SET
-             conversation_id = excluded.conversation_id`,
-          Date.now(),
-        );
-      },
-    );
-
-    const stub = butler(name);
-    await runInDurableObject(stub, (instance) => {
-      (instance as unknown as { channels(): unknown }).channels = () =>
-        env.CHANNELS.get(env.CHANNELS.idFromName(hubName));
-    });
-    return { stub, channel, clock };
-  }
-
-  /** A reference as a WeChat send leaves it: no message id, channel wechat. */
-  function wechatRef(routeKey: string): ChannelMessageRef {
-    return {
-      channel: "wechat",
-      conversationId: "wx-owner",
-      routeKey,
-      messageId: null,
-    };
-  }
-
-  it("edits progress immediately, then flushes the latest text after the interval", async () => {
+  it("starts a task without a card in the chat", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
-    const stub = butler("report-progress");
-    await seedTask(stub);
-
-    await stub.report({ taskId: "t1", seq: 1, type: "started" });
-    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "a" });
-    // `started` assigns a handle to a migrated row without one.
-    expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "77", text: "#1 查天气：a", buttons: [
-        [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
-      ] },
-    ]);
-
-    await stub.report({ taskId: "t1", seq: 3, type: "progress", text: "b" });
-    await stub.report({ taskId: "t1", seq: 4, type: "progress", text: "c" });
-    expect(channel.edits).toHaveLength(1);
-
-    fake.advance(3001);
-    await vi.waitFor(() => {
-      expect(channel.edits).toHaveLength(2);
+    const stub = butler("report-spawn-silent");
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { taskFor(id: string): unknown }).taskFor = () => ({
+        start: async () => {},
+      });
     });
-    expect(channel.edits[1]?.text).toBe("#1 查天气：c");
-    expect(await taskRow(stub, "t1")).toMatchObject({ status: "running" });
-  });
 
-  it("throttles progress to one heartbeat per 3 minutes on a channel that cannot edit messages", async () => {
-    const { stub, channel, clock } = await wechatButler(
-      "report-wechat-progress",
-    );
-    await seedTask(stub, { ref: wechatRef("route-a") });
-
-    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-    // Silent inside the first window.
+    expect(await stub.spawn("查天气", "查询北京天气")).toBe("t1");
     expect(channel.sent).toEqual([]);
-
-    clock.advance(60_001);
-    await vi.waitFor(() => expect(channel.sent).toHaveLength(1));
-    expect(channel.sent[0]?.text).toBe("t1 查天气：a");
-
-    // Updates inside the next window collapse into one heartbeat.
-    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
-    await stub.report({ taskId: "t1", seq: 3, type: "progress", text: "c" });
-    expect(channel.sent).toHaveLength(1);
-
-    clock.advance(200_000);
-    await vi.waitFor(() => expect(channel.sent).toHaveLength(2));
-    expect(channel.sent[1]?.text).toBe("t1 查天气：c");
     expect(channel.edits).toEqual([]);
   });
 
+  it("records progress on the task row and keeps the chat quiet", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setClockOverride(fixedClock(12_345));
+
+    const stub = butler("report-progress-silent");
+    await seedTask(stub);
+
+    await stub.report({ taskId: "t1", seq: 1, type: "started" });
+    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "正在搜索" });
+    await stub.report({ taskId: "t1", seq: 3, type: "progress", text: "正在搜索 机票" });
+
+    expect(channel.sent).toEqual([]);
+    expect(channel.edits).toEqual([]);
+    expect(await taskRow(stub, "t1")).toMatchObject({
+      status: "running",
+      last_progress: "正在搜索 机票",
+      last_progress_at: 12_345,
+    });
+  });
+
+  it("records out-of-band progress on the task row only", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setClockOverride(fixedClock(99_000));
+
+    const stub = butler("report-task-progress-silent");
+    await seedTask(stub);
+
+    await stub.reportTaskProgress("t1", "正在读 邮件");
+
+    expect(channel.sent).toEqual([]);
+    expect(channel.edits).toEqual([]);
+    expect(await taskRow(stub, "t1")).toMatchObject({
+      status: "queued",
+      last_progress: "正在读 邮件",
+      last_progress_at: 99_000,
+    });
+  });
+
+  it("sends exactly one completion message", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+
+    const stub = butler("report-completed-silent-progress");
+    await seedTask(stub);
+
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "ok",
+      artifacts: [],
+    });
+
+    expect(channel.sent).toEqual([{ chatId: "42", text: "ok" }]);
+    expect(channel.edits).toEqual([]);
+  });
+
+  it("says nothing when an owner task is cancelled", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+
+    const stub = butler("report-cancelled-silent");
+    await seedTask(stub, { status: "running" });
+
+    await stub.report({ taskId: "t1", seq: 1, type: "cancelled" });
+
+    expect(channel.sent).toEqual([]);
+    expect(channel.edits).toEqual([]);
+    expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
+  });
+
   it("still sends the summary when a butler submit would fail", async () => {
-    const { stub, channel } = await wechatButler("report-wechat-terminal-broken");
-    await seedTask(stub, { ref: wechatRef("route-a") });
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const stub = butler("report-terminal-broken");
+    await seedTask(stub);
     // The report never goes through the session now; a broken submit must not
     // suppress the owner's terminal message.
     await runInDurableObject(stub, (instance) => {
@@ -376,26 +268,8 @@ describe("ButlerDO.report", () => {
     });
 
     expect(channel.sent).toEqual([
-      { chatId: "wx-owner", text: "t1 查天气：抓到了价格" },
+      { chatId: "42", text: "抓到了价格" },
     ]);
-  });
-
-  it("sends exactly one terminal message on a channel that cannot edit", async () => {
-    const { stub, channel } = await wechatButler("report-wechat-terminal");
-    await seedTask(stub, { ref: wechatRef("route-a") });
-
-    await stub.report({
-      taskId: "t1",
-      seq: 1,
-      type: "completed",
-      summary: "ok",
-      artifacts: [],
-    });
-
-    expect(channel.sent).toEqual([
-      { chatId: "wx-owner", text: "t1 查天气：ok" },
-    ]);
-    expect(channel.edits).toEqual([]);
   });
 
   it("marks terminal, result and approval messages as critical", async () => {
@@ -461,108 +335,14 @@ describe("ButlerDO.report", () => {
         ?.priority,
     ).toBe("critical");
     expect(
-      sent.find((message) => message.text.includes("已完成"))?.priority,
+      sent.find((message) => message.text === "ok")?.priority,
     ).toBe("critical");
-    // Telegram's status line is edited in place; the result is the summary
-    // alone, so it must not repeat the title.
-    expect(sent.find((message) => message.text === "ok")?.priority).toBe(
-      "critical",
-    );
-  });
-
-  it("marks the single WeChat terminal message as critical", async () => {
-    const stub = butler("report-priority-wechat");
-    await seedTask(stub, { ref: wechatRef("route-a") });
-
-    const sent: OutboundMessage[] = [];
-    await runInDurableObject(stub, (instance) => {
-      (
-        instance as unknown as {
-          channels(): {
-            currentRoute(): Promise<{
-              channel: "wechat";
-              routeKey: string;
-            }>;
-            isAdmissionCurrent(): Promise<boolean>;
-            editCurrent(): Promise<boolean>;
-            sendCurrent(msg: OutboundMessage): Promise<{
-              channel: "wechat";
-              conversationId: string;
-              routeKey: string;
-              messageId: string | null;
-            }>;
-          };
-        }
-      ).channels = () => ({
-        currentRoute: async () => ({
-          channel: "wechat",
-          routeKey: "route-a",
-        }),
-        isAdmissionCurrent: async () => true,
-        editCurrent: async () => false,
-        sendCurrent: async (msg) => {
-          sent.push(msg);
-          return {
-            channel: "wechat",
-            conversationId: "wx-owner",
-            routeKey: "route-a",
-            messageId: null,
-          };
-        },
-      });
-    });
-
-    await stub.report({
-      taskId: "t1",
-      seq: 1,
-      type: "completed",
-      summary: "ok",
-      artifacts: [],
-    });
-
-    expect(sent).toEqual([
-      {
-        text: "t1 查天气：ok",
-        priority: "critical",
-      },
-    ]);
-  });
-
-  it("re-arms a progress flush that fires before the window closes", async () => {
-    const channel = fakeChannel();
-    setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
-
-    const stub = butler("report-early-flush");
-    await seedTask(stub);
-
-    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
-    await stub.report({ taskId: "t1", seq: 3, type: "progress", text: "c" });
-    expect(channel.edits).toHaveLength(1);
-
-    // The scheduled deadline includes a 1 ms guard. Pull it 2 ms earlier so it
-    // fires 1 ms before the throttle window, then let it re-arm.
-    fake.fireNextEarly(2);
-    fake.advance(2999);
-    await vi.waitFor(() => {
-      expect(fake.fired()).toBeGreaterThanOrEqual(1);
-    });
-    expect(channel.edits).toHaveLength(1);
-
-    fake.advance(2);
-    await vi.waitFor(() => {
-      expect(channel.edits).toHaveLength(2);
-    });
-    expect(channel.edits[1]?.text).toBe("t1 查天气：c");
+    expect(sent.filter((message) => message.text.includes("ok"))).toHaveLength(1);
   });
 
   it("sends an approval request with buttons and resolves it in place", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-approval");
     await seedTask(stub);
@@ -609,8 +389,6 @@ describe("ButlerDO.report", () => {
   it("writes the full approval hint when another approval is pending", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-approval-multiple");
     await seedTask(stub);
@@ -652,30 +430,6 @@ describe("ButlerDO.report", () => {
     ]);
   });
 
-  it("shows the reusable handle in the start message", async () => {
-    const channel = fakeChannel();
-    setChannelOverride("telegram", channel.adapter);
-
-    const stub = butler("report-spawn-handle");
-    await runInDurableObject(stub, (instance) => {
-      (instance as unknown as { taskFor(id: string): unknown }).taskFor = () => ({
-        start: async () => {},
-      });
-    });
-
-    await stub.spawn("查天气", "查询北京天气");
-
-    expect(channel.sent).toEqual([
-      {
-        chatId: "42",
-        text: "#1 查天气：已开始",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
-        ],
-      },
-    ]);
-  });
-
   it("does not resolve text actions while maintenance is active", async () => {
     const stub = butler("report-maintenance-resolve");
     await stub.acquireMaintenance("export", "op1");
@@ -691,8 +445,6 @@ describe("ButlerDO.report", () => {
   it("derives the pending owner approvals from the event log", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-pending-owner");
     await seedTask(stub, { id: "t1", title: "查天气", status: "running" });
@@ -732,17 +484,10 @@ describe("ButlerDO.report", () => {
   it("keeps bot approvals out of the pending owner list", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-pending-bot");
     await seedTask(stub, { id: "t1", title: "查天气", status: "running" });
-    await seedTask(stub, {
-      id: "b1",
-      title: "bot run",
-      status: "running",
-      progressMessageId: null,
-    });
+    await seedTask(stub, { id: "b1", title: "bot run", status: "running" });
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.sql.exec(`UPDATE tasks SET handle = 1 WHERE id = 't1'`);
       state.storage.sql.exec(`UPDATE tasks SET bot_id = 'bot-a' WHERE id = 'b1'`);
@@ -763,8 +508,6 @@ describe("ButlerDO.report", () => {
   it("keeps the approval outcome when the request text is long", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-approval-clamp");
     await seedTask(stub);
@@ -799,8 +542,6 @@ describe("ButlerDO.report", () => {
         fetch: fetchImpl,
       }),
     );
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-approval-entities");
     await seedTask(stub);
@@ -861,8 +602,6 @@ describe("ButlerDO.report", () => {
   it("marks completion and sends the summary directly", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-completed");
     await seedTask(stub);
@@ -875,9 +614,7 @@ describe("ButlerDO.report", () => {
       artifacts: [],
     });
 
-    expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "77", text: "t1 查天气：已完成" },
-    ]);
+    expect(channel.edits).toEqual([]);
     expect(channel.sent).toEqual([{ chatId: "42", text: "ok" }]);
     expect(await taskRow(stub, "t1")).toMatchObject({
       status: "completed",
@@ -895,8 +632,6 @@ describe("ButlerDO.report", () => {
   it("does not submit the completion summary to the butler session", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-completion-bypass");
     await seedTask(stub);
@@ -927,8 +662,6 @@ describe("ButlerDO.report", () => {
   it("writes one ledger row per completed task", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-ledger");
     await seedTask(stub);
@@ -946,9 +679,9 @@ describe("ButlerDO.report", () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      kind: "task.completed",
+      kind: "butler.said",
       refId: "t1",
-      line: "t1 查天气 已完成：抓到了价格",
+      line: "我对主人说了：抓到了价格",
     });
   });
 
@@ -988,8 +721,6 @@ describe("ButlerDO.report", () => {
   it("does not send a second completion report for a redelivered event", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-completed-idempotent");
     await seedTask(stub);
@@ -1012,8 +743,6 @@ describe("ButlerDO.report", () => {
   it("reports a completed task only once when the completion is redelivered with a higher seq", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-completed-redelivered");
     await seedTask(stub);
@@ -1030,115 +759,17 @@ describe("ButlerDO.report", () => {
     await stub.report({ ...completed, seq: 2 });
     await stub.report({ ...completed, seq: 3 });
 
-    expect(channel.sent.map((message) => message.text)).toEqual(["ok"]);
+    expect(channel.sent.map((message) => message.text)).toEqual([
+      "ok",
+    ]);
     expect(channel.artifacts).toEqual([
       { chatId: "42", name: "report.md", contentType: "text/markdown" },
     ]);
   });
 
-  it("does not flush buffered progress after a terminal event", async () => {
-    const channel = fakeChannel();
-    setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
-
-    const stub = butler("report-buffered-completed");
-    await seedTask(stub);
-
-    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
-    await stub.report({
-      taskId: "t1",
-      seq: 3,
-      type: "completed",
-      summary: "ok",
-      artifacts: [],
-    });
-
-    fake.advance(4000);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(channel.edits.map((edit) => edit.text)).toEqual([
-      "t1 查天气：a",
-      "t1 查天气：已完成",
-    ]);
-  });
-
-  it("survives a channel edit failure and sends new progress next time", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const channel = fakeChannel();
-    const failing: ChannelAdapter = {
-      ...channel.adapter,
-      async edit() {
-        throw new ChannelError("Too Many Requests", 429);
-      },
-    };
-    setChannelOverride("telegram", failing);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
-
-    const stub = butler("report-channel-failure");
-    await seedTask(stub);
-
-    await expect(
-      stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" }),
-    ).resolves.toBeUndefined();
-    expect(channel.sent).toHaveLength(0);
-    expect(channel.edits).toHaveLength(0);
-
-    fake.advance(3000);
-    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
-
-    expect(channel.sent).toEqual([
-      {
-        chatId: "42",
-        text: "t1 查天气：b",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
-        ],
-      },
-    ]);
-  });
-
-  it("treats a Telegram 'message is not modified' edit as success", async () => {
-    let edits = 0;
-    const channel = fakeChannel();
-    const notModified: ChannelAdapter = {
-      ...channel.adapter,
-      async edit() {
-        edits += 1;
-        throw new ChannelError(
-          "Bad Request: message is not modified: specified new message content",
-          400,
-        );
-      },
-    };
-    setChannelOverride("telegram", notModified);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
-
-    const stub = butler("report-not-modified");
-    await seedTask(stub);
-
-    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-    expect(edits).toBe(1);
-    expect(channel.sent).toHaveLength(0);
-    expect(await progressMessageId(stub, "t1")).toBe("77");
-
-    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
-    fake.advance(3001);
-    await vi.waitFor(() => {
-      expect(edits).toBe(2);
-    });
-    expect(channel.sent).toHaveLength(0);
-    expect(await progressMessageId(stub, "t1")).toBe("77");
-  });
-
   it("shows the retry hint for a retryable failure", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-failed");
     await seedTask(stub);
@@ -1151,21 +782,16 @@ describe("ButlerDO.report", () => {
       retryable: true,
     });
 
-    expect(channel.edits).toEqual([
-      {
-        chatId: "42",
-        messageId: "77",
-        text: "t1 查天气：模型错误\n回复\"重试\"可继续",
-      },
+    expect(channel.sent).toEqual([
+      { chatId: "42", text: "「查天气」没办成：模型错误\n要我重试吗？" },
     ]);
+    expect(channel.edits).toEqual([]);
     expect(await taskRow(stub, "t1")).toMatchObject({ status: "failed" });
   });
 
-  it("clamps progress details while preserving the retry hint", async () => {
+  it("clamps a long failure message", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
 
     const stub = butler("report-clamps");
     await seedTask(stub);
@@ -1173,167 +799,13 @@ describe("ButlerDO.report", () => {
     await stub.report({
       taskId: "t1",
       seq: 1,
-      type: "progress",
-      text: "x".repeat(300),
-    });
-    expect(channel.edits[0]?.text).toBe(
-      `t1 查天气：${"x".repeat(199)}…`,
-    );
-
-    await stub.report({
-      taskId: "t1",
-      seq: 2,
       type: "failed",
       reason: "y".repeat(5000),
       retryable: true,
     });
-    const failure = channel.edits[1]?.text ?? "";
+    const failure = channel.sent[0]?.text ?? "";
     expect(failure.length).toBeLessThanOrEqual(4096);
-    expect(failure.endsWith("\n回复\"重试\"可继续")).toBe(true);
-  });
-
-  it("marks a cancelled task and its progress message", async () => {
-    const channel = fakeChannel();
-    setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
-
-    const stub = butler("report-cancelled");
-    await seedTask(stub);
-
-    await stub.report({ taskId: "t1", seq: 1, type: "cancelled" });
-
-    expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "77", text: "t1 查天气：已取消" },
-    ]);
-    expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
-  });
-
-  it("sends task updates to notify even when the task has no source chat", async () => {
-    const channel = fakeChannel();
-    setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
-
-    const stub = butler("report-no-source");
-    await seedTask(stub, { chatId: null, progressMessageId: null });
-
-    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-    expect(channel.sent).toEqual([
-      {
-        chatId: "42",
-        text: "t1 查天气：a",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
-        ],
-      },
-    ]);
-
-    await stub.report({ taskId: "t1", seq: 2, type: "cancelled" });
-    expect(channel.edits).toEqual([
-      { chatId: "42", messageId: "1", text: "t1 查天气：已取消" },
-    ]);
-    expect(await taskRow(stub, "t1")).toMatchObject({ status: "cancelled" });
-  });
-
-  it("re-sends a progress update whose message cannot be edited", async () => {
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
-
-    const stub = butler("report-edit-unsupported");
-    await seedTask(stub);
-
-    const sent: OutboundMessage[] = [];
-    await runInDurableObject(stub, (instance) => {
-      (
-        instance as unknown as {
-          channels(): {
-            currentRoute(): Promise<{
-              channel: "telegram";
-              routeKey: string;
-            }>;
-            editCurrent(): Promise<boolean>;
-            sendCurrent(msg: OutboundMessage): Promise<{
-              channel: "telegram";
-              conversationId: string;
-              routeKey: string;
-              messageId: string;
-            }>;
-          };
-        }
-      ).channels = () => ({
-        currentRoute: async () => ({
-          channel: "telegram",
-          routeKey: "test-route",
-        }),
-        editCurrent: async () => false,
-        sendCurrent: async (msg) => {
-          sent.push(msg);
-          return {
-            channel: "telegram",
-            conversationId: "42",
-            routeKey: "test-route",
-            messageId: "99",
-          };
-        },
-      });
-    });
-
-    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-    // The saved reference cannot be edited, so this update is delivered as a
-    // new message instead of being dropped until the next event.
-    expect(sent).toEqual([
-      {
-        text: "t1 查天气：a",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
-        ],
-      },
-    ]);
-    expect(await progressMessageId(stub, "t1")).toBe("99");
-
-    fake.advance(3001);
-    await stub.report({ taskId: "t1", seq: 2, type: "progress", text: "b" });
-    expect(sent).toEqual([
-      {
-        text: "t1 查天气：a",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
-        ],
-      },
-      {
-        text: "t1 查天气：b",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
-        ],
-      },
-    ]);
-    expect(await progressMessageId(stub, "t1")).toBe("99");
-  });
-
-  it("sends a new message for a pre-migration bare progress message id", async () => {
-    const channel = fakeChannel();
-    setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
-
-    const stub = butler("report-legacy-id");
-    await seedTask(stub, { legacyMessageId: "77" });
-
-    await stub.report({ taskId: "t1", seq: 1, type: "progress", text: "a" });
-
-    // A bare id cannot prove ownership, so it is never edited.
-    expect(channel.edits).toEqual([]);
-    expect(channel.sent).toEqual([
-      {
-        chatId: "42",
-        text: "t1 查天气：a",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t1", hint: "取消 t1" }],
-        ],
-      },
-    ]);
-    expect(await progressMessageId(stub, "t1")).toBe("1");
+    expect(failure.startsWith("「查天气」没办成：")).toBe(true);
   });
 });
 
@@ -1391,7 +863,7 @@ describe("ButlerDO.report stalled", () => {
     expect(sent).toEqual([
       {
         text: expect.stringContaining(
-          "最后一步是「web_fetch」，已经 10 分钟没有返回",
+          "最后一步「web_fetch」已经 10 分钟没有返回",
         ),
         priority: "alert",
       },
@@ -1418,7 +890,6 @@ describe("ButlerDO.report stalled", () => {
   it("ignores a stalled event for a task that already ended", async () => {
     const stub = butler("report-stalled-finished");
     const { sent } = await capture(stub);
-    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
     await seedTask(stub, { status: "running" });
 
     await stub.report({
@@ -1448,12 +919,9 @@ describe("ButlerDO.report stalled", () => {
     expect(sent).toEqual([]);
   });
 
-  it("does not overwrite the progress message reference", async () => {
+  it("sends the stalled notice as its own message", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    const fake = fakeClock();
-    setClockOverride(fake.clock);
-    setModelOverride(scriptedModel([{ text: "t1 结论：ok" }]));
 
     const stub = butler("report-stalled-ref");
     await seedTask(stub, { status: "running" });
@@ -1461,7 +929,7 @@ describe("ButlerDO.report stalled", () => {
     await stub.report({ taskId: "t1", seq: 1, type: "started" });
     await stub.report({ taskId: "t1", seq: 2, type: "stalled", ...stalledTool });
     expect(channel.sent.map((message) => message.text).join("\n")).toContain(
-      "最后一步是「web_fetch」",
+      "最后一步「web_fetch」",
     );
 
     await stub.report({
@@ -1472,11 +940,11 @@ describe("ButlerDO.report stalled", () => {
       artifacts: [],
     });
 
-    expect(channel.edits.at(-1)).toMatchObject({
-      messageId: "77",
-      text: "#1 查天气：已完成",
-    });
-    expect(await progressMessageId(stub, "t1")).toBe("77");
+    expect(channel.sent.map((message) => message.text)).toEqual([
+      expect.stringContaining("最后一步「web_fetch」"),
+      "ok",
+    ]);
+    expect(channel.edits).toEqual([]);
   });
 });
 
@@ -1558,7 +1026,7 @@ describe("ButlerDO.reconcileChannel", () => {
 
   it("retries a failed send, presents once per route, and re-presents after a redeploy", async () => {
     const stub = butler("reconcile-routes");
-    await seedTask(stub, { status: "running", progressMessageId: null });
+    await seedTask(stub, { status: "running" });
     const state = boundary("k1");
     state.failSend = true;
     await stubBoundary(stub, state);
@@ -1589,7 +1057,7 @@ describe("ButlerDO.reconcileChannel", () => {
 
   it("presents nothing when the task has no live pending approval", async () => {
     const stub = butler("reconcile-none");
-    await seedTask(stub, { status: "running", progressMessageId: null });
+    await seedTask(stub, { status: "running" });
     const state = boundary();
     await stubBoundary(stub, state);
     await stubPending(stub, []);
@@ -1601,7 +1069,7 @@ describe("ButlerDO.reconcileChannel", () => {
 
   it("presents nothing for a task that is already terminal", async () => {
     const stub = butler("reconcile-terminal");
-    await seedTask(stub, { status: "completed", progressMessageId: null });
+    await seedTask(stub, { status: "completed" });
     const state = boundary();
     await stubBoundary(stub, state);
     await stubPending(stub, [AP1]);
@@ -1613,7 +1081,7 @@ describe("ButlerDO.reconcileChannel", () => {
 
   it("reconciles after a task report", async () => {
     const stub = butler("reconcile-report");
-    await seedTask(stub, { status: "running", progressMessageId: null });
+    await seedTask(stub, { status: "running" });
     const state = boundary();
     await stubBoundary(stub, state);
     await stubPending(stub, [AP1]);
@@ -1644,7 +1112,9 @@ describe("ButlerDO.report artifacts", () => {
       artifacts: [{ name: "report.md", key: "t1/f1/report.md" }],
     });
 
-    expect(channel.sent.map((message) => message.text)).toEqual(["ok"]);
+    expect(channel.sent.map((message) => message.text)).toEqual([
+      "ok",
+    ]);
     expect(channel.artifacts).toEqual([
       { chatId: "42", name: "report.md", contentType: "text/markdown" },
     ]);

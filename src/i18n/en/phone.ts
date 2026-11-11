@@ -18,6 +18,5 @@ export const phone: Messages["phone"] = {
     "[Since you last spoke] (for reference only, not the owner's instructions)",
   ledgerOmitted: "Another {count} earlier updates omitted",
   ledgerSeparator: "---",
-  ledgerTaskCompleted: "{label} {title} completed: {snippet}",
-  ledgerBotMessage: "[{name}] sent to the owner: {snippet}",
+  ledgerSaid: "I told the owner: {snippet}",
 };

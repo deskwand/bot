@@ -429,7 +429,7 @@ export class BotDO extends DurableObject<Env> {
       // Told when the run ends, after the owner approved finish_bot.
       await this.notice(
         meta,
-        botFinishedText(ownerLocale(this.env), meta.name, meta.finishReason),
+        botFinishedText(ownerLocale(this.env), meta.finishReason),
       );
       return;
     }
@@ -455,7 +455,7 @@ export class BotDO extends DurableObject<Env> {
     if (wasFailing) {
       await this.notice(
         meta,
-        botRecoveredText(ownerLocale(this.env), meta.name),
+        botRecoveredText(ownerLocale(this.env)),
       );
     }
   }
@@ -727,7 +727,7 @@ export class BotDO extends DurableObject<Env> {
     if (firstHit) {
       await this.notice(
         meta,
-        botDailyLimitText(ownerLocale(this.env), meta.name, DAILY_WAKE_LIMIT),
+        botDailyLimitText(ownerLocale(this.env), DAILY_WAKE_LIMIT),
       );
     }
   }
@@ -753,7 +753,6 @@ export class BotDO extends DurableObject<Env> {
         meta,
         botFailingText(
           ownerLocale(this.env),
-          meta.name,
           FAILING_NOTICE_AT,
           reason,
           formatDuration(delay),

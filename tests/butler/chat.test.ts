@@ -14,6 +14,8 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { PiHarness, PiSession, type PiModel } from "agents/harness/pi";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BotsRepo } from "../../src/butler/bots-repo";
+import { setBotChatStubOverride } from "../../src/butler/butler-do";
 import { setChannelOverride } from "../../src/channels/override";
 import {
   PAID_PLAN_REQUIRED_TEXT,
@@ -24,6 +26,7 @@ import {
 import { registerTestProvider, setModelOverride } from "../../src/llm/models";
 import { PI_PROGRESS } from "../../src/llm/pi-settings";
 import type { AdmittedMessage, OutboundMessage, RouteSnapshot } from "../../src/protocol";
+import { t } from "../../src/i18n";
 import { fakeChannel } from "../helpers/fake-channel";
 import { seedOwnerAddress } from "../helpers/channel-ref";
 import { scriptedModel } from "../helpers/scripted-model";
@@ -119,6 +122,7 @@ function message(evt: {
   chatId?: string;
   images?: AdmittedMessage["images"];
   files?: AdmittedMessage["files"];
+  quotedText?: string;
   fileFailed?: AdmittedMessage["fileFailed"];
   imageFailed?: boolean;
   voiceFailed?: boolean;
@@ -131,6 +135,7 @@ function message(evt: {
     text: evt.text,
     ...(evt.images === undefined ? {} : { images: evt.images }),
     ...(evt.files === undefined ? {} : { files: evt.files }),
+    ...(evt.quotedText === undefined ? {} : { quotedText: evt.quotedText }),
     ...(evt.fileFailed === undefined ? {} : { fileFailed: evt.fileFailed }),
     ...(evt.imageFailed === undefined ? {} : { imageFailed: evt.imageFailed }),
     ...(evt.voiceFailed === undefined ? {} : { voiceFailed: evt.voiceFailed }),
@@ -187,6 +192,18 @@ function routedModel(butlerTurns: Turn[], taskTurns: Turn[]): PiModel {
   return { provider: id, id };
 }
 
+/** The last user message the model saw, as plain text. */
+function userText(context: TranscriptContext | undefined): string {
+  const last = context?.messages
+    .filter((entry) => entry.role === "user")
+    .at(-1);
+  if (last === undefined || last.role !== "user") return "";
+  if (typeof last.content === "string") return last.content;
+  return last.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("");
+}
+
 /**
  * The rendered system prompt lives in a system entry's `sections` map, not in
  * its `content` (which pi keeps empty for section-carrying entries).
@@ -237,6 +254,7 @@ afterEach(() => {
   setModelOverride(null);
   setChannelOverride("telegram", null);
   setChannelOverride("wechat", null);
+  setBotChatStubOverride(null);
   vi.restoreAllMocks();
   restoreEnv();
 });
@@ -327,6 +345,104 @@ describe("butler chat", () => {
       RECEIPT,
       { chatId: "42", text: "你好！" },
     ]);
+  });
+
+  it("sends an @mention to the butler conversation", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "盯盘那边说价格回落了。",
+          observe: (context) => {
+            seen = context;
+          },
+        },
+      ]),
+    );
+    const ask = vi.fn(async () => "机器人的回答");
+    setBotChatStubOverride(() => ({ ask }));
+    const stub = butler("chat-addressed");
+    await runInDurableObject(stub, (_instance, state) => {
+      new BotsRepo(state.storage.sql).insert({ id: "chat-b1", name: "盯盘" });
+    });
+
+    await stub.handleMessage(
+      message({ text: "@盯盘 现在什么情况", eventId: "tg:addressed" }),
+    );
+
+    expect(userText(seen)).toBe("@盯盘 现在什么情况");
+    expect(ask).not.toHaveBeenCalled();
+    expect(channel.sent.map((sent) => sent.text)).toEqual([
+      RECEIPT.text,
+      "盯盘那边说价格回落了。",
+    ]);
+  });
+
+  it("adds no quote line when nothing is quoted", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "好",
+          observe: (context) => {
+            seen = context;
+          },
+        },
+      ]),
+    );
+
+    await butler("chat-no-quote").handleMessage(
+      message({ text: "随便问问", eventId: "tg:no-quote" }),
+    );
+
+    expect(userText(seen)).toBe("随便问问");
+    expect(userText(seen)).not.toContain("主人引用了这条消息");
+    expect(channel.sent.at(-1)?.text).toBe("好");
+  });
+
+  it("puts the ledger prefix, quote line and message in order", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let seen: TranscriptContext | undefined;
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "好",
+          observe: (context) => {
+            seen = context;
+          },
+        },
+      ]),
+    );
+    const stub = butler("chat-quote-order");
+    await runInDurableObject(stub, (instance) => {
+      instance.ledger.add("bot.message", "chat-b1", "价格回落了", Date.now());
+    });
+    const quoted = `今天的情况是这样的：${"引".repeat(5000)}`;
+    const original = "那明天再看看";
+
+    await stub.handleMessage(
+      message({
+        text: original,
+        quotedText: quoted,
+        eventId: "tg:quote-order",
+      }),
+    );
+
+    const text = userText(seen);
+    const header = t("zh", "phone.ledgerHeader");
+    const quoteLine = t("zh", "butler.quoted", {
+      snippet: `今天的情况是这样的：${"引".repeat(100 - [..."今天的情况是这样的："].length)}…`,
+    });
+    expect(text).toContain(`${quoteLine}\n${original}`);
+    expect(text.startsWith(header)).toBe(true);
+    expect(text.indexOf(header)).toBeLessThan(text.indexOf(quoteLine));
+    expect(text.indexOf(quoteLine)).toBeLessThan(text.indexOf(original));
+    expect(channel.sent.at(-1)?.text).toBe("好");
   });
 
   it("opens the pi harness with the slow progress policy", async () => {
@@ -979,7 +1095,7 @@ describe("butler chat", () => {
     ]);
   });
 
-  it("spawns a task and sends a progress message with a cancel button", async () => {
+  it("spawns a task without a progress message", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
     setModelOverride(
@@ -1011,13 +1127,7 @@ describe("butler chat", () => {
     const progress = channel.sent.find(
       (msg) => msg.text === "#1 查天气：已开始",
     );
-    expect(progress).toMatchObject({
-      chatId: "42",
-      text: "#1 查天气：已开始",
-    });
-    expect(progress?.buttons).toEqual([
-      [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
-    ]);
+    expect(progress).toBeUndefined();
     expect(channel.sent.at(-1)).toEqual({ chatId: "42", text: "已安排" });
 
     expect(await stub.status()).toMatchObject({

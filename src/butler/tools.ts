@@ -1,7 +1,9 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
+import { t, type Locale } from "../i18n";
 import type { InboundFile, TaskSpec } from "../protocol";
 import type { MemoryStore } from "./memory";
+import { getClock } from "./notifier";
 import type { ScheduleRow } from "./schedules";
 import { taskLabel, type TaskRow, type TasksRepo } from "./tasks-repo";
 
@@ -23,6 +25,13 @@ const ListTasks = Type.Object({
 const TaskId = Type.Object({ id: Type.String() });
 
 const SteerTask = Type.Object({ id: Type.String(), text: Type.String() });
+
+const QuickLookup = Type.Object({
+  question: Type.String(),
+  queries: Type.Array(Type.String(), {
+    description: "1-3 web search queries",
+  }),
+});
 
 const Remember = Type.Object({ content: Type.String() });
 
@@ -78,6 +87,13 @@ export type ButlerToolDeps = {
   ): Promise<string>;
   listSchedules(): ScheduleRow[];
   removeSchedule(id: string): Promise<boolean>;
+  /** Answers a small factual question from one or two web searches. */
+  lookup(
+    question: string,
+    queries: string[],
+  ): Promise<{ ok: true; answer: string } | { ok: false }>;
+  /** Locale for model-facing tool text; defaults to Chinese. */
+  locale?: Locale;
 };
 
 /** A `spawn` that created the task row but could not start its Task DO. */
@@ -93,6 +109,10 @@ export class SpawnFailedError extends Error {
 
 function output(text: string) {
   return { output: [{ type: "text" as const, text }] };
+}
+
+function errorOutput(text: string) {
+  return { output: [{ type: "text" as const, text }], isError: true };
 }
 
 function errorText(error: unknown): string {
@@ -179,6 +199,18 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
         if (!row) return output(`没有任务 ${id}`);
 
         const lines = [taskLine(row)];
+        if (row.status === "running" && row.lastProgress !== null) {
+          const minutes =
+            row.lastProgressAt === null
+              ? 0
+              : Math.floor((getClock().now() - row.lastProgressAt) / 60_000);
+          lines.push(
+            t(deps.locale ?? "zh", "butler.task.progressLine", {
+              detail: row.lastProgress,
+              minutes,
+            }),
+          );
+        }
         if (row.summary) lines.push(`摘要：${row.summary}`);
         if (row.artifacts.length > 0) {
           lines.push("产物：");
@@ -203,6 +235,23 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
         return output((await task(id).steer(text)).message);
       } catch (error) {
         return output(errorText(error));
+      }
+    },
+  };
+
+  const quickLookupTool: ToolRegistration<typeof QuickLookup> = {
+    name: "quick_lookup",
+    description:
+      "Look up a fact that one or two web searches can answer (weather, a price, a score, the latest on something) and get a short answer back. Use spawn_task for anything multi-step.",
+    parameters: QuickLookup,
+    async execute({ question, queries }) {
+      try {
+        const result = await deps.lookup(question, queries);
+        return result.ok
+          ? output(result.answer)
+          : errorOutput(t(deps.locale ?? "zh", "butler.quickLookup.noResult"));
+      } catch (error) {
+        return errorOutput(errorText(error));
       }
     },
   };
@@ -347,6 +396,7 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     listTasks,
     getTask,
     steerTask,
+    quickLookupTool,
     cancelTask,
     retryTask,
     remember,

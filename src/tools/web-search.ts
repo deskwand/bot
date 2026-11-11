@@ -35,8 +35,8 @@ function textResult(text: string) {
   return { output: [{ type: "text" as const, text }] };
 }
 
-function timeoutResult() {
-  return textResult(`搜索超时：超过 ${SEARCH_TIMEOUT_MS / 1000} 秒`);
+function timeoutText(): string {
+  return `搜索超时：超过 ${SEARCH_TIMEOUT_MS / 1000} 秒`;
 }
 
 /** The configured provider; an unreadable or unknown value means `exa`. */
@@ -83,7 +83,58 @@ function createAdapter(
 
 /**
  * Search the web through the configured provider, falling back once to Exa if
- * that provider fails. Read-only, so safe to replay after a restart.
+ * that provider fails. `ok` is false for a failure, a timeout, an abort, or no
+ * results.
+ */
+export async function searchWeb(
+  env: Env,
+  query: string,
+  maxResults: number,
+  signal: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ok: boolean; text: string }> {
+  let id = searchProvider(env);
+  const key = searchKey(env, id);
+  if (id !== "exa" && key === undefined) {
+    console.warn(`web_search: ${id} key missing, using exa`);
+    id = "exa";
+  }
+  const selected = createAdapter(
+    id,
+    id === "exa" ? undefined : key,
+    fetchImpl,
+  );
+
+  try {
+    const results = await selected.search(query, maxResults, signal);
+    return results.length > 0
+      ? { ok: true, text: truncate(formatResults(results)) }
+      : { ok: false, text: "没有找到搜索结果。" };
+  } catch (error) {
+    if (signal.aborted) return { ok: false, text: timeoutText() };
+    if (id === "exa") {
+      return { ok: false, text: `搜索失败：${errorMessage(error)}` };
+    }
+
+    const note = `（${selected.label} 不可用：${errorMessage(error)}，已改用 Exa）\n`;
+    try {
+      const results = await exaAdapter(fetchImpl).search(
+        query,
+        maxResults,
+        signal,
+      );
+      return results.length > 0
+        ? { ok: true, text: note + truncate(formatResults(results)) }
+        : { ok: false, text: note + "没有找到搜索结果。" };
+    } catch (fallbackError) {
+      if (signal.aborted) return { ok: false, text: timeoutText() };
+      return { ok: false, text: `搜索失败：${errorMessage(fallbackError)}` };
+    }
+  }
+}
+
+/**
+ * Search the web for the model. Read-only, so safe to replay after a restart.
  */
 export function webSearchTool(
   env: Env,
@@ -99,54 +150,18 @@ export function webSearchTool(
       const signal = context.abortSignal
         ? AbortSignal.any([context.abortSignal, timeout])
         : timeout;
-      const max = maxResults ?? DEFAULT_MAX_RESULTS;
 
-      let id = searchProvider(env);
-      const key = searchKey(env, id);
-      if (id !== "exa" && key === undefined) {
-        console.warn(`web_search: ${id} key missing, using exa`);
-        id = "exa";
-      }
-      const selected = createAdapter(
-        id,
-        id === "exa" ? undefined : key,
+      const result = await searchWeb(
+        env,
+        query,
+        maxResults ?? DEFAULT_MAX_RESULTS,
+        signal,
         fetchImpl,
       );
-
-      try {
-        const results = await selected.search(query, max, signal);
-        return textResult(
-          results.length > 0
-            ? truncate(formatResults(results))
-            : "没有找到搜索结果。",
-        );
-      } catch (error) {
-        // Caller cancellation must propagate so the run stops; only the
-        // tool's own timeout becomes a normal answer.
-        if (context.abortSignal?.aborted) throw error;
-        if (timeout.aborted) return timeoutResult();
-        if (id === "exa") {
-          return textResult(`搜索失败：${errorMessage(error)}`);
-        }
-
-        const note = `（${selected.label} 不可用：${errorMessage(error)}，已改用 Exa）\n`;
-        try {
-          const results = await exaAdapter(fetchImpl).search(
-            query,
-            max,
-            signal,
-          );
-          return textResult(
-            results.length > 0
-              ? note + truncate(formatResults(results))
-              : note + "没有找到搜索结果。",
-          );
-        } catch (fallbackError) {
-          if (context.abortSignal?.aborted) throw fallbackError;
-          if (timeout.aborted) return timeoutResult();
-          return textResult(`搜索失败：${errorMessage(fallbackError)}`);
-        }
-      }
+      // Caller cancellation must propagate so the run stops; only the tool's
+      // own timeout becomes a normal answer.
+      if (context.abortSignal?.aborted) throw context.abortSignal.reason;
+      return textResult(result.text);
     },
   };
 }

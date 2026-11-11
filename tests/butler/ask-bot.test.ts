@@ -1,8 +1,8 @@
+import type { TranscriptContext } from "@earendil-works/pi-ai";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BotsRepo } from "../../src/butler/bots-repo";
 import { setBotChatStubOverride } from "../../src/butler/butler-do";
-import { setClockOverride } from "../../src/butler/notifier";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
 import type { AdmittedMessage, RouteSnapshot } from "../../src/protocol";
@@ -30,7 +30,6 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  setClockOverride(null);
   setBotChatStubOverride(null);
   setChannelOverride("telegram", null);
   setModelOverride(null);
@@ -59,15 +58,35 @@ async function indexBot(
   });
 }
 
-type TurnInternals = {
-  checkTurn(): Promise<void>;
-  turns(): import("../../src/butler/turn-store").TurnStore;
-};
+/** The text of the most recent tool result in the request context. */
+function toolResultText(context: TranscriptContext): string {
+  const message = [...context.messages]
+    .reverse()
+    .find((entry) => entry.role === "toolResult");
+  if (message === undefined || message.role !== "toolResult") return "";
+  return message.content
+    .map((block) => ("text" in block ? block.text : ""))
+    .join("");
+}
+
+function asks(
+  reply: (input: { botId: string; text: string }) => Promise<string>,
+): { texts: string[] } {
+  const texts: string[] = [];
+  setBotChatStubOverride(() => ({
+    ask: async (input) => {
+      texts.push(input.text);
+      return reply(input);
+    },
+  }));
+  return { texts };
+}
 
 describe("ask_bot", () => {
-  it("suppresses the butler answer after ask_bot", async () => {
+  it("returns the bot's answer as the tool result", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
+    let tool = "";
     setModelOverride(
       scriptedModel([
         {
@@ -78,29 +97,27 @@ describe("ask_bot", () => {
             },
           ],
         },
-        { text: "已转给盯盘" },
+        {
+          text: "盯盘说价格回落了",
+          observe: (context) => {
+            tool = toolResultText(context);
+          },
+        },
       ]),
     );
-    const chats: { botId: string; text: string }[] = [];
-    setBotChatStubOverride(() => ({
-      chat: async (input) => {
-        chats.push({ botId: input.botId, text: input.text });
-      },
-    }));
-    const stub = butler("ask-bot-forward");
+    const { texts } = asks(async () => "价格回落了");
+    const stub = butler("ask-bot-answer");
     await indexBot(stub, "ask-b1", "盯盘");
 
     await stub.handleMessage(
-      message("刚才那只股票怎么了", "ask-bot:forward"),
+      message("刚才那只股票怎么了", "ask-bot:answer"),
     );
 
-    expect(chats).toEqual([
-      { botId: "ask-b1", text: "刚才那只股票怎么了" },
-    ]);
-    expect(channel.sent.map((sent) => sent.text)).not.toContain("已转给盯盘");
+    expect(texts).toEqual(["刚才那只股票怎么了"]);
+    expect(tool).toBe("价格回落了");
   });
 
-  it("delivers the butler answer when ask_bot failed", async () => {
+  it("sends the butler's final reply after ask_bot", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
     setModelOverride(
@@ -113,47 +130,28 @@ describe("ask_bot", () => {
             },
           ],
         },
-        { text: "已转给盯盘" },
+        { text: "盯着那只股票的机器人说价格回落了" },
       ]),
     );
-    let chats = 0;
-    setBotChatStubOverride(() => ({
-      chat: async () => {
-        chats += 1;
-        throw new Error("bot offline");
-      },
-    }));
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const stub = butler("ask-bot-failed");
+    asks(async () => "价格回落了");
+    const stub = butler("ask-bot-reply");
     await indexBot(stub, "ask-b2", "盯盘");
 
-    await stub.handleMessage(message("刚才那只股票怎么了", "ask-bot:failed"));
+    await stub.handleMessage(
+      message("刚才那只股票怎么了", "ask-bot:reply"),
+    );
 
-    expect(chats).toBe(1);
-    expect(channel.sent.at(-1)?.text).toBe("已转给盯盘");
+    expect(channel.sent.map((sent) => sent.text)).toEqual([
+      "收到，正在处理",
+      "盯着那只股票的机器人说价格回落了",
+    ]);
   });
 
-  it("does not drop an older answer because a later turn used ask_bot", async () => {
-    let now = Date.now();
-    setClockOverride({
-      now: () => now,
-      setTimeout: () => 0,
-      clearTimeout: () => {},
-    });
+  it("never sends a message straight from the bot", async () => {
     const channel = fakeChannel();
-    const send = channel.adapter.send.bind(channel.adapter);
-    let failed = false;
-    channel.adapter.send = async (chatId, msg) => {
-      if (msg.text === "旧的答案" && !failed) {
-        failed = true;
-        throw new Error("telegram down");
-      }
-      return send(chatId, msg);
-    };
     setChannelOverride("telegram", channel.adapter);
     setModelOverride(
       scriptedModel([
-        { text: "旧的答案" },
         {
           toolCalls: [
             {
@@ -162,34 +160,92 @@ describe("ask_bot", () => {
             },
           ],
         },
-        { text: "已转给盯盘" },
+        { text: "价格回落了，盯盘说的" },
       ]),
     );
-    const chats: string[] = [];
+    asks(async () => "机器人的原话");
+    const stub = butler("ask-bot-direct");
+    await indexBot(stub, "ask-b3", "盯盘");
+
+    await stub.handleMessage(
+      message("刚才那只股票怎么了", "ask-bot:direct"),
+    );
+
+    expect(channel.sent.map((sent) => sent.text)).not.toContain("机器人的原话");
+  });
+
+  it("reports a missing bot", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let tool = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          toolCalls: [
+            {
+              name: "ask_bot",
+              args: { id: "ask-b9", text: "刚才那只股票怎么了" },
+            },
+          ],
+        },
+        {
+          text: "没有这个机器人",
+          observe: (context) => {
+            tool = toolResultText(context);
+          },
+        },
+      ]),
+    );
+    const chats = vi.fn();
+    setBotChatStubOverride(() => ({ ask: chats }));
+    const stub = butler("ask-bot-missing");
+    await indexBot(stub, "ask-b1", "盯盘");
+
+    await stub.handleMessage(
+      message("刚才那只股票怎么了", "ask-bot:missing"),
+    );
+
+    expect(tool).toBe("没有机器人 ask-b9");
+    expect(chats).not.toHaveBeenCalled();
+    expect(channel.sent.at(-1)?.text).toBe("没有这个机器人");
+  });
+
+  it("returns an error result when the bot chat throws", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let tool = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          toolCalls: [
+            {
+              name: "ask_bot",
+              args: { id: "ask-b4", text: "刚才那只股票怎么了" },
+            },
+          ],
+        },
+        {
+          text: "那个机器人暂时联系不上",
+          observe: (context) => {
+            tool = toolResultText(context);
+          },
+        },
+      ]),
+    );
     setBotChatStubOverride(() => ({
-      chat: async (input) => {
-        chats.push(input.text);
+      ask: async () => {
+        throw new Error("bot offline");
       },
     }));
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const stub = butler("ask-bot-older");
-    await indexBot(stub, "ask-b3", "盯盘");
+    const stub = butler("ask-bot-throws");
+    await indexBot(stub, "ask-b4", "盯盘");
 
-    // The first answer fails to send and waits for a retry.
-    await stub.handleMessage(message("先查一下", "ask-bot:older"));
-    // A later turn hands its answer to a bot, which must not silence the
-    // older turn's pending answer.
     await stub.handleMessage(
-      message("刚才那只股票怎么了", "ask-bot:later"),
+      message("刚才那只股票怎么了", "ask-bot:throws"),
     );
-    expect(chats).toHaveLength(1);
 
-    // Wait out both the retry delay and the in-flight-send window.
-    now += 61_000;
-    await runInDurableObject(stub, async (instance) => {
-      await (instance as unknown as TurnInternals).checkTurn();
-    });
-
-    expect(channel.sent.map((sent) => sent.text)).toContain("旧的答案");
+    expect(tool).toBe("bot offline");
+    expect(channel.sent.at(-1)?.text).toBe("那个机器人暂时联系不上");
   });
 });

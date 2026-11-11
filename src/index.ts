@@ -91,5 +91,12 @@ export default {
     } catch (error) {
       console.error("turn heal failed:", error);
     }
+
+    // A task that has been running a while gets one line, not a progress feed.
+    try {
+      await butler(env).healSlowTasks();
+    } catch (error) {
+      console.error("slow task reminder failed:", error);
+    }
   },
 } satisfies ExportedHandler<Env>;

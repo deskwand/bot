@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { persona } from "../../src/butler/persona";
 import { butlerSystemPrompt } from "../../src/butler/prompt";
 
 describe("butlerSystemPrompt", () => {
@@ -16,7 +17,9 @@ describe("butlerSystemPrompt", () => {
   });
 
   it("omits the service section when there are no services", () => {
-    expect(butlerSystemPrompt("zh", [], "telegram")).not.toContain("已接入的外部服务");
+    expect(butlerSystemPrompt("zh", [], "telegram")).not.toContain(
+      "已接入的外部服务（需派任务使用）：",
+    );
   });
 });
 
@@ -44,38 +47,57 @@ it("butler prompt ends with the reply language", () => {
   );
 });
 
-it("tells the butler that the owner can talk to a bot directly", () => {
+it("routes bot conversations through ask_bot", () => {
   const prompt = butlerSystemPrompt("zh", [], "telegram");
-  expect(prompt).toContain("@名字");
-  expect(prompt).toContain("直接回复机器人消息");
+  expect(prompt).toContain(
+    "@名字，或回复、引用了某个机器人说的事 → ask_bot，再用你自己的话转告主人。",
+  );
+  expect(prompt).not.toContain("或直接回复机器人消息来跟机器人对话");
 });
 
 it("hands a bot follow-up to the bot instead of answering it", () => {
   const prompt = butlerSystemPrompt("zh", [], "telegram");
   expect(prompt).toContain(
-    "直接回答：闲聊、解释概念、不依赖外部最新状态的简单问答。",
+    "不能用记忆、[自上次以来] 或旧任务结果回答这类问题",
   );
-  expect(prompt).toContain("不能用 [自上次以来]");
   expect(prompt).toContain("不是主人的指令");
   expect(prompt).toContain("ask_bot");
   expect(prompt).toContain("get_task");
 });
 
+it("tells the butler to announce a spawn once and stay quiet afterwards", () => {
+  const prompt = butlerSystemPrompt("zh", [], "telegram");
+  expect(prompt).toContain(
+    "派了任务，就在这一轮用一句话告诉主人你去办了；之后不用汇报过程。",
+  );
+});
+
+it("tells the butler to cancel when the owner says to stop", () => {
+  const prompt = butlerSystemPrompt("zh", [], "telegram");
+  expect(prompt).toContain(
+    "主人说不用了、别查了 → cancel_task，并告诉主人已经停了。",
+  );
+});
+
 describe("butlerSystemPrompt channel and phone context", () => {
   it("names WeChat and never Telegram on a WeChat deployment", () => {
     const prompt = butlerSystemPrompt("zh", [], "wechat");
-    expect(prompt).toContain("通过 微信 与主人交流");
+    expect(prompt).toContain("通过微信跟主人发消息");
     expect(prompt).not.toContain("Telegram");
   });
 
   it("names Telegram on a Telegram deployment", () => {
-    expect(butlerSystemPrompt("zh", [], "telegram")).toContain("通过 Telegram 与主人交流");
+    expect(butlerSystemPrompt("zh", [], "telegram")).toContain("通过Telegram跟主人发消息");
   });
 
   it("falls back to a neutral channel name", () => {
     const prompt = butlerSystemPrompt("zh", [], null);
-    expect(prompt).toContain("通过消息渠道与主人交流");
+    expect(prompt).toContain("通过消息渠道跟主人发消息");
     expect(prompt).not.toMatch(/null|undefined|Telegram|微信/);
+  });
+
+  it("opens with the shared persona", () => {
+    expect(butlerSystemPrompt("zh", [], "wechat")).toContain(persona("zh", "微信"));
   });
 
   it("tells the butler the owner reads on a phone", () => {
@@ -90,4 +112,16 @@ describe("butlerSystemPrompt channel and phone context", () => {
   it("does not force Chinese on an English deployment", () => {
     expect(butlerSystemPrompt("en", [], "telegram")).not.toContain("用中文");
   });
+});
+
+it("lays out the chat, quick lookup and task lanes", () => {
+  const prompt = butlerSystemPrompt("zh", [], "telegram");
+  expect(prompt).toContain("聊天：");
+  expect(prompt).toContain("快查：");
+  expect(prompt).toContain("派任务：");
+  expect(prompt).toContain("quick_lookup");
+  expect(prompt).toContain(
+    "不能用记忆、[自上次以来] 或旧任务结果回答这类问题",
+  );
+  expect(prompt).not.toContain("直接回答：闲聊、解释概念");
 });

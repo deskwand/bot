@@ -1,7 +1,7 @@
 import type { Context } from "@earendil-works/chord";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
-import { webSearchTool } from "../../src/tools/web-search";
+import { searchWeb, webSearchTool } from "../../src/tools/web-search";
 
 type RecordedCall = {
   input: RequestInfo | URL;
@@ -595,5 +595,64 @@ describe("webSearchTool provider selection", () => {
     expect(new Headers(calls[0].init?.headers).get("authorization")).toBe(
       "Bearer ds-key",
     );
+  });
+});
+
+describe("searchWeb", () => {
+  it("returns ok with the formatted results", async () => {
+    const fakeFetch = exaFetch(() =>
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: 2,
+        result: {
+          content: [{ type: "text", text: "Title: Cloudflare Workers" }],
+        },
+      }),
+    );
+
+    const result = await searchWeb(
+      envWith(),
+      "q",
+      5,
+      new AbortController().signal,
+      fakeFetch,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.text).toContain("Cloudflare Workers");
+  });
+
+  it("returns not ok when there are no results", async () => {
+    const fakeFetch = providerFetch({
+      tavily: () => jsonResponse({ results: [] }),
+    });
+
+    const result = await searchWeb(
+      envWith({ provider: "tavily" }, { SEARCH_KEY_TAVILY: "tvly-key" }),
+      "q",
+      5,
+      new AbortController().signal,
+      fakeFetch,
+    );
+
+    expect(result).toEqual({ ok: false, text: "没有找到搜索结果。" });
+  });
+
+  it("returns not ok when both providers fail", async () => {
+    const fakeFetch = providerFetch({
+      tavily: () => new Response("nope", { status: 500 }),
+      exa: () => new Response("nope", { status: 500 }),
+    });
+
+    const result = await searchWeb(
+      envWith({ provider: "tavily" }, { SEARCH_KEY_TAVILY: "tvly-key" }),
+      "q",
+      5,
+      new AbortController().signal,
+      fakeFetch,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.text.startsWith("搜索失败：")).toBe(true);
   });
 });

@@ -88,6 +88,24 @@ describe("TasksRepo handles", () => {
     expect(handle).toBeNull();
   });
 
+  it("stores the latest tool progress without a chat message", async () => {
+    const row = await withRepo("progress-columns", (repo) => {
+      repo.insert({ id: "t1", title: "查机票", chatId: null });
+      expect(repo.get("t1")).toMatchObject({
+        lastProgress: null,
+        lastProgressAt: null,
+      });
+
+      repo.update("t1", { lastProgress: "正在搜索 机票", lastProgressAt: 1234 });
+      return repo.get("t1");
+    });
+
+    expect(row).toMatchObject({
+      lastProgress: "正在搜索 机票",
+      lastProgressAt: 1234,
+    });
+  });
+
   it("re-assigns a stale handle when a failed task restarts", async () => {
     const state = await withRepo("handles-restart", (repo) => {
       repo.insert({ id: "t1", title: "a", chatId: null });

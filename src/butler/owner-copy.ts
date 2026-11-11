@@ -1,6 +1,5 @@
 import { t, type Locale, type MessageKey } from "../i18n";
 import type { ActionKind } from "../protocol";
-import type { TaskActivity } from "../task/stall";
 import type { TurnActivity } from "./turn";
 import { taskLabel } from "./tasks-repo";
 
@@ -58,17 +57,6 @@ export function approvalButtonLabel(
   );
 }
 
-/** A cancel button for progress and start messages. */
-export function cancelButton(
-  locale: Locale,
-  label: string,
-): { label: string; hint: string } {
-  return {
-    label: t(locale, "butler.task.cancelButton"),
-    hint: actionHint(locale, "cancel", { taskId: label }),
-  };
-}
-
 export function approvalCardText(
   locale: Locale,
   input: {
@@ -97,54 +85,6 @@ export function decisionSuffix(
   return `\n→ ${t(locale, DECISION_KEYS[decision])}`;
 }
 
-export function taskStartedText(
-  locale: Locale,
-  label: string,
-  title: string,
-): string {
-  return t(locale, "butler.task.started", { label, title });
-}
-
-export function taskStartFailedText(
-  locale: Locale,
-  label: string,
-  title: string,
-  message: string,
-): string {
-  return t(locale, "butler.task.startFailed", { label, title, message });
-}
-
-export function taskProgressText(
-  locale: Locale,
-  label: string,
-  title: string,
-  detail: string,
-): string {
-  return t(locale, "butler.task.progress", { label, title, detail });
-}
-
-/**
- * One notice naming where a running task stopped: the model or the last tool.
- * It reports only observable facts, never a guessed cause or an ETA.
- */
-export function taskStalledText(
-  locale: Locale,
-  label: string,
-  title: string,
-  activity: TaskActivity,
-  idleMs: number,
-): string {
-  const minutes = Math.floor(idleMs / 60_000);
-  return activity.kind === "running_tool"
-    ? t(locale, "butler.task.stalledTool", {
-        label,
-        title,
-        tool: activity.tool,
-        minutes,
-      })
-    : t(locale, "butler.task.stalledModel", { label, title, minutes });
-}
-
 /** The one-line receipt for a turn that has not answered yet. */
 export function turnAckText(locale: Locale): string {
   return t(locale, "butler.turn.ack");
@@ -170,24 +110,6 @@ export function turnStalledText(
     : t(locale, "butler.turn.stalledModel", { minutes });
 }
 
-export function taskCompletedText(
-  locale: Locale,
-  label: string,
-  title: string,
-  body: string = t(locale, "butler.task.done"),
-): string {
-  return t(locale, "butler.task.completed", { label, title, body });
-}
-
-export function taskFailedText(
-  locale: Locale,
-  label: string,
-  title: string,
-  reason: string,
-): string {
-  return t(locale, "butler.task.failed", { label, title, reason });
-}
-
 /** 一个产物没送到时补发的告知；reason 只放稳定短语，不放原始错误。 */
 export function artifactFailedText(
   locale: Locale,
@@ -195,19 +117,6 @@ export function artifactFailedText(
   reason: string,
 ): string {
   return t(locale, "butler.task.artifactFailed", { name, reason });
-}
-
-/** The retry line under a failed task, or an empty string when it cannot retry. */
-export function retryHint(locale: Locale, retryable: boolean): string {
-  return retryable ? `\n${t(locale, "butler.task.retryHint")}` : "";
-}
-
-export function taskCancelledText(
-  locale: Locale,
-  label: string,
-  title: string,
-): string {
-  return t(locale, "butler.task.cancelled", { label, title });
 }
 
 export function taskMissingText(locale: Locale): string {
@@ -252,14 +161,6 @@ export function unsupportedMessageNotice(locale: Locale): string {
 
 export function imageModelNotice(locale: Locale): string {
   return t(locale, "butler.notice.imageModel");
-}
-
-export function botNoticeText(
-  locale: Locale,
-  name: string,
-  text: string,
-): string {
-  return t(locale, "butler.notice.bot", { name, text });
 }
 
 export function resolutionNoActiveTask(

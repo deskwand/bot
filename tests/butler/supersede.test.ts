@@ -361,6 +361,12 @@ describe("supersede a thinking turn", () => {
     const stub = butler("supersede-queued-report");
     const sent = await captureSends(stub);
     await seedTask(stub);
+    // The speaker is one-shot; keep it out of the scripted harness turns.
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as { completeSpeak: () => Promise<string> }
+      ).completeSpeak = async () => "S";
+    });
     const held = gate();
     setModelOverride(
       scriptedModel([
@@ -409,6 +415,11 @@ describe("supersede a thinking turn", () => {
     const stub = butler("supersede-report");
     const sent = await captureSends(stub);
     await seedTask(stub);
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as { completeSpeak: () => Promise<string> }
+      ).completeSpeak = async () => "S";
+    });
     let modelCalls = 0;
     setModelOverride(
       scriptedModel([

@@ -1,4 +1,5 @@
 import { Agent, type Schedule } from "agents";
+import { contentText } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
 import { PiHarness, type PiModel, type PiOperationResult } from "agents/harness/pi";
@@ -30,6 +31,7 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
+import { modelUnavailableShortText } from "../llm/model-errors";
 import {
   createModelsForEnv,
   defaultThinkingLevel,
@@ -52,8 +54,6 @@ import {
   artifactFailedText,
   approvalButtonLabel,
   approvalCardText,
-  botNoticeText,
-  cancelButton,
   decisionSuffix,
   errorNotice,
   fileTooLargeNotice,
@@ -62,15 +62,7 @@ import {
   maintenanceRetryText,
   maintenanceText,
   noChannelText,
-  retryHint,
-  taskCancelledText,
-  taskCompletedText,
-  taskFailedText,
   taskMissingText,
-  taskProgressText,
-  taskStartedText,
-  taskStartFailedText,
-  taskStalledText,
   turnAckText,
   turnEmptyAnswerText,
   turnInterruptedText,
@@ -78,12 +70,9 @@ import {
   unsupportedMessageNotice,
   voiceUnavailableNotice,
 } from "./owner-copy";
-import {
-  getClock,
-  ProgressHeartbeat,
-  ProgressThrottle,
-  type ProgressPolicy,
-} from "./notifier";
+import { getClock } from "./notifier";
+import { quickLookup } from "./quick-lookup";
+import { speak, type SpeakComplete, type SpeakEvent } from "./speaker";
 import {
   activityOf,
   planTurnCheck,
@@ -105,14 +94,13 @@ import {
   renderLedgerPrefix,
   snippet,
 } from "./ledger";
-import { resolveBotAddress } from "./bot-address";
 import {
   toUserInput,
   turnBlocker,
   unansweredText,
 } from "./model-gate";
 import { createBotTools } from "./bot-tools";
-import { butlerSystemPrompt } from "./prompt";
+import { butlerSystemPrompt, channelName } from "./prompt";
 import {
   InvalidCronError,
   isCronParseError,
@@ -125,6 +113,7 @@ import {
   type Resolution,
 } from "./text-resolution";
 import { createButlerTools, SpawnFailedError, type TaskControl } from "./tools";
+import { searchWeb } from "../tools/web-search";
 
 type TaskEventRow = {
   seq: number;
@@ -139,28 +128,29 @@ type ApprovalMessageRow = {
   text: string;
 };
 
-const PROGRESS_INTERVAL_MS = 3000;
-const PROGRESS_HEARTBEAT_INTERVAL_MS = 180_000;
-const PROGRESS_HEARTBEAT_FIRST_MS = 60_000;
 const PROGRESS_DETAIL_MAX = 200;
 const MESSAGE_MAX = 4096;
 const BOT_HEAL_KEY = "bot_heal_at";
 const TASK_HEAL_KEY = "task_heal_at";
 const TASK_PROBE_FAILURES_PREFIX = "task_probe_failures:";
 
+/** First reminder a long-running owner task gets, and how often after that. */
+export const SLOW_FIRST_MS = 180_000;
+export const SLOW_REPEAT_MS = 900_000;
+
 /** The part of a bot chat stub the Butler uses. */
 type BotChatStub = {
-  chat(input: BotChatInput): Promise<void>;
+  ask(input: BotChatInput): Promise<string>;
   destroy(): Promise<void>;
 };
 
 let botChatStubOverride:
-  | ((botId: string) => { chat(input: BotChatInput): Promise<void> })
+  | ((botId: string) => { ask(input: BotChatInput): Promise<string> })
   | null = null;
 
 /** Test-only bot chat stub override, mirroring `setBotButlerOverride`. */
 export function setBotChatStubOverride(
-  fn: ((botId: string) => { chat(input: BotChatInput): Promise<void> }) | null,
+  fn: ((botId: string) => { ask(input: BotChatInput): Promise<string> }) | null,
 ): void {
   botChatStubOverride = fn;
 }
@@ -214,15 +204,6 @@ export class ButlerDO extends Agent<Env> {
   /** The address of the message being answered (source of spawned tasks). */
   private origin: Address | null = null;
 
-  private readonly throttle = new ProgressThrottle(PROGRESS_INTERVAL_MS);
-
-  private readonly heartbeat = new ProgressHeartbeat(
-    PROGRESS_HEARTBEAT_INTERVAL_MS,
-    PROGRESS_HEARTBEAT_FIRST_MS,
-  );
-
-  private readonly progressTimers = new Map<string, unknown>();
-
   /** Single-flight guard for reconciling pending approvals on this instance. */
   private reconcilePromise: Promise<void> | null = null;
 
@@ -233,6 +214,9 @@ export class ButlerDO extends Agent<Env> {
 
   /** Delivery in progress in this instance. */
   private readonly deliveringTurns = new Set<string>();
+
+  /** Serializes event messages so they reach the owner in arrival order. */
+  private speaking: Promise<unknown> = Promise.resolve();
 
   /** One sweep at a time: `checkTurn` and the cron can overlap. */
   private sweeping = false;
@@ -299,6 +283,9 @@ export class ButlerDO extends Agent<Env> {
     this.ensureColumn("approval_messages", "message_ref_json", "TEXT");
     this.ensureColumn("tasks", "bot_id", "TEXT");
     this.ensureColumn("tasks", "handle", "INTEGER");
+    this.ensureColumn("tasks", "last_progress", "TEXT");
+    this.ensureColumn("tasks", "last_progress_at", "INTEGER");
+    this.ensureColumn("tasks", "slow_notified_at", "INTEGER");
 
     this.repo = new TasksRepo(this.db);
     this.ledger = new LedgerStore(this.db);
@@ -324,6 +311,17 @@ export class ButlerDO extends Agent<Env> {
             this.createSchedule(cron, title, instructions),
           listSchedules: () => this.schedules.list(),
           removeSchedule: (id) => this.removeSchedule(id),
+          lookup: (question, queries) =>
+            quickLookup(
+              { question, queries },
+              {
+                search: (query, signal) =>
+                  searchWeb(this.env, query, 5, signal),
+                complete: this.completeLookup,
+                locale: ownerLocale(this.env),
+              },
+            ),
+          locale: ownerLocale(this.env),
         }),
         ...createBotTools({
           bots: this.bots,
@@ -586,6 +584,28 @@ export class ButlerDO extends Agent<Env> {
   }
 
   /**
+   * Cron reminder for owner tasks that have been running a long time: one
+   * line when one first passes three minutes, then at most every fifteen.
+   */
+  async healSlowTasks(): Promise<void> {
+    if (this.lease.current() !== null) return;
+    const now = getClock().now();
+    for (const row of this.repo.listActiveOwner()) {
+      const due =
+        row.slowNotifiedAt === null
+          ? now - row.createdAt >= SLOW_FIRST_MS
+          : now - row.slowNotifiedAt >= SLOW_REPEAT_MS;
+      if (!due) continue;
+      // Record before speaking so a failed send is not retried every cron tick.
+      this.repo.update(row.id, { slowNotifiedAt: now, updatedAt: now });
+      await this.say(
+        { kind: "task.slow", title: row.title, body: row.lastProgress ?? "" },
+        { refId: row.id },
+      );
+    }
+  }
+
+  /**
    * Creates the task row and starts its Task DO. Shared by the `spawn_task`
    * tool and by scheduled runs. Returns the new task id.
    */
@@ -595,34 +615,12 @@ export class ButlerDO extends Agent<Env> {
     origin: Address | null = this.origin,
     attachments: InboundFile[] = [],
   ): Promise<string> {
-    const locale = ownerLocale(this.env);
     const id = this.repo.nextId();
     this.repo.insert({
       id,
       title,
       chatId: origin === null ? null : JSON.stringify(origin),
     });
-    const row = this.repo.get(id);
-    const label = row ? taskLabel(row) : id;
-
-    // Send the start message before the run begins: the first progress event
-    // can arrive while `start()` is still in flight, and it must edit this
-    // message rather than create a second one. Task output always goes to the
-    // selected channel, whichever channel the task was spawned from.
-    const progressRef = await this.sendBestEffort({
-      text: clampMessage(taskStartedText(locale, label, title)),
-      buttons: [
-        [
-          {
-            ...cancelButton(locale, label),
-            data: encodeAction({ action: "cancel", taskId: id }),
-          },
-        ],
-      ],
-    });
-    if (progressRef !== null) {
-      this.repo.update(id, { progressMessageRef: progressRef });
-    }
 
     try {
       await this.taskFor(id).start({
@@ -636,11 +634,6 @@ export class ButlerDO extends Agent<Env> {
       // forever and look like an active task.
       const message = errorText(error);
       this.repo.update(id, { status: "failed", summary: message });
-      if (progressRef !== null) {
-        await this.editBestEffort(progressRef, {
-          text: clampMessage(taskStartFailedText(locale, label, title, message)),
-        });
-      }
       throw new SpawnFailedError(id, message);
     }
 
@@ -802,8 +795,6 @@ export class ButlerDO extends Agent<Env> {
     // Display-only progress is dropped while the deployment is quiesced; the
     // Task outbox keeps the durable events for after the lease.
     if (this.lease.current() !== null) return;
-    const row = this.repo.get(taskId);
-    if (!row || row.botId !== null) return;
     await this.handleProgress(taskId, text, getClock().now());
   }
 
@@ -828,13 +819,13 @@ export class ButlerDO extends Agent<Env> {
     return { outcome: null, summary: "" };
   }
 
-  /** Sends a bot message as-is (the text already carries any prefix). */
+  /** A bot message to the owner; `text` is the body without the bot name. */
   async botNotice(botId: string, text: string): Promise<void> {
-    const ref = await this.sendBestEffort({ text: clampMessage(text) });
-    if (ref === null) return;
     const bot = this.bots.get(botId);
-    // The copy already names the bot, so the ledger line is the text itself.
-    if (bot !== null) this.writeBotLedger(botId, snippet(text));
+    await this.say(
+      { kind: "bot.message", botName: bot?.name ?? botId, body: text },
+      { refId: botId },
+    );
   }
 
   /** What the Butler knows about the owner, for a bot's wake context. */
@@ -842,32 +833,90 @@ export class ButlerDO extends Agent<Env> {
     return renderOwnerProfile(this.memory.all());
   }
 
-  /** Sends `notify_owner` output, prefixed with the bot's name. */
+  /** Sends `notify_owner` output through the speaker. */
   async notifyFromBot(botId: string, text: string): Promise<boolean> {
     const bot = this.bots.get(botId);
     if (!bot) return false;
-    const locale = ownerLocale(this.env);
-    const ref = await this.sendBestEffort({
-      text: clampMessage(botNoticeText(locale, bot.name, text)),
-    });
-    if (ref === null) return false;
-    this.writeBotLedger(
-      botId,
-      t(locale, "phone.ledgerBotMessage", {
-        name: bot.name,
-        snippet: snippet(text),
-      }),
+    return this.say(
+      { kind: "bot.message", botName: bot.name, body: text },
+      { refId: botId },
     );
-    return true;
   }
 
-  /** Bookkeeping for a bot message the owner already received. */
-  private writeBotLedger(botId: string, line: string): void {
-    try {
-      this.ledger.add("bot.message", botId, line, getClock().now());
-    } catch (error) {
-      console.error("butler ledger write failed:", error);
+  private readonly completeSpeak: SpeakComplete = (system, user, signal) =>
+    this.completeWith("butler", system, user, signal);
+
+  private readonly completeLookup: SpeakComplete = (system, user, signal) =>
+    this.completeWith("task", system, user, signal);
+
+  private async completeWith(
+    role: "butler" | "task",
+    system: string,
+    user: string,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const models = createModelsForEnv(this.env);
+    const ref = resolveModel(
+      readRuntimeConfig(this.env).models[role],
+      this.env,
+    );
+    const model = models.getModel(ref.provider, ref.id);
+    if (!model) {
+      throw new Error(
+        modelUnavailableShortText(ownerLocale(this.env), ref.provider, ref.id),
+      );
     }
+    const result = await models.completeSimple(
+      model,
+      {
+        systemPrompt: system,
+        messages: [{ role: "user", content: user, timestamp: Date.now() }],
+      },
+      { signal },
+    );
+    if (result.stopReason === "error" || result.stopReason === "aborted") {
+      throw new Error(result.errorMessage ?? result.stopReason);
+    }
+    return contentText(result.content);
+  }
+
+  /**
+   * The one way event text reaches the owner: rewrite it in the butler's
+   * voice, send it, then record what was said. Calls are serialized so two
+   * events arriving together go out in order and the second sees the first.
+   */
+  private say(
+    event: SpeakEvent,
+    opts: { refId: string; priority?: "critical" | "alert" },
+  ): Promise<boolean> {
+    const run = this.speaking.then(async () => {
+      const locale = ownerLocale(this.env);
+      const recent = this.ledger.recentLines("butler.said", 3);
+      const text = await speak(event, {
+        complete: this.completeSpeak,
+        locale,
+        channelName: channelName(parseActiveChannel(this.env.ACTIVE_CHANNEL)),
+        recent,
+      });
+      const ref = await this.sendBestEffort({
+        text: clampMessage(text),
+        ...(opts.priority === undefined ? {} : { priority: opts.priority }),
+      });
+      if (ref === null) return false;
+      try {
+        this.ledger.add(
+          "butler.said",
+          opts.refId,
+          t(locale, "phone.ledgerSaid", { snippet: snippet(text, 100) }),
+          getClock().now(),
+        );
+      } catch (error) {
+        console.error("butler ledger write failed:", error);
+      }
+      return true;
+    });
+    this.speaking = run.catch(() => undefined);
+    return run;
   }
 
   async report(event: TaskEvent): Promise<void> {
@@ -914,7 +963,13 @@ export class ButlerDO extends Agent<Env> {
         // A retry keeps the task id, so a handle left over from the failed
         // run may have been taken by a newer task in the meantime.
         this.repo.ensureHandle(taskId);
-        this.repo.update(taskId, { status: "running", updatedAt: now });
+        // Count the slow reminder from this start, so a retried task is not
+        // called slow the minute it restarts.
+        this.repo.update(taskId, {
+          status: "running",
+          slowNotifiedAt: now - (SLOW_REPEAT_MS - SLOW_FIRST_MS),
+          updatedAt: now,
+        });
         break;
       case "progress":
         await this.handleProgress(taskId, body.text, now);
@@ -1090,16 +1145,9 @@ export class ButlerDO extends Agent<Env> {
   }
 
   /**
-   * WeChat cannot edit a sent message, so every progress update there would
-   * become a new chat message. Those tasks get a heartbeat instead. A missing
-   * reference keeps the editing policy: the next send teaches us the channel.
+   * Tool progress is background noise: it lands on the task row so that
+   * `get_task` can answer questions about it, and never in the chat.
    */
-  private progressPolicy(row: TaskRow): ProgressPolicy {
-    return row.progressMessageRef?.channel === "wechat"
-      ? this.heartbeat
-      : this.throttle;
-  }
-
   private async handleProgress(
     taskId: string,
     detail: string,
@@ -1108,28 +1156,16 @@ export class ButlerDO extends Agent<Env> {
     const row = this.repo.get(taskId);
     if (!row || row.botId !== null) return;
 
-    const text = clampMessage(
-      taskProgressText(
-        ownerLocale(this.env),
-        taskLabel(row),
-        row.title,
-        clamp(detail, PROGRESS_DETAIL_MAX),
-      ),
-    );
-    const allowed = this.progressPolicy(row).offer(taskId, text, now);
-    if (allowed !== null) {
-      await this.showProgress(taskId, allowed);
-      return;
-    }
-
-    this.scheduleProgressFlush(taskId, now);
+    this.repo.update(taskId, {
+      lastProgress: clamp(detail, PROGRESS_DETAIL_MAX),
+      lastProgressAt: now,
+    });
   }
 
   /**
-   * A stalled run gets one standalone notice, so the progress message keeps
-   * its reference and the terminal event still edits that same message. Bot
-   * tasks never alert the owner, and a report that arrives after the task
-   * ended must not resurrect it.
+   * A stalled run gets one standalone notice. Bot tasks never alert the
+   * owner, and a report that arrives after the task ended must not resurrect
+   * it.
    */
   private async handleStalled(
     taskId: string,
@@ -1139,125 +1175,18 @@ export class ButlerDO extends Agent<Env> {
     if (!row || row.status !== "running" || row.botId !== null) return;
 
     const locale = ownerLocale(this.env);
-    await this.sendBestEffort({
-      text: clampMessage(
-        taskStalledText(
-          locale,
-          taskLabel(row),
-          row.title,
-          body.activity,
-          body.idleMs,
-        ),
-      ),
-      priority: "alert",
-    });
-  }
-
-  private scheduleProgressFlush(taskId: string, now: number): void {
-    if (this.progressTimers.has(taskId)) return;
-    const dueAt = this.throttle.dueAt(taskId) ?? this.heartbeat.dueAt(taskId);
-    if (dueAt === null) return;
-
-    const handle = getClock().setTimeout(() => {
-      this.progressTimers.delete(taskId);
-      void this.flushProgress(taskId).catch((error) => {
-        console.error("butler progress flush failed:", error);
-      });
-    }, dueAt - now + 1);
-    this.progressTimers.set(taskId, handle);
-  }
-
-  /** Delivers buffered progress once the throttle interval has elapsed. */
-  private async flushProgress(taskId: string): Promise<void> {
-    const now = getClock().now();
-    const due = [...this.throttle.takeDue(now), ...this.heartbeat.takeDue(now)];
-    for (const item of due) {
-      await this.showProgress(item.taskId, item.text);
-    }
-
-    // A timer can fire before the throttle window closes. Keep this task's
-    // buffered update armed instead of stranding it until another event.
-    const pending =
-      this.throttle.dueAt(taskId) ?? this.heartbeat.dueAt(taskId);
-    if (pending !== null) {
-      this.scheduleProgressFlush(taskId, now);
-    }
-  }
-
-  private cancelProgressTimer(taskId: string): void {
-    const handle = this.progressTimers.get(taskId);
-    if (handle === undefined) return;
-    this.progressTimers.delete(taskId);
-    getClock().clearTimeout(handle);
-  }
-
-  private async showProgress(taskId: string, text: string): Promise<void> {
-    const row = this.repo.get(taskId);
-    if (!row || isTerminal(row.status)) return;
-
-    const message: OutboundMessage = {
-      text: clampMessage(text),
-      buttons: [
-        [
-          {
-            ...cancelButton(ownerLocale(this.env), taskLabel(row)),
-            data: encodeAction({ action: "cancel", taskId }),
-          },
-        ],
-      ],
-    };
-
-    if (row.progressMessageRef !== null) {
-      const previousRef = row.progressMessageRef;
-      const outcome = await this.editBestEffort(previousRef, message);
-      if (outcome === "edited") return;
-
-      // The reference is useless to us either way. A transient failure keeps
-      // the old message in place, so the next update re-sends instead of
-      // duplicating this one; a reference that can never be edited (WeChat
-      // has no message ids, an older deployment owns it) must not swallow the
-      // update, so fall through and send it as a new message.
-      this.repo.update(taskId, { progressMessageRef: null });
-      if (outcome === "failed") return;
-
-      // WeChat cannot edit messages, so every progress update would repeat the
-      // cancel hint. Only its newly sent progress goes without buttons; the
-      // start message already holds the only hint. Telegram keeps its buttons.
-      if (previousRef.channel === "wechat") {
-        const ref = await this.sendBestEffort({ text: message.text });
-        if (ref !== null) {
-          this.repo.update(taskId, { progressMessageRef: ref });
-        }
-        return;
-      }
-    }
-
-    const ref = await this.sendBestEffort(message);
-    if (ref !== null) {
-      this.repo.update(taskId, { progressMessageRef: ref });
-    }
-  }
-
-  private async showTerminal(taskId: string, text: string): Promise<void> {
-    const row = this.repo.get(taskId);
-    if (!row) return;
-
-    // A terminal status is the answer the owner has been waiting for: the
-    // WeChat queue must not evict it behind progress frames.
-    const message: OutboundMessage = {
-      text: clampMessage(text),
-      priority: "critical",
-    };
-    if (row.progressMessageRef !== null) {
-      const outcome = await this.editBestEffort(row.progressMessageRef, message);
-      if (outcome === "edited") return;
-      this.repo.update(taskId, { progressMessageRef: null });
-    }
-
-    const ref = await this.sendBestEffort(message);
-    if (ref !== null) {
-      this.repo.update(taskId, { progressMessageRef: ref });
-    }
+    const minutes = Math.floor(body.idleMs / 60_000);
+    const activity =
+      body.activity.kind === "running_tool"
+        ? t(locale, "butler.turn.stalledTool", {
+            tool: body.activity.tool,
+            minutes,
+          })
+        : t(locale, "butler.turn.stalledModel", { minutes });
+    await this.say(
+      { kind: "task.stalled", title: row.title, body: activity },
+      { refId: row.id, priority: "alert" },
+    );
   }
 
   private async handleApprovalRequested(
@@ -1378,9 +1307,6 @@ export class ButlerDO extends Agent<Env> {
     // finished: repeating it would send the summary and artifacts twice.
     if (this.repo.get(taskId)?.status === "completed") return;
 
-    this.throttle.drop(taskId);
-    this.heartbeat.drop(taskId);
-    this.cancelProgressTimer(taskId);
     this.repo.update(taskId, {
       status: "completed",
       summary,
@@ -1394,57 +1320,19 @@ export class ButlerDO extends Agent<Env> {
       await this.forwardToBot(row.botId, taskId, "completed", summary);
       return;
     }
-    const append = this.progressPolicy(row) === this.heartbeat;
-    if (append) {
-      // The single terminal message carries the status line, so the reference
-      // that only existed to be edited is no longer needed.
-      this.repo.update(taskId, { progressMessageRef: null });
-    } else {
-      await this.showTerminal(
-        taskId,
-        taskCompletedText(ownerLocale(this.env), taskLabel(row), row.title),
-      );
-    }
-    await this.reportCompletion(row, summary, artifacts, append);
+    await this.reportCompletion(row, summary, artifacts);
   }
 
   private async reportCompletion(
     row: TaskRow,
     summary: string,
     artifacts: Artifact[],
-    append: boolean,
   ): Promise<void> {
     const locale = ownerLocale(this.env);
-    const label = taskLabel(row);
-    // A ledger write is bookkeeping: if it fails, the owner still gets the
-    // task's own result below.
-    try {
-      this.ledger.add(
-        "task.completed",
-        row.id,
-        t(locale, "phone.ledgerTaskCompleted", {
-          label,
-          title: row.title,
-          snippet: snippet(summary),
-        }),
-        getClock().now(),
-      );
-    } catch (error) {
-      console.error("butler ledger write failed:", error);
-    }
-
-    if (append) {
-      await this.sendBestEffort({
-        text: clampMessage(
-          taskCompletedText(locale, label, row.title, summary || undefined),
-        ),
-        priority: "critical",
-      });
-    } else if (summary.length > 0) {
-      // Telegram already edited the progress message to the status line, so
-      // the result is the summary by itself.
-      await this.sendBestEffort({ text: summary, priority: "critical" });
-    }
+    await this.say(
+      { kind: "task.completed", title: row.title, body: summary },
+      { refId: row.id, priority: "critical" },
+    );
     await this.deliverArtifacts(artifacts, locale);
   }
 
@@ -1475,9 +1363,6 @@ export class ButlerDO extends Agent<Env> {
     retryable: boolean,
     now: number,
   ): Promise<void> {
-    this.throttle.drop(taskId);
-    this.heartbeat.drop(taskId);
-    this.cancelProgressTimer(taskId);
     this.repo.update(taskId, { status: "failed", updatedAt: now });
 
     const row = this.repo.get(taskId);
@@ -1488,19 +1373,13 @@ export class ButlerDO extends Agent<Env> {
       await this.forwardToBot(row.botId, taskId, "failed", reason);
       return;
     }
-    const locale = ownerLocale(this.env);
-    const hint = retryHint(locale, retryable);
-    const body = taskFailedText(locale, taskLabel(row), row.title, reason);
-    await this.showTerminal(
-      taskId,
-      `${clamp(body, MESSAGE_MAX - hint.length)}${hint}`,
+    await this.say(
+      { kind: "task.failed", title: row.title, body: reason, retryable },
+      { refId: row.id, priority: "critical" },
     );
   }
 
   private async handleCancelled(taskId: string, now: number): Promise<void> {
-    this.throttle.drop(taskId);
-    this.heartbeat.drop(taskId);
-    this.cancelProgressTimer(taskId);
     this.repo.update(taskId, { status: "cancelled", updatedAt: now });
 
     const row = this.repo.get(taskId);
@@ -1509,10 +1388,8 @@ export class ButlerDO extends Agent<Env> {
       await this.forwardToBot(row.botId, taskId, "cancelled", "");
       return;
     }
-    await this.showTerminal(
-      taskId,
-      taskCancelledText(ownerLocale(this.env), taskLabel(row), row.title),
-    );
+    // The owner's own cancel command already got its receipt, and the butler
+    // confirms a tool-driven cancel in its reply. A task event says nothing.
   }
 
   private approvalMessage(approvalId: string): ApprovalMessageRow | undefined {
@@ -1628,61 +1505,7 @@ export class ButlerDO extends Agent<Env> {
       this.turns().remove(operationId);
       return;
     }
-    // The bot answers the owner directly, so this turn's text is only the
-    // model narrating the hand-off and must not be sent.
-    if (result.status === "done" && (await this.handedToBot(operationId))) {
-      this.turns().remove(operationId);
-      return;
-    }
     await this.sendTerminal(operationId, await this.turnResultText(result));
-  }
-
-  /**
-   * True when this run handed the owner to a bot through a successful
-   * `ask_bot`. The bot answers directly, so the butler's own answer is dropped.
-   * It reads the same transcript as `supersedeIdleThinking`, so a turn resumed
-   * after a restart is judged the same way.
-   */
-  private async handedToBot(operationId: string): Promise<boolean> {
-    try {
-      const record = await this.submissionOf(operationId);
-      if (record?.type !== "input" || record.status !== "done") {
-        return false;
-      }
-      // Bound the scan to this run's answer: a later turn's `ask_bot` must
-      // not silence an older answer that a sweep is re-delivering.
-      const entries = (await this.harness.messages()).filter(
-        (entry) => entry.id > record.entry && entry.id <= record.answer,
-      );
-      const calls = new Set<string>();
-      for (const entry of entries) {
-        for (const message of entry.model ?? []) {
-          if (message.role !== "assistant") continue;
-          for (const content of message.content) {
-            if (content.type === "toolCall" && content.name === "ask_bot") {
-              calls.add(content.id);
-            }
-          }
-        }
-      }
-      if (calls.size === 0) return false;
-      for (const entry of entries) {
-        for (const message of entry.model ?? []) {
-          if (
-            message.role === "toolResult" &&
-            calls.has(message.toolCallId) &&
-            !message.isError
-          ) {
-            return true;
-          }
-        }
-      }
-      return false;
-    } catch (error) {
-      // A duplicate answer beats a lost one: deliver unless proven handed off.
-      console.error("butler ask_bot check failed:", error);
-      return false;
-    }
   }
 
   /**
@@ -2054,63 +1877,6 @@ export class ButlerDO extends Agent<Env> {
       return;
     }
 
-    // Attachments stay with the Butler: `steer` cannot carry them, so a bot
-    // run would never see the file.
-    if (files.length === 0) {
-      // Accepted risks: the bot path does not repeat the second
-      // `admissionHolds` check below, so a route switch during the chat's
-      // prompt refresh can still let one old-route message through. The fixed
-      // empty/ambiguous replies are not deduped on redelivery.
-      const address = resolveBotAddress(
-        { text: evt.text, quotedText: evt.quotedText },
-        this.bots.list(),
-      );
-      if (address.kind === "ambiguous") {
-        const lines = address.matches
-          .map((bot) => `${bot.id} ${bot.name}`)
-          .join("\n");
-        await this.sendBestEffort({
-          text: t(locale, "butler.botChat.ambiguous", {
-            name: address.name,
-            lines,
-          }),
-        });
-        this.kickReconcile();
-        return;
-      }
-      if (address.kind === "bot") {
-        if (address.text === "" && images.length === 0) {
-          await this.sendBestEffort({
-            text: t(locale, "butler.botChat.empty", {
-              name: address.bot.name,
-            }),
-          });
-          this.kickReconcile();
-          return;
-        }
-        try {
-          await this.botChatFor(address.bot.id).chat({
-            botId: address.bot.id,
-            text: address.text,
-            images,
-            eventId: evt.eventId,
-          });
-        } catch (error) {
-          console.error(
-            `butler bot chat ${address.bot.id} failed:`,
-            error,
-          );
-          await this.sendBestEffort({
-            text: t(locale, "butler.botChat.unavailable", {
-              name: address.bot.name,
-            }),
-          });
-        }
-        this.kickReconcile();
-        return;
-      }
-    }
-
     // Tests replace the model per message; in production this is a no-op after
     // the first message of an object instance.
     await this.ensureAgent();
@@ -2137,7 +1903,13 @@ export class ButlerDO extends Agent<Env> {
       // arrive close together must not both carry the same rows.
       const ledger = this.ledger.pending();
       const prefix = renderLedgerPrefix(ledger.rows, ledger.omitted, locale);
-      const text = prefix === "" ? evt.text : `${prefix}${evt.text ?? ""}`;
+      const quoted = evt.quotedText?.trim();
+      const quoteLine =
+        quoted === undefined || quoted === ""
+          ? ""
+          : t(locale, "butler.quoted", { snippet: snippet(quoted, 100) }) +
+            "\n";
+      const text = `${prefix}${quoteLine}${evt.text ?? ""}`;
       const input = toUserInput(text, images, files);
       const receipt = await this.harness.submit(input, { operationId });
       if (receipt.accepted) this.ledger.consume(ledger.ids);
@@ -2250,10 +2022,10 @@ export class ButlerDO extends Agent<Env> {
   private botChatFor(id: string): BotChatStub {
     const override = botChatStubOverride;
     if (override !== null) {
-      // The override stands in for `chat` only; deletion is covered by the
+      // The override stands in for `ask` only; deletion is covered by the
       // bot-tools tests, so `destroy` is a no-op here.
       return {
-        chat: (input) => override(id).chat(input),
+        ask: (input) => override(id).ask(input),
         destroy: async () => {},
       };
     }
@@ -2299,10 +2071,6 @@ function addressOf(evt: AdmittedMessage): Address {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isTerminal(status: TaskRow["status"]): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 function clamp(text: string, max: number): string {

@@ -79,7 +79,7 @@ export type BotToolDeps = {
   bots: BotsRepo;
   bot(id: string): BotControl;
   botChat(id: string): {
-    chat(input: BotChatInput): Promise<void>;
+    ask(input: BotChatInput): Promise<string>;
     destroy(): Promise<void>;
   };
   task(id: string): TaskControl;
@@ -281,7 +281,7 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
   const askBot: ToolRegistration<typeof AskBot> = {
     name: "ask_bot",
     description:
-      "Hand the owner's message to a bot that should answer it itself, e.g. a follow-up on what the bot just sent. The bot replies to the owner directly; anything you say in this turn is NOT sent.",
+      "Ask a bot a question and get its answer back. Only you see the answer; tell the owner in your own words.",
     parameters: AskBot,
     async execute({ id, text }) {
       try {
@@ -292,13 +292,12 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
             isError: true,
           };
         }
-        await botChat(id).chat({
+        const reply = await botChat(id).ask({
           botId: id,
           text,
-          images: [],
           eventId: `ask_bot:${crypto.randomUUID()}`,
         });
-        return output(`已转给 ${row.name}`);
+        return output(reply);
       } catch (error) {
         return {
           output: [{ type: "text" as const, text: errorText(error) }],

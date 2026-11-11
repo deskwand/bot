@@ -129,7 +129,7 @@ describe("bot run end to end", () => {
     await runFirstRun(bot);
 
     expect(channel.sent).toEqual([
-      { chatId: "42", text: "【价格哨兵】降价到 199" },
+      { chatId: "42", text: "价格哨兵那边说：降价到 199" },
     ]);
     expect(channel.edits).toEqual([]);
   });

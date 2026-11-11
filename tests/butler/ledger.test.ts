@@ -78,6 +78,19 @@ describe("LedgerStore", () => {
     expect(length).toBeLessThanOrEqual(LEDGER_LINE_MAX);
   });
 
+  it("returns the newest lines of one kind, read or unread", async () => {
+    const lines = await withStore("ledger-recent", (store) => {
+      for (let i = 1; i <= 5; i++) {
+        store.add("butler.said", "t1", `said ${i}`, i);
+      }
+      store.add("task.completed", "t1", "completed", 6);
+      store.consume(store.pending().ids);
+      return store.recentLines("butler.said", 3);
+    });
+
+    expect(lines).toEqual(["said 5", "said 4", "said 3"]);
+  });
+
   it("prunes read rows older than the retention window", async () => {
     const now = Date.now();
     const counts = await withStore("ledger-prune", (store, sql) => {

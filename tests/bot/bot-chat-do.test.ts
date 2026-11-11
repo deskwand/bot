@@ -211,13 +211,34 @@ function withoutSnapshot(calls: Call[]): Call[] {
   return calls.filter((call) => call.method !== "snapshot");
 }
 
-function chat(
+function ask(
   stub: ChatStub,
   botId: string,
   text: string,
   eventId: string,
-): Promise<void> {
-  return stub.chat({ botId, text, eventId });
+): Promise<string> {
+  return stub.ask({ botId, text, eventId });
+}
+
+/**
+ * Runs an ask that is expected to fail, and returns the failure message. The
+ * catch sits inside the object so the runtime does not also report the
+ * rejection as an uncaught exception.
+ */
+async function askFailure(
+  stub: ChatStub,
+  botId: string,
+  text: string,
+  eventId: string,
+): Promise<string> {
+  return runInDurableObject(stub, async (instance) => {
+    try {
+      await instance.ask({ botId, text, eventId });
+      return "no error";
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  });
 }
 
 /** The level pi actually holds for this chat's root conversation. */
@@ -242,7 +263,7 @@ describe("bot chat", () => {
     const stub = chatStub("thinking-default");
 
     // opencode-go/deepseek-v4.1-flash offers low, high, max.
-    await chat(stub, "b1", "你好", "e-level-default");
+    await ask(stub, "b1", "你好", "e-level-default");
     expect(await storedThinkingLevel(stub)).toBe("high");
   });
 
@@ -252,13 +273,13 @@ describe("bot chat", () => {
     setModelOverride(scriptedModel([{ text: "好" }, { text: "好" }]));
     const stub = chatStub("thinking-reopen");
 
-    await chat(stub, "b1", "你好", "e-level-first");
+    await ask(stub, "b1", "你好", "e-level-first");
     expect(await storedThinkingLevel(stub)).toBe("low");
 
     // Defaults never reach a root that already exists, so the change has to be
     // applied to the conversation itself on the next turn.
     setEnv(butlerConfig("high"));
-    await chat(stub, "b1", "再来", "e-level-second");
+    await ask(stub, "b1", "再来", "e-level-second");
     expect(await storedThinkingLevel(stub)).toBe("high");
   });
 
@@ -268,11 +289,11 @@ describe("bot chat", () => {
     setModelOverride(scriptedModel([{ text: "好" }, { text: "好" }]));
     const stub = chatStub("thinking-removed");
 
-    await chat(stub, "b1", "你好", "e-removed-first");
+    await ask(stub, "b1", "你好", "e-removed-first");
     expect(await storedThinkingLevel(stub)).toBe("low");
 
     setEnv(butlerConfig());
-    await chat(stub, "b1", "再来", "e-removed-second");
+    await ask(stub, "b1", "再来", "e-removed-second");
     // opencode-go/deepseek-v4.1-flash offers low, high, max.
     expect(await storedThinkingLevel(stub)).toBe("high");
   });
@@ -285,8 +306,8 @@ describe("bot chat", () => {
 
     setModelOverride(scriptedModel([{ text: "第一轮回答" }]));
     const stub = chatStub(botId);
-    await chat(stub, botId, "第一句话", "e1");
-    expect(butler.notices).toEqual([{ botId, text: "第一轮回答" }]);
+    expect(await ask(stub, botId, "第一句话", "e1")).toBe("第一轮回答");
+    expect(butler.notices).toEqual([]);
 
     await stub.destroy();
     // Agent.destroy() aborts the isolate on a later tick. Yield one so the
@@ -305,11 +326,13 @@ describe("bot chat", () => {
         },
       ]),
     );
-    await chat(chatStub(botId), botId, "第二句话", "e2");
+    expect(await ask(chatStub(botId), botId, "第二句话", "e2")).toBe(
+      "第二轮回答",
+    );
 
     expect(JSON.stringify(seen?.messages)).not.toContain("第一句话");
     expect(JSON.stringify(seen?.messages)).not.toContain("第一轮回答");
-    expect(butler.notices.at(-1)).toEqual({ botId, text: "第二轮回答" });
+    expect(butler.notices).toEqual([]);
   });
 
   it("persists the bot id for a resumed turn", async () => {
@@ -319,7 +342,7 @@ describe("bot chat", () => {
     setModelOverride(scriptedModel([{ text: "好" }]));
     const stub = chatStub(botId);
 
-    await chat(stub, botId, "你好", "e-persist-bot-id");
+    await ask(stub, botId, "你好", "e-persist-bot-id");
 
     const stored = await runInDurableObject(stub, (_instance, state) =>
       state.storage.kv.get("botId"),
@@ -364,7 +387,9 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "最近怎样", "e-snapshot");
+    expect(await ask(chatStub(botId), botId, "最近怎样", "e-snapshot")).toBe(
+      "价格回落了",
+    );
 
     expect(prompt).toContain("盯盘");
     expect(prompt).toContain("盯着价格");
@@ -379,7 +404,7 @@ describe("bot chat", () => {
     expect(prompt).toContain("上次价格 239");
     expect(prompt).toContain("价格没变");
     expect(prompt).toContain("时区 UTC+8");
-    expect(butler.notices).toEqual([{ botId, text: "价格回落了" }]);
+    expect(butler.notices).toEqual([]);
   });
 
   it("run_now steers and wakes the bot", async () => {
@@ -400,7 +425,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "立刻查一次", "e-run-now");
+    await ask(chatStub(botId), botId, "立刻查一次", "e-run-now");
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       { method: "steer", args: ["查一次", { fromChat: true }] },
@@ -428,7 +453,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "查一次", "e-run-now-after");
+    await ask(chatStub(botId), botId, "查一次", "e-run-now-after");
 
     expect(tool).toBe("正在运行，结束后约 5 分钟再唤醒");
   });
@@ -452,7 +477,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "查一次", "e-run-now-inactive");
+    await ask(chatStub(botId), botId, "查一次", "e-run-now-inactive");
 
     expect(tool).toBe("已暂停或已完成，先恢复再唤醒");
   });
@@ -483,7 +508,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "记一下方法", "e-write-doc");
+    await ask(chatStub(botId), botId, "记一下方法", "e-write-doc");
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       {
@@ -522,7 +547,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "查查记录", "e-search-runs");
+    await ask(chatStub(botId), botId, "查查记录", "e-search-runs");
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       { method: "searchRuns", args: ["价格"] },
@@ -551,7 +576,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "两小时后再看", "e-set-next-wake");
+    await ask(chatStub(botId), botId, "两小时后再看", "e-set-next-wake");
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       { method: "setNextWake", args: [{ afterMs: 7_200_000 }] },
@@ -579,7 +604,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "改成 1m", "e-set-interval-reject");
+    await ask(chatStub(botId), botId, "改成 1m", "e-set-interval-reject");
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([]);
     expect(tool).toBe("时长超出范围：1m（最短 5m，最长 30d）");
@@ -605,7 +630,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "改成 abc", "e-set-interval-invalid");
+    await ask(chatStub(botId), botId, "改成 abc", "e-set-interval-invalid");
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([]);
     expect(tool).toBe("时长格式无效：abc（示例：30m、2h、1d）");
@@ -636,7 +661,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "改成 10m", "e-set-interval");
+    await ask(chatStub(botId), botId, "改成 10m", "e-set-interval");
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       { method: "setDefaultInterval", args: [600_000] },
@@ -658,7 +683,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "先停一下", "e-pause");
+    await ask(chatStub(botId), botId, "先停一下", "e-pause");
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       { method: "pause", args: [] },
@@ -679,7 +704,7 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "继续吧", "e-resume");
+    await ask(chatStub(botId), botId, "继续吧", "e-resume");
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       { method: "resume", args: [true] },
@@ -698,14 +723,14 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "继续吧", "e-resume-default");
+    await ask(chatStub(botId), botId, "继续吧", "e-resume-default");
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       { method: "resume", args: [false] },
     ]);
   });
 
-  it("a rules write sends the confirmation as its own message", async () => {
+  it("a rules write returns the reply and the confirmation", async () => {
     const bot = fakeSelf();
     const { butler, notices } = fakeButler();
     install(bot, butler);
@@ -725,7 +750,12 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "加一条守则", "e-rules-confirm");
+    const reply = await ask(
+      chatStub(botId),
+      botId,
+      "加一条守则",
+      "e-rules-confirm",
+    );
 
     expect(withoutSnapshot(bot.state.calls)).toEqual([
       {
@@ -733,15 +763,13 @@ describe("bot chat", () => {
         args: [" 守则 ", " 不要半夜通知 ", { allowRules: true }],
       },
     ]);
-    expect(notices).toEqual([
-      { botId, text: "好的" },
-      {
-        botId,
-        text: t("zh", "butler.botChat.rulesUpdated", {
+    expect(reply).toBe(
+      "好的\n" +
+        t("zh", "butler.botChat.rulesUpdated", {
           rules: "不要半夜通知",
         }),
-      },
-    ]);
+    );
+    expect(notices).toEqual([]);
   });
 
   it("truncates a long rules confirmation and says how long it was", async () => {
@@ -762,19 +790,22 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "加一条长守则", "e-rules-long");
+    const reply = await ask(
+      chatStub(botId),
+      botId,
+      "加一条长守则",
+      "e-rules-long",
+    );
 
-    expect(notices).toEqual([
-      { botId, text: "好的" },
-      {
-        botId,
-        text: t("zh", "butler.botChat.rulesUpdated", {
+    expect(reply).toBe(
+      "好的\n" +
+        t("zh", "butler.botChat.rulesUpdated", {
           rules:
             "x".repeat(200) +
             t("zh", "butler.botChat.rulesTruncated", { count: 300 }),
         }),
-      },
-    ]);
+    );
+    expect(notices).toEqual([]);
   });
 
   it("a rules write outside a turn notifies immediately", async () => {
@@ -787,8 +818,8 @@ describe("bot chat", () => {
     // would have done.
     setModelOverride(scriptedModel([{ text: "第一轮回答" }]));
     const stub = chatStub(botId);
-    await chat(stub, botId, "你好", "e-outside-first");
-    expect(notices).toEqual([{ botId, text: "第一轮回答" }]);
+    expect(await ask(stub, botId, "你好", "e-outside-first")).toBe("第一轮回答");
+    expect(notices).toEqual([]);
 
     // A resumed turn runs the tool outside runTurn, so no `chat()` is active.
     await runInDurableObject(stub, async (instance) => {
@@ -804,8 +835,8 @@ describe("bot chat", () => {
       );
     });
 
-    await vi.waitFor(() => expect(notices).toHaveLength(2));
-    expect(notices[1]).toEqual({
+    await vi.waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices[0]).toEqual({
       botId,
       text: t("zh", "butler.botChat.rulesUpdated", {
         rules: "不要半夜通知",
@@ -830,16 +861,19 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "加一条守则", "e-rules-no-reply");
+    const reply = await ask(
+      chatStub(botId),
+      botId,
+      "加一条守则",
+      "e-rules-no-reply",
+    );
 
-    expect(notices).toEqual([
-      {
-        botId,
-        text: t("zh", "butler.botChat.rulesUpdated", {
-          rules: "不要半夜通知",
-        }),
-      },
-    ]);
+    expect(reply).toBe(
+      t("zh", "butler.botChat.rulesUpdated", {
+        rules: "不要半夜通知",
+      }),
+    );
+    expect(notices).toEqual([]);
   });
 
   it("deleting the rules confirms the deletion", async () => {
@@ -859,11 +893,15 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "删掉守则", "e-rules-delete");
+    const reply = await ask(
+      chatStub(botId),
+      botId,
+      "删掉守则",
+      "e-rules-delete",
+    );
 
-    expect(notices).toEqual([
-      { botId, text: t("zh", "butler.botChat.rulesDeleted") },
-    ]);
+    expect(reply).toBe(t("zh", "butler.botChat.rulesDeleted"));
+    expect(notices).toEqual([]);
   });
 
   it("a method write adds no confirmation", async () => {
@@ -883,9 +921,10 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "记一下方法", "e-method-write");
-
-    expect(notices).toEqual([{ botId, text: "好的" }]);
+    expect(await ask(chatStub(botId), botId, "记一下方法", "e-method-write")).toBe(
+      "好的",
+    );
+    expect(notices).toEqual([]);
   });
 
   it("a repeated eventId is answered once", async () => {
@@ -897,10 +936,9 @@ describe("bot chat", () => {
     setModelOverride(scriptedModel([{ text: "只回一次" }]));
 
     const stub = chatStub(botId);
-    await chat(stub, botId, "你好", "same-event");
-    await chat(stub, botId, "你好", "same-event");
-
-    expect(notices).toEqual([{ botId, text: "只回一次" }]);
+    expect(await ask(stub, botId, "你好", "same-event")).toBe("只回一次");
+    expect(await ask(stub, botId, "你好", "same-event")).toBe("");
+    expect(notices).toEqual([]);
   });
 
   it("two concurrent chats run one after another", async () => {
@@ -923,15 +961,15 @@ describe("bot chat", () => {
     );
 
     const stub = chatStub(botId);
-    const first = chat(stub, botId, "第一句", "e-first");
-    const second = chat(stub, botId, "第二句", "e-second");
-    await Promise.all([first, second]);
+    const first = ask(stub, botId, "第一句", "e-first");
+    const second = ask(stub, botId, "第二句", "e-second");
+    expect(await Promise.all([first, second])).toEqual([
+      "第一轮回答",
+      "第二轮回答",
+    ]);
 
     expect(JSON.stringify(seen?.messages)).toContain("第一轮回答");
-    expect(notices).toEqual([
-      { botId, text: "第一轮回答" },
-      { botId, text: "第二轮回答" },
-    ]);
+    expect(notices).toEqual([]);
   });
 
   it("a new model applies to an existing chat", async () => {
@@ -947,15 +985,11 @@ describe("bot chat", () => {
 
     const stub = chatStub(botId);
     setModelOverride(modelA);
-    await chat(stub, botId, "你好", "e-model-a");
+    expect(await ask(stub, botId, "你好", "e-model-a")).toBe("来自 A");
 
     setModelOverride(modelB);
-    await chat(stub, botId, "再说一次", "e-model-b");
-
-    expect(notices).toEqual([
-      { botId, text: "来自 A" },
-      { botId, text: "来自 B" },
-    ]);
+    expect(await ask(stub, botId, "再说一次", "e-model-b")).toBe("来自 B");
+    expect(notices).toEqual([]);
   });
 
   it("a much smaller model is refused like the Butler's model switch", async () => {
@@ -982,16 +1016,20 @@ describe("bot chat", () => {
 
     const stub = chatStub(botId);
     setModelOverride(large);
-    await chat(stub, botId, "你好", "e-window-large");
+    expect(await ask(stub, botId, "你好", "e-window-large")).toBe(
+      "大窗口回答",
+    );
 
     setModelOverride(small);
-    await chat(stub, botId, "再说一次", "e-window-small");
+    expect(
+      await askFailure(stub, botId, "再说一次", "e-window-small"),
+    ).toContain("128000");
+    expect(
+      await askFailure(stub, botId, "再说一次", "e-window-small-2"),
+    ).toContain("16000");
 
     expect(smallCalls).toBe(0);
-    expect(notices[0]).toEqual({ botId, text: "大窗口回答" });
-    expect(notices).toHaveLength(2);
-    expect(notices[1]?.text).toContain("128000");
-    expect(notices[1]?.text).toContain("16000");
+    expect(notices).toEqual([]);
   });
 
   it("a missing snapshot answers deleted without calling the model", async () => {
@@ -1012,11 +1050,11 @@ describe("bot chat", () => {
       ]),
     );
 
-    await chat(chatStub(botId), botId, "你好", "e-deleted");
+    expect(
+      await askFailure(chatStub(botId), botId, "你好", "e-deleted"),
+    ).toBe(t("zh", "butler.botChat.deleted"));
 
-    expect(notices).toEqual([
-      { botId, text: t("zh", "butler.botChat.deleted") },
-    ]);
+    expect(notices).toEqual([]);
     expect(calls).toBe(0);
   });
 
@@ -1038,14 +1076,11 @@ describe("bot chat", () => {
       },
     });
 
-    await chat(chatStub(botId), botId, "你好", "e-blocked");
+    expect(
+      await askFailure(chatStub(botId), botId, "你好", "e-blocked"),
+    ).toBe(modelUnavailableText("zh", "opencode-go", "does-not-exist"));
 
-    expect(notices).toEqual([
-      {
-        botId,
-        text: modelUnavailableText("zh", "opencode-go", "does-not-exist"),
-      },
-    ]);
+    expect(notices).toEqual([]);
   });
 
   it("a model error answers with the unanswered copy", async () => {
@@ -1056,8 +1091,9 @@ describe("bot chat", () => {
 
     setModelOverride(scriptedModel([{ error: WORKERS_AI_QUOTA_MARKER }]));
 
-    await chat(chatStub(botId), botId, "你好", "e-model-error");
-
-    expect(notices).toEqual([{ botId, text: QUOTA_EXHAUSTED_TEXT }]);
+    expect(await ask(chatStub(botId), botId, "你好", "e-model-error")).toBe(
+      QUOTA_EXHAUSTED_TEXT,
+    );
+    expect(notices).toEqual([]);
   });
 });

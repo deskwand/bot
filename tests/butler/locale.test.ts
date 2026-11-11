@@ -1,17 +1,9 @@
-import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import validConfig from "../../contracts/fixtures/config-valid.json";
-import { setChannelOverride } from "../../src/channels/override";
-import type { TaskSpec } from "../../src/protocol";
-import { seedOwnerAddress } from "../helpers/channel-ref";
-import { fakeChannel } from "../helpers/fake-channel";
 import {
   actionHint,
   actionLabel,
   approvalButtonLabel,
   approvalCardText,
-  botNoticeText,
-  cancelButton,
   decisionSuffix,
   errorNotice,
   imageModelNotice,
@@ -24,14 +16,7 @@ import {
   resolutionNoPendingApproval,
   resolutionNoPendingApprovalId,
   resolutionPendingList,
-  retryHint,
-  taskCancelledText,
-  taskCompletedText,
-  taskFailedText,
   taskMissingText,
-  taskProgressText,
-  taskStartedText,
-  taskStartFailedText,
   unsupportedMessageNotice,
   voiceUnavailableNotice,
 } from "../../src/butler/owner-copy";
@@ -54,7 +39,6 @@ function task(id: string, handle: number | null, title: string): TaskRow {
     title,
     status: "running",
     chatId: "42",
-    progressMessageRef: null,
     summary: null,
     artifacts: [],
     lastSeq: 0,
@@ -62,6 +46,9 @@ function task(id: string, handle: number | null, title: string): TaskRow {
     updatedAt: 0,
     botId: null,
     handle,
+    lastProgress: null,
+    lastProgressAt: null,
+    slowNotifiedAt: null,
   };
 }
 
@@ -77,10 +64,6 @@ describe("action buttons and hints", () => {
     expect(actionHint("zh", "cancel", { taskId: "#1" })).toBe("取消 #1");
     expect(approvalButtonLabel("zh", "approve")).toBe("批准");
     expect(approvalButtonLabel("zh", "reject")).toBe("拒绝");
-    expect(cancelButton("zh", "#1")).toEqual({
-      label: "取消",
-      hint: "取消 #1",
-    });
   });
 
   it("uses English commands and labels", () => {
@@ -94,8 +77,6 @@ describe("action buttons and hints", () => {
     for (const action of ["approve", "reject"] as const) {
       expectEnglish(approvalButtonLabel("en", action));
     }
-    expect(cancelButton("en", "#1").label).toBe("Cancel");
-    expect(cancelButton("en", "#1").hint).toBe("cancel #1");
   });
 });
 
@@ -147,52 +128,6 @@ describe("approval card", () => {
   });
 });
 
-describe("task lifecycle copy", () => {
-  it("keeps the Chinese lifecycle messages", () => {
-    expect(taskStartedText("zh", "#1", "查天气")).toBe(
-      "#1 查天气：已开始",
-    );
-    expect(taskStartFailedText("zh", "#1", "查天气", "boom")).toBe(
-      "#1 查天气：boom",
-    );
-    expect(taskProgressText("zh", "#1", "查天气", "读取页面")).toBe(
-      "#1 查天气：读取页面",
-    );
-    expect(taskCompletedText("zh", "#1", "查天气")).toBe(
-      "#1 查天气：已完成",
-    );
-    expect(taskCompletedText("zh", "#1", "查天气", "摘要")).toBe(
-      "#1 查天气：摘要",
-    );
-    expect(taskFailedText("zh", "#1", "查天气", "超时")).toBe(
-      "#1 查天气：超时",
-    );
-    expect(retryHint("zh", true)).toBe('\n回复"重试"可继续');
-    expect(retryHint("zh", false)).toBe("");    expect(taskCancelledText("zh", "#1", "查天气")).toBe(
-      "#1 查天气：已取消",
-    );
-  });
-
-  it("writes the English lifecycle messages with the same parameters", () => {
-    const messages = [
-      taskStartedText("en", "#1", "Weather"),
-      taskStartFailedText("en", "#1", "Weather", "boom"),
-      taskProgressText("en", "#1", "Weather", "Reading the page"),
-      taskCompletedText("en", "#1", "Weather"),
-      taskCompletedText("en", "#1", "Weather", "Summary"),
-      taskFailedText("en", "#1", "Weather", "Timed out"),
-      taskCancelledText("en", "#1", "Weather"),
-      retryHint("en", true),
-    ];
-    for (const message of messages) expectEnglish(message);
-    expect(retryHint("en", true)).toBe('\nReply "retry" to continue');
-    expect(messages[0]).toContain("Weather");
-    expect(messages[2]).toContain("Reading the page");
-    expect(messages[4]).toContain("Summary");
-    expect(messages[7]).toContain("retry");
-  });
-});
-
 describe("butler notices", () => {
   it("keeps the Chinese notices", () => {
     expect(taskMissingText("zh")).toBe("任务不存在");
@@ -212,9 +147,6 @@ describe("butler notices", () => {
     expect(imageModelNotice("zh")).toBe(
       "当前模型不支持图片，请在桌面端模型页换成支持视觉的模型",
     );
-    expect(botNoticeText("zh", "价格哨兵", "降价了")).toBe(
-      "【价格哨兵】降价了",
-    );
   });
 
   it("writes the English notices", () => {
@@ -228,11 +160,8 @@ describe("butler notices", () => {
       voiceUnavailableNotice("en"),
       unsupportedMessageNotice("en"),
       imageModelNotice("en"),
-      botNoticeText("en", "Price sentinel", "Price dropped"),
     ];
     for (const message of messages) expectEnglish(message);
-    expect(messages[9]).toContain("Price sentinel");
-    expect(messages[9]).toContain("Price dropped");
   });
 });
 
@@ -306,38 +235,6 @@ describe("resolution messages", () => {
       expectEnglish(en.text);
       expect(en.text).toContain("Sandbox test");
       expect(en.text).toContain("#2");
-    }
-  });
-});
-
-describe("butler sends the owner's language", () => {
-  it("starts a task in English when the config says en", async () => {
-    await seedOwnerAddress("42");
-    const channel = fakeChannel();
-    setChannelOverride("telegram", channel.adapter);
-
-    const ENV = env as unknown as Record<string, unknown>;
-    const saved = ENV.DESKWAND_CONFIG;
-    ENV.DESKWAND_CONFIG = { ...validConfig, locale: "en" };
-    try {
-      const stub = env.BUTLER.get(env.BUTLER.idFromName("locale-en"));
-      await runInDurableObject(stub, (instance) => {
-        (
-          instance as unknown as { taskFor(id: string): unknown }
-        ).taskFor = () => ({
-          start: async (_spec: TaskSpec) => {},
-        });
-      });
-
-      await stub.spawn("Weather", "Check the weather");
-
-      expect(channel.sent).toHaveLength(1);
-      expectEnglish(channel.sent[0]!.text);
-      expect(channel.sent[0]!.text).toContain("Weather");
-      expectEnglish(JSON.stringify(channel.sent[0]!.buttons));
-    } finally {
-      ENV.DESKWAND_CONFIG = saved;
-      setChannelOverride("telegram", null);
     }
   });
 });

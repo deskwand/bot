@@ -1,5 +1,5 @@
 import { artifactKeySegments, artifactNameFromKey } from "../artifact";
-import type { Artifact, ChannelMessageRef } from "../protocol";
+import type { Artifact } from "../protocol";
 
 export type TaskStatus =
   | "queued"
@@ -13,9 +13,11 @@ export type TaskRow = {
   title: string;
   status: TaskStatus;
   chatId: string | null;
-  progressMessageRef: ChannelMessageRef | null;
   summary: string | null;
   artifacts: Artifact[];
+  lastProgress: string | null;
+  lastProgressAt: number | null;
+  slowNotifiedAt: number | null;
   lastSeq: number;
   createdAt: number;
   updatedAt: number;
@@ -31,6 +33,9 @@ type RawTaskRow = {
   progress_message_ref_json: string | null;
   summary: string | null;
   artifacts_json: string | null;
+  last_progress: string | null;
+  last_progress_at: number | null;
+  slow_notified_at: number | null;
   last_seq: number;
   created_at: number;
   updated_at: number;
@@ -200,17 +205,21 @@ export class TasksRepo {
       sets.push("chat_id = ?");
       values.push(patch.chatId);
     }
-    if (patch.progressMessageRef !== undefined) {
-      sets.push("progress_message_ref_json = ?");
-      values.push(
-        patch.progressMessageRef === null
-          ? null
-          : JSON.stringify(patch.progressMessageRef),
-      );
-    }
     if (patch.summary !== undefined) {
       sets.push("summary = ?");
       values.push(patch.summary);
+    }
+    if (patch.lastProgress !== undefined) {
+      sets.push("last_progress = ?");
+      values.push(patch.lastProgress);
+    }
+    if (patch.lastProgressAt !== undefined) {
+      sets.push("last_progress_at = ?");
+      values.push(patch.lastProgressAt);
+    }
+    if (patch.slowNotifiedAt !== undefined) {
+      sets.push("slow_notified_at = ?");
+      values.push(patch.slowNotifiedAt);
     }
     if (patch.artifacts !== undefined) {
       sets.push("artifacts_json = ?");
@@ -252,24 +261,17 @@ function toTaskRow(row: RawTaskRow): TaskRow {
     title: row.title,
     status: row.status as TaskStatus,
     chatId: row.chat_id,
-    progressMessageRef: parseMessageRef(row.progress_message_ref_json),
     summary: row.summary,
     artifacts: parseArtifacts(row.artifacts_json),
+    lastProgress: row.last_progress,
+    lastProgressAt: row.last_progress_at,
+    slowNotifiedAt: row.slow_notified_at,
     lastSeq: row.last_seq,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     botId: row.bot_id,
     handle: row.handle,
   };
-}
-
-function parseMessageRef(json: string | null): ChannelMessageRef | null {
-  if (!json) return null;
-  try {
-    return JSON.parse(json) as ChannelMessageRef;
-  } catch {
-    return null;
-  }
 }
 
 function parseArtifacts(json: string | null): Artifact[] {

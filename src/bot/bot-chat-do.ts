@@ -10,7 +10,6 @@ import {
   resolveModel,
 } from "../llm/models";
 import { PI_PROGRESS } from "../llm/pi-settings";
-import type { InboundImage } from "../protocol";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import {
   toUserInput,
@@ -24,7 +23,6 @@ export type BotChatInput = {
   botId: string;
   /** The message text after the address was removed; may be empty. */
   text: string;
-  images?: InboundImage[];
   /** Used as the harness operation id, so a redelivery is answered once. */
   eventId: string;
 };
@@ -145,17 +143,23 @@ export class BotChatDO extends Agent<Env> {
   }
 
   /**
-   * Answers one owner message. Resolves after the turn's reply was sent.
-   * A failed send is logged and dropped: `notifyFromBot` reports it by
-   * returning false rather than throwing.
+   * Answers one question from the Butler. Resolves with the reply text; it
+   * never sends to the channel itself, so the Butler decides what the owner
+   * hears.
    */
-  chat(input: BotChatInput): Promise<void> {
-    const run = () => this.runTurn(input);
-    this.turn = this.turn.then(run, run);
-    return this.turn;
+  ask(input: BotChatInput): Promise<string> {
+    const result = this.turn.then(
+      () => this.runTurn(input),
+      () => this.runTurn(input),
+    );
+    this.turn = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
-  private async runTurn(input: BotChatInput): Promise<void> {
+  private async runTurn(input: BotChatInput): Promise<string> {
     this.activeTurn = true;
     try {
       this.botId = input.botId;
@@ -167,34 +171,24 @@ export class BotChatDO extends Agent<Env> {
       const locale = ownerLocale(this.env);
       const prompt = await this.refreshPrompt();
       if (prompt === "") {
-        await this.sendNotice(
-          input.botId,
-          t(locale, "butler.botChat.deleted"),
-        );
-        return;
+        throw new Error(t(locale, "butler.botChat.deleted"));
       }
 
       try {
         await this.ensureAgent();
       } catch (error) {
         if (!(error instanceof ModelSwitchError)) throw error;
-        await this.sendNotice(input.botId, error.message);
-        return;
+        throw new Error(error.message);
       }
 
-      const images = input.images ?? [];
-      const blocked = turnBlocker(this.env, images.length > 0);
-      if (blocked !== undefined) {
-        await this.sendNotice(input.botId, blocked);
-        return;
-      }
+      const blocked = turnBlocker(this.env, false);
+      if (blocked !== undefined) throw new Error(blocked);
 
-      const receipt = await this.harness.submit(
-        toUserInput(input.text, images, []),
-        { operationId: input.eventId },
-      );
+      const receipt = await this.harness.submit(toUserInput(input.text, [], []), {
+        operationId: input.eventId,
+      });
       // The same event was already accepted: never answer it twice.
-      if (!receipt.accepted) return;
+      if (!receipt.accepted) return "";
 
       const result = await this.harness.wait(input.eventId);
       const answer =
@@ -206,17 +200,12 @@ export class BotChatDO extends Agent<Env> {
             )
           : (result.text ?? "");
 
-      if (answer.length > 0) {
-        await this.sendNotice(input.botId, answer);
-      }
-      // The confirmation is its own message so the code-generated line can
-      // never be cut off with the answer.
-      if (this.rulesWritten !== null) {
-        await this.sendNotice(
-          input.botId,
-          this.confirmationFor(this.rulesWritten, locale),
-        );
-      }
+      // A rules confirmation is code-generated, so it rides along with the
+      // reply instead of being rewritten by the speaker.
+      const rules = this.rulesWritten;
+      if (rules === null) return answer;
+      const confirmation = this.confirmationFor(rules, locale);
+      return answer.length > 0 ? `${answer}\n${confirmation}` : confirmation;
     } finally {
       this.activeTurn = false;
     }
@@ -269,12 +258,6 @@ export class BotChatDO extends Agent<Env> {
       .catch((error) => {
         console.error(`bot chat ${botId} rules notice failed:`, error);
       });
-  }
-
-  /** Best-effort notice to the owner; a false result is logged, not thrown. */
-  private async sendNotice(botId: string, text: string): Promise<void> {
-    const sent = await this.butler().notifyFromBot(botId, text);
-    if (!sent) console.warn(`bot chat ${botId}: notice not sent, dropping`);
   }
 
   private async ensureAgent(): Promise<void> {

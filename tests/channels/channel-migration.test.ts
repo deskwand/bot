@@ -183,7 +183,7 @@ describe("migration from the previous schema", () => {
     expect(result.nextId).toBe("t8");
   });
 
-  it("sends a new progress message instead of editing a legacy bare id", async () => {
+  it("keeps tool progress off the chat after upgrading a legacy schema", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
     await seedOwnerAddress("42");
@@ -209,15 +209,7 @@ describe("migration from the previous schema", () => {
     });
 
     expect(channel.edits).toEqual([]);
-    expect(channel.sent).toEqual([
-      {
-        chatId: "42",
-        text: "t7 旧任务：继续",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t7", hint: "取消 t7" }],
-        ],
-      },
-    ]);
+    expect(channel.sent).toEqual([]);
   });
 
   it("keeps WeChat conversation state while the default selection is Telegram", async () => {

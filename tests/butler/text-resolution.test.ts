@@ -11,7 +11,6 @@ function task(id: string, handle: number | null, title: string): TaskRow {
     title,
     status: "running",
     chatId: "42",
-    progressMessageRef: null,
     summary: null,
     artifacts: [],
     lastSeq: 0,
@@ -19,6 +18,9 @@ function task(id: string, handle: number | null, title: string): TaskRow {
     updatedAt: 0,
     botId: null,
     handle,
+    lastProgress: null,
+    lastProgressAt: null,
+    slowNotifiedAt: null,
   };
 }
 

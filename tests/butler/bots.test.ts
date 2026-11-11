@@ -328,7 +328,7 @@ describe("ButlerDO bot runs", () => {
     );
   });
 
-  it("notifyFromBot prefixes the name", async () => {
+  it("notifyFromBot sends the bot body through the speaker", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
     const stub = butler("bots-notify");
@@ -338,11 +338,11 @@ describe("ButlerDO bot runs", () => {
 
     expect(delivered).toBe(true);
     expect(channel.sent).toEqual([
-      { chatId: "42", text: "【价格哨兵】降价了" },
+      { chatId: "42", text: "价格哨兵那边说：降价了" },
     ]);
   });
 
-  it("ordinary tasks are unchanged", async () => {
+  it("starts ordinary tasks silently", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
     const stub = butler("bots-ordinary");
@@ -350,15 +350,8 @@ describe("ButlerDO bot runs", () => {
 
     await stub.spawn("查天气", "查询北京天气");
 
-    expect(channel.sent).toEqual([
-      {
-        chatId: "42",
-        text: "#1 查天气：已开始",
-        buttons: [
-          [{ label: "取消", data: "a:cancel:t1", hint: "取消 #1" }],
-        ],
-      },
-    ]);
+    expect(channel.sent).toEqual([]);
+    expect(channel.edits).toEqual([]);
     expect(specs[0]).toMatchObject({
       taskId: "t1",
       title: "查天气",

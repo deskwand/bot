@@ -52,6 +52,15 @@ function lastResult(context: TranscriptContext): ToolResultMessage {
 function text(result: ToolResultMessage) {
   return result.content.flatMap(c => c.type === "text" ? [c.text] : []).join("\n");
 }
+/** Keeps the owner Butler's speaker from consuming the TaskDO's scripted turns. */
+async function muteSpeaker(): Promise<void> {
+  const owner = env.BUTLER.get(env.BUTLER.idFromName("owner"));
+  await runInDurableObject(owner, (instance) => {
+    (instance as unknown as { completeSpeak: () => Promise<string> }).completeSpeak =
+      async () => "";
+  });
+}
+
 async function complete(stub: Stub) {
   await vi.waitFor(async () => expect(await stub.status()).toMatchObject({state:"completed"}), {timeout:10_000});
 }
@@ -61,6 +70,7 @@ async function script(id: string, code: string, setup?: (stub: Stub) => Promise<
     {toolCalls:[{name:"codemode",args:{code}}]},
     {observe:c=>{result=lastResult(c);}, toolCalls:[{name:"finish_task",args:{summary:"script complete"}}]},
   ]));
+  await muteSpeaker();
   const stub=task(id);
   if(setup) await setup(stub);
   await stub.start({taskId:id,title:id,instructions:"run script"});

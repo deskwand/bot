@@ -238,6 +238,12 @@ describe("batched turns", () => {
     const stub = butler("batched-report");
     const sent = await captureSends(stub);
     await installSlowWait(stub);
+    // The speaker is one-shot; keep it out of the scripted harness turns.
+    await runInDurableObject(stub, (instance) => {
+      (
+        instance as unknown as { completeSpeak: () => Promise<string> }
+      ).completeSpeak = async () => "S";
+    });
     setModelOverride(
       scriptedModel([
         { toolCalls: [{ name: "slow_wait", args: {} }] },

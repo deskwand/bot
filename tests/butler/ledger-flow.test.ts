@@ -2,9 +2,7 @@ import type { TranscriptContext } from "@earendil-works/pi-ai";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BotsRepo } from "../../src/butler/bots-repo";
-import { setBotChatStubOverride } from "../../src/butler/butler-do";
 import { LedgerStore, type LedgerRow } from "../../src/butler/ledger";
-import { botNoticeText } from "../../src/butler/owner-copy";
 import { setChannelOverride } from "../../src/channels/override";
 import { t } from "../../src/i18n";
 import { setModelOverride } from "../../src/llm/models";
@@ -29,7 +27,6 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  setBotChatStubOverride(null);
   setModelOverride(null);
   setChannelOverride("telegram", null);
   vi.restoreAllMocks();
@@ -100,6 +97,7 @@ describe("butler ledger flow", () => {
     let seen: TranscriptContext | undefined;
     setModelOverride(
       scriptedModel([
+        { text: "价格回落了，跟你说一声。" },
         {
           text: "收到",
           observe: (context) => {
@@ -118,7 +116,7 @@ describe("butler ledger flow", () => {
 
     const text = lastUserText(seen) ?? "";
     expect(text.startsWith(t("zh", "phone.ledgerHeader"))).toBe(true);
-    expect(text).toContain("【盯盘】发给主人：价格回落了");
+    expect(text).toContain("我对主人说了：价格回落了，跟你说一声。");
     expect(text.endsWith("然后呢")).toBe(true);
   });
 
@@ -128,6 +126,7 @@ describe("butler ledger flow", () => {
     const texts: (string | undefined)[] = [];
     setModelOverride(
       scriptedModel([
+        { text: "价格回落了，跟你说一声。" },
         {
           text: "第一次",
           observe: (context) => {
@@ -153,7 +152,7 @@ describe("butler ledger flow", () => {
       message({ text: "还有吗", eventId: "ledger-flow:consume-2" }),
     );
 
-    expect(texts[0]).toContain("【盯盘】发给主人：价格回落了");
+    expect(texts[0]).toContain("我对主人说了：价格回落了，跟你说一声。");
     expect(texts[1]).toBe("还有吗");
     expect(await pending(stub)).toEqual({ rows: [], ids: [], omitted: 0 });
   });
@@ -161,7 +160,9 @@ describe("butler ledger flow", () => {
   it("keeps the ledger when the submit is rejected", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    setModelOverride(scriptedModel([{ text: "收到" }]));
+    setModelOverride(
+      scriptedModel([{ text: "收到" }, { text: "价格回落了，跟你说一声。" }]),
+    );
     const stub = butler("ledger-flow-rejected");
     await seedBot(stub, "b1", "盯盘");
 
@@ -173,7 +174,7 @@ describe("butler ledger flow", () => {
 
     const unread = await pending(stub);
     expect(unread.rows).toHaveLength(1);
-    expect(unread.rows[0]?.kind).toBe("bot.message");
+    expect(unread.rows[0]?.kind).toBe("butler.said");
     expect(unread.ids).toEqual(unread.rows.map((row) => row.id));
   });
 
@@ -183,6 +184,7 @@ describe("butler ledger flow", () => {
     let seen: TranscriptContext | undefined;
     setModelOverride(
       scriptedModel([
+        { text: "价格回落了，跟你说一声。" },
         {
           text: "看到了",
           observe: (context) => {
@@ -217,32 +219,35 @@ describe("butler ledger flow", () => {
     expect(textPart.type).toBe("text");
     const text = textPart.type === "text" ? textPart.text : "";
     expect(text.startsWith(t("zh", "phone.ledgerHeader"))).toBe(true);
-    expect(text).toContain("【盯盘】发给主人：价格回落了");
+    expect(text).toContain("我对主人说了：价格回落了，跟你说一声。");
   });
 
-  it("does not consume the ledger on a direct bot chat", async () => {
+  it("consumes the ledger when the owner addresses a bot", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    setModelOverride(scriptedModel([{ text: "不应出现" }]));
+    setModelOverride(
+      scriptedModel([
+        { text: "价格回落了，跟你说一声。" },
+        { text: "价格回落了，跟你说一声。" },
+      ]),
+    );
     const stub = butler("ledger-flow-direct");
     await seedBot(stub, "b1", "盯盘");
     await stub.notifyFromBot("b1", "价格回落了");
 
-    const chat = vi.fn(async () => {});
-    setBotChatStubOverride(() => ({ chat }));
     await stub.handleMessage(
       message({ text: "@盯盘 最近怎样", eventId: "ledger-flow:direct" }),
     );
 
-    expect(chat).toHaveBeenCalledTimes(1);
+    expect(channel.sent.at(-1)?.text).toBe("价格回落了，跟你说一声。");
     const unread = await pending(stub);
-    expect(unread.rows).toHaveLength(1);
-    expect(unread.rows[0]?.line).toContain("价格回落了");
+    expect(unread.rows).toHaveLength(0);
   });
 
   it("ignores a ledger write failure", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ text: "价格回落了，跟你说一声。" }]));
     const stub = butler("ledger-flow-failure");
     await seedBot(stub, "b1", "盯盘");
     vi.spyOn(LedgerStore.prototype, "add").mockImplementation(() => {
@@ -253,29 +258,36 @@ describe("butler ledger flow", () => {
     const delivered = await stub.notifyFromBot("b1", "价格回落了");
 
     expect(delivered).toBe(true);
-    expect(channel.sent.at(-1)?.text).toBe(
-      botNoticeText("zh", "盯盘", "价格回落了"),
-    );
+    expect(channel.sent.at(-1)?.text).toBe("价格回落了，跟你说一声。");
   });
 
-  it("writes a bot notice line without repeating the bot prefix", async () => {
+  it("writes what the butler said as the ledger line", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ text: "价格回落了，跟你说一声。" }]));
     const stub = butler("ledger-flow-notice");
     await seedBot(stub, "b1", "盯盘");
 
-    // `botNotice` texts already carry the bot name.
-    await stub.botNotice("b1", botNoticeText("zh", "盯盘", "价格回落了"));
+    await stub.botNotice("b1", "价格回落了");
 
     const unread = await pending(stub);
     expect(unread.rows).toHaveLength(1);
-    expect(unread.rows[0]?.line).toBe("【盯盘】价格回落了");
+    expect(unread.rows[0]).toMatchObject({
+      kind: "butler.said",
+      refId: "b1",
+      line: "我对主人说了：价格回落了，跟你说一声。",
+    });
   });
 
   it("does not repeat the ledger across two close messages", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
-    setModelOverride(scriptedModel([{ text: "收到" }]));
+    setModelOverride(
+      scriptedModel([
+        { text: "价格回落了，跟你说一声。" },
+        { text: "收到" },
+      ]),
+    );
     const stub = butler("ledger-flow-close");
     await seedBot(stub, "b1", "盯盘");
     await stub.notifyFromBot("b1", "价格回落了");
@@ -320,7 +332,7 @@ describe("butler ledger flow", () => {
     release();
     await Promise.all([first, second]);
 
-    expect(inputs[0]).toContain("【盯盘】发给主人：价格回落了");
+    expect(inputs[0]).toContain("我对主人说了：价格回落了，跟你说一声。");
     expect(inputs[1]).toBe("还有吗");
   });
 });

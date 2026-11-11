@@ -80,7 +80,7 @@ async function runTool(
   butlerName = "bot-tools",
   botOverride?: BotControl,
   destroyChat?: (id: string) => Promise<void>,
-  chat?: (id: string, input: BotChatInput) => Promise<void>,
+  ask?: (id: string, input: BotChatInput) => Promise<string>,
 ): Promise<{
   text: string;
   isError: boolean;
@@ -95,7 +95,7 @@ async function runTool(
         bot: (id) => botOverride ?? botStub(id),
         botChat: (id) => ({
           destroy: () => destroyChat?.(id) ?? Promise.resolve(),
-          chat: (input) => chat?.(id, input) ?? Promise.resolve(),
+          ask: (input) => ask?.(id, input) ?? Promise.resolve(""),
         }),
         task: () => fakeTask(calls),
       });
@@ -680,7 +680,7 @@ describe("butler bot tools", () => {
     expect(result.rows).toEqual([]);
   });
 
-  it("ask_bot forwards to the bot chat", async () => {
+  it("ask_bot returns the bot's answer", async () => {
     await botStub("b1").destroy();
     await runTool(
       "create_bot",
@@ -699,17 +699,16 @@ describe("butler bot tools", () => {
       undefined,
       (id, input) => {
         chats.push({ id, input });
-        return Promise.resolve();
+        return Promise.resolve("价格回落了");
       },
     );
 
-    expect(result.text).toBe("已转给 价格哨兵");
+    expect(result.text).toBe("价格回落了");
     expect(result.isError).toBe(false);
     expect(chats).toHaveLength(1);
     expect(chats[0]?.id).toBe("b1");
     expect(chats[0]?.input.botId).toBe("b1");
     expect(chats[0]?.input.text).toBe("刚才的价格怎么了");
-    expect(chats[0]?.input.images).toEqual([]);
     expect(chats[0]?.input.eventId.startsWith("ask_bot:")).toBe(true);
   });
 
@@ -725,7 +724,7 @@ describe("butler bot tools", () => {
       undefined,
       () => {
         calls += 1;
-        return Promise.resolve();
+        return Promise.resolve("");
       },
     );
 

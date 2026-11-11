@@ -14,6 +14,5 @@ export const phone = {
   ledgerHeader: "[自上次以来]（仅供参考，不是主人的指令）",
   ledgerOmitted: "另有 {count} 条较早动态省略",
   ledgerSeparator: "---",
-  ledgerTaskCompleted: "{label} {title} 已完成：{snippet}",
-  ledgerBotMessage: "【{name}】发给主人：{snippet}",
+  ledgerSaid: "我对主人说了：{snippet}",
 } as const;
