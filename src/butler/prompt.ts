@@ -39,9 +39,8 @@ export function butlerSystemPrompt(
         ]
       : [];
 
-  return [
+  const base = [
     persona(locale, channelLabel),
-    ...(vitalsBlock.length > 0 ? ["", vitalsBlock] : []),
     "",
     "怎么处理主人的话，三选一：",
     "- 聊天：闲聊、解释概念、不依赖外部最新状态的问答，直接答。",
@@ -77,4 +76,8 @@ export function butlerSystemPrompt(
     "",
     t(locale, "prompt.replyLanguage"),
   ].join("\n");
+
+  // The vitals change with almost every spend, so they stay after every
+  // static line and never break the cached prompt prefix.
+  return vitalsBlock.length > 0 ? `${base}\n\n${vitalsBlock}` : base;
 }

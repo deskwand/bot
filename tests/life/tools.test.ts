@@ -52,10 +52,10 @@ describe("life tools", () => {
   it("credits the books and reports the new balance", async () => {
     const life = deps();
     const result = await run(createLifeTools(life), "life_credit", {
-      usd: 20,
+      usd: 7,
     });
 
-    expect(life.credit).toHaveBeenCalledWith(20, "");
+    expect(life.credit).toHaveBeenCalledWith(7, "");
     expect(text(result)).toContain("20.00");
   });
 
@@ -89,6 +89,46 @@ describe("life tools", () => {
 
     expect(life.calibrate).not.toHaveBeenCalled();
     expect(text(result)).toBe(t("zh", "life.tool.badAmount"));
+  });
+
+  it("reports a failing credit instead of rejecting", async () => {
+    const life = deps({
+      credit: vi.fn(async () => {
+        throw new Error("x");
+      }),
+    });
+    const result = await run(createLifeTools(life), "life_credit", {
+      usd: 20,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("x");
+  });
+
+  it("reports failing vitals instead of rejecting", async () => {
+    const life = deps({
+      vitals: vi.fn(async () => {
+        throw new Error("x");
+      }),
+    });
+    const result = await run(createLifeTools(life), "life_vitals");
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("x");
+  });
+
+  it("reports a failing calibration instead of rejecting", async () => {
+    const life = deps({
+      calibrate: vi.fn(async () => {
+        throw new Error("x");
+      }),
+    });
+    const result = await run(createLifeTools(life), "life_calibrate", {
+      balance_usd: 20,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("x");
   });
 
   it("reports vitals with both roles' effective models", async () => {

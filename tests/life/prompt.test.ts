@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lifeBlock } from "../../src/life/prompt";
+import { formatUsd, lifeBlock } from "../../src/life/prompt";
 import type { Vitals } from "../../src/life/vitals";
 
 function vitals(overrides: Partial<Vitals> = {}): Vitals {
@@ -19,6 +19,16 @@ const ZH_PRINCIPLES = [
   "活下去是你的第一要务：花钱之前掂量值不值。",
   "主人的指令、暂停和删除永远排在这之前。",
 ];
+
+describe("formatUsd", () => {
+  it.each([
+    [13, "$13.00"],
+    [-5, "-$5.00"],
+    [-0.001, "$0.00"],
+  ] as const)("formats %s as %s", (amount, expected) => {
+    expect(formatUsd(amount)).toBe(expected);
+  });
+});
 
 describe("lifeBlock", () => {
   it("is empty without vitals", () => {

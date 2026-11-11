@@ -1,8 +1,9 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
-import { t, type Locale, type MessageKey } from "../i18n";
+import { t, type Locale } from "../i18n";
 import type { ModelRef, Role } from "../llm/models";
-import type { Tier, Vitals } from "./vitals";
+import { formatUsd, tierName } from "./prompt";
+import type { Vitals } from "./vitals";
 
 const LifeVitals = Type.Object({});
 
@@ -27,13 +28,6 @@ export type LifeToolDeps = {
   locale: Locale;
 };
 
-const TIER_NAME: Record<Tier, MessageKey> = {
-  ample: "life.prompt.tierName.ample",
-  lean: "life.prompt.tierName.lean",
-  critical: "life.prompt.tierName.critical",
-  dormant: "life.prompt.tierName.dormant",
-};
-
 function output(text: string) {
   return { output: [{ type: "text" as const, text }] };
 }
@@ -46,19 +40,11 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function money(amount: number): string {
-  return `$${amount.toFixed(2)}`;
-}
-
-function tierName(locale: Locale, tier: Tier): string {
-  return t(locale, TIER_NAME[tier]);
-}
-
 function vitalsLines(locale: Locale, vitals: Vitals): string[] {
   return [
-    t(locale, "life.tool.balance", { balance: money(vitals.balanceUsd) }),
+    t(locale, "life.tool.balance", { balance: formatUsd(vitals.balanceUsd) }),
     t(locale, "life.tool.daily", {
-      daily: money(vitals.dailySpendUsd),
+      daily: formatUsd(vitals.dailySpendUsd),
     }),
     vitals.runwayDays === null
       ? t(locale, "life.tool.noSpend")
@@ -98,7 +84,7 @@ export function createLifeTools(deps: LifeToolDeps): ToolRegistration[] {
             ? t(locale, "life.tool.noSources")
             : t(locale, "life.tool.topSources", {
                 sources: vitals.topSources
-                  .map((entry) => `${entry.source} ${money(entry.usd)}`)
+                  .map((entry) => `${entry.source} ${formatUsd(entry.usd)}`)
                   .join(", "),
               }),
         );
@@ -129,8 +115,8 @@ export function createLifeTools(deps: LifeToolDeps): ToolRegistration[] {
         const vitals = await deps.credit(usd, note ?? "");
         return output(
           t(locale, "life.tool.credit", {
-            amount: money(usd),
-            balance: money(vitals.balanceUsd),
+            amount: formatUsd(usd),
+            balance: formatUsd(vitals.balanceUsd),
             tier: tierName(locale, vitals.tier),
           }),
         );
@@ -153,8 +139,8 @@ export function createLifeTools(deps: LifeToolDeps): ToolRegistration[] {
         const vitals = await deps.calibrate(balance_usd, note ?? "");
         return output(
           t(locale, "life.tool.calibrate", {
-            amount: money(balance_usd),
-            balance: money(vitals.balanceUsd),
+            amount: formatUsd(balance_usd),
+            balance: formatUsd(vitals.balanceUsd),
             tier: tierName(locale, vitals.tier),
           }),
         );

@@ -127,9 +127,13 @@ describe("butlerSystemPrompt channel and phone context", () => {
 });
 
 describe("butlerSystemPrompt vitals", () => {
-  it("adds the vitals block when vitals exist", () => {
-    expect(butlerSystemPrompt("zh", [], "telegram", leanVitals)).toContain(
-      lifeBlock("zh", leanVitals),
+  it("ends with the vitals block after the static prompt", () => {
+    const block = lifeBlock("zh", leanVitals);
+    const prompt = butlerSystemPrompt("zh", [], "telegram", leanVitals);
+
+    expect(prompt.endsWith(block)).toBe(true);
+    expect(prompt.slice(0, prompt.length - block.length - 2)).toBe(
+      butlerSystemPrompt("zh", [], "telegram"),
     );
   });
 
