@@ -18,3 +18,8 @@ DESKWAND_CONFIG={"schemaVersion":1,"owner":{"telegramUserIds":[100000001]},"mode
 
 # 仅本地开发使用；生产选择由发布配置管理，不写进 wrangler.jsonc。
 ACTIVE_CHANNEL=telegram
+
+# 可选：交易所只读账号（桌面端「交易所」页会自动写入；命令行部署时手填）。
+# 每账号一个 secret，值是 JSON；OKX 需要 passphrase，Binance 不需要。
+# EXCHANGE_SECRET_OKX_MAIN={"key":"...","secret":"...","passphrase":"..."}
+# EXCHANGE_SECRET_BN_MAIN={"key":"...","secret":"..."}

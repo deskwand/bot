@@ -1,4 +1,5 @@
 import { createAdminGateway } from "./admin/admin-gateway";
+import { probeExchange } from "./exchange/probe";
 import { ChannelDO } from "./channels/channel-do";
 import { createGateway } from "./gateway";
 import { ownerLocale } from "./i18n";
@@ -33,6 +34,7 @@ function admin(env: Env) {
     artifacts: env.ARTIFACTS,
     mcpAuth: () => mcpAuth(env),
     locale: () => ownerLocale(env),
+    probeExchange: (account) => probeExchange(env, account),
   });
 }
 

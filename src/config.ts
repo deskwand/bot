@@ -33,6 +33,8 @@ export type AppConfig = {
   search?: { provider?: SearchProviderId };
   /** Raw mail section; every field is validated in src/mail/accounts.ts. */
   email?: { accounts?: unknown[] };
+  /** Raw exchange section; every field is validated in src/exchange/accounts.ts. */
+  exchange?: { accounts?: unknown[] };
 };
 
 export function configLocale(cfg: AppConfig): Locale {

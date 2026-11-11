@@ -4,6 +4,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createInlineCodemodeSandbox } from "@earendil-works/pi-codemode/cloudflare";
 import { httpRequestTool, safeRequestUrl } from "../tools/http-request";
 import { getArtifactTool, safeArtifactRef } from "../tools/get-artifact";
+import { exchangeExtension } from "../exchange/install";
 import { mailExtension } from "../mail/install";
 import { nowTool } from "../tools/now";
 import { Agent, type Schedule } from "agents";
@@ -171,6 +172,8 @@ export class TaskDO extends Agent<Env> {
 
   /** Resolves once the read-only mail tools were considered on this instance. */
   private mailTools: Promise<void> | undefined;
+  /** Resolves once the read-only exchange tools were considered on this instance. */
+  private exchangeTools: Promise<void> | undefined;
 
   private readonly db: SqlStorage;
 
@@ -463,6 +466,7 @@ export class TaskDO extends Agent<Env> {
       await this.ensureMcpTools();
       await this.ensureBotTools();
       await this.ensureMailTools();
+      await this.ensureExchangeTools();
     }
 
     // `wait` reads storage, so this survives restarts: re-attach to a run
@@ -636,6 +640,7 @@ export class TaskDO extends Agent<Env> {
     await this.ensureMcpTools();
     await this.ensureBotTools();
     await this.ensureMailTools();
+    await this.ensureExchangeTools();
 
     await this.harness.submit(effective.instructions, { operationId });
 
@@ -760,6 +765,7 @@ export class TaskDO extends Agent<Env> {
     await this.ensureMcpTools();
     await this.ensureBotTools();
     await this.ensureMailTools();
+    await this.ensureExchangeTools();
     // Revives the tasks pi's crash-loop guard parked. False means nothing was
     // parked, followed by an ordinary run failure: re-attach to the run below.
     await this.harness.session().retry();
@@ -808,6 +814,23 @@ export class TaskDO extends Agent<Env> {
   private ensureMailTools(): Promise<void> {
     this.mailTools ??= this.installMailTools();
     return this.mailTools;
+  }
+
+  /**
+   * Install the read-only exchange tools once per object instance. Unconfigured
+   * deployments get no tools and no prompt section.
+   */
+  private ensureExchangeTools(): Promise<void> {
+    this.exchangeTools ??= this.installExchangeTools();
+    return this.exchangeTools;
+  }
+
+  private async installExchangeTools(): Promise<void> {
+    const ext = exchangeExtension(this.env, {
+      locale: () => ownerLocale(this.env),
+      progress: (body) => this.emitProgress(body),
+    });
+    if (ext !== null) this.registry.install(ext);
   }
 
   private async installMailTools(): Promise<void> {

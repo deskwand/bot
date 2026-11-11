@@ -82,6 +82,29 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 }
 ```
 
+## 交易所
+
+配好只读 API key 后，任务可以查 OKX 与 Binance 的资产：现货、资金账户、杠杆、合约仓位（含未实现盈亏与强平价）、简单理财，统一折成 USDT 给合计。
+
+- 只读：只发签名 `GET`，代码里没有下单、撤单、划转、提现路径。
+- 一个账号配一个 secret `EXCHANGE_SECRET_<ID>`，值是 `{"key":"…","secret":"…","passphrase":"…"}`；passphrase 只有 OKX 需要。
+- 多平台可以同时配。一次查询默认覆盖全部账号；某个账号失败只让它自己跳过，不影响其他账号。
+- 结果缓存 60 秒，避免连环查询把交易所的限频打爆。
+- Binance 对来自受限地区（例如美国）的出口 IP 返回 451。桌面端「测试连接」会直接指出这一点；解决办法是给该账号配一个非美区的 `baseUrl` 代理。
+- OKX 按区域拆站（`www` / `us` / `eea` / `tr`），key 只在创建它的站点有效，`baseUrl` 要跟站点一致，否则报 `50119`。
+- 已知限制：Binance 币本位合约只算钱包余额、不列仓位（`positionAmt` 的单位是张，换算需要合约乘数）。
+
+账号写在 `DESKWAND_CONFIG` 的 `exchange.accounts`，或在桌面端「交易所」页填写。字段级校验在 `src/exchange/accounts.ts`，坏账号只丢自己，不影响 Worker 启动。
+
+```jsonc
+"exchange": {
+  "accounts": [
+    { "id": "okx-main", "venue": "okx", "label": "OKX 主号", "baseUrl": "https://www.okx.com" },
+    { "id": "bn-main", "venue": "binance" }
+  ]
+}
+```
+
 ## 自主机器人
 
 对管家说「建一个机器人，盯着 X，有变化告诉我」即可创建。机器人长期存在，有自己的使命与独立记忆，自己决定下次什么时候醒；每次醒来仍由管家派出一个任务执行。管家也能列出、查看、暂停、恢复、改名、删除机器人，或让它立即唤醒一次、追加一句指令。

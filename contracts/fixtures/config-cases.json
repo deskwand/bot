@@ -931,5 +931,85 @@
       }
     },
     "valid": true
+  },
+  {
+    "name": "exchange accounts",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": [],
+      "exchange": {
+        "accounts": [
+          {
+            "id": "okx-main",
+            "venue": "okx"
+          },
+          {
+            "id": "bn-main",
+            "venue": "binance",
+            "baseUrl": "https://api.binance.com"
+          }
+        ]
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "exchange is an array",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": [],
+      "exchange": []
+    },
+    "valid": false
+  },
+  {
+    "name": "exchange accounts is a string",
+    "input": {
+      "schemaVersion": 1,
+      "owner": {
+        "telegramUserIds": []
+      },
+      "models": {
+        "butler": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        },
+        "task": {
+          "provider": "opencode-go",
+          "id": "deepseek-v4.1-flash"
+        }
+      },
+      "mcpServers": [],
+      "exchange": {
+        "accounts": "okx-main"
+      }
+    },
+    "valid": false
   }
 ]

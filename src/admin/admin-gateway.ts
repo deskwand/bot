@@ -13,6 +13,10 @@ import type { ChannelDO } from "../channels/channel-do";
 import type { Locale } from "../i18n";
 import type { McpAuthDO } from "../mcp/mcp-auth-do";
 import type { TaskDO } from "../task/task-do";
+import {
+  createExchangeRoutes,
+  type ExchangeProbeResult,
+} from "./exchange-routes";
 import { createMcpAdminRoutes } from "./mcp-routes";
 import { createR2Routes } from "./r2-routes";
 import type {
@@ -32,6 +36,8 @@ export type AdminDeps = {
   artifacts: R2Bucket;
   mcpAuth(): DurableObjectStub<McpAuthDO>;
   locale?: () => Locale;
+  /** Present only when the deployment wires the exchange probe. */
+  probeExchange?(account: string): Promise<ExchangeProbeResult>;
 };
 
 /** The DO RPC surface used by the backup and restore routes. */
@@ -204,6 +210,8 @@ export function createAdminGateway(deps: AdminDeps): {
 } {
   const r2 = createR2Routes(deps.artifacts);
   const mcp = createMcpAdminRoutes(deps.mcpAuth, deps.locale);
+  const probe = deps.probeExchange;
+  const exchange = probe === undefined ? null : createExchangeRoutes(probe);
 
   async function handle(req: Request, url: URL): Promise<Response> {
     if (req.method === "POST" && url.pathname === ACQUIRE_PATH) {
@@ -216,6 +224,11 @@ export function createAdminGateway(deps: AdminDeps): {
     // MCP management works during backup/restore and needs no lease.
     if (url.pathname.startsWith("/admin/mcp/")) {
       return mcp.fetch(req);
+    }
+
+    // Exchange probing is a read-only health check and needs no lease.
+    if (url.pathname.startsWith("/admin/exchange/") && exchange !== null) {
+      return exchange.fetch(req);
     }
 
     if (url.pathname.startsWith(R2_PREFIX)) {
