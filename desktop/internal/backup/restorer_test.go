@@ -969,3 +969,101 @@ func TestRestoreOrderDoesNotDependOnManifestOrder(t *testing.T) {
 		t.Fatalf("restore order = %v, want %v", got, want)
 	}
 }
+
+func TestRestoreClearsLifeMissingFromBackup(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	// Export as a Worker that predates the ledger: the archive has no life.
+	worker.noLife = true
+	path := makeRestoreBackup(t, worker, "1.2.3")
+	// The deployment is updated before the restore runs.
+	worker.noLife = false
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
+		t.Fatal(err)
+	}
+
+	life := DORef{DO: "life"}
+	var lifeCalls []fakeRequest
+	for _, call := range restoreCalls(worker) {
+		if call.DO == "life" {
+			lifeCalls = append(lifeCalls, call)
+		}
+	}
+	wantPaths := []string{restoreResetPath, restoreBeginPath, restoreResetPath}
+	if len(lifeCalls) != len(wantPaths) {
+		t.Fatalf("life calls = %v", lifeCalls)
+	}
+	for i, want := range wantPaths {
+		if lifeCalls[i].Path != want {
+			t.Fatalf("life call %d = %s, want %s", i, lifeCalls[i].Path, want)
+		}
+	}
+	if got := worker.resetsOf(life); got != 2 {
+		t.Fatalf("life resets = %d, want 2", got)
+	}
+	if rows := worker.rowsOf(life); len(rows) != 0 {
+		t.Fatalf("life rows = %+v, want none", rows)
+	}
+}
+
+func TestRestoreKeepsLifeInTheBackup(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	life := DORef{DO: "life"}
+	worker.setDO(life, DBSchema{
+		Tables: []TableSchema{{Name: "spend", Create: `CREATE TABLE spend (call_id TEXT PRIMARY KEY, usd REAL)`}},
+	}, map[string][]json.RawMessage{
+		"spend": {json.RawMessage(`{"__rowid":1,"call_id":"c1","usd":{"$real":"0.5"}}`)},
+	})
+	original := worker.rowsOf(life)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+
+	worker.setDO(life, worker.schemaOf(life), map[string][]json.RawMessage{
+		"spend": {json.RawMessage(`{"__rowid":1,"call_id":"other","usd":{"$real":"9"}}`)},
+	})
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
+		t.Fatal(err)
+	}
+
+	// One reset before the ledger and one after: no separate clear.
+	if got := worker.resetsOf(life); got != 2 {
+		t.Fatalf("life resets = %d, want 2", got)
+	}
+	assertRowsEqual(t, worker.rowsOf(life)["spend"], original["spend"])
+}
+
+func TestRestoreToleratesAWorkerWithoutLife(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	worker.noLife = true
+	original := captureRows(t, worker, restoreTestRefs)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+
+	// Replace a table so the restore has something to put back.
+	worker.setDO(DORef{DO: "butler"}, worker.schemaOf(DORef{DO: "butler"}), map[string][]json.RawMessage{
+		"memories": {json.RawMessage(`{"__rowid":1,"id":"other","text":"多余"}`)},
+		"tasks":    {json.RawMessage(`{"__rowid":1,"id":"t1"}`)},
+	})
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ref := range restoreTestRefs {
+		assertDORows(t, worker, ref, original[doKey(ref)])
+	}
+	var lifeCalls int
+	for _, call := range restoreCalls(worker) {
+		if call.DO == "life" {
+			lifeCalls++
+		}
+	}
+	if lifeCalls != 1 {
+		t.Fatalf("life calls = %d, want the single tolerated clear reset", lifeCalls)
+	}
+}

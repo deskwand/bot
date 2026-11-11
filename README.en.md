@@ -86,7 +86,7 @@ When it runs out, a free account's Workers AI pauses — nothing is charged auto
 
 She keeps her own books and never queries a provider's balance. Every model call is priced from the model's rates and written to a ledger; top-ups and calibrations the owner reports are written too. Nothing changes until the owner first says *"I put $X on your account"*: until then the models, wake intervals and prompts are exactly as before.
 
-Balance = credits − spend. Daily spend is the last seven days divided by the number of days (at least one); runway = balance ÷ daily spend. Everything is in USD, and prices are per million tokens.
+Balance = credits − spend. Daily spend is the last seven days divided by the number of days (at least one); runway = balance ÷ daily spend. Everything is in USD, and prices are per million tokens. Workers AI calls still record their token counts but at $0, so they never reduce the balance — Cloudflare owns that free allowance.
 
 ### The four tiers
 
@@ -96,10 +96,12 @@ Tiers depend only on the balance and the runway. The thresholds are constants in
 |---|---|---|
 | ample | runway ≥ 14 days | everything carries on as usual |
 | lean | 3 ≤ runway < 14 days | bot wakes stretch to twice their interval; tasks and bots use the frugal model |
-| critical | runway < 3 days and balance > 0 | bots stop waking on their own; the butler uses the frugal model too |
-| dormant | balance ≤ 0 | everything runs on the default free Workers AI model; bots stop waking on their own |
+| critical | runway < 3 days and balance > 0 | bots stop waking on their own (they recheck the tier hourly); the butler uses the frugal model too |
+| dormant | balance ≤ 0 | everything runs on the default free Workers AI model; bots stop waking on their own (same hourly recheck) |
 
 Dormant is checked first, then the other three by runway. A failed read of the ledger counts as ample, and any ledger failure is logged — it never fails a model call or stops the butler replying. Manual wakes, pauses and deletions ignore the tier.
+
+Holding a bot does not change its `status`: it rechecks the tier every hour and runs again on the first check after the tier recovers.
 
 A tier change is announced once and never repeated within the same tier: after spend only a worse tier speaks; after a credit or calibration any change does.
 
@@ -149,7 +151,7 @@ A custom provider's model must carry its own price; a model without `cost` is re
 
 ### Backups
 
-Exports and restores include the ledger (spend and credits) and the last notified tier. Restoring a backup from before the ledger leaves it empty: the deployment is ample and the metabolism has not started.
+Exports and restores include the ledger (spend and credits) and the last notified tier. Restoring a backup from before the ledger empties it: the deployment is ample and the metabolism has not started. A worker that has not been updated yet is exported without a ledger, and a restore leaves that worker's (nonexistent) ledger alone.
 
 ### Known limitations
 

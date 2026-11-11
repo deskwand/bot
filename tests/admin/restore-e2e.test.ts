@@ -147,6 +147,19 @@ async function resetDo(ref: { do: string; id: string }): Promise<void> {
   expect(response.status).toBe(204);
 }
 
+// The desktop's clear path for an object that a backup does not contain:
+// reset, begin with an empty schema, reset (clearDurableObject in
+// desktop/internal/backup/restorer.go).
+async function clearDo(ref: { do: string; id: string }): Promise<void> {
+  await resetDo(ref);
+  const response = await call(`/admin/restore/begin?${target(ref)}`, {
+    method: "POST",
+    body: { schema: { tables: [], indexes: [] } },
+  });
+  expect(response.status).toBe(204);
+  await resetDo(ref);
+}
+
 async function restoreDo(
   ref: { do: string; id: string },
   dumped: DumpedDo,
@@ -527,11 +540,10 @@ describe("life ledger backup and restore", () => {
       await life.recordSpend(spend(3, now));
       expect((await life.vitals()).metabolismStarted).toBe(true);
 
-      // An old backup has no life object at all; restoring its (empty) shape
-      // is what leaves the ledger with no tables.
-      const legacy = { schema: { tables: [], indexes: [] }, tables: [] };
+      // An old backup has no life object at all; the desktop clears it with
+      // reset -> begin(empty schema) -> reset.
       await acquire("restore");
-      await restoreDo({ do: "life", id: "" }, legacy);
+      await clearDo({ do: "life", id: "" });
       await release();
 
       const restored = env.LIFE.get(env.LIFE.idFromName("global"));

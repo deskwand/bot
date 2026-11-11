@@ -77,6 +77,10 @@ type fakeWorker struct {
 	taskIDs   []string
 	botIDs    []string
 
+	// noLife makes the fake behave like a Worker deployed before the ledger:
+	// every do=life request answers 400 BACKUP_INVALID as an unknown kind.
+	noLife bool
+
 	dos     map[string]*fakeDO
 	objects map[string]*fakeObject
 
@@ -221,8 +225,11 @@ func (f *fakeWorker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch record.Path {
 	case schemaPath, pagePath, restoreBeginPath, restorePagePath, restoreCommitPath, restoreResetPath:
-		if !validDOKind(record.DO) {
-			f.writeJSON(w, http.StatusBadRequest, map[string]string{"code": "BACKUP_INVALID"})
+		if !validDOKind(record.DO) || (record.DO == "life" && f.noLife) {
+			f.writeJSON(w, http.StatusBadRequest, map[string]string{
+				"code":    "BACKUP_INVALID",
+				"message": "unknown do kind: " + record.DO,
+			})
 			return
 		}
 	}

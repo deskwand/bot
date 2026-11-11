@@ -569,3 +569,54 @@ func TestObjectEntryLimitKeepsSixDigits(t *testing.T) {
 		t.Fatal("one million artifacts were accepted")
 	}
 }
+
+func TestExportSkipsLifeBeforeTheWorkerIsUpdated(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.versionID = "version-1"
+	worker.botIDs = []string{"b1"}
+	worker.noLife = true
+	worker.setDO(DORef{DO: "butler"}, DBSchema{}, nil)
+	worker.setDO(DORef{DO: "channel"}, DBSchema{}, nil)
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	path := filepath.Join(t.TempDir(), "backup.zip")
+
+	manifest, err := Export(context.Background(), deps, backupTestTarget, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range manifest.DurableObjects {
+		if object.DO == "life" {
+			t.Fatal("a worker without a ledger exported a life object")
+		}
+	}
+
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for _, object := range reader.Manifest().DurableObjects {
+		if object.DO == "life" {
+			t.Fatal("the archive contains a life object")
+		}
+	}
+}
+
+func TestExportFailsOnLifeServerError(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.versionID = "version-1"
+	worker.setDO(DORef{DO: "butler"}, DBSchema{}, nil)
+	worker.setDO(DORef{DO: "channel"}, DBSchema{}, nil)
+	worker.failRoute("GET", schemaPath, "life", "", 0, 500)
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	path := filepath.Join(t.TempDir(), "backup.zip")
+
+	_, err := Export(context.Background(), deps, backupTestTarget, path)
+	if code := adminErrorCode(t, err); code != CodeBackupInvalid {
+		t.Fatalf("code = %q", code)
+	}
+}

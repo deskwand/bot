@@ -392,6 +392,11 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 	for _, ref := range exportRefs(info.TaskIDs, info.BotIDs) {
 		object, err := exportDurableObject(ctx, client, writer, ref, &progress, deps)
 		if err != nil {
+			// A Worker that predates the ledger rejects do=life. Back it up
+			// without a ledger instead of failing the whole export.
+			if ref.DO == "life" && unknownDOKind(err, ref) {
+				continue
+			}
 			return Manifest{}, err
 		}
 		manifest.DurableObjects = append(manifest.DurableObjects, object)
