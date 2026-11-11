@@ -286,8 +286,8 @@ describe("TaskDO lifecycle", () => {
       // deepseek-v4-pro offers off, high, max: its default is high, not low.
       expect(await storedLevel(stub)).toBe("high");
     } finally {
-      // The tier books are shared with the rest of the run; make them ample.
-      await life.get(life.idFromName("global")).recordCredit(1_000_000, "");
+      // The tier books are shared with the rest of the run; empty them again.
+      await resetLife();
     }
   });
 

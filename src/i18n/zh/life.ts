@@ -32,6 +32,7 @@ export const life = {
   },
   tool: {
     balance: "额度：{balance}",
+    daily: "日均开销：{daily}",
     runway: "还能活 {days} 天",
     noSpend: "目前没有开销",
     tier: "档位：{tier}",

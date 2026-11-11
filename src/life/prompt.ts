@@ -42,9 +42,6 @@ export function tierName(locale: Locale, tier: Tier): string {
 export function lifeBlock(locale: Locale, vitals: Vitals | null): string {
   if (vitals === null || !vitals.metabolismStarted) return "";
 
-  const wholeDays = vitals.runwayDays === null
-    ? null
-    : Math.floor(vitals.runwayDays);
   const lines = [
     t(locale, "life.prompt.tierLabel", {
       tier: tierName(locale, vitals.tier),
@@ -55,9 +52,11 @@ export function lifeBlock(locale: Locale, vitals: Vitals | null): string {
     }),
     vitals.runwayDays === null
       ? t(locale, "life.prompt.noSpend")
-      : wholeDays !== null && wholeDays < 1
+      : Math.floor(vitals.runwayDays) < 1
         ? t(locale, "life.prompt.runwayBelowDay")
-        : t(locale, "life.prompt.runway", { days: wholeDays }),
+        : t(locale, "life.prompt.runway", {
+            days: Math.floor(vitals.runwayDays),
+          }),
   ];
   if (vitals.unpriced) lines.push(t(locale, "life.prompt.unpriced"));
   lines.push(t(locale, "life.prompt.principleAlive"));

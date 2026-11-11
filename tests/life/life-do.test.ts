@@ -302,6 +302,19 @@ describe("LifeDO", () => {
     ]);
   });
 
+  it("rounds a floating speck of balance to zero", async () => {
+    const stub = life("life-balanced-rounding");
+    await stub.recordCredit(0.3, "");
+    await stub.recordSpend(entry({ usd: 0.1 }));
+    await stub.recordSpend(entry({ usd: 0.1 }));
+    await stub.recordSpend(entry({ usd: 0.1 }));
+
+    expect(await stub.vitals()).toMatchObject({
+      balanceUsd: 0,
+      tier: "dormant",
+    });
+  });
+
   it("calibrates the balance with an adjustment row", async () => {
     const stub = life("life-calibrate");
     await stub.recordCredit(20, "");
@@ -392,6 +405,27 @@ describe("LifeDO tier notices", () => {
 
     await stub.recordSpend(entry({ usd: 4 }));
     expect(notices.map((notice) => notice.tier)).toEqual(["lean", "critical"]);
+  });
+
+  it("records the spend even when the notice bookkeeping throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stub = life("life-notice-bookkeeping-failure");
+    await stub.recordCredit(20, "");
+    await runInDurableObject(stub, (_instance, state) => {
+      (
+        state.storage.kv as unknown as { get: () => Promise<never> }
+      ).get = async () => {
+        throw new Error("bookkeeping failed");
+      };
+    });
+
+    now = START + Math.round(0.5 * DAY_MS);
+    await expect(
+      stub.recordSpend(entry({ usd: 2 })),
+    ).resolves.toBeUndefined();
+
+    expect((await stub.vitals()).tier).toBe("lean");
+    warn.mockRestore();
   });
 
   it("records the spend even when the notice throws", async () => {

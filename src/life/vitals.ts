@@ -36,7 +36,12 @@ function elapsedDays(now: number, firstSpendAt: number | null): number {
 }
 
 export function computeVitals(input: VitalsInput): Vitals {
-  const balanceUsd = input.creditTotalUsd - input.spendTotalUsd;
+  // A calibration to zero can leave a 1e-17 speck; round it before deciding
+  // whether the balance is gone.
+  const roundedBalance =
+    Math.round((input.creditTotalUsd - input.spendTotalUsd) * 1_000_000) /
+    1_000_000;
+  const balanceUsd = roundedBalance === 0 ? 0 : roundedBalance;
   const days = elapsedDays(input.now, input.firstSpendAt);
   const dailySpendUsd = input.spendWindowUsd / days;
   const runwayDays = dailySpendUsd > 0 ? balanceUsd / dailySpendUsd : null;

@@ -34,6 +34,7 @@ import { setClockOverride } from "../../src/butler/notifier";
 import type { SpendEntry } from "../../src/life/books";
 import type { Tier } from "../../src/life/vitals";
 import { QUOTA_EXHAUSTED_TEXT } from "../../src/llm/model-errors";
+import { resetLife } from "../helpers/life";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -78,17 +79,6 @@ async function makeLifeAmple(): Promise<void> {
   await env.LIFE.get(env.LIFE.idFromName("global")).recordCredit(
     1_000_000,
     "",
-  );
-}
-
-/** Empties the shared ledger so later tests start from an ample tier. */
-async function resetLife(): Promise<void> {
-  await runInDurableObject(
-    env.LIFE.get(env.LIFE.idFromName("global")),
-    (_instance, state) => {
-      state.storage.sql.exec("DELETE FROM spend");
-      state.storage.sql.exec("DELETE FROM credit");
-    },
   );
 }
 

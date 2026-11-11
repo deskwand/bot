@@ -33,6 +33,7 @@ import type { AdmittedMessage, OutboundMessage, RouteSnapshot } from "../../src/
 import { t } from "../../src/i18n";
 import { fakeChannel } from "../helpers/fake-channel";
 import { seedOwnerAddress } from "../helpers/channel-ref";
+import { resetLife } from "../helpers/life";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
@@ -146,17 +147,6 @@ function message(evt: {
     eventId: evt.eventId,
     routeKey: route.routeKey,
   };
-}
-
-/** Empties the shared ledger so a credit test leaves no trace. */
-async function resetLife(): Promise<void> {
-  await runInDurableObject(
-    env.LIFE.get(env.LIFE.idFromName("global")),
-    (_instance, state) => {
-      state.storage.sql.exec("DELETE FROM spend");
-      state.storage.sql.exec("DELETE FROM credit");
-    },
-  );
 }
 
 /** 真实的 8×8 纯色 PNG。 */
@@ -382,15 +372,24 @@ describe("butler chat", () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
     setModelOverride(scriptedModel([{ text: "你好！" }]));
+    await resetLife();
 
-    await butler("chat-ledger").handleMessage(
-      message({ text: "你好", eventId: "tg:ledger" }),
-    );
+    try {
+      // Sources are only visible once the metabolism has started.
+      await lifeStub(env).recordCredit(20, "");
+      await butler("chat-ledger").handleMessage(
+        message({ text: "你好", eventId: "tg:ledger" }),
+      );
 
-    await vi.waitFor(async () => {
-      const vitals = await lifeStub(env).vitals();
-      expect(vitals.topSources.map((entry) => entry.source)).toContain("butler");
-    });
+      await vi.waitFor(async () => {
+        const vitals = await lifeStub(env).vitals();
+        expect(vitals.topSources.map((entry) => entry.source)).toContain(
+          "butler",
+        );
+      });
+    } finally {
+      await resetLife();
+    }
   });
 
   it("records a credit the owner reports to the books", async () => {

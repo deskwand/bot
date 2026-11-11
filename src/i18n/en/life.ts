@@ -37,6 +37,7 @@ export const life: Messages["life"] = {
   },
   tool: {
     balance: "Balance: {balance}",
+    daily: "Daily spend: {daily}",
     runway: "Runway: {days} days",
     noSpend: "No spend yet",
     tier: "Tier: {tier}",

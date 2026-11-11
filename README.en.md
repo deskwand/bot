@@ -84,9 +84,9 @@ When it runs out, a free account's Workers AI pauses — nothing is charged auto
 
 ## Life and metabolism
 
-She keeps her own books and never queries a provider's balance. Every model call is priced from the model's rates and written to a ledger; top-ups and calibrations the owner reports are written too. Nothing changes until the owner first says *"I put $X on your account"*: until then the models, wake intervals and prompts are exactly as before.
+She keeps her own books and never queries a provider's balance. Every model call is priced from the model's rates and written to a ledger; top-ups and calibrations the owner reports are written too. Nothing changes until the owner first says *"I put $X on your account"*: until then the models, wake intervals and prompts are exactly as before. Spend recorded before the first credit stays in the ledger, still feeds daily spend and the first-spend time, but is never charged against the balance.
 
-Balance = credits − spend. Daily spend is the last seven days divided by the number of days (at least one); runway = balance ÷ daily spend. Everything is in USD, and prices are per million tokens. Workers AI calls still record their token counts but at $0, so they never reduce the balance — Cloudflare owns that free allowance.
+Balance = credits − spend recorded at or after the first credit. Daily spend is the last seven days divided by the number of days (at least one); runway = balance ÷ daily spend. Everything is in USD, and prices are per million tokens. Workers AI calls still record their token counts but at $0, so they never reduce the balance — Cloudflare owns that free allowance.
 
 ### The four tiers
 
@@ -107,7 +107,7 @@ A tier change is announced once and never repeated within the same tier: after s
 
 ### Talking to her
 
-- *"How much longer can you live?"* (`life_vitals`) — balance, daily spend, runway, tier, the model each role is actually using, and where the money went.
+- *"How much longer can you live?"* (`life_vitals`) — balance, daily spend, runway, tier, the model each role is actually using, and where the money went (sources are grouped: all task runs collapse to `task`, each bot stays separate).
 - *"I put $20 on your account"* (`life_credit`) — records the top-up. The first credit starts the metabolism.
 - *"Calibrate the balance to $12"* (`life_calibrate`) — writes an adjustment row so the books match the balance you report.
 
@@ -151,7 +151,9 @@ A custom provider's model must carry its own price; a model without `cost` is re
 
 ### Backups
 
-Exports and restores include the ledger (spend and credits) and the last notified tier. Restoring a backup from before the ledger empties it: the deployment is ample and the metabolism has not started. A worker that has not been updated yet is exported without a ledger, and a restore leaves that worker's (nonexistent) ledger alone.
+Exports and restores include the ledger (spend, credits, running totals and the hourly rollup) and the last notified tier. Restoring a backup from before the ledger empties it: the deployment is ample and the metabolism has not started. A worker that has not been updated yet is exported without a ledger, and a restore leaves that worker's (nonexistent) ledger alone.
+
+A backup made by the new worker carries a `life` object. An older desktop client does not understand it and rejects the whole backup; update the client first, then restore.
 
 ### Known limitations
 
