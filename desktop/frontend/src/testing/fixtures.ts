@@ -14,6 +14,8 @@ import type {
   ConfigDTO,
   ConfigEditDTO,
   CustomProviderDTO,
+  ExchangeAccountDTO,
+  ExchangeProbeDTO,
   EntryResultDTO,
   ImportInputDTO,
   ImportPreviewDTO,
@@ -57,6 +59,10 @@ type Scenario =
   | "model-key-missing"
   | "search-deepseek"
   | "search-tavily"
+  | "exchange-okx"
+  | "exchange-binance"
+  | "exchange-secret-missing"
+  | "exchange-refused"
   | "client-update-failed"
   | "catalog-unavailable"
   | "pending-operations"
@@ -110,6 +116,7 @@ interface MockState {
   publishedLocale: Locale;
   approvalMode: "autonomous" | "reviewed";
   searchProvider: string;
+  exchangeAccounts: ExchangeAccountDTO[];
   localeSaveFails: boolean;
   telemetry: boolean;
   connected: boolean;
@@ -324,6 +331,10 @@ function scenarioFromLocation(): Scenario {
     case "model-key-missing":
     case "search-deepseek":
     case "search-tavily":
+    case "exchange-okx":
+    case "exchange-binance":
+    case "exchange-secret-missing":
+    case "exchange-refused":
     case "client-update-failed":
     case "catalog-unavailable":
     case "pending-operations":
@@ -414,6 +425,10 @@ function initialState(): MockState {
     "model-key-missing",
     "search-deepseek",
     "search-tavily",
+    "exchange-okx",
+    "exchange-binance",
+    "exchange-secret-missing",
+    "exchange-refused",
     "client-update-failed",
     "pending-operations",
     "pending-other-account",
@@ -456,6 +471,14 @@ function initialState(): MockState {
     publishedLocale: "zh",
     approvalMode: "autonomous",
     searchProvider: scenario === "search-tavily" ? "tavily" : "exa",
+    exchangeAccounts:
+      scenario === "exchange-okx" ||
+      scenario === "exchange-refused" ||
+      scenario === "exchange-secret-missing"
+        ? [{ id: "okx-main", venue: "okx", label: "OKX 主号" }]
+        : scenario === "exchange-binance"
+          ? [{ id: "bn-main", venue: "binance", label: "Binance" }]
+          : [],
     localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
     connected: shellScenario,
@@ -479,6 +502,8 @@ function initialState(): MockState {
       MODEL_KEY_ANTHROPIC: false,
       TELEGRAM_BOT_TOKEN: scenario === "telegram-configured",
       MODEL_KEY_DEEPSEEK: scenario === "search-deepseek",
+      EXCHANGE_SECRET_OKX_MAIN:
+        scenario === "exchange-okx" || scenario === "exchange-refused",
       WECHAT_CREDENTIALS: scenario === "user-evidence",
     },
     mcpServers:
@@ -676,6 +701,7 @@ export function createMockClient(): ClientService {
       locale: state.publishedLocale,
       approvalMode: state.approvalMode,
       searchProvider: state.searchProvider,
+      exchangeAccounts: [...state.exchangeAccounts],
       secrets: Object.keys(state.secrets)
         .sort()
         .map((name) => ({ name, configured: state.secrets[name] === true })),
@@ -698,6 +724,7 @@ export function createMockClient(): ClientService {
     if (input.butlerModel) state.butlerModel = { ...input.butlerModel };
     if (input.taskModel) state.taskModel = { ...input.taskModel };
     if (input.customProviders) state.customProviders = [...input.customProviders];
+    if (input.exchangeAccounts) state.exchangeAccounts = [...input.exchangeAccounts];
     if (input.approvalMode === "autonomous" || input.approvalMode === "reviewed") {
       state.approvalMode = input.approvalMode;
     }
@@ -1163,6 +1190,20 @@ export function createMockClient(): ClientService {
       state.mcpServers = state.mcpServers.filter((server) => server.name !== name);
       delete state.mcpAuth[name];
       return published(`op-mcp-remove-${++sequence}`);
+    },
+
+    async testExchange(accountId: string): Promise<ExchangeProbeDTO> {
+      record("testExchange");
+      void accountId;
+      if (state.scenario === "exchange-refused") {
+        return {
+          ok: false,
+          currencies: 0,
+          code: "EXCHANGE_REGION_BLOCKED",
+          message: "restricted",
+        };
+      }
+      return { ok: true, venue: "okx", currencies: 2, total: 12.5 };
     },
 
     async probeMcp(name: string): Promise<McpProbeDTO> {

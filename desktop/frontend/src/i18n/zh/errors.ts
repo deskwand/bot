@@ -69,6 +69,8 @@ export const errors = {
   ADMIN_UNAVAILABLE: "云端服务尚不支持数据备份，请先在更新页升级。",
   MCP_ADMIN_UNAVAILABLE: "云端管理接口不可用。",
   MCP_FAILED: "云端管理请求失败。",
+  EXCHANGE_ADMIN_UNAVAILABLE: "这个部署的管理接口不可用，请确认部署已完成。",
+  EXCHANGE_FAILED: "交易所测试失败，请查看下方详情。",
   MCP_SERVER_NOT_FOUND: "服务不存在",
   MCP_SERVER_NOT_FOUND_OR_NO_AUTH: "服务不存在或不需要授权",
   MCP_DCR_UNSUPPORTED: "该服务不支持自动注册（DCR）",

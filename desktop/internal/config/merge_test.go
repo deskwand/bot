@@ -966,3 +966,54 @@ func TestSecretNameAllowedSearchKey(t *testing.T) {
 		t.Fatal("SEARCH_TAVILY was allowed")
 	}
 }
+
+func TestApplyPatchWritesExchange(t *testing.T) {
+	raw := json.RawMessage(`{"accounts":[{"id":"okx-main","venue":"okx"}]}`)
+	document := map[string]any{}
+	if err := applyPatch(document, domain.EditablePatch{Exchange: &raw}); err != nil {
+		t.Fatalf("applyPatch: %v", err)
+	}
+	section, ok := document["exchange"].(map[string]any)
+	if !ok {
+		t.Fatalf("exchange section = %#v", document["exchange"])
+	}
+	if _, ok := section["accounts"].([]any); !ok {
+		t.Fatalf("accounts = %#v", section["accounts"])
+	}
+}
+
+func TestApplyPatchRejectsNonObjectExchange(t *testing.T) {
+	raw := json.RawMessage(`[]`)
+	if err := applyPatch(map[string]any{}, domain.EditablePatch{Exchange: &raw}); err == nil {
+		t.Fatal("an array exchange patch must be rejected")
+	}
+}
+
+func TestMergePreservesUnknownExchangeFields(t *testing.T) {
+	base := baseSnapshot(t)
+	canonical, err := domain.CanonicalizeJSON([]byte(`{
+		"schemaVersion":1,
+		"owner":{"telegramUserIds":[]},
+		"models":{"butler":{"provider":"opencode-go","id":"deepseek-v4.1-flash"},"task":{"provider":"opencode-go","id":"kimi-k3"}},
+		"mcpServers":[],
+		"exchange":{"accounts":[],"futureField":{"keep":true}}
+	}`))
+	if err != nil {
+		t.Fatalf("canonicalize: %v", err)
+	}
+	base.ConfigJSON = canonical
+	raw := json.RawMessage(`{"accounts":[{"id":"bn-main","venue":"binance"}]}`)
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{Exchange: &raw},
+	})
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if !strings.Contains(string(plan.ConfigJSON), `"futureField"`) {
+		t.Fatalf("unknown field dropped: %s", plan.ConfigJSON)
+	}
+	if !strings.Contains(string(plan.ConfigJSON), `"bn-main"`) {
+		t.Fatalf("patch did not land: %s", plan.ConfigJSON)
+	}
+}

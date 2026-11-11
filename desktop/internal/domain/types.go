@@ -166,6 +166,9 @@ type EditablePatch struct {
 	Locale          *string          `json:"locale"`
 	ApprovalMode    *string          `json:"approvalMode"`
 	SearchProvider  *string          `json:"searchProvider"`
+	// Exchange carries the whole section. applyPatch merges it key by key, so
+	// unknown sibling keys survive; unknown per-account keys do not.
+	Exchange *json.RawMessage `json:"exchange"`
 }
 
 // ConfigReference rewrites one existing JSON string in DESKWAND_CONFIG to an

@@ -7,6 +7,7 @@ export const shell = {
     models: "模型",
     search: "搜索",
     mcp: "服务",
+    exchange: "交易所",
     entries: "消息入口",
     diagnostics: "诊断",
     backup: "数据备份",

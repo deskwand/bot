@@ -72,6 +72,8 @@ export const errors: Messages["errors"] = {
     "The cloud service does not support backup yet; upgrade on Updates first.",
   MCP_ADMIN_UNAVAILABLE: "The cloud admin API is unavailable.",
   MCP_FAILED: "Cloud admin request failed.",
+  EXCHANGE_ADMIN_UNAVAILABLE: "This deployment's admin API is unavailable; check that it finished deploying.",
+  EXCHANGE_FAILED: "The exchange test failed; see the details below.",
   MCP_SERVER_NOT_FOUND: "Service not found",
   MCP_SERVER_NOT_FOUND_OR_NO_AUTH:
     "The service does not exist or needs no authorization",

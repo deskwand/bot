@@ -28,12 +28,12 @@ const mcpServerMissing = "服务不存在" // i18n-ignore: legacy Worker respons
 
 var (
 	mcpPropagationTimeout  = 30 * time.Second
-	mcpPropagationInterval = 2 * time.Second
+	propagationInterval = 2 * time.Second
 )
 
-// untilMcpServerLive retries call while the Worker does not know the server
+// untilLive retries call while the Worker does not know the server
 // yet. missing reports whether a result or error means "not live yet".
-func untilMcpServerLive[T any](ctx context.Context, call func() (T, error), missing func(T, error) bool) (T, error) {
+func untilLive[T any](ctx context.Context, call func() (T, error), missing func(T, error) bool) (T, error) {
 	deadline := time.Now().Add(mcpPropagationTimeout)
 	for {
 		result, err := call()
@@ -43,7 +43,7 @@ func untilMcpServerLive[T any](ctx context.Context, call func() (T, error), miss
 		select {
 		case <-ctx.Done():
 			return result, err
-		case <-time.After(mcpPropagationInterval):
+		case <-time.After(propagationInterval):
 		}
 	}
 }
@@ -313,7 +313,7 @@ func (s *Service) ProbeMcp(name string) (McpProbeDTO, error) {
 	if err != nil {
 		return McpProbeDTO{}, safeAppError(err)
 	}
-	result, err := untilMcpServerLive(ctx,
+	result, err := untilLive(ctx,
 		func() (mcpadmin.Probe, error) { return client.Probe(ctx, strings.TrimSpace(name)) },
 		func(probe mcpadmin.Probe, err error) bool {
 			return err == nil && isMcpProbeMissing(probe)
@@ -367,7 +367,7 @@ func (s *Service) StartMcpOAuth(name string) error {
 	if err != nil {
 		return safeAppError(err)
 	}
-	authorizeURL, err := untilMcpServerLive(ctx,
+	authorizeURL, err := untilLive(ctx,
 		func() (string, error) { return client.StartOAuth(ctx, strings.TrimSpace(name)) },
 		func(_ string, err error) bool { return isMcpServerMissing(err) })
 	if err != nil {

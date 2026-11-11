@@ -94,7 +94,7 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 - OKX 按区域拆站（`www` / `us` / `eea` / `tr`），key 只在创建它的站点有效，`baseUrl` 要跟站点一致，否则报 `50119`。
 - 已知限制：Binance 币本位合约只算钱包余额、不列仓位（`positionAmt` 的单位是张，换算需要合约乘数）。
 
-账号写在 `DESKWAND_CONFIG` 的 `exchange.accounts`，或在桌面端「交易所」页填写。字段级校验在 `src/exchange/accounts.ts`，坏账号只丢自己，不影响 Worker 启动。
+账号写在 `DESKWAND_CONFIG` 的 `exchange.accounts`，或在桌面端「交易所」页填写。桌面端可以逐行「测试连接」，直接用部署后的 Worker 验证出口与域名。字段级校验在 `src/exchange/accounts.ts`，坏账号只丢自己，不影响 Worker 启动。
 
 ```jsonc
 "exchange": {

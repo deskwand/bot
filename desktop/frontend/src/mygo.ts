@@ -125,6 +125,7 @@ export interface ConfigDTO {
   locale: string;
   approvalMode: string;
   searchProvider: string;
+  exchangeAccounts: ExchangeAccountDTO[];
   secrets: SecretNameDTO[];
 }
 
@@ -141,6 +142,7 @@ export interface ConfigEditDTO {
   mcpServers?: unknown;
   approvalMode?: string;
   searchProvider?: string;
+  exchangeAccounts?: ExchangeAccountDTO[];
   secrets?: unknown[];
 }
 
@@ -182,6 +184,29 @@ export interface EntryResultDTO {
   channel: string;
   configured: boolean;
   warning?: string;
+}
+
+export interface ExchangeAccountDTO {
+  id: string;
+  venue: string;
+  label?: string;
+  baseUrl?: string;
+}
+
+/**
+ * SecretEditDTO is a write-only secret edit. Value is accepted from the
+ * frontend and never returned in any DTO, error or journal.
+ * ExchangeAccountDTO is one exchange account in the config document. Secrets
+ * never appear here; they travel as EXCHANGE_SECRET_<ID> edits.
+ * ExchangeProbeDTO is one account's health check from the deployed Worker.
+ */
+export interface ExchangeProbeDTO {
+  ok: boolean;
+  venue?: string;
+  currencies: number;
+  total?: number;
+  code?: string;
+  message?: string;
 }
 
 /**
@@ -771,6 +796,14 @@ export const Service = {
    */
   telemetryEnabled(): Promise<boolean> {
     return call("Service.TelemetryEnabled");
+  },
+  /**
+   * TestExchange asks the deployed Worker to read one account. A freshly published
+   * version does not know the account yet, so the same propagation window as the
+   * MCP probe applies.
+   */
+  testExchange(accountID: string): Promise<ExchangeProbeDTO> {
+    return call("Service.TestExchange", accountID);
   },
   /**
    * Theme returns the appearance the client shows: "system", "light" or "dark".

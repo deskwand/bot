@@ -89,7 +89,7 @@ func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 		"PublishConfig": true, "RemoveMcpServer": true, "RestoreData": true, "ResumeOperation": true, "RetryRestore": true,
 		"SelectDeployment": true, "SetLocale": true, "SetTheme": true, "SetTelemetryEnabled": true, "StartMcpOAuth": true,
 		"SelectEntry": true, "StartWeChatLogin": true, "Status": true,
-		"TelemetryEnabled": true, "Theme": true, "UpdateMcpServer": true, "Upgrade": true, "UpgradeAvailable": true,
+		"TelemetryEnabled": true, "TestExchange": true, "Theme": true, "UpdateMcpServer": true, "Upgrade": true, "UpgradeAvailable": true,
 	}
 	serviceType := reflect.TypeOf(&Service{})
 	seen := map[string]bool{}

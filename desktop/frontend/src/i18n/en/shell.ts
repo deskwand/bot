@@ -9,6 +9,7 @@ export const shell: Messages["shell"] = {
     models: "Models",
     search: "Search",
     mcp: "Services",
+    exchange: "Exchanges",
     entries: "Channels",
     diagnostics: "Diagnostics",
     backup: "Backup",

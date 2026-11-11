@@ -9,6 +9,7 @@ import {
   Loader2,
   Menu,
   MessageSquare,
+  KeyRound,
   Plug,
   Search as SearchIcon,
 } from "lucide-react";
@@ -39,6 +40,7 @@ import { Backup } from "@/features/backup/Backup";
 import { Mcp } from "@/features/mcp/Mcp";
 import { Models } from "@/features/models/Models";
 import { Overview } from "@/features/overview/Overview";
+import { Exchanges } from "@/features/exchanges/Exchanges";
 import { Search } from "@/features/search/Search";
 import { Setup } from "@/features/setup/Setup";
 import { Updates } from "@/features/updates/Updates";
@@ -61,6 +63,7 @@ const NAV: { page: Page; icon: typeof LayoutDashboard }[] = [
   { page: "overview", icon: LayoutDashboard },
   { page: "models", icon: Bot },
   { page: "search", icon: SearchIcon },
+  { page: "exchange", icon: KeyRound },
   { page: "mcp", icon: Plug },
   { page: "entries", icon: MessageSquare },
   { page: "diagnostics", icon: Activity },
@@ -326,6 +329,7 @@ export function App({ client }: { client: ClientService }) {
                   {page === "overview" ? <Overview /> : null}
                   {page === "models" ? <Models /> : null}
                   {page === "search" ? <Search /> : null}
+                  {page === "exchange" ? <Exchanges /> : null}
                   {page === "mcp" ? <Mcp /> : null}
                   {page === "entries" ? (
                     <Suspense fallback={<PageLoading label={t("shell.pageLoading")} />}>

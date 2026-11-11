@@ -45,6 +45,7 @@ export function createProductionClient(): ClientService {
       Service.updateMcpServer(name, server, secrets),
     removeMcpServer: (name) => Service.removeMcpServer(name),
     probeMcp: (name) => Service.probeMcp(name),
+    testExchange: (accountId) => Service.testExchange(accountId),
     mcpStatus: () => Service.mcpStatus(),
     startMcpOAuth: (name) => Service.startMcpOAuth(name),
     previewConfig: (input) => Service.previewConfig(input),

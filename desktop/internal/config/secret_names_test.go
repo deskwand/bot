@@ -81,3 +81,24 @@ func TestReservedReferenceNamesCoverReleaseTemplate(t *testing.T) {
 		}
 	}
 }
+
+func TestExchangeSecretNamesAreAllowed(t *testing.T) {
+	for _, name := range []string{
+		"EXCHANGE_SECRET_OKX_MAIN",
+		"EXCHANGE_SECRET_BN_MAIN",
+		"EXCHANGE_SECRET_A",
+	} {
+		if !secretNameAllowed(name) {
+			t.Fatalf("%s should be allowed", name)
+		}
+	}
+	for _, name := range []string{
+		"EXCHANGE_SECRET_",
+		"EXCHANGE_SECRET_lower",
+		"EXCHANGE_OKX_MAIN",
+	} {
+		if secretNameAllowed(name) {
+			t.Fatalf("%s should be rejected", name)
+		}
+	}
+}

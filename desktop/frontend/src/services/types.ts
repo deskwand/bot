@@ -17,6 +17,8 @@ import type {
   CustomModelDTO,
   CustomProviderDTO,
   EntryResultDTO,
+  ExchangeAccountDTO,
+  ExchangeProbeDTO,
   ImportInputDTO as GeneratedImportInputDTO,
   ImportPreviewDTO,
   InstallInputDTO,
@@ -61,6 +63,8 @@ export type {
   CustomModelDTO,
   CustomProviderDTO,
   EntryResultDTO,
+  ExchangeAccountDTO,
+  ExchangeProbeDTO,
   ImportPreviewDTO,
   InstallInputDTO,
   LoginStatusDTO,
@@ -166,6 +170,7 @@ export interface ClientService {
   ): Promise<ResultDTO>;
   removeMcpServer(name: string): Promise<ResultDTO>;
   probeMcp(name: string): Promise<McpProbeDTO>;
+  testExchange(accountId: string): Promise<ExchangeProbeDTO>;
   mcpStatus(): Promise<McpAuthDTO[]>;
   startMcpOAuth(name: string): Promise<void>;
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]>;

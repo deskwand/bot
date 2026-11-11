@@ -193,6 +193,14 @@ func applyPatch(document map[string]any, patch domain.EditablePatch) error {
 		document["search"] = map[string]any{"provider": *patch.SearchProvider}
 	}
 
+	if patch.Exchange != nil {
+		section, err := decodeExchangeSection(*patch.Exchange)
+		if err != nil {
+			return err
+		}
+		document["exchange"] = mergeExchangeSection(document["exchange"], section)
+	}
+
 	if patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil {
 		return nil
 	}
@@ -306,6 +314,44 @@ func decodeMcpServers(raw json.RawMessage) ([]any, error) {
 		}
 	}
 	return servers, nil
+}
+
+// mergeExchangeSection replaces the keys this patch writes and keeps the rest,
+// so an advanced setting written by a newer client is not dropped by a save.
+func mergeExchangeSection(existing any, patch map[string]any) map[string]any {
+	current, ok := existing.(map[string]any)
+	if !ok {
+		return patch
+	}
+	for key, value := range patch {
+		current[key] = value
+	}
+	return current
+}
+
+func decodeExchangeSection(raw json.RawMessage) (map[string]any, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "an exchange patch must be a JSON object",
+		}
+	}
+	value, err := domain.DecodeJSON(trimmed)
+	if err != nil {
+		return nil, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "an exchange patch is not valid JSON",
+		}
+	}
+	section, ok := value.(map[string]any)
+	if !ok {
+		return nil, domain.Error{
+			Code:    domain.UNSUPPORTED_SCHEMA,
+			Message: "an exchange patch must be a JSON object",
+		}
+	}
+	return section, nil
 }
 
 func decodeCustomProviders(raw json.RawMessage) ([]any, error) {
@@ -431,7 +477,7 @@ func copyObject(source map[string]any) map[string]any {
 }
 
 func patchIsEmpty(patch domain.EditablePatch) bool {
-	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil && patch.McpServers == nil
+	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil && patch.McpServers == nil && patch.Exchange == nil
 }
 
 var (
@@ -760,6 +806,7 @@ var templateSecretNamePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^MODEL_KEY_[A-Z0-9_]{1,64}$`),
 	regexp.MustCompile(`^MCP_[A-Z0-9_]{1,64}$`),
 	regexp.MustCompile(`^SEARCH_KEY_[A-Z0-9_]{1,64}$`),
+	regexp.MustCompile(`^EXCHANGE_SECRET_[A-Z0-9_]{1,64}$`),
 }
 
 // secretNameAllowed reports whether an edit may target name: either it is a

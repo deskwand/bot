@@ -113,22 +113,42 @@ type SecretNameDTO struct {
 
 // ConfigDTO is the editable configuration summary.
 type ConfigDTO struct {
-	AccountID          string              `json:"accountId"`
-	WorkerName         string              `json:"workerName"`
-	Fingerprint        string              `json:"fingerprint"`
-	ReleaseVersion     string              `json:"releaseVersion,omitempty"`
-	ActiveVersionCount int                 `json:"activeVersionCount"`
-	ConfigPresent      bool                `json:"configPresent"`
-	ActiveChannel      string              `json:"activeChannel,omitempty"`
-	OwnerUserIDs       []int64             `json:"ownerUserIds"`
-	ButlerModel        *ModelDTO           `json:"butlerModel"`
-	TaskModel          *ModelDTO           `json:"taskModel"`
-	CustomProviders    []CustomProviderDTO `json:"customProviders"`
-	McpServers         json.RawMessage     `json:"mcpServers"`
-	Locale             string              `json:"locale"`
-	ApprovalMode       string              `json:"approvalMode"`
-	SearchProvider     string              `json:"searchProvider"`
-	Secrets            []SecretNameDTO     `json:"secrets"`
+	AccountID          string               `json:"accountId"`
+	WorkerName         string               `json:"workerName"`
+	Fingerprint        string               `json:"fingerprint"`
+	ReleaseVersion     string               `json:"releaseVersion,omitempty"`
+	ActiveVersionCount int                  `json:"activeVersionCount"`
+	ConfigPresent      bool                 `json:"configPresent"`
+	ActiveChannel      string               `json:"activeChannel,omitempty"`
+	OwnerUserIDs       []int64              `json:"ownerUserIds"`
+	ButlerModel        *ModelDTO            `json:"butlerModel"`
+	TaskModel          *ModelDTO            `json:"taskModel"`
+	CustomProviders    []CustomProviderDTO  `json:"customProviders"`
+	McpServers         json.RawMessage      `json:"mcpServers"`
+	Locale             string               `json:"locale"`
+	ApprovalMode       string               `json:"approvalMode"`
+	SearchProvider     string               `json:"searchProvider"`
+	ExchangeAccounts   []ExchangeAccountDTO `json:"exchangeAccounts"`
+	Secrets            []SecretNameDTO      `json:"secrets"`
+}
+
+// ExchangeProbeDTO is one account's health check from the deployed Worker.
+type ExchangeProbeDTO struct {
+	OK         bool     `json:"ok"`
+	Venue      string   `json:"venue,omitempty"`
+	Currencies int      `json:"currencies"`
+	Total      *float64 `json:"total,omitempty"`
+	Code       string   `json:"code,omitempty"`
+	Message    string   `json:"message,omitempty"`
+}
+
+// ExchangeAccountDTO is one exchange account in the config document. Secrets
+// never appear here; they travel as EXCHANGE_SECRET_<ID> edits.
+type ExchangeAccountDTO struct {
+	ID      string `json:"id"`
+	Venue   string `json:"venue"`
+	Label   string `json:"label,omitempty"`
+	BaseURL string `json:"baseUrl,omitempty"`
 }
 
 // SecretEditDTO is a write-only secret edit. Value is accepted from the
@@ -189,15 +209,16 @@ type CachedStatusDTO struct {
 // ConfigEditDTO is the 保存并发布 input. A nil owner or model means unchanged;
 // an empty owner slice clears the allowlist. Secrets are write-only.
 type ConfigEditDTO struct {
-	BaseFingerprint string               `json:"baseFingerprint,omitempty"`
-	OwnerUserIDs    *[]int64             `json:"ownerUserIds,omitempty"`
-	ButlerModel     *ModelDTO            `json:"butlerModel,omitempty"`
-	TaskModel       *ModelDTO            `json:"taskModel,omitempty"`
-	CustomProviders *[]CustomProviderDTO `json:"customProviders,omitempty"`
-	McpServers      *json.RawMessage     `json:"mcpServers,omitempty"`
-	ApprovalMode    *string              `json:"approvalMode,omitempty"`
-	SearchProvider  *string              `json:"searchProvider,omitempty"`
-	Secrets         []SecretEditDTO      `json:"secrets,omitempty"`
+	BaseFingerprint  string                `json:"baseFingerprint,omitempty"`
+	OwnerUserIDs     *[]int64              `json:"ownerUserIds,omitempty"`
+	ButlerModel      *ModelDTO             `json:"butlerModel,omitempty"`
+	TaskModel        *ModelDTO             `json:"taskModel,omitempty"`
+	CustomProviders  *[]CustomProviderDTO  `json:"customProviders,omitempty"`
+	McpServers       *json.RawMessage      `json:"mcpServers,omitempty"`
+	ApprovalMode     *string               `json:"approvalMode,omitempty"`
+	SearchProvider   *string               `json:"searchProvider,omitempty"`
+	ExchangeAccounts *[]ExchangeAccountDTO `json:"exchangeAccounts,omitempty"`
+	Secrets          []SecretEditDTO       `json:"secrets,omitempty"`
 }
 
 // StepDTO is one planned or journaled publish step.

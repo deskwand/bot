@@ -80,4 +80,9 @@ var zhApp = map[string]string{
 	"app.mcpNameInvalid":         "服务名称只能使用小写字母、数字和下划线（1-32 个字符）",
 	"app.approvalModeInvalid":    "审批模式只能是自主执行或智能审查",
 	"app.searchProviderInvalid":  "搜索商只能是 Exa、Tavily、Brave 或 DeepSeek",
+	"app.exchangeIdInvalid":      "交易所账号 id 只能用 a-z、0-9 和 -（问题在 %s）",
+	"app.exchangeDuplicateId":    "交易所账号 id 重复：%s",
+	"app.exchangeVenueInvalid":   "交易所账号 %s 的平台只能是 okx 或 binance",
+	"app.exchangeLabelTooLong":   "交易所账号 %s 的名称超过 64 个字符",
+	"app.exchangeBaseUrlInvalid": "交易所账号 %s 的 baseUrl 必须是 https 站点根地址",
 }

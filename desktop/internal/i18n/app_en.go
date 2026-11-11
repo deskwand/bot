@@ -80,4 +80,9 @@ var enApp = map[string]string{
 	"app.mcpNameInvalid":         "A service name may use only lowercase letters, digits and underscores (1-32 characters)",
 	"app.approvalModeInvalid":    "Approval mode must be autonomous or reviewed",
 	"app.searchProviderInvalid":  "Search provider must be exa, tavily, brave or deepseek",
+	"app.exchangeIdInvalid":      "An exchange account id may only use a-z, 0-9 and - (%s)",
+	"app.exchangeDuplicateId":    "Duplicate exchange account id: %s",
+	"app.exchangeVenueInvalid":   "%s must use okx or binance as its venue",
+	"app.exchangeLabelTooLong":   "The display name of %s is longer than 64 characters",
+	"app.exchangeBaseUrlInvalid": "The baseUrl of %s must be an https origin",
 }

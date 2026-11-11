@@ -389,8 +389,8 @@ func TestProbeMcpMapsWorkerProbe(t *testing.T) {
 }
 
 func TestProbeMcpWaitsForAJustPublishedServer(t *testing.T) {
-	mcpPropagationInterval = time.Millisecond
-	t.Cleanup(func() { mcpPropagationInterval = 2 * time.Second })
+	propagationInterval = time.Millisecond
+	t.Cleanup(func() { propagationInterval = 2 * time.Second })
 	calls := 0
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/admin/mcp/probe" {
@@ -415,8 +415,8 @@ func TestProbeMcpWaitsForAJustPublishedServer(t *testing.T) {
 }
 
 func TestStartMcpOAuthWaitsForAJustPublishedServer(t *testing.T) {
-	mcpPropagationInterval = time.Millisecond
-	t.Cleanup(func() { mcpPropagationInterval = 2 * time.Second })
+	propagationInterval = time.Millisecond
+	t.Cleanup(func() { propagationInterval = 2 * time.Second })
 	calls := 0
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/admin/mcp/oauth/start" {

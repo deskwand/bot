@@ -893,6 +893,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		Locale:             "zh",
 		ApprovalMode:       "autonomous",
 		SearchProvider:     "exa",
+		ExchangeAccounts:   []ExchangeAccountDTO{},
 		Secrets:            s.secretStatuses(snapshot),
 	}
 	if len(snapshot.ConfigJSON) > 0 {
@@ -911,6 +912,9 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 			Search       struct {
 				Provider string `json:"provider"`
 			} `json:"search"`
+			Exchange struct {
+				Accounts []ExchangeAccountDTO `json:"accounts"`
+			} `json:"exchange"`
 		}
 		if err := json.Unmarshal(snapshot.ConfigJSON, &document); err != nil {
 			return dto, domain.Error{Code: domain.UNSUPPORTED_SCHEMA, Message: s.t("app.configInvalidJSON")}
@@ -934,6 +938,9 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		}
 		if validSearchProvider(document.Search.Provider) {
 			dto.SearchProvider = document.Search.Provider
+		}
+		if document.Exchange.Accounts != nil {
+			dto.ExchangeAccounts = document.Exchange.Accounts
 		}
 	}
 	if s.cache != nil {
@@ -1646,6 +1653,31 @@ func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, inpu
 		}
 		provider := *input.SearchProvider
 		change.Patch.SearchProvider = &provider
+	}
+	if input.ExchangeAccounts != nil {
+		accounts := append([]ExchangeAccountDTO(nil), (*input.ExchangeAccounts)...)
+		for index := range accounts {
+			accounts[index].ID = strings.TrimSpace(accounts[index].ID)
+			accounts[index].Venue = strings.TrimSpace(accounts[index].Venue)
+			accounts[index].Label = strings.TrimSpace(accounts[index].Label)
+			accounts[index].BaseURL = strings.TrimSpace(accounts[index].BaseURL)
+		}
+		if problem := validateExchangeAccounts(accounts); problem != nil {
+			id := problem.ID
+			if id == "" {
+				id = "?"
+			}
+			return domain.Change{}, domain.Error{
+				Code:    deployment.CodeInvalidRequest,
+				Message: s.t(problem.Key, id),
+			}
+		}
+		encoded, err := exchangeSectionPatch(accounts)
+		if err != nil {
+			return domain.Change{}, err
+		}
+		raw := json.RawMessage(encoded)
+		change.Patch.Exchange = &raw
 	}
 	edited := make(map[string]bool, len(input.Secrets))
 	for _, secret := range input.Secrets {
