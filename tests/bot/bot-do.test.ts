@@ -20,6 +20,7 @@ import {
 } from "../../src/bot/bot-store";
 import {
   CHANNEL_DISABLED_RETRY_MS,
+  DIET_RECHECK_MS,
   MIN_WAKE_MS,
   WATCHDOG_MS,
   nextUtcMidnight,
@@ -30,6 +31,8 @@ import {
   buildBotInstructions,
 } from "../../src/bot/instructions";
 import { setClockOverride } from "../../src/butler/notifier";
+import type { SpendEntry } from "../../src/life/books";
+import type { Tier } from "../../src/life/vitals";
 import { QUOTA_EXHAUSTED_TEXT } from "../../src/llm/model-errors";
 
 declare module "cloudflare:test" {
@@ -37,8 +40,57 @@ declare module "cloudflare:test" {
 }
 
 const START = Date.UTC(2030, 0, 1, 9, 0, 0);
+const DAY_MS = 86_400_000;
 
 let now = START;
+
+/** Drives the global life ledger to `tier`, moving the clock to seven days on. */
+async function driveLifeTo(tier: Exclude<Tier, "ample">): Promise<void> {
+  const life = env.LIFE.get(env.LIFE.idFromName("global"));
+  await life.recordCredit(20, "");
+  const daily = {
+    lean: [1, 1, 1, 1, 1, 1, 1],
+    critical: [2, 2, 2, 2, 2, 2, 7],
+    dormant: [2, 2, 2, 2, 2, 2, 8],
+  }[tier];
+  for (let day = 0; day < daily.length; day += 1) {
+    now = START + Math.round((day + 0.5) * DAY_MS);
+    const entry: SpendEntry = {
+      callId: crypto.randomUUID(),
+      at: now,
+      source: "task:test",
+      provider: "test",
+      model: "test",
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      usd: daily[day]!,
+      priced: true,
+    };
+    await life.recordSpend(entry);
+  }
+  now = START + 7 * DAY_MS;
+}
+
+/** The ledger is shared with the rest of the file: make it ample again. */
+async function makeLifeAmple(): Promise<void> {
+  await env.LIFE.get(env.LIFE.idFromName("global")).recordCredit(
+    1_000_000,
+    "",
+  );
+}
+
+/** Empties the shared ledger so later tests start from an ample tier. */
+async function resetLife(): Promise<void> {
+  await runInDurableObject(
+    env.LIFE.get(env.LIFE.idFromName("global")),
+    (_instance, state) => {
+      state.storage.sql.exec("DELETE FROM spend");
+      state.storage.sql.exec("DELETE FROM credit");
+    },
+  );
+}
 
 type BotStub = ReturnType<typeof botStub>;
 
@@ -1572,5 +1624,102 @@ describe("BotDO heal", () => {
 
     await fireAlarm(stub);
     expect(fake.spawns).toHaveLength(1);
+  });
+});
+
+describe("BotDO diet", () => {
+  it("holds a due wake when critical", async () => {
+    const fake = fakeButler();
+    try {
+      await driveLifeTo("critical");
+      const stub = botStub("b-diet-critical-hold");
+      await initBot(stub);
+
+      await fireAlarm(stub);
+
+      expect(fake.spawns).toHaveLength(0);
+      const snapshot = await stub.snapshot();
+      expect(snapshot?.meta.nextWakeAt).toBe(now + DIET_RECHECK_MS);
+      expect(snapshot?.meta.wakesCount).toBe(0);
+      expect(snapshot?.meta.status).toBe("active");
+      expect(fake.notices).toEqual([]);
+      expect(await alarmAt(stub)).toBe(now + DIET_RECHECK_MS);
+    } finally {
+      await resetLife();
+    }
+  });
+
+  it("runs a manual wake when critical", async () => {
+    const fake = fakeButler();
+    try {
+      await driveLifeTo("critical");
+      const stub = botStub("b-diet-critical-manual");
+      await initBot(stub);
+
+      expect(await stub.wakeNow()).toBe("scheduled");
+      await fireAlarm(stub);
+
+      expect(fake.spawns).toHaveLength(1);
+      expect((await stub.snapshot())?.meta.currentTaskId).toBe("t1");
+    } finally {
+      await resetLife();
+    }
+  });
+
+  it("resumes the schedule once the balance is ample again", async () => {
+    const fake = fakeButler();
+    try {
+      await driveLifeTo("critical");
+      const stub = botStub("b-diet-recovered");
+      await initBot(stub);
+      await fireAlarm(stub);
+      expect(fake.spawns).toHaveLength(0);
+
+      await makeLifeAmple();
+      now += DIET_RECHECK_MS;
+      await fireAlarm(stub);
+
+      expect(fake.spawns).toHaveLength(1);
+    } finally {
+      await resetLife();
+    }
+  });
+
+  it("doubles the gap after a normal run when lean", async () => {
+    const fake = fakeButler();
+    try {
+      await driveLifeTo("lean");
+      const stub = botStub("b-diet-lean-stretch");
+      await initBot(stub);
+      await fireAlarm(stub);
+
+      fake.outcome = { outcome: "completed", summary: "看完了" };
+      now += WATCHDOG_MS;
+      await fireAlarm(stub);
+
+      const snapshot = await stub.snapshot();
+      expect(snapshot?.meta.currentTaskId).toBeNull();
+      expect(snapshot!.meta.nextWakeAt! - now).toBe(
+        2 * snapshot!.meta.defaultIntervalMs,
+      );
+      expect(await alarmAt(stub)).toBe(snapshot?.meta.nextWakeAt);
+    } finally {
+      await resetLife();
+    }
+  });
+
+  it("heal leaves a diet hold alone", async () => {
+    fakeButler();
+    try {
+      await driveLifeTo("critical");
+      const stub = botStub("b-diet-heal");
+      await initBot(stub);
+      await fireAlarm(stub);
+
+      expect(await stub.heal()).toBe("ok");
+      expect(await alarmAt(stub)).toBe(now + DIET_RECHECK_MS);
+    } finally {
+      await resetLife();
+    }
   });
 });

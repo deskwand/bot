@@ -9,6 +9,7 @@ import type {
 } from "../admin/sql-dump";
 import { getClock } from "../butler/notifier";
 import { ownerLocale } from "../i18n";
+import { readTier } from "../life/client";
 import { isQuotaExhaustedSummary } from "../llm/model-errors";
 import {
   BotStore,
@@ -32,16 +33,19 @@ import {
 import {
   CHANNEL_DISABLED_RETRY_MS,
   DAILY_WAKE_LIMIT,
+  DIET_RECHECK_MS,
   FAILING_NOTICE_AT,
   HEAL_OVERDUE_MS,
   MIN_WAKE_MS,
   RUN_MAX_MS,
   WATCHDOG_MS,
   clampWakeAt,
+  dietHolds,
   failureDelayMs,
   formatDuration,
   healCeilingMs,
   nextUtcMidnight,
+  stretchForDiet,
   utcDay,
   wakeCeilingMs,
 } from "./wake";
@@ -444,11 +448,15 @@ export class BotDO extends DurableObject<Env> {
       meta.manualWakeAt === requestedAt &&
       requestedAt !== null &&
       requestedAt > now;
-    meta.nextWakeAt = clampWakeAt(
+    let at = clampWakeAt(
       now,
       nextBase(meta, now),
       wakeCeilingMs(meta.defaultIntervalMs),
     ).at;
+    if (!keepManual) {
+      at = stretchForDiet(now, at, await readTier(this.env));
+    }
+    meta.nextWakeAt = at;
     if (keepManual) meta.manualWakeAt = meta.nextWakeAt;
     this.store.writeMeta(meta);
     await this.ctx.storage.setAlarm(meta.nextWakeAt);
@@ -548,6 +556,16 @@ export class BotDO extends DurableObject<Env> {
       }
       if (meta.wakesCount >= DAILY_WAKE_LIMIT) {
         await this.deferForDailyLimit(meta, now);
+        return;
+      }
+
+      const tier = await readTier(this.env);
+      const manualWake =
+        meta.manualWakeAt != null && meta.manualWakeAt === meta.nextWakeAt;
+      if (dietHolds(tier, manualWake)) {
+        meta.nextWakeAt = now + DIET_RECHECK_MS;
+        this.store.writeMeta(meta);
+        await this.ctx.storage.setAlarm(meta.nextWakeAt);
         return;
       }
 
