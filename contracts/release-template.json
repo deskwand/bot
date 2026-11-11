@@ -11,7 +11,8 @@
     { "name": "BOT", "className": "BotDO" },
     { "name": "BOT_CHAT", "className": "BotChatDO" },
     { "name": "CHANNELS", "className": "ChannelDO" },
-    { "name": "MCP_AUTH", "className": "McpAuthDO" }
+    { "name": "MCP_AUTH", "className": "McpAuthDO" },
+    { "name": "LIFE", "className": "LifeDO" }
   ],
   "r2Buckets": [
     { "name": "ARTIFACTS", "parameterKey": "r2BucketName" }
@@ -62,6 +63,10 @@
     {
       "tag": "v5",
       "newSqliteClasses": ["BotChatDO"]
+    },
+    {
+      "tag": "v6",
+      "newSqliteClasses": ["LifeDO"]
     }
   ],
   "installParameters": [
