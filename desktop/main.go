@@ -84,6 +84,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Backups default to the app data directory: Documents is a protected folder
+	// on macOS, and every upgrade re-signs the bundle, so a default there asks for
+	// access again on each update.
 	backupSettings, err := app.NewFileBackupSettings(dataDir, filepath.Join(dataDir, "backups"))
 	if err != nil {
 		log.Fatal(err)

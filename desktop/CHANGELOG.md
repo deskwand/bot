@@ -9,6 +9,8 @@
 
 ## 未发布
 
+- 备份默认目录从「文稿/文档」下的 `DeskWand 备份` 改到应用数据目录下的 `backups`（macOS `~/Library/Application Support/DeskWand Bot/backups`，Windows `%AppData%\DeskWand Bot\backups`）。「文稿」是 macOS 的受保护目录，升级换签名后系统会重新要授权；新位置不弹任何授权框。旧的 `~/Documents/DeskWand 备份` 留在磁盘上不搬不删，会自动被当成“没选过”并切到新默认；自己「更改…」选过的目录不受影响。
+- 备份放进应用数据目录后，清除应用数据会连本地备份一起清掉。
 - 新增「交易所」页：填写 OKX / Binance 只读 API，保存即部署，逐行「测试连接」。账号写进 `DESKWAND_CONFIG.exchange`，密钥写进 `EXCHANGE_SECRET_<ID>`，页面只显示「已配置/未配置」，不回显明文。
 - 删除账号不会删除它的密钥，页面上会把这些残留密钥单独列出来。
 - 测试连接直接问部署后的 Worker，因此 Binance 的 451（出口 IP 受限）和 OKX 的 `50119`（key 与域名不匹配）都能当场看出来。

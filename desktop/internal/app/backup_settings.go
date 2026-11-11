@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -16,8 +17,12 @@ import (
 	"github.com/deskwand/bot/desktop/internal/i18n"
 )
 
-// defaultBackupDirName is the folder the client creates under Documents.
-const defaultBackupDirName = "DeskWand 备份" // i18n-ignore: folder name on disk
+// legacyDefaultBackupDirName is the folder older clients created under
+// Documents. Backups moved to the app data directory because Documents is a
+// protected folder on macOS: every upgrade re-signs the bundle and the system
+// asks for access again. A stored value equal to the legacy folder is treated
+// as "the user never chose" so it follows the new default.
+const legacyDefaultBackupDirName = "DeskWand 备份" // i18n-ignore: folder name on disk
 
 // The choices the page offers. A hand-edited file cannot pick anything else,
 // so the scheduler can never be made to run every minute.
@@ -66,8 +71,13 @@ type BackupSettingsStore interface {
 // backupSettingsFile is the on-disk shape. It is not the DTO: the file keeps
 // the raw values so a hand edit that an older client wrote is normalized on
 // read instead of being rejected at startup.
+//
+// DirChosen is false in every file a client older than the app-data move wrote.
+// Those clients stored the default folder as if it were a choice, so the read
+// path has to treat it as one more default (see storedBackupDir).
 type backupSettingsFile struct {
 	Dir           string          `json:"dir"`
+	DirChosen     bool            `json:"dirChosen,omitempty"`
 	Auto          bool            `json:"auto"`
 	IntervalHours int             `json:"intervalHours"`
 	Keep          int             `json:"keep"`
@@ -85,9 +95,9 @@ type backupRunRecord struct {
 // FileBackupSettings stores the backup configuration as JSON in the app data
 // directory. It contains no secret: only a local folder path and counters.
 type FileBackupSettings struct {
-	path        string
-	fallbackDir string
-	mu          sync.Mutex
+	path       string
+	defaultDir string
+	mu         sync.Mutex
 	// Locale supplies the language for validation messages; nil means zh.
 	Locale func() string
 }
@@ -100,9 +110,10 @@ func (s *FileBackupSettings) lang() string {
 }
 
 // NewFileBackupSettings creates the app data directory if needed and returns a
-// store at <appDir>/backup.json. fallbackDir is used when the user's home
-// directory cannot be resolved.
-func NewFileBackupSettings(appDir, fallbackDir string) (*FileBackupSettings, error) {
+// store at <appDir>/backup.json. defaultDir is where a client that never picked
+// a folder backs up; it lives inside the app data directory so the first export
+// needs no OS permission prompt.
+func NewFileBackupSettings(appDir, defaultDir string) (*FileBackupSettings, error) {
 	if strings.TrimSpace(appDir) == "" {
 		return nil, errors.New("app: app data directory is empty")
 	}
@@ -110,8 +121,8 @@ func NewFileBackupSettings(appDir, fallbackDir string) (*FileBackupSettings, err
 		return nil, fmt.Errorf("app: create app data directory: %w", err)
 	}
 	return &FileBackupSettings{
-		path:        filepath.Join(appDir, "backup.json"),
-		fallbackDir: fallbackDir,
+		path:       filepath.Join(appDir, "backup.json"),
+		defaultDir: defaultDir,
 	}, nil
 }
 
@@ -125,7 +136,7 @@ func (s *FileBackupSettings) Settings() (BackupSettingsDTO, error) {
 	if err != nil {
 		return BackupSettingsDTO{}, err
 	}
-	return settingsFromFile(file, s.fallbackDir), nil
+	return settingsFromFile(file, s.defaultDir), nil
 }
 
 // Save validates input, writes it atomically and returns the stored result.
@@ -157,13 +168,14 @@ func (s *FileBackupSettings) Save(input BackupSettingsEditDTO) (BackupSettingsDT
 		return BackupSettingsDTO{}, err
 	}
 	file.Dir = dir
+	file.DirChosen = true
 	file.Auto = input.Auto
 	file.IntervalHours = input.IntervalHours
 	file.Keep = input.Keep
 	if err := s.writeLocked(file); err != nil {
 		return BackupSettingsDTO{}, err
 	}
-	return settingsFromFile(file, s.fallbackDir), nil
+	return settingsFromFile(file, s.defaultDir), nil
 }
 
 // RecordRun stores one attempt. A nil runErr is a success and clears the
@@ -191,7 +203,7 @@ func (s *FileBackupSettings) RecordRun(at time.Time, path string, runErr error) 
 	if err := s.writeLocked(file); err != nil {
 		return BackupSettingsDTO{}, err
 	}
-	return settingsFromFile(file, s.fallbackDir), nil
+	return settingsFromFile(file, s.defaultDir), nil
 }
 
 func (s *FileBackupSettings) decodeLocked() (backupSettingsFile, error) {
@@ -206,6 +218,9 @@ func (s *FileBackupSettings) decodeLocked() (backupSettingsFile, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return backupSettingsFile{}, nil
 	}
+	// Migrating here rather than in settingsFromFile keeps the next write
+	// (a recorded run, a save) honest: it stores the folder the client uses.
+	file.Dir = storedBackupDir(file, s.defaultDir)
 	return file, nil
 }
 
@@ -219,9 +234,9 @@ func (s *FileBackupSettings) writeLocked(file backupSettingsFile) error {
 }
 
 // settingsFromFile normalizes the stored values into the DTO the page sees.
-func settingsFromFile(file backupSettingsFile, fallbackDir string) BackupSettingsDTO {
+func settingsFromFile(file backupSettingsFile, defaultDir string) BackupSettingsDTO {
 	settings := BackupSettingsDTO{
-		Dir:              strings.TrimSpace(file.Dir),
+		Dir:              storedBackupDir(file, defaultDir),
 		Auto:             file.Auto,
 		IntervalHours:    file.IntervalHours,
 		Keep:             file.Keep,
@@ -230,9 +245,6 @@ func settingsFromFile(file backupSettingsFile, fallbackDir string) BackupSetting
 		LastAttemptAt:    file.LastAttempt.At,
 		LastErrorCode:    file.LastAttempt.Code,
 		LastErrorMessage: file.LastAttempt.Error,
-	}
-	if settings.Dir == "" || !filepath.IsAbs(settings.Dir) {
-		settings.Dir = defaultBackupDir(fallbackDir)
 	}
 	if !slices.Contains(allowedBackupIntervals, settings.IntervalHours) {
 		settings.IntervalHours = defaultBackupIntervalHours
@@ -243,14 +255,39 @@ func settingsFromFile(file backupSettingsFile, fallbackDir string) BackupSetting
 	return settings
 }
 
-// defaultBackupDir is the folder a fresh install backs up to. It does not
-// touch the filesystem: the first export creates it.
-func defaultBackupDir(fallbackDir string) string {
+// storedBackupDir returns the folder the client should write to: the stored one
+// when the file records a choice, otherwise the default. An empty or relative
+// value and the legacy Documents folder all mean "never chosen" — a file that
+// predates dirChosen cannot tell them apart. A user who picks the legacy folder
+// through the page records a choice, so it is kept.
+func storedBackupDir(file backupSettingsFile, defaultDir string) string {
+	dir := strings.TrimSpace(file.Dir)
+	if dir == "" || !filepath.IsAbs(dir) {
+		return defaultDir
+	}
+	if !file.DirChosen && isLegacyBackupDir(dir) {
+		return defaultDir
+	}
+	return dir
+}
+
+// isLegacyBackupDir reports whether dir is the folder that builds before the
+// app-data move created under Documents.
+func isLegacyBackupDir(dir string) bool {
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
-		return fallbackDir
+		return false
 	}
-	return filepath.Join(home, "Documents", defaultBackupDirName)
+	legacy := filepath.Join(home, "Documents", legacyDefaultBackupDirName)
+	if filepath.Clean(dir) == filepath.Clean(legacy) {
+		return true
+	}
+	// macOS and Windows file systems ignore case, and the folder name can come
+	// back with a different capitalisation than the one written here.
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(dir), filepath.Clean(legacy))
+	}
+	return false
 }
 
 // ensureWritableDir creates dir and proves it is writable, so an export never

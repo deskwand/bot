@@ -21,14 +21,14 @@ func newBackupSettings(t *testing.T) (*FileBackupSettings, string) {
 	return store, appDir
 }
 
-func TestFileBackupSettingsDefaultsToDocuments(t *testing.T) {
-	store, _ := newBackupSettings(t)
+func TestFileBackupSettingsDefaultsToAppDataDir(t *testing.T) {
+	store, appDir := newBackupSettings(t)
 
 	settings, err := store.Settings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := defaultBackupDir(filepath.Join(t.TempDir(), "backups")); settings.Dir != want {
+	if want := filepath.Join(appDir, "backups"); settings.Dir != want {
 		t.Fatalf("dir = %q, want %q", settings.Dir, want)
 	}
 	if !filepath.IsAbs(settings.Dir) {
@@ -42,11 +42,107 @@ func TestFileBackupSettingsDefaultsToDocuments(t *testing.T) {
 	}
 }
 
+// A file whose dir is exactly the legacy Documents folder never recorded a
+// choice, so an upgraded client follows the new default instead of asking for
+// Documents access again.
+func TestFileBackupSettingsMigratesLegacyDocumentsDir(t *testing.T) {
+	legacy := legacyBackupDir(t)
+	store, appDir := newBackupSettings(t)
+	writeSettingsFile(t, appDir, backupSettingsFile{Dir: legacy, Auto: true, IntervalHours: 6, Keep: 10})
+
+	want := filepath.Join(appDir, "backups")
+	settings, err := store.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Dir != want {
+		t.Fatalf("dir = %q, want the app data folder %q", settings.Dir, want)
+	}
+	if !settings.Auto || settings.IntervalHours != 6 || settings.Keep != 10 {
+		t.Fatalf("migration dropped the rest of the file: %#v", settings)
+	}
+
+	// Recording a run stores the folder the client actually used.
+	if _, err := store.RecordRun(time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC), filepath.Join(want, "a.zip"), nil); err != nil {
+		t.Fatal(err)
+	}
+	file := readSettingsFile(t, appDir)
+	if file.Dir != want {
+		t.Fatalf("stored dir = %q, want %q", file.Dir, want)
+	}
+}
+
+// Picking the legacy folder on purpose has to survive: only a file without a
+// recorded choice is migrated. This goes through the read path on purpose —
+// Save would create the folder, and that means touching the real Documents
+// directory from a test.
+func TestFileBackupSettingsKeepsChosenLegacyDir(t *testing.T) {
+	legacy := legacyBackupDir(t)
+	store, appDir := newBackupSettings(t)
+	writeSettingsFile(t, appDir, backupSettingsFile{Dir: legacy, DirChosen: true, IntervalHours: 24, Keep: 5})
+
+	settings, err := store.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Dir != legacy {
+		t.Fatalf("dir = %q, want the chosen %q", settings.Dir, legacy)
+	}
+}
+
+// Save records that the folder is a choice, so a later upgrade cannot read it
+// as a default and move the client away from it.
+func TestFileBackupSettingsSaveRecordsChoice(t *testing.T) {
+	store, appDir := newBackupSettings(t)
+	dir := t.TempDir()
+
+	if _, err := store.Save(BackupSettingsEditDTO{Dir: dir, IntervalHours: 6, Keep: 10}); err != nil {
+		t.Fatal(err)
+	}
+	file := readSettingsFile(t, appDir)
+	if !file.DirChosen || file.Dir != dir {
+		t.Fatalf("stored = %#v, want dir %q with the choice recorded", file, dir)
+	}
+}
+
+func legacyBackupDir(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	return filepath.Join(home, "Documents", legacyDefaultBackupDirName)
+}
+
+func writeSettingsFile(t *testing.T, appDir string, file backupSettingsFile) {
+	t.Helper()
+	data, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "backup.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readSettingsFile(t *testing.T, appDir string) backupSettingsFile {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(appDir, "backup.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file backupSettingsFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
 func TestSettingsFromFileNormalizesBadValues(t *testing.T) {
 	settings := settingsFromFile(backupSettingsFile{
 		Dir: "relative/path", Auto: true, IntervalHours: 2, Keep: 3,
 	}, "/fallback")
-	if settings.Dir != defaultBackupDir("/fallback") {
+	if settings.Dir != "/fallback" {
 		t.Fatalf("dir = %q, want the default folder", settings.Dir)
 	}
 	if settings.IntervalHours != 24 || settings.Keep != 5 {
@@ -162,7 +258,6 @@ func TestFileBackupSettingsSurvivesCorruptFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(appDir, "backup.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
 	settings, err := store.Settings()
 	if err != nil {
 		t.Fatal(err)
