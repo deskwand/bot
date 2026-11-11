@@ -21,6 +21,8 @@ import { setChannelOverride } from "../../src/channels/override";
 import type { BotMeta } from "../../src/bot/bot-store";
 import { MIN_WAKE_MS } from "../../src/bot/wake";
 import { setClockOverride } from "../../src/butler/notifier";
+import type { SpendEntry } from "../../src/life/books";
+import type { Tier } from "../../src/life/vitals";
 import { seedOwnerAddress } from "../helpers/channel-ref";
 import { fakeChannel } from "../helpers/fake-channel";
 
@@ -30,6 +32,25 @@ declare module "cloudflare:test" {
 
 const TOKEN = "test-admin-token";
 const OP = "op-e2e";
+
+const DAY_MS = 86_400_000;
+const START = Date.UTC(2030, 0, 1, 9, 0, 0);
+
+function spend(usd: number, at: number): SpendEntry {
+  return {
+    callId: crypto.randomUUID(),
+    at,
+    source: "butler",
+    provider: "opencode-go",
+    model: "deepseek-v4.1-flash",
+    inputTokens: 10,
+    outputTokens: 5,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    usd,
+    priced: true,
+  };
+}
 
 type DumpedTable = { table: TableSchema; rows: DumpRow[] };
 
@@ -49,6 +70,7 @@ function deps(): AdminDeps {
     channel: () => env.CHANNELS.get(env.CHANNELS.idFromName("channels")),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
+    life: () => env.LIFE.get(env.LIFE.idFromName("global")),
     artifacts: env.ARTIFACTS,
     mcpAuth: () => env.MCP_AUTH.get(env.MCP_AUTH.idFromName("global")),
   };
@@ -415,6 +437,113 @@ describe("backup and restore end to end", () => {
         (_instance, state) => state.storage.getAlarm(),
       );
       expect(alarm).toBe(now + MIN_WAKE_MS);
+    } finally {
+      setClockOverride(null);
+    }
+  });
+});
+
+describe("life ledger backup and restore", () => {
+  it("restores the books and the last notified tier", async () => {
+    let now = START;
+    setClockOverride({
+      now: () => now,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    });
+
+    try {
+      const life = env.LIFE.get(env.LIFE.idFromName("global"));
+      await life.recordCredit(20, "");
+      for (let day = 0; day < 6; day += 1) {
+        now = START + Math.round((day + 0.5) * DAY_MS);
+        await life.recordSpend(spend(2, now));
+      }
+      now = START + 6 * DAY_MS;
+
+      const before = await life.vitals();
+      expect(before).toMatchObject({
+        balanceUsd: 8,
+        tier: "lean",
+        metabolismStarted: true,
+      });
+
+      await acquire("export");
+      const lifeDump = await dumpDo({ do: "life", id: "" });
+      await release();
+
+      // The ledger and the KV table that holds notified_tier are both in it.
+      expect(
+        lifeDump.tables.find(({ table }) => table.name === "spend")?.rows,
+      ).toHaveLength(6);
+      expect(
+        lifeDump.tables.find(({ table }) => table.name === "credit")?.rows,
+      ).toHaveLength(1);
+      expect(
+        lifeDump.tables.find(({ table }) => table.name === "__kv")?.rows,
+      ).not.toHaveLength(0);
+
+      await acquire("restore");
+      await restoreDo({ do: "life", id: "" }, lifeDump);
+      await release();
+
+      const restored = env.LIFE.get(env.LIFE.idFromName("global"));
+      const after = await restored.vitals();
+      expect(after).toMatchObject({
+        balanceUsd: before.balanceUsd,
+        tier: before.tier,
+        metabolismStarted: before.metabolismStarted,
+      });
+
+      const notices: Tier[] = [];
+      await runInDurableObject(restored, (instance) => {
+        instance.notifyTierChange = async (tier) => {
+          notices.push(tier);
+        };
+      });
+
+      // The next spend must not announce lean a second time.
+      now = START + 6 * DAY_MS + 60_000;
+      await restored.recordSpend(spend(0.5, now));
+
+      expect((await restored.vitals()).tier).toBe("lean");
+      expect(notices).toEqual([]);
+    } finally {
+      setClockOverride(null);
+    }
+  });
+
+  it("restores an old backup with no ledger as ample and not started", async () => {
+    const now = START;
+    setClockOverride({
+      now: () => now,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    });
+
+    try {
+      const life = env.LIFE.get(env.LIFE.idFromName("global"));
+      await life.recordCredit(20, "");
+      await life.recordSpend(spend(3, now));
+      expect((await life.vitals()).metabolismStarted).toBe(true);
+
+      // An old backup has no life object at all; restoring its (empty) shape
+      // is what leaves the ledger with no tables.
+      const legacy = { schema: { tables: [], indexes: [] }, tables: [] };
+      await acquire("restore");
+      await restoreDo({ do: "life", id: "" }, legacy);
+      await release();
+
+      const restored = env.LIFE.get(env.LIFE.idFromName("global"));
+      expect(await restored.vitals()).toEqual({
+        balanceUsd: 0,
+        dailySpendUsd: 0,
+        runwayDays: null,
+        tier: "ample",
+        metabolismStarted: false,
+        unpriced: false,
+        topSources: [],
+      });
     } finally {
       setClockOverride(null);
     }

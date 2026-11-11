@@ -588,7 +588,7 @@ func TestRestoreOrder(t *testing.T) {
 			groups = append(groups, group)
 		}
 	}
-	wantGroups := []string{"task/t1", "task/t2", "bot/b1", "channel", "butler"}
+	wantGroups := []string{"task/t1", "task/t2", "bot/b1", "life", "channel", "butler"}
 	if !reflect.DeepEqual(groups, wantGroups) {
 		t.Fatalf("restore order = %v, want %v", groups, wantGroups)
 	}

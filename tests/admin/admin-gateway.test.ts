@@ -22,6 +22,7 @@ function deps(name: string, token: string | null = TOKEN): AdminDeps {
       env.CHANNELS.get(env.CHANNELS.idFromName(`${name}-channels`)),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
+    life: () => env.LIFE.get(env.LIFE.idFromName(`${name}-life`)),
     artifacts: env.ARTIFACTS,
     mcpAuth: () => env.MCP_AUTH.get(env.MCP_AUTH.idFromName("global")),
   };
@@ -168,6 +169,21 @@ describe("admin gateway", () => {
     expect(schema.tables.map((table) => table.name)).toContain("runs");
   });
 
+  it("schema accepts do=life", async () => {
+    const gateway = createAdminGateway(deps("admin-life-schema"));
+    expect((await acquire(gateway)).status).toBe(200);
+
+    const response = await call(gateway, "/admin/backup/schema?do=life");
+
+    expect(response.status).toBe(200);
+    const schema = (await response.json()) as {
+      tables: { name: string }[];
+    };
+    const names = schema.tables.map((table) => table.name);
+    expect(names).toContain("spend");
+    expect(names).toContain("credit");
+  });
+
   it("returns 400 for an unknown do kind", async () => {
     const gateway = createAdminGateway(deps("admin-unknown-do"));
     expect((await acquire(gateway)).status).toBe(200);
@@ -223,6 +239,9 @@ describe("admin gateway", () => {
         throw new Error("unused");
       },
       bot: () => {
+        throw new Error("unused");
+      },
+      life: () => {
         throw new Error("unused");
       },
       artifacts: env.ARTIFACTS,

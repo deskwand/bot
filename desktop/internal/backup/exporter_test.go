@@ -127,6 +127,20 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 	}, map[string][]json.RawMessage{
 		"meta": {json.RawMessage(`{"__rowid":1,"key":"status","value":"active"}`)},
 	})
+	worker.setDO(DORef{DO: "life"}, DBSchema{
+		Tables: []TableSchema{
+			{Name: "spend", Create: `CREATE TABLE spend (call_id TEXT PRIMARY KEY, usd REAL)`},
+			{Name: "credit", Create: `CREATE TABLE credit (id INTEGER PRIMARY KEY AUTOINCREMENT, usd REAL)`},
+		},
+	}, map[string][]json.RawMessage{
+		"spend": {
+			json.RawMessage(`{"__rowid":1,"call_id":"c1","usd":{"$real":"0.25"}}`),
+			json.RawMessage(`{"__rowid":2,"call_id":"c2","usd":{"$real":"0.5"}}`),
+		},
+		"credit": {
+			json.RawMessage(`{"__rowid":1,"id":1,"usd":20}`),
+		},
+	})
 	worker.setDO(DORef{DO: "channel"}, DBSchema{
 		Tables: []TableSchema{{Name: "__kv", WithoutRowid: true}},
 	}, map[string][]json.RawMessage{
@@ -152,7 +166,7 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 	if got := manifest.ExportedAt; got != deps.Now() {
 		t.Fatalf("exportedAt = %v", got)
 	}
-	if len(manifest.DurableObjects) != 5 {
+	if len(manifest.DurableObjects) != 6 {
 		t.Fatalf("durable objects = %d", len(manifest.DurableObjects))
 	}
 	var butler *DOManifest
@@ -164,7 +178,7 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 			butler = object
 		}
 	}
-	if want := []string{"task/t1", "task/t2", "bot/b1", "channel/", "butler/"}; !reflect.DeepEqual(order, want) {
+	if want := []string{"task/t1", "task/t2", "bot/b1", "life/", "channel/", "butler/"}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("export order = %v, want %v", order, want)
 	}
 	if butler == nil || butler.Rows["memories"] != 2 || butler.Rows["schedules"] != 1 {
@@ -190,6 +204,8 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "butler"}, "schedules"), butlerRows["schedules"])
 	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "task", ID: "t1"}, "meta"),
 		worker.rowsOf(DORef{DO: "task", ID: "t1"})["meta"])
+	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "life"}, "credit"),
+		worker.rowsOf(DORef{DO: "life"})["credit"])
 	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "channel"}, "__kv"),
 		worker.rowsOf(DORef{DO: "channel"})["__kv"])
 
@@ -216,7 +232,7 @@ func TestExportRefsOrdersBotsAfterTasks(t *testing.T) {
 	for _, ref := range refs {
 		got = append(got, ref.DO+"/"+ref.ID)
 	}
-	want := []string{"task/t1", "task/t2", "bot/b1", "bot/b2", "channel/", "butler/"}
+	want := []string{"task/t1", "task/t2", "bot/b1", "bot/b2", "life/", "channel/", "butler/"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("export order = %v, want %v", got, want)
 	}

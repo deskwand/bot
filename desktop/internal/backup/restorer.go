@@ -385,11 +385,12 @@ func restoreData(ctx context.Context, deps Deps, client *AdminClient, reader *Re
 	return restoreObjects(ctx, deps, client, reader, manifest.R2, progress)
 }
 
-// restoreOrder puts tasks first, then bots, the channel hub, and the Butler
-// last so its alarm cannot fire before the data it points at exists.
+// restoreOrder puts tasks first, then bots, the life ledger, the channel hub,
+// and the Butler last so its alarm cannot fire before the data it points at
+// exists.
 func restoreOrder(objects []DOManifest) []DOManifest {
 	ordered := make([]DOManifest, 0, len(objects))
-	for _, kind := range []string{"task", "bot", "channel", "butler"} {
+	for _, kind := range []string{"task", "bot", "life", "channel", "butler"} {
 		for _, object := range objects {
 			if object.DO == kind {
 				ordered = append(ordered, object)

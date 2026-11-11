@@ -1,4 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
+import { BackupRpc } from "../admin/backup-rpc";
+import {
+  createIndexes,
+  type DbSchema,
+  type DumpPage,
+  type DumpRow,
+  type TableSchema,
+} from "../admin/sql-dump";
 import { getClock } from "../butler/notifier";
 import { Books, type SpendEntry } from "./books";
 import { computeVitals, tierRank, type Tier, type Vitals } from "./vitals";
@@ -17,9 +25,41 @@ type TierNotifier = {
 export class LifeDO extends DurableObject<Env> {
   private readonly books: Books;
 
+  private readonly backup: BackupRpc;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.books = new Books(ctx.storage.sql);
+    // The ledger has no maintenance lease of its own; the Butler holds it.
+    this.backup = new BackupRpc(ctx, null);
+  }
+
+  async backupSchema(): Promise<DbSchema> {
+    return this.backup.backupSchema();
+  }
+
+  async backupPage(
+    table: TableSchema,
+    cursor: string | null,
+  ): Promise<DumpPage> {
+    return this.backup.backupPage(table, cursor);
+  }
+
+  async restoreBegin(schema: DbSchema): Promise<void> {
+    await this.backup.restoreBegin(schema);
+  }
+
+  async restorePage(table: TableSchema, rows: DumpRow[]): Promise<void> {
+    await this.backup.restorePage(table, rows);
+  }
+
+  async restoreCommit(schema: DbSchema): Promise<void> {
+    // The ledger has no alarm to re-arm, unlike the Butler and the bots.
+    createIndexes(this.ctx.storage.sql, schema);
+  }
+
+  async restoreReset(): Promise<void> {
+    this.backup.restoreReset();
   }
 
   async recordSpend(entry: SpendEntry): Promise<void> {

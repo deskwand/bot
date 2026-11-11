@@ -509,7 +509,7 @@ func fakeOffset(w http.ResponseWriter, cursor string, length int) (int, bool) {
 
 func validDOKind(kind string) bool {
 	switch kind {
-	case "butler", "task", "bot", "channel":
+	case "butler", "task", "bot", "life", "channel":
 		return true
 	default:
 		return false

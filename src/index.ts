@@ -2,6 +2,7 @@ import { createAdminGateway } from "./admin/admin-gateway";
 import { ChannelDO } from "./channels/channel-do";
 import { createGateway } from "./gateway";
 import { ownerLocale } from "./i18n";
+import { lifeStub } from "./life/client";
 
 export { ButlerDO } from "./butler/butler-do";
 export { TaskDO } from "./task/task-do";
@@ -31,6 +32,7 @@ function admin(env: Env) {
     channel: () => channels(env),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
+    life: () => lifeStub(env),
     artifacts: env.ARTIFACTS,
     mcpAuth: () => mcpAuth(env),
     locale: () => ownerLocale(env),
