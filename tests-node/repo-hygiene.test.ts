@@ -33,7 +33,6 @@ describe("repository hygiene", () => {
     `om${'agt'}`,
     `bot-${'artifacts'}`,
     `file.deskwand${'.com'}`,
-    `api.deskwand${'.com'}`,
   ];
 
   it("carries no maintainer identifiers", () => {

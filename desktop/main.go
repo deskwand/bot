@@ -27,9 +27,12 @@ import (
 // it in sync with desktop/mygo.json.
 const appVersion = "0.1.39"
 
-// telemetryBaseURL is empty unless the build injects one with
-// -X main.telemetryBaseURL, so a build from source reports nothing.
-var telemetryBaseURL = ""
+// telemetryBaseURL is the API that receives the client's anonymous usage
+// events. It lives in the code rather than in a build flag: a release once
+// shipped without the endpoint compiled in, and every report after that
+// vanished without a trace. -X main.telemetryBaseURL still overrides it for a
+// build pointed at a local server. Development builds report nothing (see main).
+var telemetryBaseURL = "https://api.deskwand.com"
 
 const (
 	credentialService    = "com.deskwand.bot"
@@ -89,8 +92,6 @@ func main() {
 
 	// Anonymous usage reporting. A development build reports nothing: its runs
 	// would otherwise look like installs, and its version is not a release.
-	// A build from source reports nothing either: the reporting endpoint is
-	// injected at build time with -X main.telemetryBaseURL.
 	var reporter *telemetry.Reporter
 	telemetrySettings, telemetryErr := app.NewFileTelemetryStore(dataDir)
 	if telemetryErr != nil {

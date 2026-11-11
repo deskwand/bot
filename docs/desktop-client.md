@@ -347,12 +347,12 @@ Windows 代码签名可在 `windows.certificate` / `windows.signCommand` 中配�
 
 **维护者的真实值不进仓库。** 把它们写进两个 gitignored 文件：
 
-- `.release.env`（仓库根目录）：`PUBLIC_BASE_URL`、`R2_ARTIFACTS_BUCKET`、`DESKWAND_UPDATE_BASE`、`DESKWAND_UPDATE_BUCKET`、`DESKWAND_UPDATE_ENDPOINT`、`DESKWAND_TELEMETRY_BASE`；
+- `.release.env`（仓库根目录）：`PUBLIC_BASE_URL`、`R2_ARTIFACTS_BUCKET`、`DESKWAND_UPDATE_BASE`、`DESKWAND_UPDATE_BUCKET`、`DESKWAND_UPDATE_ENDPOINT`；
 - `desktop/mygo.release.json`：`{ "url": …, "s3": { "bucket": …, "prefix": …, "endpoint": … } }`。
 
-注入方式：`npm run deploy` 会用 `.release.env` 生成 `wrangler.local.jsonc` 再 `wrangler deploy --config`（`wrangler.jsonc` 里的 vars 会覆盖云端值，桶名又没有 CLI 参数可覆盖，所以两处都靠生成配置）；`npm run build:desktop` / `npm run release:desktop` 会在编译前把 `mygo.release.json` 合进 `mygo.json`、结束后还原，并用 `-X main.telemetryBaseURL` 注入遥测地址。
+注入方式：`npm run deploy` 会用 `.release.env` 生成 `wrangler.local.jsonc` 再 `wrangler deploy --config`（`wrangler.jsonc` 里的 vars 会覆盖云端值，桶名又没有 CLI 参数可覆盖，所以两处都靠生成配置）；`npm run build:desktop` / `npm run release:desktop` 会在编译前把 `mygo.release.json` 合进 `mygo.json`、结束后还原。遥测地址不走注入：它内置在 `desktop/main.go`，需要指向别的服务时直接传 `MYGO_LDFLAGS`。
 
-没有这两个文件时（开源检出）一切照常：构建和测试都能跑，只是产物指向占位符更新源、客户端不上报遥测；`release:desktop` 的真发布会直接拒绝，避免把打不开更新通道的客户端发出去。
+没有这两个文件时（开源检出）一切照常：构建和测试都能跑，产物指向占位符更新源；`release:desktop` 的真发布会直接拒绝，避免把打不开更新通道的客户端发出去。客户端只会向内置地址上报匿名的设备 ID、版本、平台与事件名；开发构建不报。
 
 客户端后台每 6 小时检查一次，发现新版本后弹窗询问；确认后才下载、安装并重启。开发构建或安装目录不可写时不做后台检查，手动检查会说明原因。
 

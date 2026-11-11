@@ -40,10 +40,8 @@ else
   trap 'exit 143' TERM
 fi
 
-# 遥测地址不进仓库：官方构建用 -X 注入，没配置时留空，客户端不上报。
-if [ -n "${DESKWAND_TELEMETRY_BASE:-}" ]; then
-  export MYGO_LDFLAGS="-X main.telemetryBaseURL=${DESKWAND_TELEMETRY_BASE}"
-fi
+# 遥测地址内置在 desktop/main.go：构建不再从环境变量注入，也就不存在
+# “配了但没生效”的失败模式。要指向别的服务时，直接传 MYGO_LDFLAGS。
 key_file="${DESKWAND_RELEASE_SIGNING_KEY_FILE:-$HOME/.deskwand-bot/release-signing-key.pem}"
 client_key_file="${DESKWAND_CLIENT_UPDATE_KEY_FILE:-$HOME/.deskwand-bot/client-update.key}"
 # shellcheck source=scripts/lib/worker-bundle.sh
