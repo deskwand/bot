@@ -1378,6 +1378,16 @@ describe("butler chat", () => {
       },
       { timeout: 10_000 },
     );
+    // The task finishing is a second, late report from the Butler: wait for
+    // it here so it cannot land on the next test's fake channel.
+    await vi.waitFor(
+      () => {
+        expect(
+          channel.sent.some((sent) => sent.text.includes("读完")),
+        ).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
     expect(channel.sent.some((sent) => sent.text === "已安排")).toBe(true);
   });
 
