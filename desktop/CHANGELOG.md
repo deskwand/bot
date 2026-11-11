@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.42
+
+- 备份不再默认放在「文稿」，升级后不会再反复向你要权限：默认目录改为应用数据目录（macOS `~/Library/Application Support/DeskWand Bot/backups`，Windows `%AppData%\DeskWand Bot\backups`），这个位置不需要任何授权。
+- 老客户端把那个默认值当成「你自己选的」写进了 `backup.json`；现在文件带一个 `dirChosen` 标记，没有标记且路径仍是旧默认的会自动跟随新默认，并在第一次运行后写回。你通过页面亲手选的目录（包括故意选「文稿」）会记下标记，不再被迁移。
+- 修一次性的模型调用没有会话名：管家改写和任务里的工具审查只传了 `signal`，OpenCode 网关要求 `x-opencode-session`，于是每次都被 400 拒绝——改写退化成原文、审查退化成弹审批。现在这些调用各自带上稳定的会话标识。
+
 ## 0.1.41
 
 - 新增「交易所」设置页：可以配置 OKX / Binance 的只读 API，任务就能用一个 `exchange_assets` 工具查余额与持仓（合计按 USDT 计）。
