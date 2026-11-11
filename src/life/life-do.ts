@@ -12,6 +12,7 @@ import { Books, type SpendEntry } from "./books";
 import { computeVitals, tierRank, type Tier, type Vitals } from "./vitals";
 
 const NOTIFIED_TIER_KEY = "notified_tier";
+const HOUR_MS = 3_600_000;
 
 /** Just the Butler RPC the ledger needs to reach the owner. */
 type TierNotifier = {
@@ -27,9 +28,13 @@ export class LifeDO extends DurableObject<Env> {
 
   private readonly backup: BackupRpc;
 
+  private cachedVitals: { hour: number; vitals: Vitals } | undefined;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.books = new Books(ctx.storage.sql);
+    this.books = new Books(ctx.storage.sql, (closure) =>
+      ctx.storage.transactionSync(closure),
+    );
     // The ledger has no maintenance lease of its own; the Butler holds it.
     this.backup = new BackupRpc(ctx, null);
   }
@@ -64,12 +69,19 @@ export class LifeDO extends DurableObject<Env> {
 
   async recordSpend(entry: SpendEntry): Promise<void> {
     this.books.recordSpend(entry);
-    const vitals = computeVitals(this.books.vitalsInput(getClock().now()));
+    this.cachedVitals = undefined;
+
+    const now = getClock().now();
+    const input = this.books.vitalsInput(now);
+    if (!input.hasCredit) return;
+    const vitals = computeVitals(input);
+    this.cachedVitals = { hour: Math.floor(now / HOUR_MS), vitals };
     await this.considerNotice(vitals, true);
   }
 
   async recordCredit(usd: number, note: string): Promise<Vitals> {
     this.books.recordCredit(getClock().now(), usd, "owner_topup", note);
+    this.cachedVitals = undefined;
     const vitals = await this.vitals();
     await this.considerNotice(vitals, false);
     return vitals;
@@ -81,13 +93,19 @@ export class LifeDO extends DurableObject<Env> {
     const adjustment =
       balanceUsd - (input.creditTotalUsd - input.spendTotalUsd);
     this.books.recordCredit(now, adjustment, "calibration", note);
-    const vitals = computeVitals(this.books.vitalsInput(now));
+    this.cachedVitals = undefined;
+    const vitals = await this.vitals();
     await this.considerNotice(vitals, false);
     return vitals;
   }
 
   async vitals(): Promise<Vitals> {
-    return computeVitals(this.books.vitalsInput(getClock().now()));
+    const now = getClock().now();
+    const hour = Math.floor(now / HOUR_MS);
+    if (this.cachedVitals?.hour === hour) return this.cachedVitals.vitals;
+    const vitals = computeVitals(this.books.vitalsInput(now));
+    this.cachedVitals = { hour, vitals };
+    return vitals;
   }
 
   /** Tells the owner through the Butler; replaced by a stub in tests. */
@@ -106,15 +124,21 @@ export class LifeDO extends DurableObject<Env> {
     vitals: Vitals,
     onlyWorse: boolean,
   ): Promise<void> {
-    const notified =
-      (await this.ctx.storage.kv.get<Tier>(NOTIFIED_TIER_KEY)) ?? "ample";
-    const changed = onlyWorse
-      ? tierRank(vitals.tier) > tierRank(notified)
-      : vitals.tier !== notified;
-    if (!changed) return;
-    await this.ctx.storage.kv.put(NOTIFIED_TIER_KEY, vitals.tier);
-    this.ctx.waitUntil(
-      this.notifyTierChange(vitals.tier, vitals.runwayDays).catch(console.warn),
-    );
+    try {
+      const notified =
+        (await this.ctx.storage.kv.get<Tier>(NOTIFIED_TIER_KEY)) ?? "ample";
+      const changed = onlyWorse
+        ? tierRank(vitals.tier) > tierRank(notified)
+        : vitals.tier !== notified;
+      if (!changed) return;
+      await this.ctx.storage.kv.put(NOTIFIED_TIER_KEY, vitals.tier);
+      this.ctx.waitUntil(
+        this.notifyTierChange(vitals.tier, vitals.runwayDays).catch(
+          console.warn,
+        ),
+      );
+    } catch (error) {
+      console.warn("life: tier notice bookkeeping failed", error);
+    }
   }
 }

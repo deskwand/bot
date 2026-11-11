@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setClockOverride } from "../../src/butler/notifier";
-import type { SpendEntry } from "../../src/life/books";
+import { Books, type SpendEntry } from "../../src/life/books";
 import type { Tier } from "../../src/life/vitals";
 
 declare module "cloudflare:test" {
@@ -108,6 +108,7 @@ describe("LifeDO", () => {
 
   it("counts spend older than the window in the balance only", async () => {
     const stub = life("life-old-spend");
+    now = START - 9 * DAY_MS;
     await stub.recordCredit(20, "");
     now = START - 8 * DAY_MS;
     await stub.recordSpend(entry({ usd: 4 }));
@@ -121,6 +122,7 @@ describe("LifeDO", () => {
 
   it("flags unpriced calls inside the window", async () => {
     const stub = life("life-unpriced");
+    await stub.recordCredit(20, "");
     now = START - DAY_MS;
     await stub.recordSpend(entry({ priced: false, usd: 0 }));
     now = START;
@@ -130,6 +132,7 @@ describe("LifeDO", () => {
 
   it("ignores unpriced calls older than the window", async () => {
     const stub = life("life-unpriced-old");
+    await stub.recordCredit(20, "");
     now = START - 8 * DAY_MS;
     await stub.recordSpend(entry({ priced: false, usd: 0 }));
     now = START;
@@ -139,6 +142,7 @@ describe("LifeDO", () => {
 
   it("groups the top three spend sources in the window", async () => {
     const stub = life("life-sources");
+    await stub.recordCredit(20, "");
     now = START - DAY_MS;
     await stub.recordSpend(entry({ source: "butler", usd: 1 }));
     await stub.recordSpend(entry({ source: "butler", usd: 2 }));
@@ -151,9 +155,150 @@ describe("LifeDO", () => {
     now = START;
 
     expect((await stub.vitals()).topSources).toEqual([
-      { source: "task:t1", usd: 5 },
+      { source: "task", usd: 5 },
       { source: "bot:b1", usd: 3.5 },
       { source: "butler", usd: 3 },
+    ]);
+  });
+
+  it("starts the balance at the first credit", async () => {
+    const stub = life("life-first-credit");
+    for (let day = 0; day < 7; day += 1) {
+      now = START - (7 - day) * DAY_MS + Math.round(0.5 * DAY_MS);
+      await stub.recordSpend(entry({ usd: 90 / 7 }));
+    }
+    now = START;
+
+    const credited = await stub.recordCredit(20, "");
+    expect(credited).toMatchObject({
+      balanceUsd: 20,
+      metabolismStarted: true,
+    });
+    expect(credited.balanceUsd).toBe(20);
+
+    now = START + 60_000;
+    await stub.recordSpend(entry({ usd: 5 }));
+    expect((await stub.vitals()).balanceUsd).toBe(15);
+  });
+
+  it("still rolls up spend before the first credit", async () => {
+    const stub = life("life-uncredited-rollup");
+    now = START - DAY_MS;
+    await stub.recordSpend(entry({ source: "task:t1", usd: 2 }));
+    now = START;
+
+    expect(await stub.vitals()).toMatchObject({
+      balanceUsd: 0,
+      metabolismStarted: false,
+      tier: "ample",
+      topSources: [],
+    });
+
+    const rows = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ hour: number; source: string; usd: number; unpriced: number }>(
+          `SELECT hour, source, usd, unpriced FROM spend_hourly`,
+        )
+        .toArray(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ source: "task", usd: 2, unpriced: 0 });
+  });
+
+  it("keeps totals and hourly rollups consistent after many spends", async () => {
+    const stub = life("life-many-spends");
+    await stub.recordCredit(20, "");
+
+    await runInDurableObject(stub, async (instance) => {
+      for (let index = 0; index < 1000; index += 1) {
+        now = START + Math.floor(index / 100) * 3_600_000;
+        await instance.recordSpend(
+          entry({
+            callId: `many-${index}`,
+            at: now,
+            source: index % 2 === 0 ? "butler" : "task:t1",
+            usd: 0.01,
+          }),
+        );
+      }
+    });
+    now = START + 10 * 3_600_000;
+
+    expect((await stub.vitals()).balanceUsd).toBeCloseTo(10, 6);
+
+    const ledger = await runInDurableObject(stub, (_instance, state) => {
+      const totals = state.storage.sql
+        .exec<{
+          credit_usd: number;
+          spend_usd: number;
+          first_spend_at: number | null;
+          first_credit_at: number | null;
+        }>(
+          `SELECT credit_usd, spend_usd, first_spend_at, first_credit_at FROM totals WHERE id = 1`,
+        )
+        .toArray()[0];
+      const direct =
+        state.storage.sql
+          .exec<{ total: number }>(
+            `SELECT COALESCE(SUM(usd), 0) AS total FROM spend
+             WHERE at >= (SELECT first_credit_at FROM totals WHERE id = 1)`,
+          )
+          .toArray()[0]?.total ?? 0;
+      const hourly =
+        state.storage.sql
+          .exec<{ total: number }>(
+            `SELECT COALESCE(SUM(usd), 0) AS total FROM spend_hourly`,
+          )
+          .toArray()[0]?.total ?? 0;
+      const raw =
+        state.storage.sql
+          .exec<{ total: number }>(
+            `SELECT COALESCE(SUM(usd), 0) AS total FROM spend`,
+          )
+          .toArray()[0]?.total ?? 0;
+      return { totals, direct, hourly, raw };
+    });
+
+    expect(ledger.totals.credit_usd).toBe(20);
+    expect(ledger.totals.spend_usd).toBeCloseTo(ledger.direct, 6);
+    expect(ledger.hourly).toBeCloseTo(ledger.raw, 6);
+  });
+
+  it("rebuilds a missing totals row on the next construction", async () => {
+    const stub = life("life-rebuild-totals");
+    await stub.recordCredit(20, "");
+    now = START + DAY_MS;
+    await stub.recordSpend(entry({ source: "task:t1", usd: 3 }));
+    await stub.recordSpend(entry({ source: "butler", usd: 2 }));
+    now = START + DAY_MS + 60_000;
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(`DELETE FROM totals`);
+      // The next construction finds no totals row and rebuilds it.
+      new Books(state.storage.sql, (closure) =>
+        state.storage.transactionSync(closure),
+      );
+    });
+    now = START + DAY_MS + 3_600_000;
+
+    expect((await stub.vitals()).balanceUsd).toBe(15);
+
+    const rebuilt = await runInDurableObject(stub, (_instance, state) => ({
+      totals: state.storage.sql
+        .exec<{ spend_usd: number }>(
+          `SELECT spend_usd FROM totals WHERE id = 1`,
+        )
+        .toArray()[0],
+      hourly: state.storage.sql
+        .exec<{ source: string; usd: number }>(
+          `SELECT source, usd FROM spend_hourly ORDER BY source`,
+        )
+        .toArray(),
+    }));
+    expect(rebuilt.totals.spend_usd).toBe(5);
+    expect(rebuilt.hourly).toEqual([
+      { source: "butler", usd: 2 },
+      { source: "task", usd: 3 },
     ]);
   });
 

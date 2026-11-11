@@ -495,6 +495,9 @@ describe("life ledger backup and restore", () => {
       expect(
         lifeDump.tables.find(({ table }) => table.name === "__kv")?.rows,
       ).not.toHaveLength(0);
+      expect(
+        lifeDump.tables.find(({ table }) => table.name === "spend_hourly")?.rows,
+      ).not.toHaveLength(0);
 
       await acquire("restore");
       await restoreDo({ do: "life", id: "" }, lifeDump);
@@ -507,6 +510,17 @@ describe("life ledger backup and restore", () => {
         tier: before.tier,
         metabolismStarted: before.metabolismStarted,
       });
+
+      const hourly = await runInDurableObject(
+        restored,
+        (_instance, state) =>
+          state.storage.sql
+            .exec<{ hour: number; source: string; usd: number }>(
+              `SELECT hour, source, usd FROM spend_hourly ORDER BY hour, source`,
+            )
+            .toArray(),
+      );
+      expect(hourly.length).toBeGreaterThan(0);
 
       const notices: Tier[] = [];
       await runInDurableObject(restored, (instance) => {
