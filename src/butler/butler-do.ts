@@ -20,6 +20,7 @@ import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
+import type { Meter } from "../life/meter";
 import { phoneRules } from "../phone/style";
 import { isInboxKey } from "../channels/inbox";
 import { parseActiveChannel } from "../channels/route-identity";
@@ -184,6 +185,14 @@ export class ButlerDO extends Agent<Env> {
   readonly registry = createRegistry();
 
   readonly harness: PiHarness;
+
+  /** Every model call in this object reports its usage to the life ledger. */
+  private get meter(): Meter {
+    return {
+      source: () => "butler",
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    };
+  }
 
   private readonly db: SqlStorage;
 
@@ -377,7 +386,7 @@ export class ButlerDO extends Agent<Env> {
         Harness.open(
           storage,
           {
-            models: createModelsForEnv(this.env),
+            models: createModelsForEnv(this.env, this.meter),
             registry: this.registry,
             onWake,
             settings: {
@@ -855,7 +864,7 @@ export class ButlerDO extends Agent<Env> {
     user: string,
     signal: AbortSignal,
   ): Promise<string> {
-    const models = createModelsForEnv(this.env);
+    const models = createModelsForEnv(this.env, this.meter);
     const ref = resolveModel(
       readRuntimeConfig(this.env).models[role],
       this.env,
@@ -1964,7 +1973,7 @@ export class ButlerDO extends Agent<Env> {
   private async ensureAgent(): Promise<void> {
     const ref = readRuntimeConfig(this.env).models.butler;
     const model = resolveModel(ref, this.env);
-    const models = createModelsForEnv(this.env);
+    const models = createModelsForEnv(this.env, this.meter);
     // Defaults apply only to new roots. Read the persisted model and level on
     // reopen.
     const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);

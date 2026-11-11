@@ -11,6 +11,8 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import type { Api, AuthContext, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { PiModel } from "agents/harness/pi";
 import { ownerLocale } from "../i18n";
+import { lifeStub } from "../life/client";
+import { meteredProvider, type Meter } from "../life/meter";
 import { readRuntimeConfig, RuntimeConfigError } from "../runtime-config";
 import { BUILTIN_PROVIDERS } from "./catalog.generated";
 import { modelKeyAuth } from "./model-key-auth";
@@ -86,7 +88,7 @@ export function defaultThinkingLevel(
  * default pi-ai auth context reads `process.env`, which Workers does not
  * populate from bindings.
  */
-export function createModelsForEnv(env: Env): MutableModels {
+export function createModelsForEnv(env: Env, meter?: Meter): MutableModels {
   const authContext: AuthContext = {
     async env(name) {
       if (!name.startsWith(MODEL_KEY_PREFIX)) return undefined;
@@ -99,9 +101,18 @@ export function createModelsForEnv(env: Env): MutableModels {
   };
 
   const models = createModels({ authContext });
+  const register = (provider: Provider): void => {
+    models.setProvider(
+      meter
+        ? meteredProvider(provider, meter, (entry) =>
+            lifeStub(env).recordSpend(entry),
+          )
+        : provider,
+    );
+  };
   for (const { create } of BUILTIN_PROVIDERS) {
     const provider = create();
-    models.setProvider(
+    register(
       Object.create(provider, {
         auth: {
           value: {
@@ -117,10 +128,10 @@ export function createModelsForEnv(env: Env): MutableModels {
   }
 
   for (const config of readCustomProviders(env)) {
-    models.setProvider(customProvider(config));
+    register(customProvider(config));
   }
-  for (const provider of testProviders.values()) models.setProvider(provider);
-  if (workersAiBindingReady(env)) models.setProvider(workersAiProvider(env));
+  for (const provider of testProviders.values()) register(provider);
+  if (workersAiBindingReady(env)) register(workersAiProvider(env));
   return models;
 }
 
@@ -196,7 +207,12 @@ function customProvider(config: CustomProviderConfig): Provider {
       baseUrl: config.baseUrl,
       input: ["text"],
       reasoning: false,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      cost: {
+        input: model.cost?.input ?? 0,
+        output: model.cost?.output ?? 0,
+        cacheRead: model.cost?.cacheRead ?? 0,
+        cacheWrite: model.cost?.cacheWrite ?? 0,
+      },
       contextWindow: model.contextWindow ?? 128000,
       maxTokens: model.maxTokens ?? 8192,
     })),

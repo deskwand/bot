@@ -13,6 +13,13 @@ export type CustomModelConfig = {
   id: string;
   contextWindow?: number;
   maxTokens?: number;
+  /** Prices per million tokens, in USD. */
+  cost?: {
+    input: number;
+    output: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
 };
 
 export type CustomProviderConfig = {
@@ -33,6 +40,26 @@ export const BUILTIN_PROVIDER_IDS: ReadonlySet<string> = new Set(
 
 const ROLES: readonly Role[] = ["butler", "task"];
 
+function priceValid(price: unknown): boolean {
+  return typeof price === "number" && Number.isFinite(price) && price >= 0;
+}
+
+/** Undefined is fine (the model is simply unpriced); every given price must be a non-negative number. */
+function modelCostValid(cost: CustomModelConfig["cost"]): boolean {
+  if (cost === undefined) return true;
+  if (typeof cost !== "object" || cost === null) return false;
+  const { input, output, cacheRead, cacheWrite } = cost as Record<
+    string,
+    unknown
+  >;
+  return (
+    priceValid(input) &&
+    priceValid(output) &&
+    (cacheRead === undefined || priceValid(cacheRead)) &&
+    (cacheWrite === undefined || priceValid(cacheWrite))
+  );
+}
+
 /**
  * Semantic checks the JSON schema cannot express: custom providers must not
  * shadow a built-in id, ids must be unique, and each role must reference a
@@ -51,6 +78,7 @@ export function modelsConfigValid(models: ModelsConfig): boolean {
     for (const model of provider.models) {
       if (modelIds.has(model.id)) return false;
       modelIds.add(model.id);
+      if (!modelCostValid(model.cost)) return false;
     }
     custom.set(provider.id, provider);
   }

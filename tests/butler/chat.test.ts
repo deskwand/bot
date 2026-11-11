@@ -24,6 +24,7 @@ import {
   WORKERS_AI_QUOTA_MARKER,
 } from "../../src/llm/model-errors";
 import { registerTestProvider, setModelOverride } from "../../src/llm/models";
+import { lifeStub } from "../../src/life/client";
 import { PI_PROGRESS } from "../../src/llm/pi-settings";
 import type { AdmittedMessage, OutboundMessage, RouteSnapshot } from "../../src/protocol";
 import { t } from "../../src/i18n";
@@ -345,6 +346,21 @@ describe("butler chat", () => {
       RECEIPT,
       { chatId: "42", text: "你好！" },
     ]);
+  });
+
+  it("reports a turn's model call to the life ledger", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ text: "你好！" }]));
+
+    await butler("chat-ledger").handleMessage(
+      message({ text: "你好", eventId: "tg:ledger" }),
+    );
+
+    await vi.waitFor(async () => {
+      const vitals = await lifeStub(env).vitals();
+      expect(vitals.topSources.map((entry) => entry.source)).toContain("butler");
+    });
   });
 
   it("sends an @mention to the butler conversation", async () => {

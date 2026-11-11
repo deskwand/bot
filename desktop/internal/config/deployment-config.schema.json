@@ -179,6 +179,30 @@
         "maxTokens": {
           "type": "integer",
           "minimum": 1
+        },
+        "cost": {
+          "type": "object",
+          "description": "Price per million tokens in USD. An absent cost means the model is unpriced.",
+          "required": ["input", "output"],
+          "properties": {
+            "input": {
+              "type": "number",
+              "minimum": 0
+            },
+            "output": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cacheRead": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cacheWrite": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": true
         }
       },
       "additionalProperties": true
