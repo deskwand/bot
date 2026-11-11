@@ -22,6 +22,7 @@ import type { TaskSpec } from "../../src/protocol";
 import { scriptedModel } from "../helpers/scripted-model";
 import { fakeChannel } from "../helpers/fake-channel";
 import { seedOwnerAddress } from "../helpers/channel-ref";
+import { resetLife } from "../helpers/life";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -201,6 +202,32 @@ describe("TaskDO lifecycle", () => {
 
     // Claude Haiku 4.5 offers off, minimal, low, medium, high.
     expect(await storedLevel(stub)).toBe("medium");
+  });
+
+  it("attributes a bot's run to the bot in the ledger", async () => {
+    setEnv(taskConfig());
+    setModelOverride(scriptedModel([{ text: "done" }]));
+    const taskId = "t-bot-spend";
+    const stub = task(taskId);
+    await resetLife();
+
+    try {
+      await stub.start({ ...spec(taskId), botId: "b-ledger" });
+
+      await vi.waitFor(async () => {
+        const sources = await runInDurableObject(
+          env.LIFE.get(env.LIFE.idFromName("global")),
+          (_instance, state) =>
+            state.storage.sql
+              .exec<{ source: string }>(`SELECT source FROM spend`)
+              .toArray()
+              .map((row) => row.source),
+        );
+        expect(sources).toContain("bot:b-ledger");
+      });
+    } finally {
+      await resetLife();
+    }
   });
 
   it("uses the substituted model's default instead of the role's level", async () => {

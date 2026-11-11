@@ -1,6 +1,7 @@
 import type { Api, Model, StreamFunction, Usage } from "@earendil-works/pi-ai";
 import type { Provider } from "@earendil-works/pi-ai/models";
 import type { SpendEntry } from "./books";
+import { getClock } from "../butler/notifier";
 import { WORKERS_AI_PROVIDER_ID } from "../llm/workers-ai";
 
 export type Meter = {
@@ -64,7 +65,7 @@ export function meteredProvider(
             );
             await report({
               callId,
-              at: Date.now(),
+              at: getClock().now(),
               source: meter.source(),
               provider: provider.id,
               model: message.model,

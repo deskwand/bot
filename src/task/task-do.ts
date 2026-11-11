@@ -158,7 +158,10 @@ export class TaskDO extends Agent<Env> {
   /** Every model call in this object reports its usage to the life ledger. */
   private get meter(): Meter {
     return {
-      source: () => `task:${this.currentTaskId() ?? "unknown"}`,
+      source: () =>
+        this.spec?.botId !== undefined
+          ? `bot:${this.spec.botId}`
+          : `task:${this.currentTaskId() ?? "unknown"}`,
       waitUntil: (promise) => this.ctx.waitUntil(promise),
     };
   }
