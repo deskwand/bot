@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.41
+
+- 新增「交易所」设置页：可以配置 OKX / Binance 的只读 API，任务就能用一个 `exchange_assets` 工具查余额与持仓（合计按 USDT 计）。
+- 密钥只存到 Cloudflare（`EXCHANGE_SECRET_<ID>`），界面不回显；账号按 id 引用，可加自定义地址（OKX 分区站点、Binance 被 451 时需要代理）。
+- 每个账号都能「测试连接」，保存并部署后由已部署的 Worker 实际探测；多个账号里某个失败不影响其它账号，快照缓存 60 秒。
+- 删除账号不会删除密钥，页面会列出这些遗留的密钥名，需要你自己在 Cloudflare 里清掉。
+
 ## 未发布
 
 - 新增「交易所」页：填写 OKX / Binance 只读 API，保存即部署，逐行「测试连接」。账号写进 `DESKWAND_CONFIG.exchange`，密钥写进 `EXCHANGE_SECRET_<ID>`，页面只显示「已配置/未配置」，不回显明文。
