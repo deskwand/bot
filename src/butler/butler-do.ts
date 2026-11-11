@@ -32,6 +32,7 @@ import type {
 } from "../admin/sql-dump";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import { modelUnavailableShortText } from "../llm/model-errors";
+import { oneShotOptions } from "../llm/one-shot";
 import {
   createModelsForEnv,
   defaultThinkingLevel,
@@ -844,13 +845,14 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private readonly completeSpeak: SpeakComplete = (system, user, signal) =>
-    this.completeWith("butler", system, user, signal);
+    this.completeWith("butler", "butler.speak", system, user, signal);
 
   private readonly completeLookup: SpeakComplete = (system, user, signal) =>
-    this.completeWith("task", system, user, signal);
+    this.completeWith("task", "butler.lookup", system, user, signal);
 
   private async completeWith(
     role: "butler" | "task",
+    scope: string,
     system: string,
     user: string,
     signal: AbortSignal,
@@ -872,7 +874,7 @@ export class ButlerDO extends Agent<Env> {
         systemPrompt: system,
         messages: [{ role: "user", content: user, timestamp: Date.now() }],
       },
-      { signal },
+      oneShotOptions(`${scope}:${this.ctx.id.toString()}`, signal),
     );
     if (result.stopReason === "error" || result.stopReason === "aborted") {
       throw new Error(result.errorMessage ?? result.stopReason);

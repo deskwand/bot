@@ -38,6 +38,7 @@ import {
   modelUnavailableShortText,
   userTextForModelError,
 } from "../llm/model-errors";
+import { oneShotOptions } from "../llm/one-shot";
 import {
   createModelsForEnv,
   defaultThinkingLevel,
@@ -891,7 +892,7 @@ export class TaskDO extends Agent<Env> {
         systemPrompt: system,
         messages: [{ role: "user", content: user, timestamp: Date.now() }],
       },
-      { signal },
+      oneShotOptions(`task.review:${this.ctx.id.toString()}`, signal),
     );
     if (result.stopReason === "error" || result.stopReason === "aborted") {
       throw new Error(result.errorMessage ?? result.stopReason);

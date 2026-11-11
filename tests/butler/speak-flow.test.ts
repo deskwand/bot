@@ -92,8 +92,11 @@ describe("butler speak flow", () => {
   it("sends the rewritten completion and records what it said", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);
+    const sessions: (string | undefined)[] = [];
     setModelOverride(
-      scriptedModel([{ text: "查到了，最早 7:20，680 元。" }]),
+      scriptedModel([{ text: "查到了，最早 7:20，680 元。" }], {
+        onSession: (sessionId) => sessions.push(sessionId),
+      }),
     );
     const stub = butler("speak-completed");
     await seedTask(stub);
@@ -119,6 +122,10 @@ describe("butler speak flow", () => {
     expect(unread.rows.some((row) => row.kind === "task.completed")).toBe(
       false,
     );
+    // The rewrite runs outside the harness conversation; without a session the
+    // OpenCode gateway answers 400 missing_session_id and the rewrite is lost.
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatch(/^butler\.speak:.+/);
   });
 
   it("says a task with no summary is done before sending artifacts", async () => {

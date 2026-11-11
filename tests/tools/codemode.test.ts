@@ -197,12 +197,13 @@ describe("TaskDO codemode",()=>{
   });
   it("reviews against the authorization field",async()=>{
     let seen:TranscriptContext|undefined;
+    const sessions:(string|undefined)[]=[];
     vi.spyOn(globalThis,"fetch").mockImplementation(async()=>new Response("created",{status:201,headers:{"content-type":"text/plain"}}));
     setModelOverride(scriptedModel([
       {toolCalls:[{name:"codemode",args:{code:'const r=await tools.http_request({url:"https://fixture.test/items",method:"POST",body:"{}"});return r.status;'}}]},
       {observe:c=>{seen=c;},text:'{"verdict":"allow","reason":"按指令提交"}'},
       {toolCalls:[{name:"finish_task",args:{summary:"authorization review done"}}]},
-    ]));
+    ],{onSession:s=>sessions.push(s)}));
     reviewedMode();
     const id="t-code-review-auth",stub=task(id);
     await stub.start({taskId:id,title:id,instructions:"其他内容",authorization:"只允许提交表单"});
@@ -212,6 +213,10 @@ describe("TaskDO codemode",()=>{
     expect(user).toBeDefined();
     const userText=contentText(user!.content);
     expect(userText).toContain("只允许提交表单");expect(userText).not.toContain("其他内容");
+    // The review runs outside the harness conversation and needs its own
+    // routing session, or OpenCode answers 400 missing_session_id.
+    expect(sessions.filter(s=>s?.startsWith("task.review:"))).toHaveLength(1);
+    expect(sessions.every(s=>typeof s==="string"&&s!=="")).toBe(true);
     const tools=seen!.messages.filter(m=>m.role==="system").flatMap(m=>m.toolsAdded??[]);
     expect(tools).toEqual([]);
   });

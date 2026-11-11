@@ -31,7 +31,11 @@ let nextModel = 0;
  */
 export function scriptedModel(
   turns: ScriptedTurn[],
-  options: { contextWindow?: number } = {},
+  options: {
+    contextWindow?: number;
+    /** Called with the routing session id of every model request. */
+    onSession?: (sessionId: string | undefined) => void;
+  } = {},
 ): PiModel {
   nextModel += 1;
   const id = `scripted-${nextModel}`;
@@ -72,13 +76,15 @@ export function scriptedModel(
   // documented fallback answer before every request instead.
   const provider: Provider = {
     ...faux.provider,
-    stream: (model, context, options) => {
+    stream: (model, context, streamOptions) => {
+      options.onSession?.(sessionIdOf(streamOptions));
       refill(faux);
-      return faux.provider.stream(model, context, options);
+      return faux.provider.stream(model, context, streamOptions);
     },
-    streamSimple: (model, context, options) => {
+    streamSimple: (model, context, streamOptions) => {
+      options.onSession?.(sessionIdOf(streamOptions));
       refill(faux);
-      return faux.provider.streamSimple(model, context, options);
+      return faux.provider.streamSimple(model, context, streamOptions);
     },
   };
 
@@ -90,4 +96,10 @@ function refill(faux: FauxProviderHandle): void {
   if (faux.getPendingResponseCount() === 0) {
     faux.appendResponses([fauxAssistantMessage("done")]);
   }
+}
+
+/** The provider option union does not share a type; read only the field the test watches. */
+function sessionIdOf(options: unknown): string | undefined {
+  const sessionId = (options as { sessionId?: unknown } | undefined)?.sessionId;
+  return typeof sessionId === "string" ? sessionId : undefined;
 }
