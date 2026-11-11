@@ -219,6 +219,15 @@ export function resolveMcpHeaders(
 }
 
 /**
+ * True when the connection died at the pre-handshake `server/discover` probe.
+ * The SDK reports a 5xx answer to that probe as `Version negotiation failed`,
+ * which we answer by retrying without the probe.
+ */
+function isNegotiationFailure(error: string): boolean {
+  return error.startsWith("Version negotiation failed");
+}
+
+/**
  * Build a connector backed by an `Agent`'s MCP client manager. Servers are
  * registered under a stable, normalized id so tools can be scoped to them.
  * Header values of the form `env:NAME` are read from `env` at connect time.
@@ -238,16 +247,36 @@ export function mcpConnector(
       headers = { ...headers, Authorization: `Bearer ${token}` };
     }
 
-    // The SDK reuses an existing connection (live or restored from storage)
-    // with its old URL and headers, so drop it to apply fresh credentials.
-    await manager.removeServer(id);
-    await manager.registerServer(id, {
-      url: resolveMcpUrl(server, env),
-      name: server.name,
-      transport: headers ? { requestInit: { headers } } : undefined,
-    });
+    const url = resolveMcpUrl(server, env);
+    const transport = headers ? { requestInit: { headers } } : undefined;
+    const connect = async (legacy = false) => {
+      const client = legacy
+        ? { versionNegotiation: { mode: "legacy" as const } }
+        : undefined;
+      // The SDK reuses an existing connection (live or restored from storage)
+      // with its old URL and headers, so drop it to apply fresh credentials.
+      await manager.removeServer(id);
+      await manager.registerServer(id, {
+        url,
+        name: server.name,
+        transport,
+        client,
+      });
+      return manager.connectToServer(id);
+    };
 
-    const connection = await manager.connectToServer(id);
+    let connection = await connect();
+    // Before the classic handshake the client probes `server/discover` and
+    // treats a 5xx answer as fatal. Gateways that answer unknown methods with
+    // 500 (Zuul, for one) therefore hide perfectly good legacy servers; retry
+    // once with the plain handshake instead of failing the whole server.
+    if (
+      connection.state === "failed" &&
+      isNegotiationFailure(connection.error)
+    ) {
+      connection = await connect(true);
+    }
+
     if (connection.state === "authenticating") {
       throw new Error(`MCP server ${server.name} requires authentication`);
     }

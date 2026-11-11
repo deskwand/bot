@@ -103,15 +103,22 @@ function recorder(): {
   };
 }
 
-function fakeManager(listed: readonly McpToolInfo[] = []) {
+function fakeManager(
+  listed: readonly McpToolInfo[] = [],
+  connections: Array<{ state: string; error?: string }> = [
+    { state: "connected" },
+  ],
+) {
   const registered: Array<{
     id: string;
     config: {
       url: string;
       transport?: { requestInit?: { headers?: Record<string, string> } };
+      client?: { versionNegotiation?: { mode: string } };
     };
   }> = [];
   const order: string[] = [];
+  const pending = [...connections];
   const manager = {
     async removeServer(id: string) {
       order.push(`remove:${id}`);
@@ -121,13 +128,14 @@ function fakeManager(listed: readonly McpToolInfo[] = []) {
       config: {
         url: string;
         transport?: { requestInit?: { headers?: Record<string, string> } };
+        client?: { versionNegotiation?: { mode: string } };
       },
     ) {
       order.push(`register:${id}`);
       registered.push({ id, config });
     },
     async connectToServer() {
-      return { state: "connected" };
+      return pending.shift() ?? { state: "connected" };
     },
     async discoverIfConnected() {
       return { success: true };
@@ -171,6 +179,33 @@ describe("mcpConnector connection reuse", () => {
     const connect = mcpConnector(manager, {}, async () => "fresh");
     await connect(server({ oauth: true }));
     expect(order).toEqual(["remove:notion", "register:notion"]);
+  });
+
+  it("retries without era negotiation when the discover probe is answered with 5xx", async () => {
+    const { manager, registered } = fakeManager([], [
+      {
+        state: "failed",
+        error:
+          "Version negotiation failed: the server answered the probe with HTTP 500",
+      },
+      { state: "connected" },
+    ]);
+    const connect = mcpConnector(manager, {}, async () => "token");
+    await expect(connect(server())).resolves.toBeDefined();
+    expect(registered).toHaveLength(2);
+    expect(registered[0]!.config.client).toBeUndefined();
+    expect(registered[1]!.config.client).toEqual({
+      versionNegotiation: { mode: "legacy" },
+    });
+  });
+
+  it("does not retry a failure the negotiation probe did not cause", async () => {
+    const { manager, registered } = fakeManager([], [
+      { state: "failed", error: "connect ECONNREFUSED 127.0.0.1:9999" },
+    ]);
+    const connect = mcpConnector(manager, {}, async () => "token");
+    await expect(connect(server())).rejects.toThrow(/ECONNREFUSED/);
+    expect(registered).toHaveLength(1);
   });
 });
 
