@@ -194,17 +194,11 @@ case "$platform" in
     ;;
 esac
 
-# target 名与 mygo 的 -platform 取值。
+# target 名（也是 manifest 与归档里的平台名）。
 target_of() {
   case "$1" in
     macos) echo "darwin-arm64" ;;
     windows) echo "windows-amd64" ;;
-  esac
-}
-mygo_platform_of() {
-  case "$1" in
-    macos) echo "darwin/arm64" ;;
-    windows) echo "windows/amd64" ;;
   esac
 }
 build_dir_of() {
@@ -270,28 +264,24 @@ if [ "$dry_run" = true ]; then
   for target in "${targets[@]}"; do
     printf '   %-8s GET %s/update-%s.json\n' "$target" "$base" "$(target_of "$target")"
   done
-  echo "4. 逐目标生成并签名 Worker 发布包、嵌入客户端并打包本平台产物："
-  for target in "${targets[@]}"; do
-    printf '   %-8s bash scripts/build-desktop.sh --platform %s → desktop/build/%s/\n' \
-      "$target" "$target" "$(target_of "$target")"
-  done
-  echo "5. 从 ~/.mc/config.json 的 aliases.r2 读取 R2 凭据（不打印、不写盘），逐目标上传："
+  echo "4. 从 ~/.mc/config.json 的 aliases.r2 读取 R2 凭据（不打印、不写盘），逐目标构建并上传："
   for target in "${targets[@]}"; do
     t="$(target_of "$target")"
     files_of "$t"
     echo "   ${target} → ${t}"
-    echo "     上传：${installer}、${archive}、${slug}-<from>-to-${version}-${t}.delta（仅当存在上一版本）、"
+    echo "     命令：bash scripts/build-desktop.sh --platform ${target} --upload（一次调用里签名 Worker 发布包、"
+    echo "           嵌入客户端、打包并上传，每个平台只构建一次）"
+    echo "     上传：${installer}、${archive}、${slug}-<from>-to-${version}-${t}.delta（仅当存在上一版本，最多 updates.deltas 个）、"
     echo "           ${install_script}、SHA256SUMS（合并后）、update-${t}.json（最后上传）"
-    echo "     命令：cd desktop/frontend && npx mygo build -skip-build-command -platform $(mygo_platform_of "$target") -upload .."
     if [ "$target" = "windows" ]; then
       echo "     额外：MYGO_UPDATER_PRIVATE_KEY 与 LANG/LC_ALL=en_US.UTF-8（NSIS 需要 UTF-8 locale）"
     fi
   done
-  echo "6. 逐目标公网核验：manifest 的版本；归档、安装包、安装脚本的大小与 SHA-256 对公网 SHA256SUMS 逐字节核对"
+  echo "5. 逐目标公网核验：manifest 的版本；归档、安装包、安装脚本的大小与 SHA-256 对公网 SHA256SUMS 逐字节核对"
   if [ "$platform" = "both" ]; then
     echo "   windows 的核验额外带上 darwin-arm64，确认共享 SHA256SUMS 仍保留 macOS 行"
   fi
-  echo "7. 打 tag v${version}、推送到 origin，并在两个平台的 manifest 都到该版本后建 GitHub Release"
+  echo "6. 打 tag v${version}、推送到 origin，并在两个平台的 manifest 都到该版本后建 GitHub Release"
   echo "   （--no-github 跳过；事后补发用 --github-only）"
   echo
   echo "本命令只打印，以下动作一行都不跑：构建、读取私钥或 R2 凭据、联网、上传。"
@@ -317,7 +307,7 @@ if [ "$github_only" = true ]; then
   exit 0
 fi
 
-echo "==> 1/8 前置检查"
+echo "==> 1/6 前置检查"
 if [ -n "$(git -C "$root" status --porcelain)" ]; then
   echo "工作区不干净：请先提交或清理改动再发布" >&2
   exit 1
@@ -330,7 +320,7 @@ for key in "$release_key_file" "$client_key_file"; do
   fi
 done
 
-echo "==> 2/8 发布预检与线上版本检查"
+echo "==> 2/6 发布预检与线上版本检查"
 node --experimental-strip-types "$root/scripts/desktop-release.ts" preflight "$version"
 # 公网 manifest 的读取会偶发 fetch failed（本机实测），失败即中止发布会让人误以为
 # 版本冲突。这里只对网络读取重试 3 次；版本冲突等确定性错误仍会连续失败并中止。
@@ -348,19 +338,15 @@ for target in "${targets[@]}"; do
   done
 done
 
-echo "==> 3/8 逐平台构建产物"
-# 合并维护者的更新配置并保持到脚本退出：5/7 的 mygo -upload 也要读同一份 updates，
-# 若只在 build-desktop.sh 里合并，它退出时就会把 mygo.json 还原成占位符，上传会去
-# 读 updates.example.com 的 SHA256SUMS 而失败。
+echo "==> 3/6 逐平台构建并上传"
+# 每个平台只构建一次：mygo 的 -upload 与打包在同一次调用里完成。以前先构建一遍、
+# 上传时再构建一遍，编译、打包、下载旧归档和生成 delta 全都做了两遍。
+# 合并维护者的更新配置并保持到脚本退出：上传要读同一份 updates，若只在
+# build-desktop.sh 里合并，它退出时会还原成占位符，上传就会去读 updates.example.com。
 merge_config
 export DESKWAND_RELEASE_CONFIG_MERGED=1
-# build-desktop.sh 自己生成并签名 Worker 发布包、嵌入客户端，再打包本平台产物。
-for target in "${targets[@]}"; do
-  bash "$root/scripts/build-desktop.sh" --platform "$target"
-done
 
-echo "==> 4/8 读取 R2 凭据"
-# R2 凭据只存在于脚本内存与上传子 shell 的环境里，不打印、不写文件。
+# R2 凭据只存在于脚本内存与构建子 shell 的环境里，不打印、不写文件。
 r2_credentials="$(node -e '
 const fs = require("node:fs");
 const path = require("node:path");
@@ -383,12 +369,10 @@ aws_key_id="$(printf '%s\n' "$r2_credentials" | sed -n '1p')"
 aws_secret="$(printf '%s\n' "$r2_credentials" | sed -n '2p')"
 unset r2_credentials
 
-echo "==> 5/8 逐平台上传到 R2"
 for target in "${targets[@]}"; do
   t="$(target_of "$target")"
   files_of "$t"
-  echo "--> ${t}：${installer}、${archive}、${install_script}、SHA256SUMS、update-${t}.json"
-  # 凭据与更新私钥只存在于这个子 shell 的环境里。
+  echo "--> ${t}：构建并上传 ${installer}、${archive}、${install_script}、SHA256SUMS、update-${t}.json"
   (
     export AWS_ACCESS_KEY_ID="$aws_key_id" AWS_SECRET_ACCESS_KEY="$aws_secret" AWS_REGION=auto
     export MYGO_UPDATER_PRIVATE_KEY="$(cat "$client_key_file")"
@@ -398,13 +382,11 @@ for target in "${targets[@]}"; do
     fi
     unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
     export NO_PROXY='*'
-
-    cd "$frontend"
-    npx mygo build -skip-build-command -platform "$(mygo_platform_of "$target")" -upload ..
+    bash "$root/scripts/build-desktop.sh" --platform "$target" --upload
   )
 done
 
-echo "==> 6/8 公网核验"
+echo "==> 4/6 公网核验"
 # 刚上传的对象不会立刻在公网上可读（0.1.35 实测：核验第一次读到 404，约半分钟后正常），
 # 先等几秒再核验，避免把「还没生效」当成发布失败。
 sleep 5
@@ -430,7 +412,7 @@ for target in "${targets[@]}"; do
   done
 done
 
-echo "==> 7/8 完成"
+echo "==> 5/6 完成"
 for target in "${targets[@]}"; do
   t="$(target_of "$target")"
   files_of "$t"
@@ -442,7 +424,7 @@ done
 echo "只发布了一个平台时，另一个平台用 --platform <macos|windows> 单独重跑；不得重建同版本覆盖。"
 
 
-echo "==> 8/8 打 tag 与 GitHub Release"
+echo "==> 6/6 打 tag 与 GitHub Release"
 if [ "$github" = true ]; then
   github_tag_and_release
 else

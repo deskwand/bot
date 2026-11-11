@@ -54,16 +54,22 @@ min_from_version="${DESKWAND_MIN_FROM_VERSION:-0.1.0}"
 
 usage() {
   cat >&2 <<'EOF'
-用法：build-desktop.sh [--platform macos|windows]
+用法：build-desktop.sh [--platform macos|windows] [--upload]
 
   --platform macos    默认值，构建 .app 与 .dmg
   --platform windows  交叉构建 Windows amd64 可执行文件、NSIS 安装器与更新归档
+  --upload            构建完成后直接上传到更新源（需要 R2 凭据，发布流程用）
 EOF
 }
 
 platform="macos"
+upload=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --upload)
+      upload=true
+      shift
+      ;;
     --platform)
       [ "$#" -ge 2 ] || { usage; exit 1; }
       platform="$2"
@@ -110,6 +116,11 @@ if [ -z "$version" ]; then
   exit 1
 fi
 
+if [ "$upload" = true ] && [ ! -f "$client_key_file" ]; then
+  echo "缺少客户端更新私钥：$client_key_file（--upload 需要它来签名更新清单）" >&2
+  exit 1
+fi
+
 if [ "$platform" = "windows" ]; then
   # Windows 宿主上 MyGo 会自行下载或使用已安装的 NSIS；只有交叉构建才要求
   # 本机 PATH 里有 makensis。
@@ -144,7 +155,16 @@ case "$platform" in
     # 只清理本平台目录与共享校验和：同一工作区里可能刚构建过 windows 产物，
     # 发布流程需要两者共存到各自上传完成。
     rm -rf "$root/desktop/build/darwin-arm64" "$root/desktop/build/SHA256SUMS"
-    npm --prefix "$frontend" run build:app
+    if [ "$upload" = true ]; then
+      # 直接调用 mygo，好在同一次构建里带上 -upload：build:app 脚本没有参数位。
+      (
+        export MYGO_UPDATER_PRIVATE_KEY="$(cat "$client_key_file")"
+        cd "$frontend"
+        npx mygo build -upload ..
+      )
+    else
+      npm --prefix "$frontend" run build:app
+    fi
 
     echo
     echo "==> 编译完成，产物："
@@ -164,7 +184,11 @@ case "$platform" in
       export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
       export MYGO_UPDATER_PRIVATE_KEY="$(cat "$client_key_file")"
       cd "$frontend"
-      npx mygo build -skip-build-command -platform windows/amd64 ..
+      if [ "$upload" = true ]; then
+        npx mygo build -skip-build-command -platform windows/amd64 -upload ..
+      else
+        npx mygo build -skip-build-command -platform windows/amd64 ..
+      fi
     )
 
     windows_dir="$root/desktop/build/windows-amd64"

@@ -12,6 +12,7 @@
   "out": "build",
   "updates": {
     "publicKey": "sCZid+D+ookI90aoaEfj0iZ6SXVk2WUUHUJagoUkJoo=",
+    "deltas": 2,
     "url": "https://updates.example.com/bot",
     "s3": {
       "bucket": "my-update-assets",
