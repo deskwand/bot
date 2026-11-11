@@ -682,6 +682,25 @@ describe("butler control tools", () => {
     expect(result).toEqual({ text: "晴", replay: undefined });
   });
 
+  it("registers the owner's life tools", async () => {
+    const names = await runInDurableObject(
+      butler("tools-life-registry"),
+      (instance) =>
+        instance.registry
+          .snapshot()
+          .tools()
+          .map(({ tool }) => tool.name),
+    );
+
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "life_vitals",
+        "life_credit",
+        "life_calibrate",
+      ]),
+    );
+  });
+
   it("tells the model to spawn a task when quick_lookup finds nothing", async () => {
     const result = await runInDurableObject(
       butler("tools-quick-lookup-empty"),

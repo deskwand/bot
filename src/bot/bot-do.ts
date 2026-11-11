@@ -9,7 +9,7 @@ import type {
 } from "../admin/sql-dump";
 import { getClock } from "../butler/notifier";
 import { ownerLocale } from "../i18n";
-import { readTier } from "../life/client";
+import { readTier, readVitals } from "../life/client";
 import { isQuotaExhaustedSummary } from "../llm/model-errors";
 import {
   BotStore,
@@ -585,6 +585,7 @@ export class BotDO extends DurableObject<Env> {
       } catch (error) {
         console.warn("bot owner profile failed:", error);
       }
+      const vitals = await readVitals(this.env);
 
       const instructions = buildBotInstructions({
         name: meta.name,
@@ -595,6 +596,7 @@ export class BotDO extends DurableObject<Env> {
         steer: meta.pendingSteer,
         manualWake:
           meta.manualWakeAt != null && meta.manualWakeAt === meta.nextWakeAt,
+        vitals,
       });
       const authorization = buildBotAuthorization({
         name: meta.name,

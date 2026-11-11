@@ -65,6 +65,7 @@ describe("TaskDO execution tools", () => {
         "http_request",
       ]),
     );
+    expect(names.filter((name) => name.startsWith("life_"))).toEqual([]);
   });
 
   it("reports save_artifact progress to the Butler without the outbox", async () => {

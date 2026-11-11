@@ -20,8 +20,10 @@ import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
+import { lifeStub, readVitals } from "../life/client";
 import { effectiveModelRef } from "../life/diet";
 import type { Meter } from "../life/meter";
+import { createLifeTools } from "../life/tools";
 import { phoneRules } from "../phone/style";
 import { isInboxKey } from "../channels/inbox";
 import { parseActiveChannel } from "../channels/route-identity";
@@ -343,11 +345,12 @@ export class ButlerDO extends Agent<Env> {
       sections: [
         {
           key: "butler",
-          render: () =>
+          render: async () =>
             butlerSystemPrompt(
               ownerLocale(this.env),
               enabledServices(this.env),
               parseActiveChannel(this.env.ACTIVE_CHANNEL),
+              await readVitals(this.env),
             ),
         },
         {
@@ -361,6 +364,35 @@ export class ButlerDO extends Agent<Env> {
             phoneRules(ownerLocale(this.env), { conversational: true }),
         },
       ],
+    });
+
+    this.registry.install({
+      name: "life",
+      tools: createLifeTools({
+        vitals: () => lifeStub(this.env).vitals(),
+        credit: (usd, note) => lifeStub(this.env).recordCredit(usd, note),
+        calibrate: (balanceUsd, note) =>
+          lifeStub(this.env).calibrate(balanceUsd, note),
+        effectiveModels: async () => {
+          const models = createModelsForEnv(this.env);
+          const configured = readRuntimeConfig(this.env).models;
+          return {
+            butler: await effectiveModelRef(
+              this.env,
+              models,
+              "butler",
+              configured.butler,
+            ),
+            task: await effectiveModelRef(
+              this.env,
+              models,
+              "task",
+              configured.task,
+            ),
+          };
+        },
+        locale: ownerLocale(this.env),
+      }),
     });
 
     // The default is a getter: pi only evaluates it when it opens the session,

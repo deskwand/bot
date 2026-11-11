@@ -1,6 +1,7 @@
 import { bot } from "./bot";
 import { butler } from "./butler";
 import { channel } from "./channel";
+import { life } from "./life";
 import { llm } from "./llm";
 import { mail } from "./mail";
 import { mcp } from "./mcp";
@@ -14,6 +15,7 @@ export const zh = {
   bot,
   butler,
   channel,
+  life,
   llm,
   mail,
   mcp,

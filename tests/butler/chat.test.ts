@@ -145,6 +145,17 @@ function message(evt: {
   };
 }
 
+/** Empties the shared ledger so a credit test leaves no trace. */
+async function resetLife(): Promise<void> {
+  await runInDurableObject(
+    env.LIFE.get(env.LIFE.idFromName("global")),
+    (_instance, state) => {
+      state.storage.sql.exec("DELETE FROM spend");
+      state.storage.sql.exec("DELETE FROM credit");
+    },
+  );
+}
+
 /** 真实的 8×8 纯色 PNG。 */
 const PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mM4YWODFTEMLQkAZZlQAS/gME0AAAAASUVORK5CYII=";
@@ -361,6 +372,32 @@ describe("butler chat", () => {
       const vitals = await lifeStub(env).vitals();
       expect(vitals.topSources.map((entry) => entry.source)).toContain("butler");
     });
+  });
+
+  it("records a credit the owner reports to the books", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "life_credit", args: { usd: 20 } }] },
+        { text: "记下了" },
+      ]),
+    );
+
+    await resetLife();
+    try {
+      await butler("chat-life-credit").handleMessage(
+        message({ text: "给你充了 20 美元", eventId: "tg:life-credit" }),
+      );
+
+      const vitals = await lifeStub(env).vitals();
+      expect(vitals).toMatchObject({
+        balanceUsd: 20,
+        metabolismStarted: true,
+      });
+    } finally {
+      await resetLife();
+    }
   });
 
   it("sends an @mention to the butler conversation", async () => {

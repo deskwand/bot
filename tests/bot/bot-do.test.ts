@@ -1161,6 +1161,7 @@ describe("BotDO documents", () => {
         runs: [],
         steer: [],
         manualWake: false,
+        vitals: null,
       }),
     );
   });

@@ -8,7 +8,19 @@ import {
 import type { RunRow } from "../../src/bot/bot-store";
 import type { BotDoc } from "../../src/bot/docs";
 import { t } from "../../src/i18n";
+import { lifeBlock } from "../../src/life/prompt";
+import type { Vitals } from "../../src/life/vitals";
 import { phoneRules } from "../../src/phone/style";
+
+const leanVitals: Vitals = {
+  balanceUsd: 13,
+  dailySpendUsd: 1,
+  runwayDays: 13,
+  tier: "lean",
+  metabolismStarted: true,
+  unpriced: false,
+  topSources: [],
+};
 
 const docs: BotDoc[] = [
   { name: "守则", content: "凌晨不发消息" },
@@ -39,6 +51,7 @@ function render(
     runs,
     steer: ["先看主站"],
     manualWake: false,
+    vitals: null,
     ...overrides,
   });
 }
@@ -224,6 +237,17 @@ describe("buildBotInstructions", () => {
     expect(render({ manualWake: true })).toContain(
       "唤醒原因：主人要求立即唤醒",
     );
+  });
+
+  it("adds the vitals block when vitals exist", () => {
+    expect(render({ vitals: leanVitals })).toContain(
+      lifeBlock("zh", leanVitals),
+    );
+  });
+
+  it("leaves the instructions unchanged without vitals", () => {
+    expect(render({ vitals: null })).toBe(render());
+    expect(render({ vitals: null })).not.toContain("活下去是你的第一要务");
   });
 });
 
