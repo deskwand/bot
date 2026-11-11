@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { fauxProvider } from "@earendil-works/pi-ai";
 import {
   createModelsForEnv,
   modelAcceptsImages,
   modelReadiness,
+  registerTestProvider,
   setModelOverride,
 } from "../../src/llm/models";
 
@@ -94,6 +96,62 @@ describe("createModelsForEnv", () => {
       const models = createModelsForEnv(envWith({ DESKWAND_CONFIG: config }));
       expect(models.getModel("deepseek", "deepseek-flash")).toBeDefined();
     }
+  });
+
+  it("carries a custom model's prices", () => {
+    const models = createModelsForEnv(
+      envWith({
+        DESKWAND_CONFIG: {
+          ...customConfig,
+          models: {
+            ...customConfig.models,
+            customProviders: [
+              {
+                ...customConfig.models.customProviders[0],
+                models: [
+                  { id: "gpt-5.6", cost: { input: 0.5, output: 1.5 } },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(models.getModel("my-proxy", "gpt-5.6")?.cost).toEqual({
+      input: 0.5,
+      output: 1.5,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("defaults a custom model without prices to zero", () => {
+    const models = createModelsForEnv(
+      envWith({ DESKWAND_CONFIG: customConfig }),
+    );
+
+    expect(models.getModel("my-proxy", "gpt-5.6")?.cost).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("leaves providers untouched when no meter is given", () => {
+    const faux = fauxProvider({
+      provider: "unmetered-test",
+      api: "unmetered-test",
+      models: [{ id: "m" }],
+    });
+    registerTestProvider(faux.provider);
+
+    const models = createModelsForEnv(envWith({}));
+
+    expect(models.getProvider("unmetered-test")?.stream).toBe(
+      faux.provider.stream,
+    );
   });
 });
 

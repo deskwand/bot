@@ -9,6 +9,7 @@ import {
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
+import { setClockOverride } from "../../src/butler/notifier";
 import {
   PAID_PLAN_REQUIRED_TEXT,
   QUOTA_EXHAUSTED_TEXT,
@@ -21,6 +22,7 @@ import type { TaskSpec } from "../../src/protocol";
 import { scriptedModel } from "../helpers/scripted-model";
 import { fakeChannel } from "../helpers/fake-channel";
 import { seedOwnerAddress } from "../helpers/channel-ref";
+import { resetLife } from "../helpers/life";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -51,6 +53,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setModelOverride(null);
+  setClockOverride(null);
   setChannelOverride("telegram", null);
   vi.restoreAllMocks();
   restoreEnv();
@@ -199,6 +202,93 @@ describe("TaskDO lifecycle", () => {
 
     // Claude Haiku 4.5 offers off, minimal, low, medium, high.
     expect(await storedLevel(stub)).toBe("medium");
+  });
+
+  it("attributes a bot's run to the bot in the ledger", async () => {
+    setEnv(taskConfig());
+    setModelOverride(scriptedModel([{ text: "done" }]));
+    const taskId = "t-bot-spend";
+    const stub = task(taskId);
+    await resetLife();
+
+    try {
+      await stub.start({ ...spec(taskId), botId: "b-ledger" });
+
+      await vi.waitFor(async () => {
+        const sources = await runInDurableObject(
+          env.LIFE.get(env.LIFE.idFromName("global")),
+          (_instance, state) =>
+            state.storage.sql
+              .exec<{ source: string }>(`SELECT source FROM spend`)
+              .toArray()
+              .map((row) => row.source),
+        );
+        expect(sources).toContain("bot:b-ledger");
+      });
+    } finally {
+      await resetLife();
+    }
+  });
+
+  it("uses the substituted model's default instead of the role's level", async () => {
+    const life = env.LIFE;
+    const day = 86_400_000;
+    const start = Date.UTC(2030, 0, 1, 9, 0, 0);
+    let now = start;
+    setClockOverride({
+      now: () => now,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    });
+    const books = life.get(life.idFromName("global"));
+    await books.recordCredit(20, "");
+    for (let index = 0; index < 7; index += 1) {
+      now = start + Math.round((index + 0.5) * day);
+      await books.recordSpend({
+        callId: crypto.randomUUID(),
+        at: now,
+        source: "task:test",
+        provider: "test",
+        model: "test",
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        usd: 1,
+        priced: true,
+      });
+    }
+    now = start + 7 * day;
+
+    setEnv({
+      DESKWAND_CONFIG: {
+        schemaVersion: 1,
+        owner: { telegramUserIds: [100000001] },
+        models: {
+          butler: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+          task: {
+            provider: "opencode-go",
+            id: "deepseek-v4.1-flash",
+            thinkingLevel: "low",
+          },
+          frugal: { provider: "opencode-go", id: "deepseek-v4-pro" },
+        },
+        mcpServers: [],
+      },
+    });
+    setModelOverride(scriptedModel([{ text: "done" }]));
+    const taskId = "t-diet-level";
+    const stub = task(taskId);
+
+    try {
+      await stub.start(spec(taskId));
+
+      // deepseek-v4-pro offers off, high, max: its default is high, not low.
+      expect(await storedLevel(stub)).toBe("high");
+    } finally {
+      // The tier books are shared with the rest of the run; empty them again.
+      await resetLife();
+    }
   });
 
   it("fails non-retryably when the model key is missing", async () => {

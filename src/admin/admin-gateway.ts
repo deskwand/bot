@@ -11,6 +11,7 @@ import type { BotDO } from "../bot/bot-do";
 import type { ButlerDO } from "../butler/butler-do";
 import type { ChannelDO } from "../channels/channel-do";
 import type { Locale } from "../i18n";
+import type { LifeDO } from "../life/life-do";
 import type { McpAuthDO } from "../mcp/mcp-auth-do";
 import type { TaskDO } from "../task/task-do";
 import {
@@ -33,6 +34,7 @@ export type AdminDeps = {
   channel(): DurableObjectStub<ChannelDO>;
   task(id: string): DurableObjectStub<TaskDO>;
   bot(id: string): DurableObjectStub<BotDO>;
+  life(): DurableObjectStub<LifeDO>;
   artifacts: R2Bucket;
   mcpAuth(): DurableObjectStub<McpAuthDO>;
   locale?: () => Locale;
@@ -114,6 +116,8 @@ function backupStub(deps: AdminDeps, url: URL): BackupStub | Response {
       return deps.task(id);
     case "bot":
       return deps.bot(id);
+    case "life":
+      return deps.life();
     default:
       return json(
         { code: "BACKUP_INVALID", message: `unknown do kind: ${kind ?? ""}` },

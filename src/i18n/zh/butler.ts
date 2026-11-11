@@ -65,6 +65,7 @@ export const butler = {
     kindStalled: "任务卡住",
     kindSlow: "任务还在进行",
     kindBotMessage: "机器人消息",
+    kindLifeTier: "档位变化",
   },
   quickLookup: {
     system:

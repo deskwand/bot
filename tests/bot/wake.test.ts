@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  DIET_RECHECK_MS,
   MAX_WAKE_MS,
   MIN_WAKE_MS,
   clampWakeAt,
+  dietHolds,
   failureDelayMs,
   formatDuration,
+  healCeilingMs,
   nextUtcMidnight,
   parseDuration,
+  stretchForDiet,
   utcDay,
   wakeCeilingMs,
 } from "../../src/bot/wake";
+import type { Tier } from "../../src/life/vitals";
 
 describe("wake rules", () => {
   it("parses durations", () => {
@@ -73,5 +78,39 @@ describe("wake rules", () => {
     const t = Date.UTC(2026, 10, 3, 23, 59);
     expect(utcDay(t)).toBe("2026-11-03");
     expect(nextUtcMidnight(t)).toBe(Date.UTC(2026, 10, 4));
+  });
+
+  it("holds only scheduled wakes when critical or dormant", () => {
+    expect(DIET_RECHECK_MS).toBe(3_600_000);
+    const tiers: Tier[] = ["ample", "lean", "critical", "dormant"];
+    for (const tier of tiers) {
+      for (const manual of [false, true]) {
+        expect(dietHolds(tier, manual)).toBe(
+          !manual && (tier === "critical" || tier === "dormant"),
+        );
+      }
+    }
+  });
+
+  it("stretches the heal ceiling only for lean", () => {
+    const late = Date.UTC(2026, 10, 3, 23, 0);
+    expect(healCeilingMs(late, 12 * 3_600_000)).toBe(
+      healCeilingMs(late, 12 * 3_600_000, "ample"),
+    );
+    expect(healCeilingMs(late, 12 * 3_600_000, "lean")).toBe(
+      24 * 3_600_000,
+    );
+    expect(healCeilingMs(late, 12 * 3_600_000, "critical")).toBe(
+      12 * 3_600_000,
+    );
+    expect(healCeilingMs(late, 30 * 86_400_000, "lean")).toBe(MAX_WAKE_MS);
+  });
+
+  it("doubles a lean interval and leaves other tiers alone", () => {
+    expect(stretchForDiet(0, 3_600_000, "lean")).toBe(7_200_000);
+    for (const tier of ["ample", "critical", "dormant"] as Tier[]) {
+      expect(stretchForDiet(0, 3_600_000, tier)).toBe(3_600_000);
+    }
+    expect(stretchForDiet(0, 20 * 86_400_000, "lean")).toBe(MAX_WAKE_MS);
   });
 });

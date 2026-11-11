@@ -1,4 +1,6 @@
 import { t, type Locale } from "../i18n";
+import { lifeBlock } from "../life/prompt";
+import type { Vitals } from "../life/vitals";
 import { phoneRules } from "../phone/style";
 import { MEMORY_DOC, RULES_DOC, isMethodDoc, type BotDoc } from "./docs";
 import type { RunRow } from "./bot-store";
@@ -94,6 +96,7 @@ export function buildBotInstructions(input: {
   runs: RunRow[];
   steer: string[];
   manualWake: boolean;
+  vitals: Vitals | null;
 }): string {
   const blocks = [
     `你是机器人 ${input.name}。\n\n你的使命：\n${input.mission}`,
@@ -126,6 +129,10 @@ export function buildBotInstructions(input: {
   if (records.length > 0) {
     blocks.push(`${RECORDS_NOTICE}\n<<<\n${records.join("\n\n")}\n>>>`);
   }
+
+  const life =
+    input.vitals === null ? "" : lifeBlock("zh", input.vitals);
+  if (life.length > 0) blocks.push(life);
 
   blocks.push(
     `本次运行：\n唤醒原因：${input.manualWake ? "主人要求立即唤醒" : "按计划唤醒"}`,

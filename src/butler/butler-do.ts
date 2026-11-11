@@ -20,6 +20,12 @@ import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
+import { lifeStub, readVitals } from "../life/client";
+import { effectiveModelRef } from "../life/diet";
+import type { Meter } from "../life/meter";
+import { lifeBlock } from "../life/prompt";
+import { createLifeTools } from "../life/tools";
+import type { Tier } from "../life/vitals";
 import { phoneRules } from "../phone/style";
 import { isInboxKey } from "../channels/inbox";
 import { parseActiveChannel } from "../channels/route-identity";
@@ -186,6 +192,14 @@ export class ButlerDO extends Agent<Env> {
 
   readonly harness: PiHarness;
 
+  /** Every model call in this object reports its usage to the life ledger. */
+  private get meter(): Meter {
+    return {
+      source: () => "butler",
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    };
+  }
+
   private readonly db: SqlStorage;
 
   private readonly repo: TasksRepo;
@@ -351,7 +365,47 @@ export class ButlerDO extends Agent<Env> {
           render: () =>
             phoneRules(ownerLocale(this.env), { conversational: true }),
         },
+        {
+          key: "life",
+          tag: false,
+          render: async () => {
+            const block = lifeBlock(
+              ownerLocale(this.env),
+              await readVitals(this.env),
+            );
+            return block.length > 0 ? block : undefined;
+          },
+        },
       ],
+    });
+
+    this.registry.install({
+      name: "life",
+      tools: createLifeTools({
+        vitals: () => lifeStub(this.env).vitals(),
+        credit: (usd, note) => lifeStub(this.env).recordCredit(usd, note),
+        calibrate: (balanceUsd, note) =>
+          lifeStub(this.env).calibrate(balanceUsd, note),
+        effectiveModels: async () => {
+          const models = createModelsForEnv(this.env);
+          const configured = readRuntimeConfig(this.env).models;
+          return {
+            butler: await effectiveModelRef(
+              this.env,
+              models,
+              "butler",
+              configured.butler,
+            ),
+            task: await effectiveModelRef(
+              this.env,
+              models,
+              "task",
+              configured.task,
+            ),
+          };
+        },
+        locale: ownerLocale(this.env),
+      }),
     });
 
     // The default is a getter: pi only evaluates it when it opens the session,
@@ -378,7 +432,7 @@ export class ButlerDO extends Agent<Env> {
         Harness.open(
           storage,
           {
-            models: createModelsForEnv(this.env),
+            models: createModelsForEnv(this.env, this.meter),
             registry: this.registry,
             onWake,
             settings: {
@@ -829,6 +883,14 @@ export class ButlerDO extends Agent<Env> {
     );
   }
 
+  /** Tells the owner the deployment moved to another tier. Fixed copy, no model call. */
+  async notifyLifeTier(tier: Tier, runwayDays: number | null): Promise<void> {
+    await this.say(
+      { kind: "life.tier", tier, runwayDays, body: "" },
+      { refId: "life:" + tier, priority: "alert" },
+    );
+  }
+
   /** What the Butler knows about the owner, for a bot's wake context. */
   async ownerProfile(): Promise<string> {
     return renderOwnerProfile(this.memory.all());
@@ -857,9 +919,14 @@ export class ButlerDO extends Agent<Env> {
     user: string,
     signal: AbortSignal,
   ): Promise<string> {
-    const models = createModelsForEnv(this.env);
+    const models = createModelsForEnv(this.env, this.meter);
     const ref = resolveModel(
-      readRuntimeConfig(this.env).models[role],
+      await effectiveModelRef(
+        this.env,
+        models,
+        role,
+        readRuntimeConfig(this.env).models[role],
+      ),
       this.env,
     );
     const model = models.getModel(ref.provider, ref.id);
@@ -1964,14 +2031,21 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private async ensureAgent(): Promise<void> {
-    const ref = readRuntimeConfig(this.env).models.butler;
-    const model = resolveModel(ref, this.env);
-    const models = createModelsForEnv(this.env);
+    const configured = readRuntimeConfig(this.env).models.butler;
+    const models = createModelsForEnv(this.env, this.meter);
     // Defaults apply only to new roots. Read the persisted model and level on
     // reopen.
     const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
     const agent = await conversation.agent(BACKGROUND_CONTEXT);
     const active = agent.model;
+    const ref = await effectiveModelRef(
+      this.env,
+      models,
+      "butler",
+      configured,
+      active ? { provider: active.provider, id: active.modelId } : undefined,
+    );
+    const model = resolveModel(ref, this.env);
     if (active?.provider !== model.provider || active.modelId !== model.id) {
       assertModelWindowSwitch(
         models,

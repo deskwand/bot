@@ -38,7 +38,7 @@ func validateManifestStructure(manifest Manifest) error {
 		if err := validateDORef(object.DORef); err != nil {
 			return err
 		}
-		if object.DO == "butler" || object.DO == "channel" {
+		if object.DO == "butler" || object.DO == "channel" || object.DO == "life" {
 			if object.ID != "" {
 				return fmt.Errorf("%s id must be empty", object.DO)
 			}

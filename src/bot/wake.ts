@@ -1,3 +1,8 @@
+import type { Tier } from "../life/vitals";
+
+/** How long a held bot waits before asking the tier again. */
+export const DIET_RECHECK_MS = 3_600_000;
+
 /** Shortest and longest interval a bot may schedule between wakes. */
 export const MIN_WAKE_MS = 300_000;
 export const MAX_WAKE_MS = 2_592_000_000;
@@ -56,8 +61,13 @@ export function wakeCeilingMs(defaultIntervalMs: number): number {
 export function healCeilingMs(
   now: number,
   defaultIntervalMs: number,
+  tier: Tier = "ample",
 ): number {
-  return Math.max(defaultIntervalMs, 21_600_000, nextUtcMidnight(now) - now);
+  const base =
+    tier === "lean"
+      ? Math.min(2 * defaultIntervalMs, MAX_WAKE_MS)
+      : defaultIntervalMs;
+  return Math.max(base, 21_600_000, nextUtcMidnight(now) - now);
 }
 
 /** Keeps a requested wake time inside the allowed window around `now`. */
@@ -71,6 +81,17 @@ export function clampWakeAt(
   if (at < min) return { at: min, clamped: true };
   if (at > max) return { at: max, clamped: true };
   return { at, clamped: false };
+}
+
+/** Whether a wake that is due should run. Manual wakes always run. */
+export function dietHolds(tier: Tier, manual: boolean): boolean {
+  return !manual && (tier === "critical" || tier === "dormant");
+}
+
+/** Doubles the gap to the next wake while lean; otherwise returns `at`. */
+export function stretchForDiet(now: number, at: number, tier: Tier): number {
+  if (tier !== "lean") return at;
+  return Math.min(now + 2 * (at - now), now + MAX_WAKE_MS);
 }
 
 /** Backoff: 15 minutes, 1 hour, then six hours or one default interval. */

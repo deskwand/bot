@@ -32,6 +32,8 @@ import { createBotTaskTools } from "../bot/bot-tools";
 import { discoverSkills, type SkillCatalog } from "../skills/catalog";
 import { skillSystemPrompt } from "../skills/prompt";
 import { ownerLocale, t } from "../i18n";
+import { effectiveModelRef } from "../life/diet";
+import type { Meter } from "../life/meter";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import {
   lastModelError,
@@ -154,6 +156,17 @@ export class TaskDO extends Agent<Env> {
   readonly registry = createRegistry();
 
   readonly harness: PiHarness;
+
+  /** Every model call in this object reports its usage to the life ledger. */
+  private get meter(): Meter {
+    return {
+      source: () =>
+        this.spec?.botId !== undefined
+          ? `bot:${this.spec.botId}`
+          : `task:${this.currentTaskId() ?? "unknown"}`,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    };
+  }
 
   readonly approvals: ApprovalGate;
 
@@ -422,7 +435,7 @@ export class TaskDO extends Agent<Env> {
         const harness = await Harness.open(
           storage,
           {
-            models: createModelsForEnv(this.env),
+            models: createModelsForEnv(this.env, this.meter),
             registry: this.registry,
             onWake,
             settings: { progress: PI_PROGRESS },
@@ -585,14 +598,23 @@ export class TaskDO extends Agent<Env> {
     // already has a root the defaults never reached, but it also already has
     // the level applied below, since only the first start gets here.
     const role = readRuntimeConfig(this.env).models.task;
-    const selected = effective.model ?? role;
+    const configured = effective.model ?? role;
+    const models = createModelsForEnv(this.env, this.meter);
+    const selected = await effectiveModelRef(
+      this.env,
+      models,
+      "task",
+      configured,
+    );
     await this.harness.session().setModel(resolveModel(selected, this.env));
-    // The role's own level stays the owner's stated intent; the model's default
-    // only fills in when the role has none.
-    const models = createModelsForEnv(this.env);
+    // The role's own level stays the owner's stated intent for its model; a
+    // substituted model uses its own default instead.
+    const substituted =
+      selected.provider !== configured.provider ||
+      selected.id !== configured.id;
     const level =
       selected.thinkingLevel ??
-      role.thinkingLevel ??
+      (substituted ? undefined : role.thinkingLevel) ??
       defaultThinkingLevel(models.getModel(selected.provider, selected.id));
     if (level !== undefined) {
       const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
@@ -875,9 +897,14 @@ export class TaskDO extends Agent<Env> {
     user,
     signal,
   ) => {
-    const models = createModelsForEnv(this.env);
+    const models = createModelsForEnv(this.env, this.meter);
     const ref = resolveModel(
-      this.spec?.model ?? readRuntimeConfig(this.env).models.task,
+      await effectiveModelRef(
+        this.env,
+        models,
+        "task",
+        this.spec?.model ?? readRuntimeConfig(this.env).models.task,
+      ),
       this.env,
     );
     const model = models.getModel(ref.provider, ref.id);

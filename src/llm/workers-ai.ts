@@ -30,6 +30,9 @@ import {
 
 export const WORKERS_AI_PROVIDER_ID = "workers-ai";
 
+/** The free model every deployment can run when credit is gone. */
+export const WORKERS_AI_DEFAULT_MODEL_ID = "@cf/google/gemma-4-26b-a4b-it";
+
 /**
  * Binding passthrough for the gateway's Workers AI provider. pi appends
  * `/chat/completions`, so this stops at the version segment.

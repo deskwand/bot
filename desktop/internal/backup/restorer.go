@@ -374,6 +374,21 @@ func restoreData(ctx context.Context, deps Deps, client *AdminClient, reader *Re
 		}
 	}
 
+	// A backup taken before the ledger has no life object; clear the deployment's
+	// ledger so the restore really produces an empty one.
+	lifeInBackup := false
+	for _, object := range manifest.DurableObjects {
+		if object.DO == "life" {
+			lifeInBackup = true
+			break
+		}
+	}
+	if !lifeInBackup {
+		if err := clearExtra(DORef{DO: "life"}); err != nil {
+			return err
+		}
+	}
+
 	progress.Phase = PhaseDatabase
 	deps.report(*progress)
 	for _, object := range restoreOrder(manifest.DurableObjects) {
@@ -385,11 +400,12 @@ func restoreData(ctx context.Context, deps Deps, client *AdminClient, reader *Re
 	return restoreObjects(ctx, deps, client, reader, manifest.R2, progress)
 }
 
-// restoreOrder puts tasks first, then bots, the channel hub, and the Butler
-// last so its alarm cannot fire before the data it points at exists.
+// restoreOrder puts tasks first, then bots, the life ledger, the channel hub,
+// and the Butler last so its alarm cannot fire before the data it points at
+// exists.
 func restoreOrder(objects []DOManifest) []DOManifest {
 	ordered := make([]DOManifest, 0, len(objects))
-	for _, kind := range []string{"task", "bot", "channel", "butler"} {
+	for _, kind := range []string{"task", "bot", "life", "channel", "butler"} {
 		for _, object := range objects {
 			if object.DO == kind {
 				ordered = append(ordered, object)
@@ -403,6 +419,11 @@ func restoreOrder(objects []DOManifest) []DOManifest {
 // never commits: there is no data to index and no alarm to re-arm.
 func clearDurableObject(ctx context.Context, client *AdminClient, ref DORef) error {
 	if err := client.RestoreReset(ctx, ref); err != nil {
+		// An older Worker has no life object at all, so there is nothing to
+		// clear.
+		if ref.DO == "life" && unknownDOKind(err, ref) {
+			return nil
+		}
 		return err
 	}
 	if err := client.RestoreBegin(ctx, ref, DBSchema{Tables: []TableSchema{}, Indexes: []string{}}); err != nil {

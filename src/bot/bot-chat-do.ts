@@ -4,6 +4,8 @@ import { PiHarness, type PiModel } from "agents/harness/pi";
 import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { ownerLocale, t, type Locale } from "../i18n";
+import { effectiveModelRef } from "../life/diet";
+import type { Meter } from "../life/meter";
 import {
   createModelsForEnv,
   defaultThinkingLevel,
@@ -62,6 +64,14 @@ export class BotChatDO extends Agent<Env> {
   readonly registry = createRegistry();
 
   readonly harness: PiHarness;
+
+  /** Every model call in this object reports its usage to the life ledger. */
+  private get meter(): Meter {
+    return {
+      source: () => `bot-chat:${this.botIdNow() ?? "unknown"}`,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    };
+  }
 
   /** The system prompt built from the snapshot for the current turn. */
   private prompt = "";
@@ -128,7 +138,7 @@ export class BotChatDO extends Agent<Env> {
         Harness.open(
           storage,
           {
-            models: createModelsForEnv(this.env),
+            models: createModelsForEnv(this.env, this.meter),
             registry: this.registry,
             onWake,
             settings: { progress: PI_PROGRESS },
@@ -261,9 +271,8 @@ export class BotChatDO extends Agent<Env> {
   }
 
   private async ensureAgent(): Promise<void> {
-    const ref = readRuntimeConfig(this.env).models.butler;
-    const model = resolveModel(ref, this.env);
-    const models = createModelsForEnv(this.env);
+    const configured = readRuntimeConfig(this.env).models.butler;
+    const models = createModelsForEnv(this.env, this.meter);
     // Same guard as the Butler: read the persisted model and refuse a switch
     // that shrinks the context window too far.
     const conversation = await (await this.harness.pi()).root(
@@ -271,6 +280,14 @@ export class BotChatDO extends Agent<Env> {
     );
     const agent = await conversation.agent(BACKGROUND_CONTEXT);
     const active = agent.model;
+    const ref = await effectiveModelRef(
+      this.env,
+      models,
+      "butler",
+      configured,
+      active ? { provider: active.provider, id: active.modelId } : undefined,
+    );
+    const model = resolveModel(ref, this.env);
     if (active?.provider !== model.provider || active.modelId !== model.id) {
       assertModelWindowSwitch(
         models,

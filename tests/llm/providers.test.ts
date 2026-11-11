@@ -94,6 +94,18 @@ describe("modelsConfigValid", () => {
     ).toBe(false);
   });
 
+  it("rejects a frugal ref with an unknown provider", () => {
+    expect(
+      modelsConfigValid(
+        config({ frugal: { provider: "ghost", id: "ghost-model" } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts a configuration without a frugal ref", () => {
+    expect(modelsConfigValid(config())).toBe(true);
+  });
+
   it("rejects a custom model id the provider does not declare", () => {
     expect(
       modelsConfigValid(
@@ -102,6 +114,29 @@ describe("modelsConfigValid", () => {
           customProviders: [myProxy],
         }),
       ),
+    ).toBe(false);
+  });
+
+  function withCost(cost: unknown): ModelsConfig {
+    return config({
+      customProviders: [
+        {
+          ...myProxy,
+          models: [{ id: "gpt-5.6", cost }],
+        } as unknown as CustomProviderConfig,
+      ],
+    });
+  }
+
+  it("rejects a custom model with a negative price", () => {
+    expect(
+      modelsConfigValid(withCost({ input: -0.5, output: 1.5 })),
+    ).toBe(false);
+  });
+
+  it("rejects a custom model with a non-numeric price", () => {
+    expect(
+      modelsConfigValid(withCost({ input: "free", output: 1.5 })),
     ).toBe(false);
   });
 });

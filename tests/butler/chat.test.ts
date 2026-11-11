@@ -24,11 +24,16 @@ import {
   WORKERS_AI_QUOTA_MARKER,
 } from "../../src/llm/model-errors";
 import { registerTestProvider, setModelOverride } from "../../src/llm/models";
+import type { SpendEntry } from "../../src/life/books";
+import { lifeStub } from "../../src/life/client";
+import { lifeBlock } from "../../src/life/prompt";
 import { PI_PROGRESS } from "../../src/llm/pi-settings";
+import { phoneRules } from "../../src/phone/style";
 import type { AdmittedMessage, OutboundMessage, RouteSnapshot } from "../../src/protocol";
 import { t } from "../../src/i18n";
 import { fakeChannel } from "../helpers/fake-channel";
 import { seedOwnerAddress } from "../helpers/channel-ref";
+import { resetLife } from "../helpers/life";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
@@ -216,6 +221,22 @@ function isTaskRequest(context: TranscriptContext): boolean {
   });
 }
 
+/** Flattens the replayed system sections into the prompt the model sees. */
+function systemPromptText(context: TranscriptContext | undefined): string {
+  const shown = new Map<string, string>();
+  for (const entry of context?.messages ?? []) {
+    if (entry.role !== "system") continue;
+    const sections = (entry as { sections?: Record<string, string | null> })
+      .sections;
+    if (sections === undefined) continue;
+    for (const [key, value] of Object.entries(sections)) {
+      if (value === null) shown.delete(key);
+      else shown.set(key, value);
+    }
+  }
+  return [...shown.values()].join("\n\n");
+}
+
 /** A tool that keeps the task running until the test releases it. */
 async function installSlowWait(stub: ReturnType<typeof task>): Promise<void> {
   await runInDurableObject(stub, (instance) => {
@@ -345,6 +366,123 @@ describe("butler chat", () => {
       RECEIPT,
       { chatId: "42", text: "你好！" },
     ]);
+  });
+
+  it("reports a turn's model call to the life ledger", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(scriptedModel([{ text: "你好！" }]));
+    await resetLife();
+
+    try {
+      // Sources are only visible once the metabolism has started.
+      await lifeStub(env).recordCredit(20, "");
+      await butler("chat-ledger").handleMessage(
+        message({ text: "你好", eventId: "tg:ledger" }),
+      );
+
+      await vi.waitFor(async () => {
+        const vitals = await lifeStub(env).vitals();
+        expect(vitals.topSources.map((entry) => entry.source)).toContain(
+          "butler",
+        );
+      });
+    } finally {
+      await resetLife();
+    }
+  });
+
+  it("records a credit the owner reports to the books", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "life_credit", args: { usd: 20 } }] },
+        { text: "记下了" },
+      ]),
+    );
+
+    await resetLife();
+    try {
+      await butler("chat-life-credit").handleMessage(
+        message({ text: "给你充了 20 美元", eventId: "tg:life-credit" }),
+      );
+
+      const vitals = await lifeStub(env).vitals();
+      expect(vitals).toMatchObject({
+        balanceUsd: 20,
+        metabolismStarted: true,
+      });
+    } finally {
+      await resetLife();
+    }
+  });
+
+  it("puts the vitals after the phone rules and omits them before metabolism starts", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    await resetLife();
+    try {
+      await lifeStub(env).recordCredit(20, "");
+      const spend: SpendEntry = {
+        callId: "life-prompt-spend",
+        at: Date.now(),
+        source: "butler",
+        provider: "test",
+        model: "test",
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        usd: 2,
+        priced: true,
+      };
+      await lifeStub(env).recordSpend(spend);
+      const block = lifeBlock("zh", await lifeStub(env).vitals());
+
+      let seen: TranscriptContext | undefined;
+      setModelOverride(
+        scriptedModel([
+          {
+            text: "活着",
+            observe: (context) => {
+              seen = context;
+            },
+          },
+        ]),
+      );
+      await butler("chat-life-prompt").handleMessage(
+        message({ text: "你好", eventId: "tg:life-prompt" }),
+      );
+
+      const prompt = systemPromptText(seen);
+      const phone = phoneRules("zh", { conversational: true });
+      expect(prompt.endsWith(block)).toBe(true);
+      expect(prompt.indexOf(phone)).toBeGreaterThan(-1);
+      expect(prompt.indexOf(phone)).toBeLessThan(prompt.indexOf(block));
+
+      await resetLife();
+      let clean: TranscriptContext | undefined;
+      setModelOverride(
+        scriptedModel([
+          {
+            text: "好",
+            observe: (context) => {
+              clean = context;
+            },
+          },
+        ]),
+      );
+      await butler("chat-life-prompt-clean").handleMessage(
+        message({ text: "你好", eventId: "tg:life-prompt-clean" }),
+      );
+
+      expect(systemPromptText(clean)).not.toContain(
+        "活下去是你的第一要务",
+      );
+    } finally {
+      await resetLife();
+    }
   });
 
   it("sends an @mention to the butler conversation", async () => {
@@ -1239,6 +1377,16 @@ describe("butler chat", () => {
       },
       { timeout: 10_000 },
     );
+    // The task finishing is a second, late report from the Butler: wait for
+    // it here so it cannot land on the next test's fake channel.
+    await vi.waitFor(
+      () => {
+        expect(
+          channel.sent.some((sent) => sent.text.includes("读完")),
+        ).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
     expect(channel.sent.some((sent) => sent.text === "已安排")).toBe(true);
   });
 
@@ -1394,10 +1542,13 @@ describe("butler chat", () => {
       routeKey: "wx-route",
     });
 
-    await vi.waitFor(() => {
-      expect(sends.filter((msg) => msg.text.includes("请求执行"))).toHaveLength(1);
-    });
-    expect(sends.some((msg) => msg.text.includes("\n对外发送\n"))).toBe(true);
-    expect(sends.some((msg) => msg.text === "收到")).toBe(true);
+    await vi.waitFor(
+      () => {
+        expect(sends.filter((msg) => msg.text.includes("请求执行"))).toHaveLength(1);
+        expect(sends.some((msg) => msg.text.includes("\n对外发送\n"))).toBe(true);
+        expect(sends.some((msg) => msg.text === "收到")).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
   });
 });

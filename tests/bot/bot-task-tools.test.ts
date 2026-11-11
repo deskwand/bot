@@ -129,6 +129,14 @@ describe("bot task tools", () => {
     ]);
   });
 
+  it("gives bots no life tools", () => {
+    const tools = toolsFor(fakeBot().control, fakeGate("approved").gate);
+
+    expect(
+      tools.map((tool) => tool.name).filter((name) => name.startsWith("life_")),
+    ).toEqual([]);
+  });
+
   it("write_doc passes the arguments through", async () => {
     const bot = fakeBot();
     const tools = toolsFor(bot.control, fakeGate("approved").gate);

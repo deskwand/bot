@@ -2,6 +2,7 @@ import type { Messages } from "../messages";
 import { bot } from "./bot";
 import { butler } from "./butler";
 import { channel } from "./channel";
+import { life } from "./life";
 import { llm } from "./llm";
 import { exchange } from "./exchange";
 import { mail } from "./mail";
@@ -14,6 +15,7 @@ export const en: Messages = {
   bot,
   butler,
   channel,
+  life,
   llm,
   exchange,
   mail,

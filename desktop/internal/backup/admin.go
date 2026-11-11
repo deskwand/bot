@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -352,6 +353,18 @@ func (c *AdminClient) statusError(response *http.Response) error {
 		message = fmt.Sprintf("admin request returned HTTP %d", response.StatusCode)
 	}
 	return domain.Error{Code: code, Message: c.redact(message)}
+}
+
+// unknownDOKind reports the exact 400 an older Worker returns for a DO kind it
+// does not know. The desktop client can be updated before its Worker, so the
+// life ledger is skipped instead of failing the backup.
+func unknownDOKind(err error, ref DORef) bool {
+	var coded domain.Error
+	if !errors.As(err, &coded) {
+		return false
+	}
+	return coded.Code == CodeBackupInvalid &&
+		coded.Message == "unknown do kind: "+ref.DO
 }
 
 // redact keeps the token out of an error surfaced to the user or a log.

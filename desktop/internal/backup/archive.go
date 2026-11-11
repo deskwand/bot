@@ -45,8 +45,8 @@ type DBSchema struct {
 	Indexes []string      `json:"indexes"`
 }
 
-// DORef identifies one Durable Object. DO is "butler", "task" or "channel";
-// ID is set only for task objects.
+// DORef identifies one Durable Object. DO is "butler", "task", "bot",
+// "life" or "channel"; ID is set only for task and bot objects.
 type DORef struct {
 	DO string `json:"do"`
 	ID string `json:"id"`
@@ -94,6 +94,8 @@ func TableEntry(ref DORef, table string) string {
 		return "do/butler/" + table + ".jsonl"
 	case "channel":
 		return "do/channel/" + table + ".jsonl"
+	case "life":
+		return "do/life/" + table + ".jsonl"
 	default:
 		return "do/" + ref.DO + "/" + ref.ID + "/" + table + ".jsonl"
 	}
@@ -513,7 +515,7 @@ func readManifestFile(file *zip.File) ([]byte, error) {
 
 func validateDORef(ref DORef) error {
 	switch ref.DO {
-	case "butler", "channel":
+	case "butler", "channel", "life":
 		return nil
 	case "task":
 		if ref.ID == "" {

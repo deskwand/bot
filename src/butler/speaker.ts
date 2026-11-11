@@ -1,6 +1,7 @@
-import { t, type Locale } from "../i18n";
+import { t, type Locale, type MessageKey } from "../i18n";
 import { phoneRules } from "../phone/style";
 import { persona } from "./persona";
+import type { Tier } from "../life/vitals";
 
 /** One thing that happened and needs to reach the owner in the butler's voice. */
 export type SpeakEvent =
@@ -8,7 +9,8 @@ export type SpeakEvent =
   | { kind: "task.failed"; title: string; body: string; retryable: boolean }
   | { kind: "task.stalled"; title: string; body: string }
   | { kind: "task.slow"; title: string; body: string }
-  | { kind: "bot.message"; botName: string; body: string };
+  | { kind: "bot.message"; botName: string; body: string }
+  | { kind: "life.tier"; tier: Tier; runwayDays: number | null; body: "" };
 
 export type SpeakComplete = (
   system: string,
@@ -30,6 +32,13 @@ export function rewriteLimit(locale: Locale): number {
 function bodyPresent(body: string): boolean {
   return body.trim() !== "";
 }
+
+const TIER_NOTICE: Record<Tier, MessageKey> = {
+  ample: "life.notice.ample",
+  lean: "life.notice.lean",
+  critical: "life.notice.critical",
+  dormant: "life.notice.dormant",
+};
 
 /** Text to send when the model cannot rewrite; never empty. */
 export function fallbackText(event: SpeakEvent, locale: Locale): string {
@@ -68,6 +77,15 @@ export function fallbackText(event: SpeakEvent, locale: Locale): string {
         botName: event.botName,
         body: event.body,
       });
+    case "life.tier": {
+      const runway =
+        event.runwayDays === null
+          ? t(locale, "life.prompt.noSpend")
+          : t(locale, "life.prompt.runway", {
+              days: event.runwayDays.toFixed(1),
+            });
+      return t(locale, TIER_NOTICE[event.tier], { runway });
+    }
   }
 }
 
@@ -100,6 +118,8 @@ function kindLabel(event: SpeakEvent, locale: Locale): string {
       return t(locale, "butler.speaker.kindSlow");
     case "bot.message":
       return t(locale, "butler.speaker.kindBotMessage");
+    case "life.tier":
+      return t(locale, "butler.speaker.kindLifeTier");
   }
 }
 
@@ -140,7 +160,9 @@ function userMessage(
     t(locale, "butler.speaker.userKind", { kind: kindLabel(event, locale) }),
     event.kind === "bot.message"
       ? t(locale, "butler.speaker.userBot", { botName: event.botName })
-      : t(locale, "butler.speaker.userTitle", { title: event.title }),
+      : event.kind === "life.tier"
+        ? ""
+        : t(locale, "butler.speaker.userTitle", { title: event.title }),
     "",
     event.body,
   ];
