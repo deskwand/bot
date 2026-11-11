@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.38
+
+- 修部分 MCP 服务连不上：SDK 会先发 `server/discover` 探测版本，网关（例如瑞幸前面的 Zuul）对未知方法回 500，就被当成致命错误，报「Version negotiation failed」。现在遇到这种探测失败会用传统握手重试一次，同一台服务器即可正常连接。
+- 正常协商的服务仍走新版路径；不是探测导致的失败照旧原样报错，不会被这次重试掩盖。
+
 ## 0.1.37
 
 - 瑞幸咖啡的几个只读操作不再每次弹审批：`queryShopList`、`searchProductForMcp`、`queryProductDetailInfo`、`previewOrder`、`queryOrderDetailInfo` 直接执行；`switchProduct`、`createOrder`、`cancelOrder` 仍按写操作走审批。
