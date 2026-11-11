@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.37
+
+- 瑞幸咖啡的几个只读操作不再每次弹审批：`queryShopList`、`searchProductForMcp`、`queryProductDetailInfo`、`previewOrder`、`queryOrderDetailInfo` 直接执行；`switchProduct`、`createOrder`、`cancelOrder` 仍按写操作走审批。
+- 这个目录项没有 MCP 注解，默认会把八个工具全当写操作，所以按实际行为逐个标了免审名单。
+
 ## 0.1.36
 
 - MCP 目录新增瑞幸咖啡（官方远程 MCP 服务）：在「MCP」页从目录里选它，填一次 Bearer Key 即可让任务查门店、找商品、下单和取餐码。
