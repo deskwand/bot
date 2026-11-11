@@ -25,7 +25,7 @@ import (
 
 // appVersion is the client version reported in the Cloudflare User-Agent. Keep
 // it in sync with desktop/mygo.json.
-const appVersion = "0.1.38"
+const appVersion = "0.1.39"
 
 // telemetryBaseURL is empty unless the build injects one with
 // -X main.telemetryBaseURL, so a build from source reports nothing.
