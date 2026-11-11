@@ -193,7 +193,7 @@ cp .dev.vars.example .dev.vars
 
 - `owner.telegramUserIds`：允许使用该 bot 的 Telegram 用户 ID（正整数）。空数组是合法配置，表示不授权任何人；不存在仓库内置 owner，也不会回退到源码常量。
 - `models`：按角色（`butler` / `task`）配置模型。`workers-ai` 是内置的免 key 厂商（默认）；其他内置厂商和 `models.customProviders` 里的自定义端点按 `MODEL_KEY_<ID>` 读取 key。
-- `mcpServers`：远程 MCP 服务器列表，推荐在桌面端"服务"页从目录添加（GitHub、Notion、Linear、Sentry、高德地图等），不必手写。只支持远程 MCP（Streamable HTTP / SSE），不支持 `npx` 启动的本地 stdio 服务。
+- `mcpServers`：远程 MCP 服务器列表，推荐在桌面端"服务"页从目录添加（GitHub、Notion、Linear、Sentry、高德地图、瑞幸咖啡等），不必手写。只支持远程 MCP（Streamable HTTP / SSE），不支持 `npx` 启动的本地 stdio 服务。
   - 审批：桌面端添加的服务默认"读免审、写智能"（`approvalPolicy: "writes"`，依据工具的 `readOnlyHint`）：只读工具直接执行，其他写操作先交给审查模型判断，常规操作直接放行，只有涉及金钱、删除、权限、对外发送等高风险操作才发 ✅/❌ 审批按钮，卡片附审查理由。标了 `destructiveHint` 的工具始终要审。可逐个工具改为智能、免审、要审或停用（`autoApprove` / `requireApproval` / `disabledTools`）。
   - 老部署：以前在工具页把写工具设成"要审"的服务仍保留在 `requireApproval` 里，升级后不会自动改回智能审查；需要到工具页把写工具改回"智能"并保存。
   - 密钥：header 值写 `env:NAME`，URL 中写 `{env:NAME}` 占位，`NAME` 为 `MCP_` 开头的 Worker secret；引用原样保留，不会把值展开进普通 var。

@@ -207,6 +207,32 @@
           "placement": "url"
         }
       ]
+    },
+    {
+      "id": "luckin",
+      "name": "瑞幸咖啡",
+      "category": "国内服务",
+      "description": "瑞幸咖啡：门店查询、选品、下单与取餐码",
+      "url": "https://gwmcp.lkcoffee.com/order/user/mcp",
+      "oauth": false,
+      "fields": [
+        {
+          "key": "token",
+          "label": "Bearer Key",
+          "help": "在瑞幸 AI 开放平台登录后复制 Bearer Key，有效期约 1 个月，过期需重新获取。",
+          "helpUrl": "https://open.lkcoffee.com/mcp",
+          "placement": "header",
+          "headerName": "Authorization",
+          "prefix": "Bearer "
+        }
+      ],
+      "autoApprove": [
+        "queryShopList",
+        "searchProductForMcp",
+        "queryProductDetailInfo",
+        "previewOrder",
+        "queryOrderDetailInfo"
+      ]
     }
   ]
 }

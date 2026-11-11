@@ -207,6 +207,26 @@
           "placement": "url"
         }
       ]
+    },
+    {
+      "id": "luckin",
+      "name": "瑞幸咖啡",
+      "category": {"zh": "国内服务", "en": "China services"},
+      "description": {"zh": "瑞幸咖啡：门店查询、选品、下单与取餐码", "en": "Luckin Coffee: shop lookup, menu search, ordering and pickup code"},
+      "url": "https://gwmcp.lkcoffee.com/order/user/mcp",
+      "oauth": false,
+      "fields": [
+        {
+          "key": "token",
+          "label": {"zh": "Bearer Key", "en": "Bearer Key"},
+          "help": {"zh": "在瑞幸 AI 开放平台登录后复制 Bearer Key，有效期约 1 个月，过期需重新获取。", "en": "Log in to the Luckin AI open platform and copy the Bearer key. It stays valid for about a month; get a new one when it expires."},
+          "helpUrl": "https://open.lkcoffee.com/mcp",
+          "placement": "header",
+          "headerName": "Authorization",
+          "prefix": "Bearer "
+        }
+      ],
+      "autoApprove": ["queryShopList", "searchProductForMcp", "queryProductDetailInfo", "previewOrder", "queryOrderDetailInfo"]
     }
   ]
 }
