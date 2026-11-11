@@ -61,8 +61,13 @@ export function wakeCeilingMs(defaultIntervalMs: number): number {
 export function healCeilingMs(
   now: number,
   defaultIntervalMs: number,
+  tier: Tier = "ample",
 ): number {
-  return Math.max(defaultIntervalMs, 21_600_000, nextUtcMidnight(now) - now);
+  const base =
+    tier === "lean"
+      ? Math.min(2 * defaultIntervalMs, MAX_WAKE_MS)
+      : defaultIntervalMs;
+  return Math.max(base, 21_600_000, nextUtcMidnight(now) - now);
 }
 
 /** Keeps a requested wake time inside the allowed window around `now`. */

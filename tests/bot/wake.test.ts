@@ -7,6 +7,7 @@ import {
   dietHolds,
   failureDelayMs,
   formatDuration,
+  healCeilingMs,
   nextUtcMidnight,
   parseDuration,
   stretchForDiet,
@@ -89,6 +90,20 @@ describe("wake rules", () => {
         );
       }
     }
+  });
+
+  it("stretches the heal ceiling only for lean", () => {
+    const late = Date.UTC(2026, 10, 3, 23, 0);
+    expect(healCeilingMs(late, 12 * 3_600_000)).toBe(
+      healCeilingMs(late, 12 * 3_600_000, "ample"),
+    );
+    expect(healCeilingMs(late, 12 * 3_600_000, "lean")).toBe(
+      24 * 3_600_000,
+    );
+    expect(healCeilingMs(late, 12 * 3_600_000, "critical")).toBe(
+      12 * 3_600_000,
+    );
+    expect(healCeilingMs(late, 30 * 86_400_000, "lean")).toBe(MAX_WAKE_MS);
   });
 
   it("doubles a lean interval and leaves other tiers alone", () => {

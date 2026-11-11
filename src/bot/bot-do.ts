@@ -496,6 +496,16 @@ export class BotDO extends DurableObject<Env> {
       (!running && alarmAt > now + ceiling);
     if (!lost) return "ok";
 
+    // Only a stretched lean wake sits beyond the usual ceiling and is not lost.
+    if (!running && alarmAt !== null && alarmAt > now + ceiling) {
+      const leanCeiling = healCeilingMs(
+        now,
+        meta.defaultIntervalMs,
+        await readTier(this.env),
+      );
+      if (alarmAt <= now + leanCeiling) return "ok";
+    }
+
     console.warn("bot heal:", {
       botId: meta.botId,
       status: meta.status,

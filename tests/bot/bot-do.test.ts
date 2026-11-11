@@ -1722,4 +1722,30 @@ describe("BotDO diet", () => {
       await resetLife();
     }
   });
+
+  it("heal tolerates a wake stretched by the lean tier", async () => {
+    const fake = fakeButler();
+    try {
+      await driveLifeTo("lean");
+      const stub = botStub("b-diet-lean-heal");
+      await initBot(stub, { defaultIntervalMs: 12 * 3_600_000 });
+      await fireAlarm(stub);
+
+      fake.outcome = { outcome: "completed", summary: "看完了" };
+      now += WATCHDOG_MS;
+      await fireAlarm(stub);
+
+      const scheduled = await stub.snapshot();
+      expect(scheduled!.meta.nextWakeAt! - now).toBe(24 * 3_600_000);
+      expect(await stub.heal()).toBe("ok");
+      expect((await stub.snapshot())?.meta.nextWakeAt).toBe(
+        scheduled?.meta.nextWakeAt,
+      );
+
+      await makeLifeAmple();
+      expect(await stub.heal()).toBe("healed");
+    } finally {
+      await resetLife();
+    }
+  });
 });
