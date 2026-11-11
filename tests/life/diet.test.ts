@@ -176,6 +176,16 @@ describe("effectiveModelRef", () => {
     ).toEqual(configured);
   });
 
+  it("returns the configured ref when the tier's candidate is the same model", async () => {
+    await driveTo("lean");
+
+    const sameEnv = testEnv({ DESKWAND_CONFIG: config(configured) });
+
+    expect(
+      await effectiveModelRef(sameEnv, modelsCollection(), "task", configured),
+    ).toEqual(configured);
+  });
+
   it("uses the frugal model for tasks when lean, without the configured level", async () => {
     await driveTo("lean");
 
@@ -219,6 +229,24 @@ describe("effectiveModelRef", () => {
         aiEnv,
         modelsCollection(true),
         "task",
+        configured,
+      ),
+    ).toEqual(workersAiRef);
+  });
+
+  it("ignores a configured frugal ref when dormant", async () => {
+    await driveTo("dormant");
+
+    const aiEnv = testEnv({
+      AI: { fetch: async () => new Response("") },
+      DESKWAND_CONFIG: config({ provider: "diet-test", id: "tiny" }),
+    });
+
+    expect(
+      await effectiveModelRef(
+        aiEnv,
+        modelsCollection(true),
+        "butler",
         configured,
       ),
     ).toEqual(workersAiRef);

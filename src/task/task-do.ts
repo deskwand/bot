@@ -590,19 +590,23 @@ export class TaskDO extends Agent<Env> {
     // already has a root the defaults never reached, but it also already has
     // the level applied below, since only the first start gets here.
     const role = readRuntimeConfig(this.env).models.task;
+    const configured = effective.model ?? role;
     const models = createModelsForEnv(this.env, this.meter);
     const selected = await effectiveModelRef(
       this.env,
       models,
       "task",
-      effective.model ?? role,
+      configured,
     );
     await this.harness.session().setModel(resolveModel(selected, this.env));
-    // The role's own level stays the owner's stated intent; the model's default
-    // only fills in when the role has none.
+    // The role's own level stays the owner's stated intent for its model; a
+    // substituted model uses its own default instead.
+    const substituted =
+      selected.provider !== configured.provider ||
+      selected.id !== configured.id;
     const level =
       selected.thinkingLevel ??
-      role.thinkingLevel ??
+      (substituted ? undefined : role.thinkingLevel) ??
       defaultThinkingLevel(models.getModel(selected.provider, selected.id));
     if (level !== undefined) {
       const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
