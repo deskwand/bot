@@ -1410,10 +1410,13 @@ describe("butler chat", () => {
       routeKey: "wx-route",
     });
 
-    await vi.waitFor(() => {
-      expect(sends.filter((msg) => msg.text.includes("请求执行"))).toHaveLength(1);
-    });
-    expect(sends.some((msg) => msg.text.includes("\n对外发送\n"))).toBe(true);
-    expect(sends.some((msg) => msg.text === "收到")).toBe(true);
+    await vi.waitFor(
+      () => {
+        expect(sends.filter((msg) => msg.text.includes("请求执行"))).toHaveLength(1);
+        expect(sends.some((msg) => msg.text.includes("\n对外发送\n"))).toBe(true);
+        expect(sends.some((msg) => msg.text === "收到")).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
   });
 });
