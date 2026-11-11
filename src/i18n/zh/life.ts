@@ -1,8 +1,8 @@
 export const life = {
   prompt: {
-    balance: "额度：{balance}",
-    daily: "日均开销：{daily}",
-    runway: "还能活 {days} 天",
+    balance: "额度：约 {balance}",
+    runway: "还能撑约 {days} 天",
+    runwayBelowDay: "不足 1 天",
     noSpend: "目前没有开销",
     tierLabel: "档位：{tier}——{behavior}",
     tierName: {
@@ -13,8 +13,8 @@ export const life = {
     },
     tierBehavior: {
       ample: "一切照常",
-      lean: "机器人唤醒间隔翻倍，任务和机器人改用节食模型",
-      critical: "机器人暂停自动唤醒，管家也用节食模型",
+      lean: "机器人少醒，已配置节食模型时换用它",
+      critical: "机器人暂停自动唤醒，已配置节食模型时换用它",
       dormant: "全部用 Workers AI 默认免费模型，机器人全停自动唤醒",
     },
     unpriced: "有模型没有计价，实际开销比账面高",
@@ -24,15 +24,14 @@ export const life = {
   notice: {
     ample:
       "{runway}。额度回到充裕档，一切照常。",
-    lean: "{runway}。额度进入吃紧档：机器人唤醒间隔翻倍，任务和机器人改用节食模型。",
+    lean: "{runway}。额度进入吃紧档：机器人少醒，已配置节食模型时换用它。",
     critical:
-      "{runway}。额度进入危急档：机器人暂停自动唤醒，管家也用节食模型。",
+      "{runway}。额度进入危急档：机器人暂停自动唤醒，已配置节食模型时换用它。",
     dormant:
       "额度已归零，进入冬眠：全部用 Workers AI 默认免费模型，机器人全停自动唤醒。",
   },
   tool: {
     balance: "额度：{balance}",
-    daily: "日均开销：{daily}",
     runway: "还能活 {days} 天",
     noSpend: "目前没有开销",
     tier: "档位：{tier}",

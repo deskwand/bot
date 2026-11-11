@@ -2,9 +2,9 @@ import type { Messages } from "../messages";
 
 export const life: Messages["life"] = {
   prompt: {
-    balance: "Balance: {balance}",
-    daily: "Daily spend: {daily}",
-    runway: "Runway: {days} days",
+    balance: "Balance: about {balance}",
+    runway: "Runway: about {days} days",
+    runwayBelowDay: "Less than a day of runway",
     noSpend: "No spend yet",
     tierLabel: "Tier: {tier} — {behavior}",
     tierName: {
@@ -15,8 +15,8 @@ export const life: Messages["life"] = {
     },
     tierBehavior: {
       ample: "everything carries on as usual",
-      lean: "bot wakes stretch to twice their interval; tasks and bots use the frugal model",
-      critical: "bots stop waking on their own; the butler uses the frugal model too",
+      lean: "bots wake less often; a configured frugal model replaces the current one when present",
+      critical: "bots stop waking on their own; a configured frugal model replaces the current one when present",
       dormant: "everything runs on the default free Workers AI model; bots stop waking on their own",
     },
     unpriced:
@@ -29,15 +29,14 @@ export const life: Messages["life"] = {
   notice: {
     ample:
       "{runway}. The deployment is back to the ample tier; everything carries on as usual.",
-    lean: "{runway}. The deployment moved to the lean tier: bot wakes stretch to twice their interval, and tasks and bots use the frugal model.",
+    lean: "{runway}. The deployment moved to the lean tier: bots wake less often, and a configured frugal model replaces the current one when present.",
     critical:
-      "{runway}. The deployment moved to the critical tier: bots stop waking on their own, and the butler uses the frugal model too.",
+      "{runway}. The deployment moved to the critical tier: bots stop waking on their own, and a configured frugal model replaces the current one when present.",
     dormant:
       "The balance is down to zero. The deployment is dormant: everything runs on the default free Workers AI model, and bots stop waking on their own.",
   },
   tool: {
     balance: "Balance: {balance}",
-    daily: "Daily spend: {daily}",
     runway: "Runway: {days} days",
     noSpend: "No spend yet",
     tier: "Tier: {tier}",

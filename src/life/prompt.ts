@@ -26,6 +26,13 @@ export function formatUsd(amount: number): string {
   return fixed.startsWith("$-") ? `-$${fixed.slice(2)}` : fixed;
 }
 
+/** Whole dollars, so a prompt block does not change with every cent. */
+function wholeUsd(amount: number): string {
+  const rounded = Math.round(amount);
+  if (rounded === 0) return "$0";
+  return rounded < 0 ? `-$${Math.abs(rounded)}` : `$${rounded}`;
+}
+
 /** The display name of a tier in `locale`. */
 export function tierName(locale: Locale, tier: Tier): string {
   return t(locale, TIER_NAME[tier]);
@@ -35,22 +42,22 @@ export function tierName(locale: Locale, tier: Tier): string {
 export function lifeBlock(locale: Locale, vitals: Vitals | null): string {
   if (vitals === null || !vitals.metabolismStarted) return "";
 
+  const wholeDays = vitals.runwayDays === null
+    ? null
+    : Math.floor(vitals.runwayDays);
   const lines = [
-    t(locale, "life.prompt.balance", {
-      balance: formatUsd(vitals.balanceUsd),
-    }),
-    t(locale, "life.prompt.daily", {
-      daily: formatUsd(vitals.dailySpendUsd),
-    }),
-    vitals.runwayDays === null
-      ? t(locale, "life.prompt.noSpend")
-      : t(locale, "life.prompt.runway", {
-          days: vitals.runwayDays.toFixed(1),
-        }),
     t(locale, "life.prompt.tierLabel", {
       tier: tierName(locale, vitals.tier),
       behavior: t(locale, TIER_BEHAVIOR[vitals.tier]),
     }),
+    t(locale, "life.prompt.balance", {
+      balance: wholeUsd(vitals.balanceUsd),
+    }),
+    vitals.runwayDays === null
+      ? t(locale, "life.prompt.noSpend")
+      : wholeDays !== null && wholeDays < 1
+        ? t(locale, "life.prompt.runwayBelowDay")
+        : t(locale, "life.prompt.runway", { days: wholeDays }),
   ];
   if (vitals.unpriced) lines.push(t(locale, "life.prompt.unpriced"));
   lines.push(t(locale, "life.prompt.principleAlive"));
