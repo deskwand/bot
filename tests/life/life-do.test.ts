@@ -1,7 +1,8 @@
-import { env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { env, runInDurableObject } from "cloudflare:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setClockOverride } from "../../src/butler/notifier";
 import type { SpendEntry } from "../../src/life/books";
+import type { Tier } from "../../src/life/vitals";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -45,6 +46,24 @@ beforeEach(() => {
 afterEach(() => {
   setClockOverride(null);
 });
+
+type Notice = { tier: Tier; runwayDays: number | null };
+
+type LifeStub = ReturnType<typeof life>;
+
+/** Replaces the instance's notice hook with a recorder. */
+async function recordNotices(
+  stub: LifeStub,
+  notices: Notice[],
+  options: { fail?: boolean } = {},
+): Promise<void> {
+  await runInDurableObject(stub, (instance) => {
+    instance.notifyTierChange = async (tier, runwayDays) => {
+      notices.push({ tier, runwayDays });
+      if (options.fail === true) throw new Error("notice failed");
+    };
+  });
+}
 
 describe("LifeDO", () => {
   it("reports an empty ledger as ample and not started", async () => {
@@ -156,5 +175,94 @@ describe("LifeDO", () => {
       balanceUsd: 5,
       metabolismStarted: true,
     });
+  });
+});
+
+describe("LifeDO tier notices", () => {
+  it("says nothing before any credit was recorded", async () => {
+    const stub = life("life-notice-uncredited");
+    const notices: Notice[] = [];
+    await recordNotices(stub, notices);
+
+    for (let day = 0; day < 10; day += 1) {
+      now = START + day * DAY_MS;
+      await stub.recordSpend(entry({ usd: 5 }));
+    }
+
+    expect(notices).toEqual([]);
+  });
+
+  it("tells each worsening tier once and stops at dormant", async () => {
+    const stub = life("life-notice-descent");
+    const notices: Notice[] = [];
+    await recordNotices(stub, notices);
+    await stub.recordCredit(20, "");
+
+    now = START + Math.round(0.5 * DAY_MS);
+    await stub.recordSpend(entry({ usd: 2 }));
+    expect(notices.map((notice) => notice.tier)).toEqual(["lean"]);
+
+    for (const day of [1.5, 2.5, 3.5, 4.5, 5.5]) {
+      now = START + Math.round(day * DAY_MS);
+      await stub.recordSpend(entry({ usd: 2 }));
+    }
+    expect(notices.map((notice) => notice.tier)).toEqual(["lean"]);
+
+    now = START + Math.round(6.5 * DAY_MS);
+    await stub.recordSpend(entry({ usd: 2 }));
+    expect(notices.map((notice) => notice.tier)).toEqual(["lean", "critical"]);
+
+    now = START + Math.round(6.6 * DAY_MS);
+    await stub.recordSpend(entry({ usd: 6 }));
+    expect(notices.map((notice) => notice.tier)).toEqual([
+      "lean",
+      "critical",
+      "dormant",
+    ]);
+
+    await stub.recordCredit(50, "");
+    expect(notices.map((notice) => notice.tier)).toEqual([
+      "lean",
+      "critical",
+      "dormant",
+      "ample",
+    ]);
+  });
+
+  it("stays quiet when a spend only returns to an already-noticed tier", async () => {
+    const stub = life("life-notice-rebound");
+    const notices: Notice[] = [];
+    await recordNotices(stub, notices);
+    await stub.recordCredit(20, "");
+
+    now = START + Math.round(0.5 * DAY_MS);
+    await stub.recordSpend(entry({ usd: 2 }));
+    expect(notices.map((notice) => notice.tier)).toEqual(["lean"]);
+
+    // The whole spend window slides out, so the books say ample again.
+    now = START + 8 * DAY_MS;
+    await stub.recordSpend(entry({ usd: 1 }));
+    await stub.recordSpend(entry({ usd: 8 }));
+    expect(notices.map((notice) => notice.tier)).toEqual(["lean"]);
+
+    await stub.recordSpend(entry({ usd: 4 }));
+    expect(notices.map((notice) => notice.tier)).toEqual(["lean", "critical"]);
+  });
+
+  it("records the spend even when the notice throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stub = life("life-notice-failure");
+    const notices: Notice[] = [];
+    await recordNotices(stub, notices, { fail: true });
+    await stub.recordCredit(20, "");
+
+    now = START + Math.round(0.5 * DAY_MS);
+    await expect(
+      stub.recordSpend(entry({ usd: 2 })),
+    ).resolves.toBeUndefined();
+
+    expect((await stub.vitals()).tier).toBe("lean");
+    expect(notices.map((notice) => notice.tier)).toEqual(["lean"]);
+    warn.mockRestore();
   });
 });

@@ -110,3 +110,41 @@ describe("fallbackText", () => {
     ).toBe("「查机票」没办成：超时\n要我重试吗？");
   });
 });
+
+describe("life tier notices", () => {
+  const tiers = ["ample", "lean", "critical", "dormant"] as const;
+
+  it("gives every tier its own non-empty notice", () => {
+    const texts = tiers.map((tier) =>
+      fallbackText(
+        { kind: "life.tier", tier, runwayDays: 5, body: "" },
+        "zh",
+      ),
+    );
+
+    for (const text of texts) expect(text.trim()).not.toBe("");
+    expect(new Set(texts).size).toBe(tiers.length);
+  });
+
+  it("tells the runway in the critical notice", () => {
+    expect(
+      fallbackText(
+        { kind: "life.tier", tier: "critical", runwayDays: 2.5, body: "" },
+        "zh",
+      ),
+    ).toContain("2.5");
+  });
+
+  it("does not call the model for a tier change", async () => {
+    const complete = vi.fn();
+    const event: SpeakEvent = {
+      kind: "life.tier",
+      tier: "lean",
+      runwayDays: 9,
+      body: "",
+    };
+
+    expect(await speak(event, deps(complete))).toBe(fallbackText(event, "zh"));
+    expect(complete).not.toHaveBeenCalled();
+  });
+});

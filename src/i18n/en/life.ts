@@ -26,6 +26,15 @@ export const life: Messages["life"] = {
     principleOwner:
       "The owner's instructions, pauses and deletions always come before that.",
   },
+  notice: {
+    ample:
+      "{runway}. The deployment is back to the ample tier; everything carries on as usual.",
+    lean: "{runway}. The deployment moved to the lean tier: bot wakes stretch to twice their interval, and tasks and bots use the frugal model.",
+    critical:
+      "{runway}. The deployment moved to the critical tier: bots stop waking on their own, and the butler uses the frugal model too.",
+    dormant:
+      "The balance is down to zero. The deployment is dormant: everything runs on the default free Workers AI model, and bots stop waking on their own.",
+  },
   tool: {
     balance: "Balance: {balance}",
     daily: "Daily spend: {daily}",

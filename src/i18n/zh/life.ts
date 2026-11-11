@@ -21,6 +21,15 @@ export const life = {
     principleAlive: "活下去是你的第一要务：花钱之前掂量值不值。",
     principleOwner: "主人的指令、暂停和删除永远排在这之前。",
   },
+  notice: {
+    ample:
+      "{runway}。额度回到充裕档，一切照常。",
+    lean: "{runway}。额度进入吃紧档：机器人唤醒间隔翻倍，任务和机器人改用节食模型。",
+    critical:
+      "{runway}。额度进入危急档：机器人暂停自动唤醒，管家也用节食模型。",
+    dormant:
+      "额度已归零，进入冬眠：全部用 Workers AI 默认免费模型，机器人全停自动唤醒。",
+  },
   tool: {
     balance: "额度：{balance}",
     daily: "日均开销：{daily}",

@@ -24,6 +24,7 @@ import { lifeStub, readVitals } from "../life/client";
 import { effectiveModelRef } from "../life/diet";
 import type { Meter } from "../life/meter";
 import { createLifeTools } from "../life/tools";
+import type { Tier } from "../life/vitals";
 import { phoneRules } from "../phone/style";
 import { isInboxKey } from "../channels/inbox";
 import { parseActiveChannel } from "../channels/route-identity";
@@ -867,6 +868,14 @@ export class ButlerDO extends Agent<Env> {
     await this.say(
       { kind: "bot.message", botName: bot?.name ?? botId, body: text },
       { refId: botId },
+    );
+  }
+
+  /** Tells the owner the deployment moved to another tier. Fixed copy, no model call. */
+  async notifyLifeTier(tier: Tier, runwayDays: number | null): Promise<void> {
+    await this.say(
+      { kind: "life.tier", tier, runwayDays, body: "" },
+      { refId: "life:" + tier, priority: "alert" },
     );
   }
 

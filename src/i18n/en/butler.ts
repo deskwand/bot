@@ -72,6 +72,7 @@ export const butler: Messages["butler"] = {
     kindStalled: "Task stalled",
     kindSlow: "Task still running",
     kindBotMessage: "Bot message",
+    kindLifeTier: "Life tier change",
   },
   quickLookup: {
     system:
