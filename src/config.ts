@@ -18,6 +18,7 @@ export type McpServerConfig = {
 };
 
 export type ModelsConfig = Record<Role, ModelRef> & {
+  frugal?: ModelRef;
   customProviders?: CustomProviderConfig[];
 };
 

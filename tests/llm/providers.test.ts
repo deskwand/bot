@@ -94,6 +94,18 @@ describe("modelsConfigValid", () => {
     ).toBe(false);
   });
 
+  it("rejects a frugal ref with an unknown provider", () => {
+    expect(
+      modelsConfigValid(
+        config({ frugal: { provider: "ghost", id: "ghost-model" } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts a configuration without a frugal ref", () => {
+    expect(modelsConfigValid(config())).toBe(true);
+  });
+
   it("rejects a custom model id the provider does not declare", () => {
     expect(
       modelsConfigValid(

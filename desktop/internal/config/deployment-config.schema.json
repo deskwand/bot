@@ -95,6 +95,9 @@
         "task": {
           "$ref": "#/$defs/ModelRef"
         },
+        "frugal": {
+          "$ref": "#/$defs/ModelRef"
+        },
         "customProviders": {
           "type": "array",
           "maxItems": 16,

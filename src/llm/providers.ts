@@ -83,8 +83,11 @@ export function modelsConfigValid(models: ModelsConfig): boolean {
     custom.set(provider.id, provider);
   }
 
-  for (const role of ROLES) {
-    const ref = models[role];
+  const refs = [
+    ...ROLES.map((role) => models[role]),
+    ...(models.frugal ? [models.frugal] : []),
+  ];
+  for (const ref of refs) {
     if (BUILTIN_PROVIDER_IDS.has(ref.provider)) continue;
     const provider = custom.get(ref.provider);
     if (!provider) return false;

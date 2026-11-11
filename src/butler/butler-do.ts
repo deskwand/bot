@@ -20,6 +20,7 @@ import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
+import { effectiveModelRef } from "../life/diet";
 import type { Meter } from "../life/meter";
 import { phoneRules } from "../phone/style";
 import { isInboxKey } from "../channels/inbox";
@@ -866,7 +867,12 @@ export class ButlerDO extends Agent<Env> {
   ): Promise<string> {
     const models = createModelsForEnv(this.env, this.meter);
     const ref = resolveModel(
-      readRuntimeConfig(this.env).models[role],
+      await effectiveModelRef(
+        this.env,
+        models,
+        role,
+        readRuntimeConfig(this.env).models[role],
+      ),
       this.env,
     );
     const model = models.getModel(ref.provider, ref.id);
@@ -1971,14 +1977,21 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private async ensureAgent(): Promise<void> {
-    const ref = readRuntimeConfig(this.env).models.butler;
-    const model = resolveModel(ref, this.env);
+    const configured = readRuntimeConfig(this.env).models.butler;
     const models = createModelsForEnv(this.env, this.meter);
     // Defaults apply only to new roots. Read the persisted model and level on
     // reopen.
     const conversation = await (await this.harness.pi()).root(BACKGROUND_CONTEXT);
     const agent = await conversation.agent(BACKGROUND_CONTEXT);
     const active = agent.model;
+    const ref = await effectiveModelRef(
+      this.env,
+      models,
+      "butler",
+      configured,
+      active ? { provider: active.provider, id: active.modelId } : undefined,
+    );
+    const model = resolveModel(ref, this.env);
     if (active?.provider !== model.provider || active.modelId !== model.id) {
       assertModelWindowSwitch(
         models,

@@ -31,6 +31,7 @@ import { createBotTaskTools } from "../bot/bot-tools";
 import { discoverSkills, type SkillCatalog } from "../skills/catalog";
 import { skillSystemPrompt } from "../skills/prompt";
 import { ownerLocale, t } from "../i18n";
+import { effectiveModelRef } from "../life/diet";
 import type { Meter } from "../life/meter";
 import { RuntimeConfigError, readRuntimeConfig } from "../runtime-config";
 import {
@@ -589,11 +590,16 @@ export class TaskDO extends Agent<Env> {
     // already has a root the defaults never reached, but it also already has
     // the level applied below, since only the first start gets here.
     const role = readRuntimeConfig(this.env).models.task;
-    const selected = effective.model ?? role;
+    const models = createModelsForEnv(this.env, this.meter);
+    const selected = await effectiveModelRef(
+      this.env,
+      models,
+      "task",
+      effective.model ?? role,
+    );
     await this.harness.session().setModel(resolveModel(selected, this.env));
     // The role's own level stays the owner's stated intent; the model's default
     // only fills in when the role has none.
-    const models = createModelsForEnv(this.env, this.meter);
     const level =
       selected.thinkingLevel ??
       role.thinkingLevel ??
@@ -862,7 +868,12 @@ export class TaskDO extends Agent<Env> {
   ) => {
     const models = createModelsForEnv(this.env, this.meter);
     const ref = resolveModel(
-      this.spec?.model ?? readRuntimeConfig(this.env).models.task,
+      await effectiveModelRef(
+        this.env,
+        models,
+        "task",
+        this.spec?.model ?? readRuntimeConfig(this.env).models.task,
+      ),
       this.env,
     );
     const model = models.getModel(ref.provider, ref.id);
