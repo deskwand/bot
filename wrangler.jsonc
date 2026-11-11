@@ -31,7 +31,8 @@
       { "name": "BOT", "class_name": "BotDO" },
       { "name": "BOT_CHAT", "class_name": "BotChatDO" },
       { "name": "CHANNELS", "class_name": "ChannelDO" },
-      { "name": "MCP_AUTH", "class_name": "McpAuthDO" }
+      { "name": "MCP_AUTH", "class_name": "McpAuthDO" },
+      { "name": "LIFE", "class_name": "LifeDO" }
     ]
   },
   "migrations": [
@@ -54,6 +55,10 @@
     {
       "tag": "v5",
       "new_sqlite_classes": ["BotChatDO"]
+    },
+    {
+      "tag": "v6",
+      "new_sqlite_classes": ["LifeDO"]
     }
   ],
   "triggers": {

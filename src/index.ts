@@ -9,6 +9,7 @@ export { BotDO } from "./bot/bot-do";
 export { BotChatDO } from "./bot/bot-chat-do";
 export { ChannelDO };
 export { McpAuthDO } from "./mcp/mcp-auth-do";
+export { LifeDO } from "./life/life-do";
 
 function channels(env: Env): DurableObjectStub<ChannelDO> {
   return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
