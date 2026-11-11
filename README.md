@@ -1,5 +1,7 @@
 # DeskWand Bot
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/deskwand-bot)
+
 一个住在你自己 Cloudflare Worker 里的 bot。有自己的使命和记忆，自己安排什么时候醒；没事不吵你，真有事才发一条。
 
 AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-readme)

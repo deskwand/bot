@@ -1,5 +1,7 @@
 # DeskWand Bot
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/deskwand-bot)
+
 A bot that lives in your own Cloudflare Worker. It keeps its own mission and memory, decides on its own when to wake up, and stays quiet unless there is something worth telling you.
 
 AGPL-3.0 · [中文](README.md) · [Website](https://deskwand.com/bot?src=gh-readme)
