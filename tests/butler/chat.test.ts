@@ -24,8 +24,11 @@ import {
   WORKERS_AI_QUOTA_MARKER,
 } from "../../src/llm/model-errors";
 import { registerTestProvider, setModelOverride } from "../../src/llm/models";
+import type { SpendEntry } from "../../src/life/books";
 import { lifeStub } from "../../src/life/client";
+import { lifeBlock } from "../../src/life/prompt";
 import { PI_PROGRESS } from "../../src/llm/pi-settings";
+import { phoneRules } from "../../src/phone/style";
 import type { AdmittedMessage, OutboundMessage, RouteSnapshot } from "../../src/protocol";
 import { t } from "../../src/i18n";
 import { fakeChannel } from "../helpers/fake-channel";
@@ -228,6 +231,22 @@ function isTaskRequest(context: TranscriptContext): boolean {
   });
 }
 
+/** Flattens the replayed system sections into the prompt the model sees. */
+function systemPromptText(context: TranscriptContext | undefined): string {
+  const shown = new Map<string, string>();
+  for (const entry of context?.messages ?? []) {
+    if (entry.role !== "system") continue;
+    const sections = (entry as { sections?: Record<string, string | null> })
+      .sections;
+    if (sections === undefined) continue;
+    for (const [key, value] of Object.entries(sections)) {
+      if (value === null) shown.delete(key);
+      else shown.set(key, value);
+    }
+  }
+  return [...shown.values()].join("\n\n");
+}
+
 /** A tool that keeps the task running until the test releases it. */
 async function installSlowWait(stub: ReturnType<typeof task>): Promise<void> {
   await runInDurableObject(stub, (instance) => {
@@ -395,6 +414,73 @@ describe("butler chat", () => {
         balanceUsd: 20,
         metabolismStarted: true,
       });
+    } finally {
+      await resetLife();
+    }
+  });
+
+  it("puts the vitals after the phone rules and omits them before metabolism starts", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    await resetLife();
+    try {
+      await lifeStub(env).recordCredit(20, "");
+      const spend: SpendEntry = {
+        callId: "life-prompt-spend",
+        at: Date.now(),
+        source: "butler",
+        provider: "test",
+        model: "test",
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        usd: 2,
+        priced: true,
+      };
+      await lifeStub(env).recordSpend(spend);
+      const block = lifeBlock("zh", await lifeStub(env).vitals());
+
+      let seen: TranscriptContext | undefined;
+      setModelOverride(
+        scriptedModel([
+          {
+            text: "活着",
+            observe: (context) => {
+              seen = context;
+            },
+          },
+        ]),
+      );
+      await butler("chat-life-prompt").handleMessage(
+        message({ text: "你好", eventId: "tg:life-prompt" }),
+      );
+
+      const prompt = systemPromptText(seen);
+      const phone = phoneRules("zh", { conversational: true });
+      expect(prompt.endsWith(block)).toBe(true);
+      expect(prompt.indexOf(phone)).toBeGreaterThan(-1);
+      expect(prompt.indexOf(phone)).toBeLessThan(prompt.indexOf(block));
+
+      await resetLife();
+      let clean: TranscriptContext | undefined;
+      setModelOverride(
+        scriptedModel([
+          {
+            text: "好",
+            observe: (context) => {
+              clean = context;
+            },
+          },
+        ]),
+      );
+      await butler("chat-life-prompt-clean").handleMessage(
+        message({ text: "你好", eventId: "tg:life-prompt-clean" }),
+      );
+
+      expect(systemPromptText(clean)).not.toContain(
+        "活下去是你的第一要务",
+      );
     } finally {
       await resetLife();
     }

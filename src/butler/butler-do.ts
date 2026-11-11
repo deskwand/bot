@@ -23,6 +23,7 @@ import { ownerLocale, t, type Locale } from "../i18n";
 import { lifeStub, readVitals } from "../life/client";
 import { effectiveModelRef } from "../life/diet";
 import type { Meter } from "../life/meter";
+import { lifeBlock } from "../life/prompt";
 import { createLifeTools } from "../life/tools";
 import type { Tier } from "../life/vitals";
 import { phoneRules } from "../phone/style";
@@ -346,12 +347,11 @@ export class ButlerDO extends Agent<Env> {
       sections: [
         {
           key: "butler",
-          render: async () =>
+          render: () =>
             butlerSystemPrompt(
               ownerLocale(this.env),
               enabledServices(this.env),
               parseActiveChannel(this.env.ACTIVE_CHANNEL),
-              await readVitals(this.env),
             ),
         },
         {
@@ -363,6 +363,17 @@ export class ButlerDO extends Agent<Env> {
           tag: false,
           render: () =>
             phoneRules(ownerLocale(this.env), { conversational: true }),
+        },
+        {
+          key: "life",
+          tag: false,
+          render: async () => {
+            const block = lifeBlock(
+              ownerLocale(this.env),
+              await readVitals(this.env),
+            );
+            return block.length > 0 ? block : undefined;
+          },
         },
       ],
     });

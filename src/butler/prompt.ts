@@ -1,6 +1,4 @@
 import { t, type Locale } from "../i18n";
-import { lifeBlock } from "../life/prompt";
-import type { Vitals } from "../life/vitals";
 import type { ChannelId } from "../protocol";
 import { persona } from "./persona";
 
@@ -22,10 +20,8 @@ export function butlerSystemPrompt(
   locale: Locale,
   services: { name: string; description?: string }[],
   channel: ChannelId | null,
-  vitals: Vitals | null = null,
 ): string {
   const channelLabel = channelName(channel);
-  const vitalsBlock = lifeBlock(locale, vitals);
 
   const serviceLines =
     services.length > 0
@@ -39,7 +35,7 @@ export function butlerSystemPrompt(
         ]
       : [];
 
-  const base = [
+  return [
     persona(locale, channelLabel),
     "",
     "怎么处理主人的话，三选一：",
@@ -76,8 +72,4 @@ export function butlerSystemPrompt(
     "",
     t(locale, "prompt.replyLanguage"),
   ].join("\n");
-
-  // The vitals change with almost every spend, so they stay after every
-  // static line and never break the cached prompt prefix.
-  return vitalsBlock.length > 0 ? `${base}\n\n${vitalsBlock}` : base;
 }

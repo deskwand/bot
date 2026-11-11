@@ -1,18 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { persona } from "../../src/butler/persona";
 import { butlerSystemPrompt } from "../../src/butler/prompt";
-import { lifeBlock } from "../../src/life/prompt";
-import type { Vitals } from "../../src/life/vitals";
-
-const leanVitals: Vitals = {
-  balanceUsd: 13,
-  dailySpendUsd: 1,
-  runwayDays: 13,
-  tier: "lean",
-  metabolismStarted: true,
-  unpriced: false,
-  topSources: [],
-};
 
 describe("butlerSystemPrompt", () => {
   it("lists the services a task can use", () => {
@@ -123,25 +111,6 @@ describe("butlerSystemPrompt channel and phone context", () => {
 
   it("does not force Chinese on an English deployment", () => {
     expect(butlerSystemPrompt("en", [], "telegram")).not.toContain("用中文");
-  });
-});
-
-describe("butlerSystemPrompt vitals", () => {
-  it("ends with the vitals block after the static prompt", () => {
-    const block = lifeBlock("zh", leanVitals);
-    const prompt = butlerSystemPrompt("zh", [], "telegram", leanVitals);
-
-    expect(prompt.endsWith(block)).toBe(true);
-    expect(prompt.slice(0, prompt.length - block.length - 2)).toBe(
-      butlerSystemPrompt("zh", [], "telegram"),
-    );
-  });
-
-  it("leaves the prompt unchanged without vitals", () => {
-    const before = butlerSystemPrompt("zh", [], "telegram");
-
-    expect(butlerSystemPrompt("zh", [], "telegram", null)).toBe(before);
-    expect(before).not.toContain("活下去是你的第一要务");
   });
 });
 
