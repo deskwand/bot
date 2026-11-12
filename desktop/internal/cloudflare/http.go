@@ -33,11 +33,20 @@ const (
 
 	apiPathPrefix = "/client/v4"
 
-	requestTimeout   = 60 * time.Second
-	maxAttempts      = 3
-	maxRetryDelay    = 30 * time.Second
-	maxErrorRunes    = 300
-	maxResponseBytes = 8 << 20
+	// requestTimeout is the budget for one request that carries no body
+	// beyond a few kilobytes: every GET and every JSON mutation.
+	requestTimeout = 60 * time.Second
+	// plannedUploadBytesPerSecond is the uplink a body is budgeted for. A
+	// version upload sends the whole Worker bundle uncompressed, so its
+	// duration is set by the client's uplink: the slowest link measured
+	// carried about 38 KB/s, needing five and a half minutes for a 12 MB
+	// release. Planning at 20 KB/s leaves roughly 2x headroom for a link that
+	// degrades mid-upload.
+	plannedUploadBytesPerSecond = 20 * 1024
+	maxAttempts                 = 3
+	maxRetryDelay               = 30 * time.Second
+	maxErrorRunes               = 300
+	maxResponseBytes            = 8 << 20
 )
 
 var (
@@ -105,6 +114,9 @@ type Client struct {
 	http      *http.Client
 	sleep     func(context.Context, time.Duration) error
 	userAgent string
+	// baseTimeout is the budget every request gets before upload time is
+	// added. It is requestTimeout in production.
+	baseTimeout time.Duration
 
 	redactedMu sync.RWMutex
 	redacted   []string
@@ -140,28 +152,44 @@ func newClient(opts Options, origin string, httpClient *http.Client, sleep func(
 		sleep = defaultSleep
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: requestTimeout}
+		httpClient = &http.Client{}
 	} else {
 		copyClient := *httpClient
-		if copyClient.Timeout == 0 {
-			copyClient.Timeout = requestTimeout
-		}
 		httpClient = &copyClient
 	}
+	// http.Client.Timeout covers the whole exchange, including writing the
+	// request body, so it cannot distinguish a dead connection from a slow
+	// uplink. Deadlines are set per request by requestBudgetFor instead.
+	httpClient.Timeout = 0
 	version := opts.Version
 	if version == "" {
 		version = DefaultVersion
 	}
 
 	client := &Client{
-		token:     opts.Token,
-		baseURL:   baseURL,
-		http:      httpClient,
-		sleep:     sleep,
-		userAgent: "DeskWandBot/" + version,
+		token:       opts.Token,
+		baseURL:     baseURL,
+		http:        httpClient,
+		sleep:       sleep,
+		userAgent:   "DeskWandBot/" + version,
+		baseTimeout: requestTimeout,
 	}
 	httpClient.CheckRedirect = client.checkRedirect
 	return client
+}
+
+// requestBudgetFor returns the time one attempt of a request may take. A body
+// also gets the time it needs to leave the machine at
+// plannedUploadBytesPerSecond, because a release upload pushes 12 MB and
+// aborting it mid-body wastes the whole request.
+func (c *Client) requestBudgetFor(payloadBytes int) time.Duration {
+	if payloadBytes <= 0 {
+		return c.baseTimeout
+	}
+	// Round up so a body always gets at least the time it needs, and divide
+	// before scaling to keep the duration well inside int64.
+	seconds := (payloadBytes + plannedUploadBytesPerSecond - 1) / plannedUploadBytesPerSecond
+	return c.baseTimeout + time.Duration(seconds)*time.Second
 }
 
 func defaultSleep(ctx context.Context, delay time.Duration) error {
@@ -341,6 +369,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 	endpoint := c.endpoint(path, query)
 	retryable := method == http.MethodGet
+	budget := c.requestBudgetFor(len(payload))
 	var lastErr error
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -352,8 +381,13 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		if payload != nil {
 			requestBody = bytes.NewReader(payload)
 		}
-		request, err := http.NewRequestWithContext(ctx, method, endpoint, requestBody)
+		// Each attempt gets its own budget so a retried GET is not starved by
+		// the attempt that already timed out. The response body is read inside
+		// parseResponse, so the deadline is released only after it returns.
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, budget)
+		request, err := http.NewRequestWithContext(attemptCtx, method, endpoint, requestBody)
 		if err != nil {
+			cancelAttempt()
 			return nil, fmt.Errorf("cloudflare: create request: %w", err)
 		}
 		request.Header.Set("Authorization", "Bearer "+token)
@@ -365,6 +399,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 		httpResponse, requestErr := c.http.Do(request)
 		if requestErr != nil {
+			cancelAttempt()
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -382,6 +417,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		}
 
 		response, apiErr := c.parseResponse(httpResponse, token)
+		cancelAttempt()
 		if apiErr == nil {
 			return response, nil
 		}
