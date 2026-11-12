@@ -11,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { useApp } from "@/components/app-context";
+import { pageSubtitle, useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
@@ -375,7 +375,7 @@ export function Mcp() {
   };
 
   const header = (
-    <PageHeader title={t("shell.pages.mcp")} actions={<>
+    <PageHeader title={t("shell.pages.mcp")} subtitle={pageSubtitle("mcp")} actions={<>
       <SyncStatus
         isFetching={configQuery.isFetching}
         isPlaceholder={configQuery.isPlaceholder}

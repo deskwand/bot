@@ -9,7 +9,12 @@ import {
 } from "@tanstack/react-query";
 import { useApp } from "@/components/app-context";
 import { toClientError } from "@/services/errors";
-import type { ClientService, ConfigDTO, StatusItemDTO } from "@/services/types";
+import type {
+  ClientService,
+  ConfigDTO,
+  LifeVitalsDTO,
+  StatusItemDTO,
+} from "@/services/types";
 
 export const queryKeys = {
   config: ["config"],
@@ -20,6 +25,8 @@ export const queryKeys = {
   mcpCatalog: ["mcpCatalog"],
   mcpStatus: ["mcpStatus"],
   exchangeSyncStatus: ["exchangeSyncStatus"],
+  lifeVitals: ["lifeVitals"],
+  walletStatus: ["walletStatus"],
 } as const;
 
 function isAuthLost(error: unknown): boolean {
@@ -132,6 +139,15 @@ export function useMcpStatusQuery(): UseQueryResult<Awaited<ReturnType<ClientSer
   return useQuery({
     queryKey: queryKeys.mcpStatus,
     queryFn: () => client.mcpStatus(),
+  });
+}
+
+export function useLifeVitalsQuery(): UseQueryResult<LifeVitalsDTO> {
+  const { client } = useApp();
+  return useQuery({
+    queryKey: queryKeys.lifeVitals,
+    queryFn: () => client.lifeVitals(),
+    retry: false,
   });
 }
 

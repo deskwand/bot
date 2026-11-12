@@ -21,6 +21,8 @@ import type {
   ImportInputDTO,
   ImportPreviewDTO,
   InstallInputDTO,
+  LifeSourceDTO,
+  LifeVitalsDTO,
   Locale,
   LocaleDTO,
   LocaleSource,
@@ -72,6 +74,12 @@ type Scenario =
   | "wallet-configured"
   | "wallet-unavailable"
   | "wallet-zero"
+  | "vitals-unstarted"
+  | "vitals-unpriced"
+  | "vitals-dormant"
+  | "vitals-critical"
+  | "vitals-failed"
+  | "vitals-unsupported"
   | "client-update-failed"
   | "catalog-unavailable"
   | "pending-operations"
@@ -127,6 +135,7 @@ interface MockState {
   searchProvider: string;
   exchangeAccounts: ExchangeAccountDTO[];
   wallet: WalletStatusDTO;
+  vitals: LifeVitalsDTO | "failed" | "unsupported";
   localeSaveFails: boolean;
   telemetry: boolean;
   connected: boolean;
@@ -323,6 +332,20 @@ const CATALOG: ModelCatalogDTO = {
   ],
 };
 
+const DEFAULT_VITALS: LifeVitalsDTO = {
+  balanceUsd: 42.5,
+  dailySpendUsd: 1.85,
+  runwayDays: 23,
+  tier: "ample",
+  metabolismStarted: true,
+  unpriced: false,
+  topSources: [
+    { source: "butler", usd: 6.1 },
+    { source: "task:t1", usd: 3.2 },
+    { source: "bot:b1", usd: 1.4 },
+  ],
+};
+
 function scenarioFromLocation(): Scenario {
   const value = new URLSearchParams(window.location.search).get("fixture");
   switch (value) {
@@ -351,6 +374,12 @@ function scenarioFromLocation(): Scenario {
     case "wallet-configured":
     case "wallet-unavailable":
     case "wallet-zero":
+    case "vitals-unstarted":
+    case "vitals-unpriced":
+    case "vitals-dormant":
+    case "vitals-critical":
+    case "vitals-failed":
+    case "vitals-unsupported":
     case "client-update-failed":
     case "catalog-unavailable":
     case "pending-operations":
@@ -451,6 +480,12 @@ function initialState(): MockState {
     "wallet-configured",
     "wallet-unavailable",
     "wallet-zero",
+    "vitals-unstarted",
+    "vitals-unpriced",
+    "vitals-dormant",
+    "vitals-critical",
+    "vitals-failed",
+    "vitals-unsupported",
     "client-update-failed",
     "pending-operations",
     "pending-other-account",
@@ -515,6 +550,53 @@ function initialState(): MockState {
             : { valueUsd: scenario === "wallet-zero" ? 0 : 12.5 }),
         }
       : { configured: false },
+    vitals:
+      scenario === "vitals-failed"
+        ? "failed"
+        : scenario === "vitals-unsupported"
+          ? "unsupported"
+          : scenario === "vitals-unstarted"
+            ? {
+                balanceUsd: 0,
+                dailySpendUsd: 0,
+                runwayDays: null,
+                tier: "ample",
+                metabolismStarted: false,
+                unpriced: false,
+                topSources: [],
+              }
+            : scenario === "vitals-dormant"
+              ? {
+                  balanceUsd: -1.2,
+                  dailySpendUsd: 1.85,
+                  runwayDays: -0.65,
+                  tier: "dormant",
+                  metabolismStarted: true,
+                  unpriced: false,
+                  topSources: [
+                    { source: "butler", usd: 6.1 },
+                    { source: "task:t1", usd: 3.2 },
+                    { source: "bot:b1", usd: 1.4 },
+                  ],
+                }
+              : scenario === "vitals-critical"
+                ? {
+                    balanceUsd: 1.1,
+                    dailySpendUsd: 1.85,
+                    runwayDays: 0.59,
+                    tier: "critical",
+                    metabolismStarted: true,
+                    unpriced: false,
+                    topSources: [
+                      { source: "butler", usd: 6.1 },
+                      { source: "task:t1", usd: 3.2 },
+                      { source: "bot:b1", usd: 1.4 },
+                    ],
+                  }
+                : {
+                  ...DEFAULT_VITALS,
+                  ...(scenario === "vitals-unpriced" ? { unpriced: true } : {}),
+                },
     localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
     connected: shellScenario,
@@ -1307,6 +1389,20 @@ export function createMockClient(): ClientService {
     async walletStatus(): Promise<WalletStatusDTO> {
       record("walletStatus");
       return { ...state.wallet };
+    },
+
+    async lifeVitals(): Promise<LifeVitalsDTO> {
+      record("lifeVitals");
+      if (state.vitals === "failed") {
+        fail("LIFE_VITALS_FAILED", "体征请求失败，请稍后重试。");
+      }
+      if (state.vitals === "unsupported") {
+        fail("LIFE_VITALS_UNSUPPORTED", "云端版本过旧，升级后可查看体征");
+      }
+      return {
+        ...state.vitals,
+        topSources: state.vitals.topSources.map((source: LifeSourceDTO) => ({ ...source })),
+      };
     },
 
     async saveWallet(input: WalletEditDTO): Promise<ResultDTO> {

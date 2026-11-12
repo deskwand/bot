@@ -261,6 +261,12 @@ type Service struct {
 	// never blocked by a sync in flight.
 	exchangeStatusMu sync.Mutex
 	exchangeStatus   map[string]ExchangeSyncDTO
+
+	// adminConnectMu serializes the wallet and life clients' Connect calls
+	// (the two the home page fires together): each may publish a new Worker
+	// version when ADMIN_TOKEN is missing, and two concurrent publishes would
+	// collide on the same fingerprint.
+	adminConnectMu sync.Mutex
 }
 
 // NewService constructs the application service.

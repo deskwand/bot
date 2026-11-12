@@ -99,7 +99,7 @@ func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 		"SelectEntry": true, "StartWeChatLogin": true, "Status": true,
 		"TelemetryEnabled": true, "TestExchange": true, "Theme": true, "UpdateMcpServer": true, "Upgrade": true, "UpgradeAvailable": true,
 		"SyncExchange": true, "ExchangeSyncStatus": true,
-		"SaveWallet": true, "WalletStatus": true,
+		"SaveWallet": true, "WalletStatus": true, "LifeVitals": true,
 	}
 	serviceType := reflect.TypeOf(&Service{})
 	seen := map[string]bool{}

@@ -19,7 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useApp } from "@/components/app-context";
+import { pageSubtitle, useApp } from "@/components/app-context";
 import { ErrorAlert, StateBadge, StepList } from "@/components/feedback";
 import { useT } from "@/i18n";
 import { describeCode } from "@/services/errors";
@@ -95,7 +95,7 @@ export function Updates() {
 
   return (
     <div>
-      <PageHeader title={t("shell.pages.updates")} actions={<>
+      <PageHeader title={t("shell.pages.updates")} subtitle={pageSubtitle("updates")} actions={<>
         <Button type="button" variant="outline" size="icon" aria-label={t("shell.refresh")} onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw aria-hidden />}
         </Button>

@@ -2,10 +2,14 @@ import { createContext, useContext } from "react";
 import { tryT } from "@/i18n";
 import type { ClientService } from "@/services/types";
 
-export type Page = "overview" | "models" | "search" | "exchange" | "agent" | "mcp" | "entries" | "diagnostics" | "backup" | "updates";
+export type Page = "overview" | "models" | "search" | "exchange" | "agent" | "mcp" | "entries" | "cloudflare" | "diagnostics" | "backup" | "updates";
 
 export function pageLabel(page: Page): string {
   return tryT(`shell.pages.${page}`) ?? page;
+}
+
+export function pageSubtitle(page: Page): string {
+  return tryT(`shell.subtitles.${page}`) ?? "";
 }
 
 export interface AppContextValue {
@@ -13,6 +17,7 @@ export interface AppContextValue {
   navigate: (page: Page) => void;
   navigateImport: () => void;
   setDirty: (dirty: boolean) => void;
+  signedOut: () => void;
 }
 
 export const AppContext = createContext<AppContextValue | null>(null);

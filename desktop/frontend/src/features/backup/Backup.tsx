@@ -19,7 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useApp } from "@/components/app-context";
+import { pageSubtitle, useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
 import { formatDateTime, getT, useT, type MessageKey } from "@/i18n";
 import { useInvalidate } from "@/services/queries";
@@ -306,7 +306,7 @@ export function Backup() {
 
   return (
     <div>
-      <PageHeader title={t("shell.pages.backup")} />
+      <PageHeader title={t("shell.pages.backup")} subtitle={pageSubtitle("backup")} />
 
       <ErrorAlert error={exportError} onRetry={exportData} retryLabel={t("backup.retryExport")} />
       <ErrorAlert error={chooseError} onRetry={chooseBackup} retryLabel={t("backup.retryChoose")} />

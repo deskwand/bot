@@ -2,7 +2,7 @@ package i18n
 
 var enDeployment = map[string]string{
 	"deployment.releaseVersionUnknown":    "The cloud release version is unknown (it may have been deployed from the command line); import it again from Connect an existing service",
-	"deployment.upgradeRequired":          "Upgrade the cloud service on the Updates page first",
+	"deployment.upgradeRequired":          "Upgrade the cloud service on the Growth page first",
 	"deployment.downgradeRejected":        "The cloud release is newer; upgrade the client first",
 	"deployment.versionUnknown":           "Unknown",
 	"deployment.releaseSummary":           "Cloud release %s; client release %s",

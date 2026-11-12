@@ -23,6 +23,8 @@ import type {
   ImportInputDTO as GeneratedImportInputDTO,
   ImportPreviewDTO,
   InstallInputDTO,
+  LifeSourceDTO,
+  LifeVitalsDTO,
   LoginStatusDTO,
   McpAddInput,
   McpAuthDTO,
@@ -70,6 +72,8 @@ export type {
   ExchangeSyncDTO,
   ImportPreviewDTO,
   InstallInputDTO,
+  LifeSourceDTO,
+  LifeVitalsDTO,
   LoginStatusDTO,
   McpAddInput,
   McpAuthDTO,
@@ -188,6 +192,7 @@ export interface ClientService {
   syncExchange(accountId: string): Promise<ExchangeSyncDTO>;
   exchangeSyncStatus(): Promise<ExchangeSyncDTO[]>;
   walletStatus(): Promise<WalletStatusDTO>;
+  lifeVitals(): Promise<LifeVitalsDTO>;
   saveWallet(input: WalletEditDTO): Promise<ResultDTO>;
   mcpStatus(): Promise<McpAuthDTO[]>;
   startMcpOAuth(name: string): Promise<void>;

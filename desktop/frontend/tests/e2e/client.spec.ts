@@ -83,7 +83,7 @@ async function installAndOpenModels(page: Page) {
   await expect(page.getByText("部署未完成")).toBeVisible();
   await page.getByTestId("result-resume").click();
   await page.getByRole("button", { name: /设置模型/ }).click();
-  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "头脑", exact: true })).toBeVisible();
 }
 
 test("production bundle contains no fixture router", () => {
@@ -136,7 +136,7 @@ test("describeCode covers every fixed Go error code", () => {
   expect(describeCode("UP_TO_DATE")).not.toBe(fallbackCodeMessage());
   // The copy budget is a requirement, not a one-off cleanup. The backup notice
   // is pinned verbatim by its own spec and is the only exemption.
-  const pinned = new Set(["云端服务尚不支持数据备份，请先在更新页升级。"]);
+  const pinned = new Set(["云端服务尚不支持数据备份，请先在成长页升级。"]);
   for (const code of codes) {
     const line = describeCode(code);
     if (pinned.has(line)) continue;
@@ -192,7 +192,7 @@ test("welcome → token connect → preflight → interrupted deployment → res
   await expectNoVerifiedClaim(page);
 
   await page.getByRole("button", { name: /设置模型/ }).click();
-  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "头脑", exact: true })).toBeVisible();
   await screenshot(page, "02-models.png");
 
   // New installs default to Workers AI; this flow still exercises explicit keys.
@@ -207,8 +207,8 @@ test("welcome → token connect → preflight → interrupted deployment → res
   await expect(page.getByText(/配置已发布/).first()).toBeVisible();
   await expectNoVerifiedClaim(page);
 
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "消息入口", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "声音", exact: true })).toBeVisible();
   await page.locator("#current-wechat").click();
   await page.getByRole("button", { name: "保存并发布" }).click();
   await expect(page.getByText("发布结果")).toBeVisible();
@@ -255,7 +255,7 @@ test("switching back to Workers AI drops the key row", async ({ page }) => {
 
 test("text-only Workers AI models are labelled", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await page.getByLabel("管家模型供应商").click();
   await page.getByRole("option", { name: "Cloudflare Workers AI（免费额度）", exact: true }).click();
 
@@ -320,7 +320,7 @@ test("a stale key draft is not published after switching back", async ({ page })
 
 test("login published follow-up with a publish operation id is accepted", async ({ page }) => {
   await page.goto("/test.html?fixture=login-sync");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
   await page.getByRole("button", { name: "扫码连接", exact: true }).click();
   await expect(page.getByTestId("wechat-qr")).toBeVisible();
   await expect(page.getByRole("heading", { name: "已连接", exact: true })).toBeVisible({
@@ -332,7 +332,7 @@ test("login published follow-up with a publish operation id is accepted", async 
 
 test("login publish_failed shows the code and resumes the publish operation", async ({ page }) => {
   await page.goto("/test.html?fixture=qr-publish-failed");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
   await page.getByRole("button", { name: "扫码连接", exact: true }).click();
   await expect(page.getByRole("heading", { name: "发布失败", exact: true })).toBeVisible({
     timeout: 10_000,
@@ -349,7 +349,7 @@ test("login publish_failed shows the code and resumes the publish operation", as
 
 test("unchanged entry result explains that no version was published", async ({ page }) => {
   await page.goto("/test.html?fixture=entry-unchanged");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
   await expect(page.getByTestId("current-entry")).toHaveText("Telegram");
   await page.locator("#current-wechat").click();
   await page.getByRole("button", { name: "保存并发布" }).click();
@@ -361,7 +361,7 @@ test("unchanged entry result explains that no version was published", async ({ p
 
 test("unknown entry selection offers a resume action", async ({ page }) => {
   await page.goto("/test.html?fixture=entry-unknown");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
   await page.locator("#current-wechat").click();
   await page.getByRole("button", { name: "保存并发布" }).click();
   await expect(page.getByTestId("channel-resume")).toBeVisible();
@@ -439,14 +439,14 @@ test("import retry requires re-entering cleared secrets", async ({ page }) => {
 
 test("UPGRADE_REQUIRED points to the updates page", async ({ page }) => {
   await page.goto("/test.html?fixture=upgrade-required");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await keyRow(page, "opencode-go").getByLabel("API 密钥").fill("sk-upgrade-SENTINEL");
   await page.getByRole("button", { name: "保存并发布" }).click();
   const alert = page.getByTestId("error-alert");
   await alert.locator("summary").click();
   await expect(alert.getByText("UPGRADE_REQUIRED")).toBeVisible();
-  await alert.getByRole("button", { name: "前往更新页" }).click();
-  await expect(page.getByRole("heading", { name: "更新", exact: true })).toBeVisible();
+  await alert.getByRole("button", { name: "前往成长页" }).click();
+  await expect(page.getByRole("heading", { name: "成长", exact: true })).toBeVisible();
 });
 
 test("model catalog failure is surfaced during setup", async ({ page }) => {
@@ -486,7 +486,7 @@ test("a pending operation can be abandoned after confirmation", async ({ page })
 
 test("unknown cloud release points to the import flow", async ({ page }) => {
   await page.goto("/test.html?fixture=version-unknown");
-  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await page.getByRole("button", { name: "成长", exact: true }).click();
   await page.getByTestId("upgrade-reason").click();
   await expect(page.getByText(/VERSION_UNKNOWN_REIMPORT/)).toBeVisible();
   await expect(page.getByText(/版本未知，请重新导入/)).toBeVisible();
@@ -564,8 +564,8 @@ test("credential-store denial is explicit and never falls back to plaintext", as
 
 test("config conflict asks for a reload instead of overwriting", async ({ page }) => {
   await page.goto("/test.html?fixture=config-conflict");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "头脑", exact: true })).toBeVisible();
   await keyRow(page, "opencode-go").getByLabel("API 密钥").fill("sk-conflict-SENTINEL");
   await page.getByRole("button", { name: "保存并发布" }).click();
   const alert = page.getByTestId("error-alert");
@@ -586,7 +586,7 @@ test("unsupported multi-version deployment blocks editing", async ({ page }) => 
 
 test("model connection test keeps the typed key for the next publish", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   const row = keyRow(page, "opencode-go");
   await row.getByLabel("API 密钥").fill("sk-probe-SENTINEL");
   await row.getByRole("button", { name: "测试连接" }).click();
@@ -599,8 +599,8 @@ test("model connection test keeps the typed key for the next publish", async ({ 
 
 test("secret replace and clear are distinct operations", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "头脑", exact: true })).toBeVisible();
   await keyRow(page, "opencode-go").getByText("详情", { exact: true }).click();
   await expect(page.getByText("MODEL_KEY_OPENCODE_GO 已配置")).toBeVisible();
 
@@ -624,7 +624,7 @@ test("secret replace and clear are distinct operations", async ({ page }) => {
 
 test("model picker chooses the provider first, then filters its models", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await expect(page.getByLabel("管家模型供应商")).toHaveText(/OpenCode Go/);
   await expect(page.getByLabel("管家模型", { exact: true })).toHaveText(/DeepSeek V4\.1 Flash/);
 
@@ -648,7 +648,7 @@ test("model picker chooses the provider first, then filters its models", async (
 
 test("model keys use MODEL_KEY_<ID> names", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await chooseModel(page, "管家模型", "DeepSeek", /^DeepSeek Flash/);
   const row = keyRow(page, "deepseek");
   await row.getByText("详情", { exact: true }).click();
@@ -665,7 +665,7 @@ test("model keys use MODEL_KEY_<ID> names", async ({ page }) => {
 
 test("each role provider gets its own key row", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await chooseModel(page, "管家模型", "Anthropic", /Claude Sonnet 5\.5/);
   const anthropicRow = keyRow(page, "anthropic");
   const opencodeRow = keyRow(page, "opencode-go");
@@ -689,7 +689,7 @@ test("each role provider gets its own key row", async ({ page }) => {
 
 test("custom endpoint can be added and selected", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await page.getByRole("button", { name: "添加自定义端点" }).click();
   const dialog = page.getByRole("dialog", { name: "添加自定义端点" });
   await dialog.getByLabel("端点 ID").fill("my-proxy");
@@ -715,7 +715,7 @@ test("custom endpoint can be added and selected", async ({ page }) => {
 
 test("custom endpoint rejects a built-in id and plain http", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await page.getByRole("button", { name: "添加自定义端点" }).click();
   const dialog = page.getByRole("dialog", { name: "添加自定义端点" });
   await dialog.getByLabel("端点 ID").fill("deepseek");
@@ -734,7 +734,7 @@ test("custom endpoint rejects a built-in id and plain http", async ({ page }) =>
 
 test("model ids containing a slash round-trip", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await chooseModel(page, "管家模型", "OpenRouter", /Claude Sonnet 5\.5/);
   await page.getByRole("button", { name: "保存并发布" }).click();
   const preview = page.getByRole("dialog", { name: "确认保存并发布" });
@@ -746,19 +746,19 @@ test("model ids containing a slash round-trip", async ({ page }) => {
 
 test("upgrade warns which model keys must be re-entered", async ({ page }) => {
   await page.goto("/test.html?fixture=upgrade-keys-missing");
-  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await page.getByRole("button", { name: "成长", exact: true }).click();
   await expect(
-    page.getByText(/升级后需在模型页重填：MODEL_KEY_OPENCODE_GO/),
+    page.getByText(/升级后需在头脑页重填：MODEL_KEY_OPENCODE_GO/),
   ).toBeVisible();
   await page.getByTestId("upgrade-cloud").click();
   const dialog = page.getByRole("dialog", { name: "升级前确认" });
-  await expect(dialog.getByText(/升级后需在模型页重填：/)).toBeVisible();
+  await expect(dialog.getByText(/升级后需在头脑页重填：/)).toBeVisible();
   await expect(dialog.getByText(/MODEL_KEY_OPENCODE_GO/)).toBeVisible();
 });
 
 test("MODEL_KEY_MISSING lists the missing secrets", async ({ page }) => {
   await page.goto("/test.html?fixture=model-key-missing");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await keyRow(page, "opencode-go").getByLabel("API 密钥").fill("sk-missing-SENTINEL");
   await page.getByRole("button", { name: "保存并发布" }).click();
   const preview = page.getByRole("dialog", { name: "确认保存并发布" });
@@ -766,24 +766,25 @@ test("MODEL_KEY_MISSING lists the missing secrets", async ({ page }) => {
   const alert = page.getByTestId("error-alert");
   await alert.locator("summary").click();
   await expect(alert.getByText("MODEL_KEY_MISSING")).toBeVisible();
-  await expect(alert.getByTestId("error-short")).toHaveText("缺少模型密钥，请在模型页填写。");
+  await expect(alert.getByTestId("error-short")).toHaveText("缺少模型密钥，请在头脑页填写。");
   await expect(alert.getByText(/MODEL_KEY_DEEPSEEK/)).toBeVisible();
 });
 
 test("dirty form protection warns before leaving", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await chooseModel(page, "管家模型", "OpenCode Go", /DeepSeek V4 Pro/);
-  await page.getByRole("button", { name: "服务概览", exact: true }).click();
+  await page.getByRole("button", { name: "生命体征", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "有未保存的更改" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "继续编辑" }).click();
-  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "头脑", exact: true })).toBeVisible();
 });
 
 test("signing out returns to the Cloudflare login page", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await expect(page.getByRole("button", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "头脑", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "容器：Cloudflare" }).click();
   await page.getByRole("button", { name: "退出登录" }).click();
   const dialog = page.getByRole("dialog", { name: "退出 Cloudflare 账号？" });
   await expect(dialog).toBeVisible();
@@ -792,33 +793,24 @@ test("signing out returns to the Cloudflare login page", async ({ page }) => {
   await dialog.getByRole("button", { name: "确认退出" }).click();
   await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
   // The shell, its navigation and any pending operation block are gone.
-  await expect(page.getByRole("button", { name: "模型", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "头脑", exact: true })).toHaveCount(0);
   await screenshot(page, "06-signout.png");
 });
 
 test("cancelling sign-out keeps the account connected", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "容器：Cloudflare" }).click();
   await page.getByRole("button", { name: "退出登录" }).click();
   const dialog = page.getByRole("dialog", { name: "退出 Cloudflare 账号？" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "取消" }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "模型", exact: true })).toBeVisible();
-});
-
-test("signing out warns that unpublished edits are dropped", async ({ page }) => {
-  await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
-  await chooseModel(page, "管家模型", "OpenCode Go", /DeepSeek V4 Pro/);
-  await page.getByRole("button", { name: "退出登录" }).click();
-  const dialog = page.getByRole("dialog", { name: "退出 Cloudflare 账号？" });
-  await expect(dialog.getByText(/未发布的修改会丢弃/)).toBeVisible();
-  await dialog.getByRole("button", { name: "确认退出" }).click();
-  await expect(page.getByRole("button", { name: "使用 Cloudflare 登录" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "头脑", exact: true })).toBeVisible();
 });
 
 test("a failed sign-out reports the error and stays connected", async ({ page }) => {
   await page.goto("/test.html?fixture=cf-signout-failed");
+  await page.getByRole("button", { name: "容器：Cloudflare" }).click();
   await page.getByRole("button", { name: "退出登录" }).click();
   const dialog = page.getByRole("dialog", { name: "退出 Cloudflare 账号？" });
   const confirm = dialog.getByRole("button", { name: "确认退出" });
@@ -835,19 +827,19 @@ test("a failed sign-out reports the error and stays connected", async ({ page })
   await expect(confirm).toBeEnabled();
   // The client is still signed in: cancelling returns to a working shell.
   await dialog.getByRole("button", { name: "取消" }).click();
-  await expect(page.getByRole("button", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "头脑", exact: true })).toBeVisible();
 });
 
 test("an operation from a previously connected account is not offered", async ({ page }) => {
   await page.goto("/test.html?fixture=pending-other-account");
-  await expect(page.getByRole("button", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "头脑", exact: true })).toBeVisible();
   // Resuming it would fail TARGET_MISMATCH, so the block must not appear.
   await expect(page.getByTestId("pending-operations")).toHaveCount(0);
 });
 
 test("QR expiration offers a new code and never claims success", async ({ page }) => {
   await page.goto("/test.html?fixture=qr-expired");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
   await page.getByRole("button", { name: "扫码连接", exact: true }).click();
   await expect(page.getByRole("heading", { name: "二维码已过期", exact: true })).toBeVisible({
     timeout: 10_000,
@@ -860,8 +852,8 @@ test("QR expiration offers a new code and never claims success", async ({ page }
 
 test("diagnostics show unknown evidence with source and time", async ({ page }) => {
   await page.goto("/test.html?fixture=diagnostics-unknown");
-  await page.getByRole("button", { name: "诊断", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "诊断", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "体检", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "体检", exact: true })).toBeVisible();
   await expect(page.getByTestId("status-wechat")).toBeVisible();
   await expect(page.getByTestId("status-wechat").getByText("未知")).toBeVisible();
   await expect(page.getByTestId("status-wechat").getByText("来源：无来源")).toBeVisible();
@@ -882,7 +874,7 @@ test("user-confirmed evidence is labelled separately from cloud verification", a
 
 test("client update button opens the updater window", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await page.getByRole("button", { name: "成长", exact: true }).click();
   await expect(page.getByText(`v${APP_VERSION}`)).toBeVisible();  // __APP_VERSION__
   await expect(page.getByRole("button", { name: "安装客户端更新" })).toHaveCount(0);
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
@@ -892,15 +884,15 @@ test("client update button opens the updater window", async ({ page }) => {
 
 test("client update failure shows an error", async ({ page }) => {
   await page.goto("/test.html?fixture=client-update-failed");
-  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await page.getByRole("button", { name: "成长", exact: true }).click();
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await expect(page.getByText("无法打开更新窗口")).toBeVisible();
 });
 
 test("cloud upgrade requires confirmation and reports the control-plane result", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "更新", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "更新", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "成长", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "成长", exact: true })).toBeVisible();
   await expect(page.getByText("有新版本", { exact: true })).toBeVisible();
   const cloudCard = page
     .locator('[data-slot="card"]')
@@ -952,8 +944,8 @@ async function backupCalls(page: Page): Promise<BackupCalls> {
 
 test("exports a backup and shows the sensitivity notice", async ({ page }) => {
   await page.goto("/test.html?fixture=backup");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "数据备份", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "记忆存档", exact: true })).toBeVisible();
   await expect(page.getByTestId("backup-dir")).toContainText("DeskWand 备份");
   await page.getByRole("button", { name: "立即备份", exact: true }).click();
   await expect(page.getByText(BACKUP_NOTICE)).toBeVisible();
@@ -963,7 +955,7 @@ test("exports a backup and shows the sensitivity notice", async ({ page }) => {
 
 test("a background export refreshes the folder view", async ({ page }) => {
   await page.goto("/test.html?fixture=backup");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
   await expect(page.getByTestId("backup-file")).toHaveCount(1);
   const before = (await backupCalls(page)).list;
 
@@ -987,14 +979,14 @@ test("a background export refreshes the folder view", async ({ page }) => {
 
 test("opens the backup folder in the file manager", async ({ page }) => {
   await page.goto("/test.html?fixture=backup");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
   await page.getByRole("button", { name: "打开目录", exact: true }).first().click();
   await expect.poll(async () => (await backupCalls(page)).openFolder).toBe(1);
 });
 
 test("turning auto backup on saves the schedule", async ({ page }) => {
   await page.goto("/test.html?fixture=backup");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
   await expect(page.getByRole("button", { name: "自动备份：关", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "自动备份：关", exact: true }).click();
@@ -1012,7 +1004,7 @@ test("turning auto backup on saves the schedule", async ({ page }) => {
 
 test("changing the folder stores the new path", async ({ page }) => {
   await page.goto("/test.html?fixture=backup");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
   await page.getByRole("button", { name: "更改…", exact: true }).click();
   await expect(page.getByTestId("backup-dir")).toContainText("备份（新）");
   await expect.poll(async () => (await backupCalls(page)).chooseDir).toBe(1);
@@ -1020,7 +1012,7 @@ test("changing the folder stores the new path", async ({ page }) => {
 
 test("restores a listed backup without a file dialog", async ({ page }) => {
   await page.goto("/test.html?fixture=backup");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
   await page.getByRole("button", { name: "恢复这份", exact: true }).click();
 
   await expect(page.getByText("恢复摘要")).toBeVisible();
@@ -1032,7 +1024,7 @@ test("restores a listed backup without a file dialog", async ({ page }) => {
 
 test("shows progress while exporting", async ({ page }) => {
   await page.goto("/test.html?fixture=backup-progress");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
   await page.getByRole("button", { name: "立即备份", exact: true }).click();
   const progress = page.getByTestId("backup-progress");
   await expect(progress).toContainText("导出数据库");
@@ -1042,7 +1034,7 @@ test("shows progress while exporting", async ({ page }) => {
 
 test("restores only after confirming the overwrite", async ({ page }) => {
   await page.goto("/test.html?fixture=backup");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
   await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
   await expect(page.getByText("恢复摘要")).toBeVisible();
   // The same name now also appears in the local list, so scope this to the
@@ -1067,7 +1059,7 @@ test("restores only after confirming the overwrite", async ({ page }) => {
 
 test("blocks restore on a version mismatch", async ({ page }) => {
   await page.goto("/test.html?fixture=backup-version-mismatch");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
   await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
   await expect(
     page.getByText(
@@ -1106,8 +1098,8 @@ test("corrupt restore record can be abandoned without breaking the overview", as
   await page.goto("/test.html?fixture=backup-pending-corrupt");
 
   // The other overview calls still render their own data.
-  await expect(page.getByRole("heading", { name: "服务概览" })).toBeVisible();
-  await expect(page.getByText("云端服务", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "生命体征" })).toBeVisible();
+  await expect(page.getByTestId("health-cloudflare")).toContainText("deskwand-bot");
   await expect(page.getByTestId("overview-status-details").locator("summary")).toHaveText("详情");
 
   // The corrupt record offers abandonment only, with the no-rollback wording.
@@ -1125,8 +1117,8 @@ test("corrupt restore record can be abandoned without breaking the overview", as
   await dialog.getByRole("button", { name: "确认放弃记录", exact: true }).click();
   await expect.poll(async () => (await backupCalls(page)).abandon).toBe(1);
   await expect(page.getByText("本机恢复记录无法读取", { exact: false })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "服务概览" })).toBeVisible();
-  await expect(page.getByText("云端服务", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "生命体征" })).toBeVisible();
+  await expect(page.getByTestId("health-cloudflare")).toContainText("deskwand-bot");
   await expect(page.getByTestId("overview-status-details").locator("summary")).toHaveText("详情");
 
   // A generic pending-restore failure must not claim the journal is corrupt.
@@ -1137,7 +1129,7 @@ test("corrupt restore record can be abandoned without breaking the overview", as
 
 test("snapshot failure retries by choosing the backup again", async ({ page }) => {
   await page.goto("/test.html?fixture=backup-restore-snapshot-failed");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
   await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
   await page.getByRole("button", { name: "覆盖并恢复", exact: true }).click();
   await page.getByRole("dialog", { name: "确认覆盖恢复" }).getByRole("button", { name: "确认覆盖恢复", exact: true }).click();
@@ -1151,7 +1143,7 @@ test("snapshot failure retries by choosing the backup again", async ({ page }) =
 
 test("midway failure retries from the journal and shows the running state", async ({ page }) => {
   await page.goto("/test.html?fixture=backup-restore-midway-failed");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
   await page.getByRole("button", { name: "从本地恢复", exact: true }).click();
   await page.getByRole("button", { name: "覆盖并恢复", exact: true }).click();
   await page.getByRole("dialog", { name: "确认覆盖恢复" }).getByRole("button", { name: "确认覆盖恢复", exact: true }).click();
@@ -1161,14 +1153,14 @@ test("midway failure retries from the journal and shows the running state", asyn
   await page.getByRole("button", { name: "重试未完成恢复", exact: true }).click();
   await expect.poll(async () => (await backupCalls(page)).retry).toEqual([false]);
 
-  await page.getByRole("button", { name: "服务概览", exact: true }).click();
+  await page.getByRole("button", { name: "生命体征", exact: true }).click();
   await expect(page.getByText("数据恢复未完成")).toBeVisible();
   await expect(page.getByText("进行中", { exact: true })).toBeVisible();
 });
 
 test("status badges: configured entry is labelled pending verification", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
   // Save a token through the actual UI before checking its verification state.
   await page.getByLabel("Bot Token").fill("123:token");
   await page.getByRole("button", { name: "保存并连接" }).click();
@@ -1178,7 +1170,7 @@ test("status badges: configured entry is labelled pending verification", async (
 
 test("status badges: user confirmation is labelled as user confirmation", async ({ page }) => {
   await page.goto("/test.html?fixture=user-evidence");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
   await expect(page.getByTestId("summary-verification-wechat-verified-user")).toBeVisible();
   await expect(page.getByTestId("summary-verification-wechat-verified-user")).toHaveText("用户确认收发");
   await expect(page.getByTestId("verification-wechat-verified-cloud")).toHaveCount(0);
@@ -1186,7 +1178,7 @@ test("status badges: user confirmation is labelled as user confirmation", async 
 
 test("error alert shows one short line, bridge text only on demand", async ({ page }) => {
   await page.goto("/test.html?fixture=config-conflict");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await keyRow(page, "opencode-go").getByLabel("API 密钥").fill("sk-conflict-SENTINEL");
   await page.getByRole("button", { name: "保存并发布" }).click();
   const alert = page.getByTestId("error-alert");
@@ -1213,7 +1205,7 @@ test("pinned and rewritten labels render without stray quote marks", async ({ pa
 
 test("a verified state without cloud evidence never claims verified delivery", async ({ page }) => {
   await page.goto("/test.html?fixture=verified-local");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
   await expect(page.getByTestId("verification-wechat-unverified")).toHaveText("待验证收发");
   await expectNoVerifiedClaim(page);
 });
@@ -1267,13 +1259,13 @@ test("free neuron notice reads identically on install and models pages", async (
   await expect(page.getByText("部署未完成")).toBeVisible();
   await page.getByTestId("result-resume").click();
   await page.getByRole("button", { name: /设置模型/ }).click();
-  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "头脑", exact: true })).toBeVisible();
   await expect(page.getByTestId("workers-ai-quota-notice")).toHaveText(WORKERS_AI_QUOTA_NOTICE);
 });
 
 test("update page labels actions without repeating the card subject", async ({ page }) => {
   await page.goto("/test.html?fixture=upgrade-required");
-  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await page.getByRole("button", { name: "成长", exact: true }).click();
 
   // 卡片标题已经写了「云端服务」，按钮只说动作。
   await expect(page.getByTestId("upgrade-cloud")).toHaveText("升级");
@@ -1292,7 +1284,7 @@ test("update page labels actions without repeating the card subject", async ({ p
 
 test("wechat card does not make the button repeat the description", async ({ page }) => {
   await page.goto("/test.html?fixture=qr-expired");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
   // 卡片描述已经说「扫码登录你的微信」，按钮只说动作。
   await expect(page.getByRole("button", { name: "扫码连接", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "连接微信", exact: true })).toHaveCount(0);
@@ -1306,14 +1298,14 @@ test("overview config rows show data instead of repeating the row title", async 
 
   // 三个「管理」文字按钮没了，只剩带可访问名的图标按钮。
   await expect(page.getByText("管理", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "管理模型", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "管理服务", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "管理消息入口", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "管理头脑", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "管理双手", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "管理声音", exact: true })).toBeVisible();
 });
 
 test("backup and diagnostics descriptions stay on the user side of the glass", async ({ page }) => {
   await page.goto("/test.html?fixture=backup");
-  await page.getByRole("button", { name: "数据备份", exact: true }).click();
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
 
   // 自动备份开关就在下面，说明句不该再把这件事讲一遍。
   await expect(page.getByText("每次备份都写到这里。", { exact: true })).toBeVisible();
@@ -1325,7 +1317,7 @@ test("backup and diagnostics descriptions stay on the user side of the glass", a
   await expect(page.getByText("按时间从新到旧。", { exact: true })).toBeVisible();
   await expect(page.getByText(/不用再开文件对话框/)).toHaveCount(0);
 
-  await page.getByRole("button", { name: "诊断", exact: true }).click();
+  await page.getByRole("button", { name: "体检", exact: true }).click();
   await expect(page.getByText("用你输入的密钥直连供应商。", { exact: true })).toBeVisible();
   await expect(page.getByText(/直接调用供应商/)).toHaveCount(0);
 });

@@ -28,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useApp } from "@/components/app-context";
+import { pageSubtitle, useApp } from "@/components/app-context";
 import { getT, useT, type MessageKey } from "@/i18n";
 import { cloudflareNeuronsNotice } from "@/lib/copy";
 import { ErrorAlert, StateBadge, StatusRow, StepList } from "@/components/feedback";
@@ -584,7 +584,7 @@ export function Models() {
 
   return (
     <div>
-      <PageHeader title={t("shell.pages.models")} actions={<>
+      <PageHeader title={t("shell.pages.models")} subtitle={pageSubtitle("models")} actions={<>
         <SyncStatus
           isFetching={configQuery.isFetching}
           isPlaceholder={configQuery.isPlaceholder}

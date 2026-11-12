@@ -15,10 +15,10 @@ async function openWallet(page: Page, scenario: string) {
   await page.goto(`/test.html?fixture=${scenario}`);
   await page
     .getByRole("navigation", { name: "主导航" })
-    .getByRole("button", { name: "智能体", exact: true })
+    .getByRole("button", { name: "钱包", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "智能体", exact: true }),
+    page.getByRole("heading", { name: "钱包", exact: true }),
   ).toBeVisible();
 }
 
@@ -167,10 +167,10 @@ test("english has no chinese", async ({ page }) => {
   await useEnglish(page, "/test.html?fixture=wallet-configured");
   await page
     .getByRole("navigation", { name: "Main navigation" })
-    .getByRole("button", { name: "Agent", exact: true })
+    .getByRole("button", { name: "Wallet", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Agent", exact: true }),
+    page.getByRole("heading", { name: "Wallet", exact: true }),
   ).toBeVisible();
   await expectNoChinese(page);
 });

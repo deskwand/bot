@@ -373,7 +373,7 @@ func TestMergeSurfacesUnavailableBuiltinModel(t *testing.T) {
 	if !errors.As(err, &coded) {
 		t.Fatalf("error = %v, want domain.Error", err)
 	}
-	const want = "模型 deepseek/not-in-catalog 不可用，请在桌面端模型页重新选择"
+	const want = "模型 deepseek/not-in-catalog 不可用，请在桌面端头脑页重新选择"
 	if coded.Message != want {
 		t.Fatalf("message = %q, want %q", coded.Message, want)
 	}

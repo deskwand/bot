@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "cn";
 import { ExternalLink, Loader2, RefreshCw, Save, ShieldCheck } from "lucide-react";
-import { useApp } from "@/components/app-context";
+import { pageSubtitle, useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
 import { PageHeader } from "@/components/page-header";
 import { SyncStatus } from "@/components/sync-status";
@@ -228,6 +228,7 @@ export function Search() {
     <div>
       <PageHeader
         title={t("shell.pages.search")}
+        subtitle={pageSubtitle("search")}
         description={t("search.intro")}
         actions={
           <>

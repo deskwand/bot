@@ -13,10 +13,9 @@ test("account mismatch goes to deployment choice", async ({ page }) => {
 
 test("sign out clears cached data", async ({ page }) => {
   await page.goto("/test.html?fixture=cloud-slow");
-  await expect(
-    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByTestId("health-cloudflare")).toContainText("deskwand-bot");
 
+  await page.getByRole("button", { name: "容器：Cloudflare" }).click();
   await page.getByRole("button", { name: "退出登录" }).click();
   await page
     .getByRole("dialog", { name: "退出 Cloudflare 账号？" })
@@ -31,9 +30,7 @@ test("sign out clears cached data", async ({ page }) => {
   // The previous target belongs to the old account, so the app must ask for a
   // new deployment instead of showing the previous account's cached overview.
   await expect(page.getByRole("button", { name: "部署新服务" })).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
-  ).toHaveCount(0);
+  await expect(page.getByTestId("health-cloudflare")).toHaveCount(0);
 });
 
 test("a failing boot state reports the reason", async ({ page }) => {
@@ -56,18 +53,14 @@ async function mockCallCount(page: import("@playwright/test").Page, name: string
 
 test("overview shows cached data then syncs", async ({ page }) => {
   await page.goto("/test.html?fixture=cloud-slow");
-  await expect(
-    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
-  ).toBeVisible({ timeout: 500 });
+  await expect(page.getByTestId("health-cloudflare")).toContainText("deskwand-bot", { timeout: 500 });
   await expect(page.getByText("5 分钟前的数据")).toBeVisible({ timeout: 500 });
   await expect(page.getByText("5 分钟前的数据")).toHaveCount(0, { timeout: 10_000 });
 });
 
 test("offline keeps cached data with banner", async ({ page }) => {
   await page.goto("/test.html?fixture=cloud-offline");
-  await expect(
-    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByTestId("health-cloudflare")).toContainText("deskwand-bot");
   const banner = page.getByRole("status").filter({ hasText: "无法同步最新数据" });
   await expect(banner).toBeVisible();
   await expect(banner).toContainText("显示的是 5 分钟前的数据");
@@ -81,21 +74,19 @@ test("revisiting a page does not reload", async ({ page }) => {
   await page.goto("/test.html?fixture=cloud-slow");
   await expect(page.getByText("5 分钟前的数据")).toHaveCount(0, { timeout: 10_000 });
 
-  await page.getByRole("button", { name: "诊断", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "诊断", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "体检", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "体检", exact: true })).toBeVisible();
   await expect(page.getByText("正在同步…")).toHaveCount(0, { timeout: 10_000 });
 
-  await page.getByRole("button", { name: "服务概览", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
-  ).toBeVisible({ timeout: 100 });
+  await page.getByRole("button", { name: "生命体征", exact: true }).click();
+  await expect(page.getByTestId("health-cloudflare")).toContainText("deskwand-bot", { timeout: 100 });
   await expect(page.getByText("正在加载…")).toHaveCount(0);
 });
 
 test("entry switch refetches config", async ({ page }) => {
   await page.goto("/test.html?fixture=cloud-slow");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "消息入口", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "声音", exact: true })).toBeVisible();
   await expect(page.getByText("5 分钟前的数据")).toHaveCount(0, { timeout: 10_000 });
 
   const before = await mockCallCount(page, "getConfig");
@@ -106,8 +97,8 @@ test("entry switch refetches config", async ({ page }) => {
 
 test("edit controls wait for cloud data", async ({ page }) => {
   await page.goto("/test.html?fixture=cloud-slow");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "头脑", exact: true })).toBeVisible();
   const publish = page.getByRole("button", { name: "保存并发布" });
   const keyInput = page
     .getByTestId("model-key-row-opencode-go")
@@ -122,7 +113,7 @@ test("edit controls wait for cloud data", async ({ page }) => {
 
 test("background refresh does not clobber edits", async ({ page }) => {
   await page.goto("/test.html?fixture=cloud-updated");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await expect(
     page.getByTestId("model-key-row-opencode-go").getByLabel("API 密钥"),
   ).toBeEnabled();
@@ -144,7 +135,7 @@ test("background refresh does not clobber edits", async ({ page }) => {
 
 test("publish uses cloud fingerprint", async ({ page }) => {
   await page.goto("/test.html?fixture=cloud-slow");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   const publish = page.getByRole("button", { name: "保存并发布" });
   const keyInput = page
     .getByTestId("model-key-row-opencode-go")
@@ -173,8 +164,8 @@ test("publish uses cloud fingerprint", async ({ page }) => {
 
 test("mcp add refetches status", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "服务", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "服务", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "双手", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "双手", exact: true })).toBeVisible();
   const before = await mockCallCount(page, "mcpStatus");
 
   await page.getByRole("button", { name: "添加服务" }).click();
@@ -189,7 +180,7 @@ test("mcp add refetches status", async ({ page }) => {
 
 test("own publish does not show cloud updated banner", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   const keyInput = page
     .getByTestId("model-key-row-opencode-go")
     .getByLabel("API 密钥");
@@ -219,7 +210,7 @@ test("own publish does not show cloud updated banner", async ({ page }) => {
 
 test("a failed refetch after publish keeps the form locked", async ({ page }) => {
   await page.goto("/test.html?fixture=publish-refetch-fail");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   const keyInput = page
     .getByTestId("model-key-row-opencode-go")
     .getByLabel("API 密钥");
@@ -241,17 +232,15 @@ test("a failed refetch after publish keeps the form locked", async ({ page }) =>
 
 test("a successful upgrade refetches config on return", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await expect(
-    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByTestId("health-cloudflare")).toContainText("deskwand-bot");
   const before = await mockCallCount(page, "getConfig");
 
-  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await page.getByRole("button", { name: "成长", exact: true }).click();
   await page.getByTestId("upgrade-cloud").click();
   const dialog = page.getByRole("dialog", { name: "升级前确认" });
   await dialog.getByRole("button", { name: "确认升级" }).click();
   await expect(page.getByText("升级结果")).toBeVisible();
 
-  await page.getByRole("button", { name: "服务概览", exact: true }).click();
+  await page.getByRole("button", { name: "生命体征", exact: true }).click();
   await expect.poll(() => mockCallCount(page, "getConfig")).toBeGreaterThan(before);
 });

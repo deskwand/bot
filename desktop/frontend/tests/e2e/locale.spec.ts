@@ -49,9 +49,7 @@ test("shows the bot sync hint and syncs", async ({ page }) => {
 
 test("no sync hint when published locale is missing and resolved is zh", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await expect(
-    page.getByRole("heading", { name: "deskwand-bot", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByTestId("health-cloudflare")).toContainText("deskwand-bot");
   await expect(page.getByRole("group", { name: "语言" })).toBeVisible();
   await expect(page.getByText("下次发布后 bot 使用中文")).toHaveCount(0);
 });
@@ -99,7 +97,7 @@ test("switching back to system follows the system language", async ({ page }) =>
 
 test("sync is blocked while a page has unsaved changes", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await chooseModel(page, "管家模型", "OpenCode Go", /DeepSeek V4 Pro/);
 
   await page
@@ -128,9 +126,9 @@ test("html lang follows the locale", async ({ page }) => {
 
 test("formatDateTime follows the locale", async ({ page }) => {
   // Index-based nav keeps working once the shell itself is translated.
-  // The agent page was inserted between Exchanges and Services.
+  // The Cloudflare page sits in the container group before Checkup and Memory.
   const backupNav = () =>
-    page.locator("#primary-nav").getByRole("button").nth(8);
+    page.locator("#primary-nav").getByRole("button").nth(9);
 
   await page.goto("/test.html?fixture=backup");
   await backupNav().click();
@@ -162,7 +160,7 @@ test("state badges switch language without reload", async ({ page }) => {
 
 test("switching language refetches server text", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await openPage(page, "诊断");
+  await openPage(page, "体检");
   await expect(page.getByTestId("status-model")).toBeVisible();
 
   const statusCalls = () =>
@@ -199,7 +197,7 @@ async function openPage(page: Page, name: string) {
 
 test("overview is English", async ({ page }) => {
   await useEnglish(page, "/test.html?fixture=configured");
-  await openPage(page, "Overview");
+  await openPage(page, "Vitals");
   await page.getByTestId("overview-status-details").locator("summary").click();
   await expect(page.getByTestId("status-model")).toBeVisible();
   await expectNoChinese(page, "main");
@@ -207,7 +205,7 @@ test("overview is English", async ({ page }) => {
 
 test("overview todos are English", async ({ page }) => {
   await useEnglish(page, "/test.html?fixture=configured");
-  await openPage(page, "Overview");
+  await openPage(page, "Vitals");
   const todo = page.getByTestId("overview-todos");
   await expect(
     todo.getByRole("button", { name: "Connect channel", exact: true }),
@@ -218,7 +216,7 @@ test("overview todos are English", async ({ page }) => {
 test("diagnostics is English", async ({ page }) => {
   for (const fixture of ["configured", "diagnostics-unknown"]) {
     await useEnglish(page, `/test.html?fixture=${fixture}`);
-    await openPage(page, "Diagnostics");
+    await openPage(page, "Checkup");
     await expectNoChinese(page, "main");
   }
 });
@@ -226,7 +224,7 @@ test("diagnostics is English", async ({ page }) => {
 test("updates is English", async ({ page }) => {
   for (const fixture of ["configured", "upgrade-required"]) {
     await useEnglish(page, `/test.html?fixture=${fixture}`);
-    await openPage(page, "Updates");
+    await openPage(page, "Growth");
     await expectNoChinese(page, "main");
   }
 });
@@ -241,7 +239,7 @@ test("channels page is English", async ({ page }) => {
     "user-evidence",
   ]) {
     await useEnglish(page, `/test.html?fixture=${fixture}`);
-    await openPage(page, "Channels");
+    await openPage(page, "Voice");
     await expectNoChinese(page, "main");
   }
 });
@@ -259,7 +257,7 @@ test("expectNoChinese ignores marked regions", async ({ page }) => {
 test("models is English", async ({ page }) => {
   // Configured: the model picker, the custom endpoint form and the preview.
   await useEnglish(page, "/test.html?fixture=configured");
-  await openPage(page, "Models");
+  await openPage(page, "Brain");
   await expectNoChinese(page, "body");
 
   await page.getByLabel("Butler model provider").click();
@@ -289,7 +287,7 @@ test("models is English", async ({ page }) => {
 
   // A failed publish keeps its short line and Go detail in English layout.
   await useEnglish(page, "/test.html?fixture=model-key-missing");
-  await openPage(page, "Models");
+  await openPage(page, "Brain");
   await page
     .getByTestId("model-key-row-opencode-go")
     .getByLabel("API key")
@@ -304,7 +302,7 @@ test("models is English", async ({ page }) => {
 
   // A config conflict shows the reload affordance in English.
   await useEnglish(page, "/test.html?fixture=config-conflict");
-  await openPage(page, "Models");
+  await openPage(page, "Brain");
   await page
     .getByTestId("model-key-row-opencode-go")
     .getByLabel("API key")
@@ -317,20 +315,20 @@ test("models is English", async ({ page }) => {
 test("backup page is English", async ({ page }) => {
   for (const fixture of ["backup", "backup-pending"]) {
     await useEnglish(page, `/test.html?fixture=${fixture}`);
-    await openPage(page, "Backup");
+    await openPage(page, "Memory");
     await expectNoChinese(page, "main");
   }
 
   // The progress card while an export runs.
   await useEnglish(page, "/test.html?fixture=backup-progress");
-  await openPage(page, "Backup");
+  await openPage(page, "Memory");
   await page.getByRole("button", { name: "Back up now", exact: true }).click();
   await expect(page.getByTestId("backup-progress")).toBeVisible();
   await expectNoChinese(page, "main");
 
   // A version mismatch blocks restore with an English explanation.
   await useEnglish(page, "/test.html?fixture=backup-version-mismatch");
-  await openPage(page, "Backup");
+  await openPage(page, "Memory");
   await page
     .getByRole("button", { name: "Restore from file", exact: true })
     .click();
@@ -339,7 +337,7 @@ test("backup page is English", async ({ page }) => {
 
   // The overwrite confirmation dialog.
   await useEnglish(page, "/test.html?fixture=backup");
-  await openPage(page, "Backup");
+  await openPage(page, "Memory");
   await page
     .getByRole("button", { name: "Restore this one", exact: true })
     .click();
@@ -522,7 +520,7 @@ test("switching language mid-setup keeps inputs", async ({ page }) => {
 
 test("dialogs are English", async ({ page }) => {
   await useEnglish(page, "/test.html?fixture=upgrade-required");
-  await openPage(page, "Updates");
+  await openPage(page, "Growth");
   await page.getByTestId("upgrade-cloud").click();
   const upgrade = page.getByRole("dialog", { name: "Confirm upgrade" });
   await expect(upgrade).toBeVisible();
@@ -530,7 +528,7 @@ test("dialogs are English", async ({ page }) => {
   await upgrade.getByRole("button", { name: "Cancel" }).click();
 
   await useEnglish(page, "/test.html?fixture=configured");
-  await openPage(page, "Models");
+  await openPage(page, "Brain");
   const row = page.getByTestId("model-key-row-opencode-go");
   await row.getByLabel("API key").fill("sk-en-SENTINEL");
   await row.getByRole("button", { name: "Test connection" }).click();
@@ -540,13 +538,18 @@ test("dialogs are English", async ({ page }) => {
   await probe.getByRole("button", { name: "Cancel" }).click();
 
   // The draft key makes the page dirty, so switching pages asks first.
-  await page.locator("#primary-nav").getByRole("button", { name: "Overview", exact: true }).click();
+  await page.locator("#primary-nav").getByRole("button", { name: "Vitals", exact: true }).click();
   const unsaved = page.getByRole("dialog", { name: "Unsaved changes" });
   await expect(unsaved).toBeVisible();
   await expectNoChinese(page, '[role="dialog"]');
   await unsaved.getByRole("button", { name: "Keep editing" }).click();
 
-  await page.locator("aside").getByRole("button", { name: "Sign out" }).click();
+  await page.getByRole("button", { name: "Container: Cloudflare" }).click();
+  const discard = page.getByRole("dialog", { name: "Unsaved changes" });
+  await expect(discard).toBeVisible();
+  await discard.getByRole("button", { name: "Discard changes" }).click();
+
+  await page.getByRole("button", { name: "Sign out" }).click();
   const signOut = page.getByRole("dialog", { name: "Sign out of Cloudflare?" });
   await expect(signOut).toBeVisible();
   await expectNoChinese(page, '[role="dialog"]');
@@ -562,7 +565,7 @@ test("dialogs are English", async ({ page }) => {
   await abandonRestore.getByRole("button", { name: "Cancel" }).click();
 
   await useEnglish(page, "/test.html?fixture=configured");
-  await openPage(page, "Channels");
+  await openPage(page, "Voice");
   await page.getByRole("button", { name: "Scan to connect" }).click();
   const qrDialog = page.getByRole("dialog", { name: "Connect WeChat" });
   await expect(qrDialog).toBeVisible();
@@ -592,7 +595,7 @@ test("pending cards are English", async ({ page }) => {
 
 test("messages follow a language switch", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  await page.getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "头脑", exact: true }).click();
   await page
     .getByTestId("model-key-row-opencode-go")
     .getByLabel("API 密钥")
@@ -620,13 +623,13 @@ test("English shell fits the narrow window", async ({ page }) => {
   const navToggle = page.getByRole("button", { name: "Open navigation" });
 
   for (const name of [
-    "Overview",
-    "Models",
-    "Services",
-    "Channels",
-    "Diagnostics",
-    "Backup",
-    "Updates",
+    "Vitals",
+    "Brain",
+    "Hands",
+    "Voice",
+    "Checkup",
+    "Memory",
+    "Growth",
   ]) {
     if (await navToggle.isVisible()) await navToggle.click();
     await openPage(page, name);

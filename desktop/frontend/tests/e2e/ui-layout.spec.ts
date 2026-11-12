@@ -2,11 +2,32 @@ import { expect, test } from "@playwright/test";
 
 test("daily pages have one heading and working navigation", async ({ page }) => {
   await page.goto("/test.html?fixture=configured");
-  for (const name of ["服务概览", "模型", "服务", "消息入口", "诊断", "数据备份", "更新"]) {
-    await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name, exact: true }).click();
-    await expect(page.locator("main h1")).toHaveText(name);
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await expect(nav.getByRole("heading")).toHaveText(["心智", "感知与表达", "行动", "生计", "容器"]);
+  for (const name of ["生命体征", "头脑", "视野", "声音", "双手", "钱包", "交易所", "体检", "记忆存档", "成长"]) {
+    await nav.getByRole("button", { name, exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name, exact: true })).toBeVisible();
   }
+  await expect(page.getByText("云端与客户端的版本更新")).toBeVisible(); // 循环最后停在“成长”页
+});
+
+test("the Cloudflare container has its own page", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "容器：Cloudflare" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Cloudflare", exact: true })).toBeVisible();
+  await expect(page.getByText("运行这个生命体的账号与部署")).toBeVisible();
+  await expect(page.getByRole("button", { name: "退出登录" })).toBeVisible();
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await expect(nav.getByRole("button", { name: "Cloudflare", exact: true })).toBeVisible();
+});
+
+test("leaving unsaved edits through the container link asks first", async ({ page }) => {
+  await page.goto("/test.html?fixture=telegram-configured");
+  await page.getByRole("button", { name: "声音", exact: true }).click();
+  await page.getByRole("button", { name: "更换令牌", exact: true }).click();
+  await page.getByLabel("Bot Token", { exact: true }).fill("draft-token");
+  await page.getByRole("button", { name: "容器：Cloudflare" }).click();
+  await expect(page.getByRole("dialog", { name: "有未保存的更改" })).toBeVisible();
 });
 
 test("error keeps the explanation visible and technical code expandable", async ({ page }) => {
@@ -66,21 +87,21 @@ test("empty resource name reveals the field without installing", async ({ page }
 
 test("configured Telegram token is editable on demand without losing drafts", async ({ page }) => {
   await page.goto("/test.html?fixture=telegram-configured");
-  await page.getByRole("button", { name: "消息入口", exact: true }).click();
+  await page.getByRole("button", { name: "声音", exact: true }).click();
   await expect(page.getByLabel("Bot Token", { exact: true })).toBeHidden();
   await page.getByRole("button", { name: "更换令牌", exact: true }).click();
   await page.getByLabel("Bot Token", { exact: true }).fill("draft-token");
   await page.getByRole("button", { name: "收起", exact: true }).click();
   await page.getByRole("button", { name: "更换令牌", exact: true }).click();
   await expect(page.getByLabel("Bot Token", { exact: true })).toHaveValue("draft-token");
-  await page.getByRole("navigation").getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("navigation").getByRole("button", { name: "头脑", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
 });
 
 for (const fixture of ["entry-unknown", "entry-failed"]) {
   test(`${fixture} keeps the last confirmed entry`, async ({ page }) => {
     await page.goto(`/test.html?fixture=${fixture}`);
-    await page.getByRole("button", { name: "消息入口", exact: true }).click();
+    await page.getByRole("button", { name: "声音", exact: true }).click();
     await expect(page.getByTestId("current-entry")).toHaveText("Telegram");
     await page.locator("#current-wechat").click();
     await page.getByRole("button", { name: "保存并发布", exact: true }).click();
@@ -101,22 +122,26 @@ for (const width of [390, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       await page.emulateMedia({ colorScheme });
       await page.goto("/test.html?fixture=layout-long-content");
-      for (const name of ["服务概览", "模型", "服务", "消息入口", "诊断", "数据备份", "更新"]) {
+      for (const name of ["生命体征", "头脑", "双手", "声音", "体检", "记忆存档", "成长"]) {
         const nav = page.getByRole("navigation", { name: "主导航" });
         if (!(await nav.isVisible())) await page.getByRole("button", { name: "打开导航", exact: true }).click();
         await nav.getByRole("button", { name, exact: true }).click();
         await expect(page.locator("main h1")).toHaveText(name);
-        if (name === "服务概览") await expect(page.getByRole("heading", { name: "long-name-".repeat(18), exact: true })).toBeVisible();
         for (const summary of await page.locator("main details > summary").all()) {
           await summary.focus();
           await page.keyboard.press("Enter");
           await expect(summary.locator("..")).toHaveJSProperty("open", true);
         }
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-        if (width === 1280 && ["服务概览", "消息入口", "数据备份"].includes(name)) {
+        if (width === 1280 && ["生命体征", "声音", "记忆存档"].includes(name)) {
           await page.screenshot({ path: `test-results/screens/slim-${name}-${colorScheme}.png`, fullPage: true });
         }
       }
+
+      const nav = page.getByRole("navigation", { name: "主导航" });
+      if (!(await nav.isVisible())) await page.getByRole("button", { name: "打开导航", exact: true }).click();
+      await nav.getByRole("button", { name: "Cloudflare", exact: true }).click();
+      await expect(page.getByText("long-name-".repeat(18))).toBeVisible();
     });
   }
 }

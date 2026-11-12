@@ -5,6 +5,7 @@ import {
   type AdminDeps,
 } from "../../src/admin/admin-gateway";
 import { BotsRepo } from "../../src/butler/bots-repo";
+import type { Vitals } from "../../src/life/vitals";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -310,5 +311,27 @@ describe("admin gateway", () => {
     expect(other.status).toBe(204);
 
     expect((await call(gateway, "/admin/backup/info")).status).toBe(200);
+  });
+
+  it("serves life vitals without a maintenance lease", async () => {
+    const gateway = createAdminGateway(deps("admin-life-vitals"));
+
+    const response = await call(gateway, "/admin/life/vitals");
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Vitals;
+    expect(body.tier).toBe("ample");
+    expect(body.metabolismStarted).toBe(false);
+  });
+
+  it("refuses life vitals without the admin token", async () => {
+    const gateway = createAdminGateway(deps("admin-life-noauth"));
+
+    const response = await call(gateway, "/admin/life/vitals", {
+      token: null,
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ code: "ADMIN_UNAUTHORIZED" });
   });
 });

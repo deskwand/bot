@@ -87,6 +87,7 @@ type fakePublish struct {
 	abandonID     string
 	changes       []domain.Change
 	targets       []domain.Target
+	onApply       func(domain.Change)
 }
 
 func (f *fakePublish) Preview(_ context.Context, target domain.Target, change domain.Change) ([]domain.Step, error) {
@@ -99,14 +100,18 @@ func (f *fakePublish) Preview(_ context.Context, target domain.Target, change do
 
 func (f *fakePublish) Apply(_ context.Context, target domain.Target, change domain.Change) (domain.Result, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.targets = append(f.targets, target)
 	f.changes = append(f.changes, change)
 	result := f.applyResult
-	if result.OperationID == "" && f.applyErr == nil {
+	err := f.applyErr
+	f.mu.Unlock()
+	if result.OperationID == "" && err == nil {
 		result = domain.Result{OperationID: "op-publish", State: deployment.StatePublished}
 	}
-	return result, f.applyErr
+	if f.onApply != nil {
+		f.onApply(change)
+	}
+	return result, err
 }
 
 func (f *fakePublish) Resume(_ context.Context, operationID string) (domain.Result, error) {
@@ -273,14 +278,28 @@ func (f *fakeStatus) ExportDiagnostics(context.Context, domain.Target) ([]byte, 
 }
 
 type fakeSnapshots struct {
+	mu       sync.Mutex
 	calls    int
 	snapshot domain.Snapshot
 	err      error
 }
 
 func (f *fakeSnapshots) ReadSnapshot(context.Context, domain.Target) (domain.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	return f.snapshot, f.err
+}
+
+func (f *fakeSnapshots) addSecret(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, existing := range f.snapshot.SecretNames {
+		if existing == name {
+			return
+		}
+	}
+	f.snapshot.SecretNames = append(f.snapshot.SecretNames, name)
 }
 
 type fakeScripts struct {

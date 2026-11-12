@@ -1,18 +1,21 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
-  Activity,
   Archive,
-  ArrowUpCircle,
-  Bot,
-  LayoutDashboard,
+  Brain,
+  Cloud,
+  Eye,
+  Hand,
+  HeartPulse,
+  KeyRound,
   Loader2,
   Menu,
   MessageSquare,
-  KeyRound,
-  Plug,
-  Search as SearchIcon,
+  Sprout,
+  Stethoscope,
+  Wallet,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,7 +28,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { AppContext, pageLabel, type Page } from "@/components/app-context";
-import { CloudflareAccountCard } from "@/components/cloudflare-account";
+import { ContainerFooter } from "@/components/cloudflare-account";
 import { TelemetryToggle } from "@/components/telemetry-toggle";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { LocaleChoice } from "@/components/locale-choice";
@@ -42,6 +45,7 @@ import { Models } from "@/features/models/Models";
 import { Overview } from "@/features/overview/Overview";
 import { Exchanges } from "@/features/exchanges/Exchanges";
 import { Agent } from "@/features/agent/Agent";
+import { Cloudflare } from "@/features/cloudflare/Cloudflare";
 import { Search } from "@/features/search/Search";
 import { Setup } from "@/features/setup/Setup";
 import { Updates } from "@/features/updates/Updates";
@@ -60,17 +64,35 @@ type Session =
   | { kind: "choose" }
   | { kind: "ready" };
 
-const NAV: { page: Page; icon: typeof LayoutDashboard }[] = [
-  { page: "overview", icon: LayoutDashboard },
-  { page: "models", icon: Bot },
-  { page: "search", icon: SearchIcon },
-  { page: "exchange", icon: KeyRound },
-  { page: "agent", icon: Bot },
-  { page: "mcp", icon: Plug },
-  { page: "entries", icon: MessageSquare },
-  { page: "diagnostics", icon: Activity },
-  { page: "backup", icon: Archive },
-  { page: "updates", icon: ArrowUpCircle },
+type NavGroup = "mind" | "senses" | "action" | "livelihood" | "containers";
+
+const NAV: { group?: NavGroup; items: { page: Page; icon: LucideIcon }[] }[] = [
+  { items: [{ page: "overview", icon: HeartPulse }] },
+  { group: "mind", items: [{ page: "models", icon: Brain }] },
+  {
+    group: "senses",
+    items: [
+      { page: "search", icon: Eye },
+      { page: "entries", icon: MessageSquare },
+    ],
+  },
+  { group: "action", items: [{ page: "mcp", icon: Hand }] },
+  {
+    group: "livelihood",
+    items: [
+      { page: "agent", icon: Wallet },
+      { page: "exchange", icon: KeyRound },
+    ],
+  },
+  {
+    group: "containers",
+    items: [
+      { page: "cloudflare", icon: Cloud },
+      { page: "diagnostics", icon: Stethoscope },
+      { page: "backup", icon: Archive },
+      { page: "updates", icon: Sprout },
+    ],
+  },
 ];
 
 export function App({ client }: { client: ClientService }) {
@@ -212,9 +234,18 @@ export function App({ client }: { client: ClientService }) {
     setSetupImport(true);
   }, []);
 
+  const signedOut = useCallback(() => {
+    // The shell is about to unmount; the import flow lives in the parent, so it
+    // would otherwise survive the next session. The next session opens on the
+    // living entity's vitals.
+    setSetupImport(false);
+    setPage("overview");
+    void refresh(false);
+  }, [refresh, setPage]);
+
   const appValue = useMemo(
-    () => ({ client, navigate, navigateImport, setDirty: setDirtyState }),
-    [client, navigate, navigateImport],
+    () => ({ client, navigate, navigateImport, setDirty: setDirtyState, signedOut }),
+    [client, navigate, navigateImport, signedOut],
   );
 
   const shell = session.kind === "ready";
@@ -261,33 +292,50 @@ export function App({ client }: { client: ClientService }) {
                 className={`${navOpen ? "flex" : "hidden"} flex-col gap-1 md:flex`}
                 aria-label={t("shell.nav")}
               >
-                {NAV.map(({ page: target, icon: Icon }) => (
-                  <Button
-                    key={target}
-                    type="button"
-                    variant={page === target ? "secondary" : "ghost"}
-                    className="justify-start"
-                    aria-current={page === target ? "page" : undefined}
-                    onClick={() => navigate(target)}
-                  >
-                    <Icon className="size-4" aria-hidden />
-                    {pageLabel(target)}
-                  </Button>
-                ))}
+                {NAV.map(({ group, items }) => {
+                  const buttons = items.map(({ page: target, icon: Icon }) => (
+                    <Button
+                      key={target}
+                      type="button"
+                      variant={page === target ? "secondary" : "ghost"}
+                      className="justify-start"
+                      aria-current={page === target ? "page" : undefined}
+                      onClick={() => navigate(target)}
+                    >
+                      <Icon className="size-4" aria-hidden />
+                      {pageLabel(target)}
+                    </Button>
+                  ));
+                  if (!group) {
+                    return (
+                      <div key="ungrouped" className="flex flex-col gap-1">
+                        {buttons}
+                      </div>
+                    );
+                  }
+                  return (
+                    <div
+                      key={group}
+                      role="group"
+                      aria-labelledby={`nav-group-${group}`}
+                      className="mt-4 flex flex-col gap-1"
+                    >
+                      <h2
+                        id={`nav-group-${group}`}
+                        className="px-3 text-xs font-medium text-muted-foreground"
+                      >
+                        {t(`shell.groups.${group}`)}
+                      </h2>
+                      {buttons}
+                    </div>
+                  );
+                })}
               </nav>
               <div className="mt-6 md:mt-auto">
                 <ThemeSwitcher />
                 <LocaleSwitcher dirty={dirty} />
                 <TelemetryToggle />
-                <CloudflareAccountCard
-                  dirty={dirty}
-                  onSignedOut={() => {
-                    // The shell is about to unmount; the import flow lives in the
-                    // parent, so it would otherwise survive the next session.
-                    setSetupImport(false);
-                    void refresh(false);
-                  }}
-                />
+                <ContainerFooter />
               </div>
             </aside>
           ) : null}
@@ -342,6 +390,7 @@ export function App({ client }: { client: ClientService }) {
                   {page === "diagnostics" ? <Diagnostics /> : null}
                   {page === "backup" ? <Backup /> : null}
                   {page === "updates" ? <Updates /> : null}
+                  {page === "cloudflare" ? <Cloudflare /> : null}
                 </div>
               </>
             ) : (

@@ -80,6 +80,8 @@ func (s *Service) walletClient(ctx context.Context, target domain.Target) (*wall
 	if s.snapshots == nil || s.publish == nil || s.credentials == nil {
 		return nil, s.serviceUnavailable()
 	}
+	// A Connect may publish a Worker version; see adminConnectMu.
+	s.adminConnectMu.Lock()
 	client, err := walletadmin.Connect(ctx, walletadmin.Deps{
 		Token: backup.TokenDeps{
 			Snapshots:   s.snapshots,
@@ -88,6 +90,7 @@ func (s *Service) walletClient(ctx context.Context, target domain.Target) (*wall
 		},
 		Locale: s.locale.Current,
 	}, target)
+	s.adminConnectMu.Unlock()
 	if err != nil {
 		return nil, err
 	}

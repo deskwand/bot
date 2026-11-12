@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useApp } from "@/components/app-context";
+import { pageSubtitle, useApp } from "@/components/app-context";
 import { ErrorAlert, StatusRow } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
@@ -113,7 +113,7 @@ export function Diagnostics() {
 
   return (
     <div>
-      <PageHeader title={t("shell.pages.diagnostics")} actions={<>
+      <PageHeader title={t("shell.pages.diagnostics")} subtitle={pageSubtitle("diagnostics")} actions={<>
 <div className="flex flex-wrap gap-2">
           <SyncStatus
             isFetching={statusQuery.isFetching}

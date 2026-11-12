@@ -5,7 +5,7 @@ export const updates = {
   noUpgrade: "无需升级",
   versionLine: "当前 {current} → 可用 {available}",
   modelKeysMissingTitle: "需重新填写模型密钥",
-  modelKeysMissingDescription: "升级后需在模型页重填：{keys}",
+  modelKeysMissingDescription: "升级后需在头脑页重填：{keys}",
   listSeparator: "、",
   readingVersions: "正在读取版本信息。",
   upgrade: "升级",

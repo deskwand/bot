@@ -20,6 +20,7 @@ import {
   type ExchangeProbeResult,
 } from "./exchange-routes";
 import { createWalletRoutes, type WalletReads } from "./wallet-routes";
+import { createLifeRoutes } from "./life-routes";
 import { createMcpAdminRoutes } from "./mcp-routes";
 import { createR2Routes } from "./r2-routes";
 import type {
@@ -233,6 +234,7 @@ export function createAdminGateway(deps: AdminDeps): {
         });
   const wallet =
     deps.walletReads === undefined ? null : createWalletRoutes(deps.walletReads);
+  const life = createLifeRoutes({ vitals: () => deps.life().vitals() });
 
   async function handle(req: Request, url: URL): Promise<Response> {
     if (req.method === "POST" && url.pathname === ACQUIRE_PATH) {
@@ -255,6 +257,11 @@ export function createAdminGateway(deps: AdminDeps): {
     // Wallet status is a read-only health check and needs no lease.
     if (url.pathname.startsWith("/admin/wallet/") && wallet !== null) {
       return wallet.fetch(req);
+    }
+
+    // Vitals are a read-only health check and need no lease.
+    if (url.pathname.startsWith("/admin/life/")) {
+      return life.fetch(req);
     }
 
     if (url.pathname.startsWith(R2_PREFIX)) {

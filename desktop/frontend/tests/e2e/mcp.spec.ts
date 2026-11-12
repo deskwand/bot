@@ -3,8 +3,8 @@ import { expectNoChinese, useEnglish } from "./i18n-helpers";
 
 async function openServices(page: Page, scenario = "configured") {
   await page.goto(`/test.html?fixture=${scenario}`);
-  await page.getByRole("button", { name: "服务", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "服务", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "双手", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "双手", exact: true })).toBeVisible();
 }
 
 async function addCatalogEntry(page: Page, name: string) {
@@ -219,9 +219,9 @@ test("mcp page is English", async ({ page }) => {
   await useEnglish(page, "/test.html?fixture=configured");
   await page
     .locator("#primary-nav")
-    .getByRole("button", { name: "Services", exact: true })
+    .getByRole("button", { name: "Hands", exact: true })
     .click();
-  await expect(page.locator("main h1")).toHaveText("Services");
+  await expect(page.locator("main h1")).toHaveText("Hands");
   await expectNoChinese(page, "main");
 
   await page.getByRole("button", { name: "Add service" }).click();
@@ -231,7 +231,7 @@ test("mcp page is English", async ({ page }) => {
   await useEnglish(page, "/test.html?fixture=mcp-many-tools");
   await page
     .locator("#primary-nav")
-    .getByRole("button", { name: "Services", exact: true })
+    .getByRole("button", { name: "Hands", exact: true })
     .click();
   await page.getByRole("button", { name: /^Tools/ }).click();
   await expectNoChinese(page, "main");

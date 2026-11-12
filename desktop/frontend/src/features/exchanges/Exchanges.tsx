@@ -8,7 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useApp } from "@/components/app-context";
+import { pageSubtitle, useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -368,6 +368,7 @@ export function Exchanges() {
     <div>
       <PageHeader
         title={t("shell.pages.exchange")}
+        subtitle={pageSubtitle("exchange")}
         description={t("exchange.intro")}
         actions={
           <Badge variant="outline">

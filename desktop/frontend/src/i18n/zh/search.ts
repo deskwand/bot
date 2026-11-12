@@ -20,7 +20,7 @@ export const search = {
   keyPlaceholderNew: "输入新密钥",
   pendingClear: "待清除",
   clearSavedKey: "清除已保存密钥",
-  keyShared: "与模型页共用同一个 key。",
+  keyShared: "与头脑页共用同一个 key。",
   missingKey: "未配置 key，将使用 Exa",
   keysNeverEchoed: "密钥不回显",
   submitted: "已提交",

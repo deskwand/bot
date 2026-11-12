@@ -14,19 +14,13 @@ import { useApp } from "@/components/app-context";
 import { useT } from "@/i18n";
 
 /**
- * Sidebar footer for the connected account. Signing out revokes this client's
- * authorization and deletes its local credentials; the cloud service, the
- * selected deployment and the published secrets are untouched, so the dialog
- * says all three out loud.
+ * Signing out revokes this client's authorization and deletes its local
+ * credentials; the cloud service, the selected deployment and the published
+ * secrets are untouched, so the dialog says all three out loud. An unsaved
+ * draft cannot reach the Cloudflare page: navigation asks before discarding it.
  */
-export function CloudflareAccountCard({
-  dirty,
-  onSignedOut,
-}: {
-  dirty: boolean;
-  onSignedOut: () => void;
-}) {
-  const { client } = useApp();
+export function CloudflareSignOut() {
+  const { client, signedOut } = useApp();
   const t = useT();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -46,16 +40,16 @@ export function CloudflareAccountCard({
     try {
       await client.disconnectCloudflare();
       setOpen(false);
-      onSignedOut();
+      signedOut();
     } catch (failure) {
       setError(failure);
       // Go revokes the refresh token before deleting the local keys, so a
-      // delete that fails can leave this client signed out already. The card
+      // delete that fails can leave this client signed out already. The page
       // must not keep claiming the account is connected in that case.
       client
         .cloudflareStatus()
         .then((status) => {
-          if (status.state !== "connected") onSignedOut();
+          if (status.state !== "connected") signedOut();
         })
         .catch(() => undefined);
     } finally {
@@ -64,14 +58,11 @@ export function CloudflareAccountCard({
   };
 
   return (
-    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
-      <span className="inline-flex items-center gap-1.5" aria-label={t("shell.accountConnected")}>
-        <span className="size-1.5 rounded-full bg-emerald-600" aria-hidden />Cloudflare
-      </span>
+    <div className="mt-6 border-t border-border pt-4">
       <Button
         type="button"
         variant="ghost"
-        size="xs"
+        size="sm"
         className="px-1"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -87,11 +78,6 @@ export function CloudflareAccountCard({
             <DialogTitle>{t("shell.signOutTitle")}</DialogTitle>
             <DialogDescription>{t("shell.signOutDescription")}</DialogDescription>
           </DialogHeader>
-          {dirty ? (
-            <p className="text-sm text-muted-foreground">
-              {t("shell.unpublishedWillDiscard")}
-            </p>
-          ) : null}
           <ErrorAlert error={error} />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => change(false)} disabled={busy}>
@@ -106,6 +92,31 @@ export function CloudflareAccountCard({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+/**
+ * The sidebar footer for the container itself: a connection dot and one row
+ * that opens the Cloudflare page. Client settings (theme, language, telemetry)
+ * stay separate because they belong to this computer, not to the deployment.
+ */
+export function ContainerFooter() {
+  const { navigate } = useApp();
+  const t = useT();
+
+  return (
+    <div className="mt-2 border-t border-border pt-3">
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        className="w-full justify-start px-1 text-xs text-muted-foreground"
+        onClick={() => navigate("cloudflare")}
+      >
+        <span className="size-1.5 rounded-full bg-emerald-600" aria-hidden />
+        {t("shell.containerFooter")}
+      </Button>
     </div>
   );
 }

@@ -22,7 +22,7 @@ export const search: Messages["search"] = {
   keyPlaceholderNew: "Enter a new key",
   pendingClear: "Pending clear",
   clearSavedKey: "Clear saved key",
-  keyShared: "Shares the same key as the Models page.",
+  keyShared: "Shares the same key as the Brain page.",
   missingKey: "No key configured; Exa will be used",
   keysNeverEchoed: "Keys are never echoed",
   submitted: "Submitted",

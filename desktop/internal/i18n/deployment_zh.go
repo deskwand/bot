@@ -2,7 +2,7 @@ package i18n
 
 var zhDeployment = map[string]string{
 	"deployment.releaseVersionUnknown":    "云端版本未知（可能用命令行部署过）；请在“连接已有服务”中重新导入",
-	"deployment.upgradeRequired":          "请先在“更新”页升级云端服务",
+	"deployment.upgradeRequired":          "请先在“成长”页升级云端服务",
 	"deployment.downgradeRejected":        "云端版本较新，请先升级客户端",
 	"deployment.versionUnknown":           "未知",
 	"deployment.releaseSummary":           "云端版本 %s；客户端版本 %s",

@@ -185,6 +185,24 @@ type WalletSectionDTO struct {
 	RPCURL string `json:"rpcUrl"`
 }
 
+// LifeSourceDTO is one entry in the vitals' spend ranking.
+type LifeSourceDTO struct {
+	Source string  `json:"source"`
+	USD    float64 `json:"usd"`
+}
+
+// LifeVitalsDTO is the deployed life ledger's read-only state. TopSources is
+// always an array, never null.
+type LifeVitalsDTO struct {
+	BalanceUSD        float64         `json:"balanceUsd"`
+	DailySpendUSD     float64         `json:"dailySpendUsd"`
+	RunwayDays        *float64        `json:"runwayDays"`
+	Tier              string          `json:"tier"`
+	MetabolismStarted bool            `json:"metabolismStarted"`
+	Unpriced          bool            `json:"unpriced"`
+	TopSources        []LifeSourceDTO `json:"topSources"`
+}
+
 // MarshalJSON omits the write-only values, like SecretEditDTO.
 func (w WalletEditDTO) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {

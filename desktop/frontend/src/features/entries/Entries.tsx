@@ -23,7 +23,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { useApp } from "@/components/app-context";
+import { pageSubtitle, useApp } from "@/components/app-context";
 import {
   ErrorAlert,
   type LocalizedStep,
@@ -354,7 +354,7 @@ export function Entries() {
 
   return (
     <div>
-      <PageHeader title={t("shell.pages.entries")} actions={<>
+      <PageHeader title={t("shell.pages.entries")} subtitle={pageSubtitle("entries")} actions={<>
         <SyncStatus
           isFetching={configQuery.isFetching || statusQuery.isFetching}
           isPlaceholder={configQuery.isPlaceholder || statusQuery.isPlaceholder}

@@ -263,6 +263,26 @@ export interface InstallInputDTO {
   activeChannel: string;
 }
 
+/** LifeSourceDTO is one entry in the vitals' spend ranking. */
+export interface LifeSourceDTO {
+  source: string;
+  usd: number;
+}
+
+/**
+ * LifeVitalsDTO is the deployed life ledger's read-only state. TopSources is
+ * always an array, never null.
+ */
+export interface LifeVitalsDTO {
+  balanceUsd: number;
+  dailySpendUsd: number;
+  runwayDays: number | null;
+  tier: string;
+  metabolismStarted: boolean;
+  unpriced: boolean;
+  topSources: LifeSourceDTO[];
+}
+
 /**
  * LocaleDTO is the language the UI shows: the stored source and the zh/en
  * locale it resolves to.
@@ -659,6 +679,10 @@ export const Service = {
   /** Install creates a new deployment. */
   install(input: InstallInputDTO): Promise<ResultDTO> {
     return call("Service.Install", input);
+  },
+  /** LifeVitals reads the deployed life ledger's vitals. */
+  lifeVitals(): Promise<LifeVitalsDTO> {
+    return call("Service.LifeVitals");
   },
   /** ListBackups lists the backups in the configured folder, newest first. */
   listBackups(): Promise<BackupFileDTO[]> {

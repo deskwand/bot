@@ -7,7 +7,7 @@ export const updates: Messages["updates"] = {
   noUpgrade: "No upgrade needed",
   versionLine: "Current {current} → available {available}",
   modelKeysMissingTitle: "Refill model keys",
-  modelKeysMissingDescription: "Refill these keys on Models after upgrading: {keys}",
+  modelKeysMissingDescription: "Refill these keys on Brain after upgrading: {keys}",
   listSeparator: ", ",
   readingVersions: "Reading version information.",
   upgrade: "Upgrade",

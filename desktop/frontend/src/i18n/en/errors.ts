@@ -28,7 +28,7 @@ export const errors: Messages["errors"] = {
   RELEASE_NOT_BUNDLED: "This build has no publish bundle; install the full release.",
   RELEASE_UNTRUSTED: "The publish bundle signature is not trusted.",
   RELEASE_UNAVAILABLE: "Publish bundle unavailable; reinstall the app.",
-  UPGRADE_REQUIRED: "Upgrade the cloud service on Updates first.",
+  UPGRADE_REQUIRED: "Upgrade the cloud service on Growth first.",
   UPGRADE_REQUIRED_FIRST: "Migration version too old; upgrade from the command line.",
   DOWNGRADE_REJECTED: "Cloud version is newer; upgrade this app first.",
   UPGRADE_REQUIRES_INTERMEDIATE: "Upgrade to the intermediate version first.",
@@ -53,7 +53,7 @@ export const errors: Messages["errors"] = {
   MODELS_REQUIRED: "Choose the butler and task models.",
   CONFIG_MISSING: "DESKWAND_CONFIG is missing in the cloud.",
   MODEL_SWITCH_REJECTED: "Model switch blocked; check the details.",
-  MODEL_KEY_MISSING: "Model key missing; add it on Models.",
+  MODEL_KEY_MISSING: "Model key missing; add it on Brain.",
   SERVICE_NOT_FOUND: "Worker not found.",
   UPLOAD_REJECTED: "Cloudflare rejected the upload.",
   VERIFY_FAILED: "Verification failed; keep checking.",
@@ -69,7 +69,7 @@ export const errors: Messages["errors"] = {
   INVALID_SECRET_EDIT: "Invalid secret edit; keep or replace it.",
   NOT_SENT: "The request did not reach the cloud; nothing was written.",
   ADMIN_UNAVAILABLE:
-    "The cloud service does not support backup yet; upgrade on Updates first.",
+    "The cloud service does not support backup yet; upgrade on Growth first.",
   MCP_ADMIN_UNAVAILABLE: "The cloud admin API is unavailable.",
   MCP_FAILED: "Cloud admin request failed.",
   EXCHANGE_ADMIN_UNAVAILABLE: "This deployment's admin API is unavailable; check that it finished deploying.",
@@ -77,6 +77,10 @@ export const errors: Messages["errors"] = {
   WALLET_ADMIN_UNAVAILABLE:
     "This deployment's admin API is unavailable; check that it finished deploying.",
   WALLET_FAILED: "The wallet request failed; retry later.",
+  LIFE_ADMIN_UNAVAILABLE:
+    "This deployment's admin API is unavailable; check that it finished deploying.",
+  LIFE_VITALS_UNSUPPORTED: "The cloud service is too old to report vitals; upgrade it first.",
+  LIFE_VITALS_FAILED: "The vitals request failed; retry later.",
   MCP_SERVER_NOT_FOUND: "Service not found",
   MCP_SERVER_NOT_FOUND_OR_NO_AUTH:
     "The service does not exist or needs no authorization",
@@ -99,7 +103,7 @@ export const errors: Messages["errors"] = {
   operationFailed: "Operation failed. Retry.",
   reauthAccount: "Account to sign in again: ",
   reload: "Reload",
-  goToUpdates: "Go to Updates",
+  goToUpdates: "Go to Growth",
   reimport: "Import again",
   resolvePendingFirst: "Handle it with Continue at the top",
 };

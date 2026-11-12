@@ -9,6 +9,6 @@ export const locale: Messages["locale"] = {
   pendingBot: "The bot switches to {lang} after the next publish",
   syncNow: "Sync now",
   syncing: "Syncing…",
-  syncIncomplete: "Sync did not finish; continue it from Overview.",
+  syncIncomplete: "Sync did not finish; continue it from Vitals.",
   syncBlockedDirty: "Publish or discard this page's changes first",
 };

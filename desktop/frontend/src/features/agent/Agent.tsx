@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, RefreshCw, Save, ShieldCheck } from "lucide-react";
-import { useApp } from "@/components/app-context";
+import { pageSubtitle, useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -10,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useDirty } from "@/components/use-dirty";
 import { useT, type MessageKey } from "@/i18n";
-import { useConfigQuery, useInvalidate } from "@/services/queries";
+import { queryKeys, useConfigQuery, useInvalidate } from "@/services/queries";
 import type { WalletEditDTO, WalletStatusDTO } from "@/services/types";
 import {
   walletDraftEmpty,
@@ -33,6 +34,7 @@ export function Agent() {
   const t = useT();
   const configQuery = useConfigQuery();
   const invalidate = useInvalidate();
+  const queryClient = useQueryClient();
   const [draft, setDraft] = useState<WalletDraft>(EMPTY);
   const [status, setStatus] = useState<WalletStatusDTO | null>(null);
   const [loading, setLoading] = useState(true);
@@ -101,6 +103,7 @@ export function Agent() {
       setDraft(EMPTY);
       setSuccess(true);
       invalidate.config();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.walletStatus });
       await loadStatus();
     } catch (cause) {
       setError(cause);
@@ -116,6 +119,7 @@ export function Agent() {
     <div>
       <PageHeader
         title={t("shell.pages.agent")}
+        subtitle={pageSubtitle("agent")}
         description={t("wallet.intro")}
         actions={
           <Badge variant="outline">

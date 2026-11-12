@@ -11,10 +11,10 @@ async function openSearch(page: Page, scenario = "configured") {
   await page.goto(`/test.html?fixture=${scenario}`);
   await page
     .getByRole("navigation", { name: "主导航" })
-    .getByRole("button", { name: "搜索", exact: true })
+    .getByRole("button", { name: "视野", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "搜索", exact: true }),
+    page.getByRole("heading", { name: "视野", exact: true }),
   ).toBeVisible();
 }
 
@@ -95,10 +95,10 @@ test("english has no chinese", async ({ page }) => {
   await useEnglish(page, "/test.html?fixture=configured");
   await page
     .getByRole("navigation", { name: "Main navigation" })
-    .getByRole("button", { name: "Search", exact: true })
+    .getByRole("button", { name: "Sight", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Search", exact: true }),
+    page.getByRole("heading", { name: "Sight", exact: true }),
   ).toBeVisible();
 
   await expectNoChinese(page);

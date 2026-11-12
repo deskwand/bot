@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ArrowRight, Loader2 } from "lucide-react";
@@ -16,19 +17,30 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { pageLabel, useApp, type Page } from "@/components/app-context";
-import { ErrorAlert, StatusRow, StatusBadge, formatObserved } from "@/components/feedback";
+import { pageLabel, pageSubtitle, useApp, type Page } from "@/components/app-context";
+import { ErrorAlert, StatusRow, StatusBadge } from "@/components/feedback";
 import { SyncStatus } from "@/components/sync-status";
 import { useT, type MessageKey } from "@/i18n";
 import { isCode } from "@/services/errors";
-import { useConfigQuery, useInvalidate, useStatusQuery } from "@/services/queries";
+import {
+  queryKeys,
+  useConfigQuery,
+  useInvalidate,
+  useLifeVitalsQuery,
+  useStatusQuery,
+} from "@/services/queries";
 import type { ConnectionDTO, PendingRestoreDTO } from "@/services/types";
+import { VitalsCard } from "./VitalsCard";
+import { WalletCard } from "./WalletCard";
 
 export function Overview() {
   const { client, navigate } = useApp();
   const t = useT();
   const configQuery = useConfigQuery();
   const statusQuery = useStatusQuery();
+  const vitalsQuery = useLifeVitalsQuery();
+  const refetchVitals = vitalsQuery.refetch;
+  const queryClient = useQueryClient();
   const invalidate = useInvalidate();
   const config = configQuery.data;
   const mcpCount = Array.isArray(config?.mcpServers) ? config.mcpServers.length : 0;
@@ -74,8 +86,10 @@ export function Overview() {
   const refresh = useCallback(() => {
     void configQuery.refetch();
     void statusQuery.refetch();
+    void refetchVitals();
+    void queryClient.invalidateQueries({ queryKey: queryKeys.walletStatus });
     void loadLocal();
-  }, [configQuery, loadLocal, statusQuery]);
+  }, [configQuery, loadLocal, queryClient, refetchVitals, statusQuery]);
 
   const error = configQuery.data
     ? localError
@@ -85,6 +99,7 @@ export function Overview() {
     : null;
 
   const entryStatus = status.find((item) => item.kind === config?.activeChannel);
+  const modelStatus = status.find((item) => item.kind === "model");
   const modelsConfigured = Boolean(config?.butlerModel && config?.taskModel);
   const corruptPendingRecord = pendingError !== null && isCode(pendingError, "RESTORE_JOURNAL_CORRUPT");
   const pendingCheckFailed = pendingError !== null && !corruptPendingRecord;
@@ -122,23 +137,59 @@ export function Overview() {
     }
   };
 
-  const configRows: { page: Page; description: ReactNode }[] = [
+  const configRows: { page: Page; description: ReactNode; testId?: string }[] = [
     {
       page: "models",
-      description: config?.butlerModel ? (
+      description: (
         <>
-          {t("overview.butlerModel")}{" "}
-          <span data-i18n-ignore>{config.butlerModel.id}</span>
-          {" · "}
-          {t("overview.taskModel")}{" "}
-          {config.taskModel?.id ? (
-            <span data-i18n-ignore>{config.taskModel.id}</span>
+          {config?.butlerModel ? (
+            <>
+              {t("overview.butlerModel")}{" "}
+              <span data-i18n-ignore>{config.butlerModel.id}</span>
+              {" · "}
+              {t("overview.taskModel")}{" "}
+              {config.taskModel?.id ? (
+                <span data-i18n-ignore>{config.taskModel.id}</span>
+              ) : (
+                t("common.notSet")
+              )}
+            </>
           ) : (
-            t("common.notSet")
+            t("overview.notConfigured")
           )}
+          {modelStatus ? (
+            <>
+              {" "}
+              <StatusBadge item={modelStatus} />
+            </>
+          ) : null}
         </>
+      ),
+    },
+    {
+      page: "search",
+      description: config?.searchProvider ? (
+        t("overview.searchOn", { provider: config.searchProvider })
       ) : (
         t("overview.notConfigured")
+      ),
+    },
+    {
+      page: "entries",
+      description: (
+        <>
+          {config?.activeChannel === "wechat"
+            ? t("overview.channelWechat")
+            : config?.activeChannel === "telegram"
+              ? t("overview.channelTelegram")
+              : t("overview.channelNone")}
+          {entryStatus ? (
+            <>
+              {" "}
+              <StatusBadge item={entryStatus} />
+            </>
+          ) : null}
+        </>
       ),
     },
     {
@@ -149,21 +200,21 @@ export function Overview() {
           : t("overview.mcpNone"),
     },
     {
-      page: "entries",
-      description:
-        config?.activeChannel === "wechat"
-          ? t("overview.channelWechat")
-          : config?.activeChannel === "telegram"
-            ? t("overview.channelTelegram")
-            : t("overview.channelNone"),
+      page: "cloudflare",
+      testId: "health-cloudflare",
+      description: config?.workerName ? (
+        <span data-i18n-ignore>{config.workerName}</span>
+      ) : (
+        t("overview.notRead")
+      ),
     },
   ];
 
   return (
     <div>
-      <PageHeader title={t("shell.pages.overview")} actions={<>
+      <PageHeader title={t("shell.pages.overview")} subtitle={pageSubtitle("overview")} actions={<>
         <SyncStatus
-          isFetching={configQuery.isFetching || statusQuery.isFetching}
+          isFetching={configQuery.isFetching || statusQuery.isFetching || vitalsQuery.isFetching}
           isPlaceholder={configQuery.isPlaceholder || statusQuery.isPlaceholder}
           savedAt={configQuery.savedAt ?? statusQuery.savedAt}
           error={syncError}
@@ -300,26 +351,14 @@ export function Overview() {
         </Alert>
       ) : null}
 
-      <div className="grid overflow-hidden rounded-lg border border-border bg-card sm:grid-cols-2">
-        <div className="min-w-0 p-5">
-          <p className="text-xs text-muted-foreground">{t("common.cloudService")}</p>
-          <h2 className="mt-2 break-all text-xl font-semibold">{config?.workerName ? <span data-i18n-ignore>{config.workerName}</span> : t("overview.notRead")}</h2>
-          <p className="mt-2 text-sm text-muted-foreground">{t("overview.releaseVersion")}{" "}{config?.releaseVersion ? <span data-i18n-ignore>{config.releaseVersion}</span> : t("common.unknown")}</p>
-        </div>
-        <div className="min-w-0 border-t border-border p-5 sm:border-t-0 sm:border-l">
-          <p className="text-xs text-muted-foreground">{t("common.currentChannel")}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <h2 className="text-xl font-semibold">{config?.activeChannel ? (config.activeChannel === "wechat" ? t("common.wechat") : t("common.telegram")) : t("common.notSet")}</h2>
-            {entryStatus ? <StatusBadge item={entryStatus} /> : <Badge variant="outline">{t("overview.statusUnknown")}</Badge>}
-          </div>
-          <p className="mt-2 text-sm text-muted-foreground">{entryStatus ? formatObserved(entryStatus.observedAt) : t("overview.noVerification")}</p>
-        </div>
-      </div>
+      <VitalsCard />
 
-      <section className="mt-6" aria-labelledby="overview-config-title">
-        <h2 id="overview-config-title" className="text-base font-medium">{t("overview.configuration")}</h2>
-        {configRows.map(({ page, description }) => (
-          <div key={page} className="flex items-center justify-between gap-4 border-b border-border py-4 last:border-0">
+      <WalletCard />
+
+      <section className="mt-6" aria-labelledby="overview-health-title">
+        <h2 id="overview-health-title" className="text-base font-medium">{t("overview.health")}</h2>
+        {configRows.map(({ page, description, testId }) => (
+          <div key={page} data-testid={testId} className="flex items-center justify-between gap-4 border-b border-border py-4 last:border-0">
             <div className="min-w-0"><h3 className="text-sm font-medium">{pageLabel(page)}</h3><p className="mt-1 break-words text-xs text-muted-foreground">{description}</p></div>
             <Button type="button" size="icon-sm" variant="ghost" aria-label={t("overview.manage", { name: pageLabel(page) })} onClick={() => navigate(page)}>
               <ArrowRight aria-hidden />

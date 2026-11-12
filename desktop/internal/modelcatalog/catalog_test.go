@@ -145,7 +145,7 @@ func TestUnavailableModelErrorFollowsLocale(t *testing.T) {
 				i18ntest.NoHan(t, "unavailable model", err.Error())
 				return
 			}
-			if want := "模型 deepseek/not-in-catalog 不可用，请在桌面端模型页重新选择"; err.Error() != want {
+			if want := "模型 deepseek/not-in-catalog 不可用，请在桌面端头脑页重新选择"; err.Error() != want {
 				t.Fatalf("error = %q, want %q", err.Error(), want)
 			}
 		})
