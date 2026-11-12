@@ -234,6 +234,16 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 
 - 「钱包里有多少钱」（`wallet_status`）：钱包地址、各币持仓、总估值和待确认的汇款。只注册在管家的主人对话里。
 
+### 谋生机器人
+
+在管家里说「建一个谋生机器人」，她就通过 `create_bot` 建一个带 `earner` 标记的机器人（每个部署最多一个，建议 4 小时间隔）。只有它的任务里会多出四个钱包工具：`wallet_balances`、`market_prices`、`wallet_swap`、`wallet_history`；其他机器人和管家都没有能动钱的工具。
+
+- 换币只走 Uniswap V3 `SwapRouter02`，币种限定 USDC、WETH、cbBTC，`recipient` 永远是钱包自己。单笔不超过总估值的 25%，报价滑点不超过 1%，授权只给路由且数额精确。
+- 最近 24 小时（或当天 UTC 0 点、上次恢复交易之后）的已实现亏损达到估值的 10% 就熔断，`swap` 一律拒绝；到下一个 UTC 0 点自动解除，或主人说「恢复交易」后由 `wallet_resume_trading` 解除。汇款不受熔断影响。
+- 总估值低于 5 美元时停止交易，并通知主人一次；补钱后自动恢复。
+- 钱包每小时整点采样一次 WETH 和 cbBTC 的价格，保留 30 天；`market_prices` 默认看最近 24 小时。
+- 危急档照常唤醒，冬眠档和其他机器人一样搁置；吃紧档的间隔加倍和模型降级对它同样适用。
+
 ### 在 Sepolia 上试跑
 
 `scripts/wallet-sepolia.ts` 在 Base Sepolia 上手动验证链上读写，不进 CI。它会打印钱包地址、ETH 和 USDC 余额、1 USDC 换 WETH 的报价，再构造一笔 5 USDC（最小汇款额）转给收款地址的转账：
@@ -244,11 +254,13 @@ HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 \
   node --use-env-proxy --experimental-strip-types scripts/wallet-sepolia.ts --dry-run --random-key
 ```
 
+加 `--swap` 时改为用 1 USDC 换 WETH：先打印 approve 和 swap 两笔交易的 `to` 与最小成交量，再打印 `checkSwap` 的结果；被风控拒绝时同样正常退出。真跑至少需要 5 USDC（交易下限按总估值算）和 0.002 ETH 付 gas。
+
 真跑时设置 `WALLET_PRIVATE_KEY` 和 `WALLET_OWNER_ADDRESS`，去掉 `--dry-run`；`SEPOLIA_RPC_URL` 可选，默认 `https://sepolia.base.org`。余额为 0 时风控会拒绝并打印原因，脚本正常退出。
 
 ### 备份
 
-导出与恢复包含 `remittances` 表。私钥、收款地址和 RPC 地址不进备份。恢复不含钱包的旧备份会清空钱包表：链上资产不受影响，只是丢了历史。还没升级到带钱包版本的 Worker 在导出时直接不带钱包，恢复时也不会去动它。
+导出与恢复包含 `remittances`、`trades`、`prices` 三张表。私钥、收款地址和 RPC 地址不进备份。恢复不含钱包的旧备份会清空钱包表：链上资产不受影响，只是丢了历史。还没升级到带钱包版本的 Worker 在导出时直接不带钱包，恢复时也不会去动它。
 
 新版 Worker 导出的备份带 `wallet` 对象；旧版桌面客户端不认识它，会拒绝恢复整份备份。先用旧客户端升级，再做恢复。
 
@@ -258,6 +270,7 @@ HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 \
 
 - 信任根是 Worker。Cloudflare 账号被攻破时，私钥可以被导出。资金量大了以后应升级为链上金库合约。
 - 估值用 Quoter 的即时报价，大额持仓的真实可变现价值会更低。
+- 熔断只看已实现的估值变化；持仓不动、但价格下跌，不会触发熔断。
 - 汇款金额以美元计，主人用人民币充值时自己换算。
 - 恢复旧备份可能丢掉一笔已汇出、还没结清的汇款记录，之后可能再汇一笔。
 

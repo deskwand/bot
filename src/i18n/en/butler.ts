@@ -75,6 +75,8 @@ export const butler: Messages["butler"] = {
     kindLifeTier: "Life tier change",
     kindWalletRemit: "Remittance sent",
     kindWalletRemitFailed: "Remittance failed",
+    kindWalletTradeStuck: "Swap stuck",
+    kindWalletDepleted: "Wallet value low",
   },
   quickLookup: {
     system:

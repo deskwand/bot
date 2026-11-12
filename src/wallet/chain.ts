@@ -24,6 +24,8 @@ export interface ChainPort {
   ethBalance(): Promise<bigint>;
   tokenBalance(token: Token): Promise<bigint>;
   quote(sell: Token, buy: Token, amountIn: bigint): Promise<bigint>;
+  /** How much `spender` may move from the wallet for this token. */
+  allowance(token: Token, spender: Address): Promise<bigint>;
   /** Signs with the latest mined nonce from the chain and a fixed `value: 0n`. */
   sign(tx: TxRequest): Promise<Signed>;
   /** The latest mined nonce; anything above a signed nonce means it is spent. */
@@ -100,6 +102,54 @@ export const erc20Abi = [
       { name: "amount", type: "uint256" },
     ],
     outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "allowance",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
+
+/**
+ * SwapRouter02's `exactInputSingle`, with no deadline: a stuck swap replayed
+ * verbatim is still bounded by `amountOutMinimum`.
+ */
+export const swapRouterAbi = [
+  {
+    type: "function",
+    name: "exactInputSingle",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "recipient", type: "address" },
+          { name: "amountIn", type: "uint256" },
+          { name: "amountOutMinimum", type: "uint256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [{ name: "amountOut", type: "uint256" }],
   },
 ] as const;
 

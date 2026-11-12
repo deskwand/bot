@@ -189,6 +189,16 @@ When the owner confirms receipt and includes the remittance id in `life_credit`,
 
 - *"How much is in your wallet?"* (`wallet_status`) — the wallet address, holdings, total value and any pending remittance. Only registered in the owner's butler conversation.
 
+### The earner bot
+
+Ask the butler to "create an earner bot" and she creates a bot with the `earner` flag through `create_bot` (at most one per deployment, a 4h interval is recommended). Only that bot's tasks get four extra wallet tools: `wallet_balances`, `market_prices`, `wallet_swap` and `wallet_history`; no other bot and not the butler has a tool that can move money.
+
+- Swaps go only through Uniswap V3 `SwapRouter02`, limited to USDC, WETH and cbBTC, and the recipient is always the wallet itself. Each trade is at or below 25% of the total value, the quote's slippage is at or below 1%, and the router gets an exact-amount allowance.
+- When confirmed swaps in the last 24 hours (or since UTC midnight, or since the owner last resumed trading) have realized a 10% loss against the value, the breaker trips and every `swap` is refused. It lifts automatically at the next UTC midnight, or when the owner says "resume trading" and the butler calls `wallet_resume_trading`. Remittances are unaffected.
+- Trading stops below $5 of total value, the owner is told once, and topping up resumes it automatically.
+- The wallet samples WETH and cbBTC prices at the top of every hour and keeps 30 days; `market_prices` shows the last 24 hours by default.
+- The earner still wakes in the critical tier and is held in dormant like every other bot; the doubled lean-tier interval and model downgrade apply to it too.
+
 ### Trying it on Sepolia
 
 `scripts/wallet-sepolia.ts` manually exercises the chain reads and writes against Base Sepolia; it is not part of CI. It prints the wallet address, ETH and USDC balances and the quote for 1 USDC into WETH, then builds a 5 USDC (the minimum remittance) transfer to the owner address:
@@ -199,11 +209,13 @@ HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 \
   node --use-env-proxy --experimental-strip-types scripts/wallet-sepolia.ts --dry-run --random-key
 ```
 
+With `--swap` it swaps 1 USDC into WETH instead: it first prints the `to` of both the approve and the swap and the minimum amount out, then prints the `checkSwap` result; a refusal still exits normally. A real swap needs at least 5 USDC in the wallet (the floor is on total value) and 0.002 ETH for gas.
+
 For a real run set `WALLET_PRIVATE_KEY` and `WALLET_OWNER_ADDRESS` and drop `--dry-run`; `SEPOLIA_RPC_URL` is optional and defaults to `https://sepolia.base.org`. With a zero balance the guard refuses and prints the reason, and the script exits normally.
 
 ### Backups
 
-Exports and restores include the `remittances` table. The private key, owner address and RPC URL are not in the backup. Restoring an old backup with no wallet empties the wallet table; on-chain assets are unaffected, only the history is lost. A worker that has not been updated yet is exported without a wallet, and a restore leaves that worker's (nonexistent) wallet alone.
+Exports and restores include the `remittances`, `trades` and `prices` tables. The private key, owner address and RPC URL are not in the backup. Restoring an old backup with no wallet empties the wallet tables; on-chain assets are unaffected, only the history is lost. A worker that has not been updated yet is exported without a wallet, and a restore leaves that worker's (nonexistent) wallet alone.
 
 A backup made by the new worker carries a `wallet` object. An older desktop client does not understand it and rejects the whole backup; update the client first, then restore.
 
@@ -213,6 +225,7 @@ The wallet is a new `WalletDO` class (migration `v7`, one global instance); it o
 
 - The trust root is the Worker. If the Cloudflare account is compromised, the private key can be exported. Move to an on-chain vault contract once the balance grows.
 - Valuation uses the Quoter's spot quote; a large position is worth less than that if actually sold.
+- The breaker only sees realized value changes; a price drop on a position that is not sold does not trip it.
 - Remittances are denominated in USD; convert yourself when funding in CNY.
 - Restoring an old backup can lose a remitted-but-unsettled transfer, and the next tier change may remit again.
 

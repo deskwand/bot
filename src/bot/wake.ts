@@ -84,8 +84,14 @@ export function clampWakeAt(
 }
 
 /** Whether a wake that is due should run. Manual wakes always run. */
-export function dietHolds(tier: Tier, manual: boolean): boolean {
-  return !manual && (tier === "critical" || tier === "dormant");
+export function dietHolds(
+  tier: Tier,
+  manual: boolean,
+  earner = false,
+): boolean {
+  if (manual) return false;
+  if (tier === "dormant") return true;
+  return tier === "critical" && !earner;
 }
 
 /** Doubles the gap to the next wake while lean; otherwise returns `at`. */

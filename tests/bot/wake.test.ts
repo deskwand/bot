@@ -92,6 +92,13 @@ describe("wake rules", () => {
     }
   });
 
+  it("exempts an earner from the critical diet but not dormancy", () => {
+    expect(dietHolds("critical", false, true)).toBe(false);
+    expect(dietHolds("dormant", false, true)).toBe(true);
+    expect(dietHolds("critical", false)).toBe(true);
+    expect(dietHolds("critical", true, true)).toBe(false);
+  });
+
   it("stretches the heal ceiling only for lean", () => {
     const late = Date.UTC(2026, 10, 3, 23, 0);
     expect(healCeilingMs(late, 12 * 3_600_000)).toBe(

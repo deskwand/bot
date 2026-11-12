@@ -14,6 +14,8 @@ export type BotMeta = {
   wakesDay: string | null;
   wakesCount: number;
   pendingSteer: string[];
+  /** Only the single earner bot carries this flag; absent on all others. */
+  earner?: boolean;
   /** The wake time the owner asked for; absent on older rows. */
   manualWakeAt?: number | null;
   /** Why the bot called finish_bot; absent on older rows. */

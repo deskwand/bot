@@ -88,6 +88,15 @@ export class ViemChain implements ChainPort {
     return result[0];
   }
 
+  async allowance(token: Token, spender: Address): Promise<bigint> {
+    return this.client.readContract({
+      address: this.token(token).address,
+      abi: erc20Abi,
+      functionName: "allowance",
+      args: [this.address, spender],
+    });
+  }
+
   async sign(tx: TxRequest): Promise<Signed> {
     // The latest (mined) nonce, not the pending one: a transfer stuck in the
     // mempool and given up on by reconciliation then shares its nonce with

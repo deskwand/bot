@@ -25,7 +25,9 @@ export type SpeakEvent =
       usdc: number;
       reason: string;
       body: "";
-    };
+    }
+  | { kind: "wallet.tradeStuck"; reason?: string; body: "" }
+  | { kind: "wallet.depleted"; valueUsd: number; body: "" };
 
 export type SpeakComplete = (
   system: string,
@@ -118,6 +120,15 @@ export function fallbackText(event: SpeakEvent, locale: Locale): string {
         usdc: formatUsd(event.usdc),
         reason: tryT(locale, event.reason) ?? event.reason,
       });
+    case "wallet.tradeStuck":
+      return (
+        (event.reason === undefined ? undefined : tryT(locale, event.reason)) ??
+        t(locale, "wallet.notice.tradeStuck")
+      );
+    case "wallet.depleted":
+      return t(locale, "wallet.notice.depleted", {
+        value: formatUsd(event.valueUsd),
+      });
   }
 }
 
@@ -156,6 +167,10 @@ function kindLabel(event: SpeakEvent, locale: Locale): string {
       return t(locale, "butler.speaker.kindWalletRemit");
     case "wallet.remitFailed":
       return t(locale, "butler.speaker.kindWalletRemitFailed");
+    case "wallet.tradeStuck":
+      return t(locale, "butler.speaker.kindWalletTradeStuck");
+    case "wallet.depleted":
+      return t(locale, "butler.speaker.kindWalletDepleted");
   }
 }
 
@@ -198,7 +213,9 @@ function userMessage(
       ? t(locale, "butler.speaker.userBot", { botName: event.botName })
       : event.kind === "life.tier" ||
           event.kind === "wallet.remit" ||
-          event.kind === "wallet.remitFailed"
+          event.kind === "wallet.remitFailed" ||
+          event.kind === "wallet.tradeStuck" ||
+          event.kind === "wallet.depleted"
         ? ""
         : t(locale, "butler.speaker.userTitle", { title: event.title }),
     "",

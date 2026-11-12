@@ -16,6 +16,12 @@ export async function resetWallet(): Promise<void> {
       if (tables.has("remittances")) {
         state.storage.sql.exec(`DELETE FROM remittances`);
       }
+      if (tables.has("trades")) {
+        state.storage.sql.exec(`DELETE FROM trades`);
+      }
+      if (tables.has("prices")) {
+        state.storage.sql.exec(`DELETE FROM prices`);
+      }
       const keys = await state.storage.list();
       for (const key of keys.keys()) {
         await state.storage.delete(key);

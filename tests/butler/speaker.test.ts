@@ -197,6 +197,34 @@ describe("wallet remittance notices", () => {
     expect(text).toContain(t("zh", "wallet.error.reverted"));
   });
 
+  it("gives a stuck swap its own fixed copy", () => {
+    const event: SpeakEvent = {
+      kind: "wallet.tradeStuck",
+      reason: "wallet.notice.tradeStuck",
+      body: "",
+    };
+
+    for (const locale of ["zh", "en"] as const) {
+      expect(fallbackText(event, locale)).toBe(
+        t(locale, "wallet.notice.tradeStuck"),
+      );
+    }
+  });
+
+  it.each(["zh", "en"] as const)(
+    "gives the depleted notice the value in %s",
+    (locale) => {
+      const text = fallbackText(
+        { kind: "wallet.depleted", valueUsd: 3.5, body: "" },
+        locale,
+      );
+
+      expect(text.trim()).not.toBe("");
+      expect(text).toContain("3.50");
+      expect(text).toContain("5");
+    },
+  );
+
   it("does not call the model for a remittance notice", async () => {
     const complete = vi.fn();
     const event = remit(0);

@@ -68,6 +68,8 @@ export const butler = {
     kindLifeTier: "档位变化",
     kindWalletRemit: "汇款到账",
     kindWalletRemitFailed: "汇款失败",
+    kindWalletTradeStuck: "换币卡住",
+    kindWalletDepleted: "钱包估值过低",
   },
   quickLookup: {
     system:

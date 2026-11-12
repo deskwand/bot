@@ -241,6 +241,7 @@ describe("life_vitals wallet", () => {
       tokens: { USDC: 100_000_000n, WETH: 0n, cbBTC: 0n },
       valueUsd: 100,
     },
+    breaker: { tripped: false, lossUsd: 0 },
     pendingRemittance: null,
   };
 

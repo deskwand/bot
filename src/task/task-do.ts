@@ -68,6 +68,8 @@ import {
   type McpGates,
 } from "../tools/mcp";
 import { documentConverterFromAi } from "../tools/file-content";
+import { createEarnerTools } from "../wallet/tools";
+import { walletConfigured, walletStub } from "../wallet/wallet-do";
 import { createR2WorkspaceEnv } from "../env/r2-env";
 import { webFetchTool } from "../tools/web-fetch";
 import { webSearchTool } from "../tools/web-search";
@@ -890,6 +892,28 @@ export class TaskDO extends Agent<Env> {
         locale: ownerLocale(this.env),
       }),
     });
+
+    if (!walletConfigured(this.env)) return;
+    // The bot's flag decides whether it gets the trading tools at all. A failed
+    // read leaves them out; the alternative would be a bot that cannot trade.
+    let snapshot: Awaited<ReturnType<typeof bot.snapshot>> = null;
+    try {
+      snapshot = await bot.snapshot();
+    } catch (error) {
+      console.warn(
+        "wallet: bot snapshot read failed",
+        error instanceof Error ? error.constructor.name : "Error",
+      );
+    }
+    if (snapshot?.meta.earner === true) {
+      this.registry.install({
+        name: "wallet",
+        tools: createEarnerTools({
+          wallet: () => walletStub(this.env),
+          locale: ownerLocale(this.env),
+        }),
+      });
+    }
   }
 
   private readonly completeReview: ReviewComplete = async (

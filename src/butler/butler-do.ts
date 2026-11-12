@@ -27,7 +27,7 @@ import { lifeBlock } from "../life/prompt";
 import { createLifeTools } from "../life/tools";
 import type { Tier } from "../life/vitals";
 import { readWalletStatus, readWalletValue } from "../wallet/client";
-import { createWalletTools } from "../wallet/tools";
+import { createWalletResumeTool, createWalletTools } from "../wallet/tools";
 import {
   walletConfigured,
   walletStub,
@@ -350,6 +350,8 @@ export class ButlerDO extends Agent<Env> {
           bot: (id) => this.botFor(id),
           botChat: (id) => this.botChatFor(id),
           task: (id) => this.taskFor(id),
+          walletConfigured: walletConfigured(this.env),
+          locale: ownerLocale(this.env),
         }),
       ],
       sections: [
@@ -428,16 +430,23 @@ export class ButlerDO extends Agent<Env> {
     });
 
     if (walletConfigured(this.env)) {
+      const walletLocale = ownerLocale(this.env);
       this.registry.install({
         name: "wallet",
-        tools: createWalletTools({
-          status: async () => {
-            const status = await readWalletStatus(this.env);
-            if (status === null) throw new Error("wallet is unavailable");
-            return status;
-          },
-          locale: ownerLocale(this.env),
-        }),
+        tools: [
+          ...createWalletTools({
+            status: async () => {
+              const status = await readWalletStatus(this.env);
+              if (status === null) throw new Error("wallet is unavailable");
+              return status;
+            },
+            locale: walletLocale,
+          }),
+          createWalletResumeTool({
+            resume: () => walletStub(this.env).resumeTrading(),
+            locale: walletLocale,
+          }),
+        ],
       });
     }
 
@@ -926,11 +935,13 @@ export class ButlerDO extends Agent<Env> {
 
   /** Tells the owner about a remittance. Fixed copy, no model call. */
   async notifyRemittance(event: WalletNotice): Promise<void> {
-    await this.say(event, {
-      refId:
-        event.kind === "wallet.remit" ? `remit:${event.id}` : "remit:failed",
-      priority: "alert",
-    });
+    const refId =
+      event.kind === "wallet.remit"
+        ? `remit:${event.id}`
+        : event.kind === "wallet.depleted"
+          ? "wallet:depleted"
+          : "remit:failed";
+    await this.say(event, { refId, priority: "alert" });
   }
 
   /** What the Butler knows about the owner, for a bot's wake context. */

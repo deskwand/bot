@@ -5,7 +5,7 @@ import { ChannelDO } from "./channels/channel-do";
 import { createGateway } from "./gateway";
 import { ownerLocale } from "./i18n";
 import { lifeStub } from "./life/client";
-import { walletStub } from "./wallet/wallet-do";
+import { walletConfigured, walletStub } from "./wallet/wallet-do";
 
 export { ButlerDO } from "./butler/butler-do";
 export { TaskDO } from "./task/task-do";
@@ -58,8 +58,24 @@ export default {
     return gateway.fetch(req);
   },
 
-  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     if (await butler(env).maintenanceActive()) return;
+
+    // The wallet's hourly alarm is the only sampler; repair it if it was lost.
+    // A sixteenth-of-an-hour slot keeps the probe from running every minute.
+    if (
+      new Date(controller.scheduledTime).getUTCMinutes() % 15 === 0 &&
+      walletConfigured(env)
+    ) {
+      try {
+        await walletStub(env).ensureAlarm();
+      } catch (error) {
+        console.warn(
+          "wallet alarm ensure failed:",
+          error instanceof Error ? error.constructor.name : "Error",
+        );
+      }
+    }
 
     const hub = channels(env);
     try {

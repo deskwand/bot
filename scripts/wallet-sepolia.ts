@@ -3,12 +3,15 @@
  *
  * Usage:
  *   node --use-env-proxy --experimental-strip-types scripts/wallet-sepolia.ts --dry-run --random-key
+ *   node --use-env-proxy --experimental-strip-types scripts/wallet-sepolia.ts --swap --dry-run --random-key
  *   WALLET_PRIVATE_KEY=0x... WALLET_OWNER_ADDRESS=0x... \
  *     node --use-env-proxy --experimental-strip-types scripts/wallet-sepolia.ts
  *
  * `SEPOLIA_RPC_URL` overrides the public RPC. `--dry-run` signs without
  * broadcasting. `--random-key` uses a throwaway key (and, when no owner is
- * set, a throwaway owner) so a dry run needs neither secret.
+ * set, a throwaway owner) so a dry run needs neither secret. `--swap` swaps
+ * 1 USDC into WETH instead of transferring; a real swap needs at least 5 USDC
+ * in the wallet (the trading floor) and 0.002 ETH for gas.
  */
 import {
   formatEther,
@@ -18,13 +21,20 @@ import {
   type Hex,
 } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { CHAINS } from "../src/wallet/chain.ts";
+import { CHAINS, pairKey } from "../src/wallet/chain.ts";
 import {
   checkRemit,
+  checkSwap,
   MIN_REMIT_USD,
+  minOut,
   RECEIPT_TIMEOUT_MS,
 } from "../src/wallet/guard.ts";
-import { assertAllowedTarget, transferTx } from "../src/wallet/tx.ts";
+import {
+  approveTx,
+  assertAllowedTarget,
+  swapTx,
+  transferTx,
+} from "../src/wallet/tx.ts";
 import { ViemChain } from "../src/wallet/viem-chain.ts";
 
 const DEFAULT_RPC_URL = "https://sepolia.base.org";
@@ -98,6 +108,84 @@ async function main(): Promise<void> {
 
   const wethOut = await chain.quote("USDC", "WETH", ONE_USDC);
   console.log("quote: 1 USDC ->", formatUnits(wethOut, 18), "WETH");
+
+  if (args.has("--swap")) {
+    const feeTier = network.feeTier[pairKey("USDC", "WETH")];
+    if (feeTier === undefined) fail("Sepolia 上没有 USDC/WETH 的费率档");
+
+    const amountIn = ONE_USDC;
+    const minimum = minOut(wethOut);
+    const approve = approveTx(network, "USDC", amountIn);
+    const swap = swapTx(
+      network,
+      chain.address,
+      "USDC",
+      "WETH",
+      amountIn,
+      minimum,
+      feeTier,
+    );
+    assertAllowedTarget(network, approve);
+    assertAllowedTarget(network, swap);
+
+    console.log("approve to:", approve.to);
+    console.log("swap to:", swap.to);
+    console.log("minOut:", formatUnits(minimum, 18), "WETH");
+
+    const weth = await chain.tokenBalance("WETH");
+    const wethUsd = weth > 0n ? await chain.quote("WETH", "USDC", weth) : 0n;
+    const check = checkSwap({
+      sell: "USDC",
+      buy: "WETH",
+      amountIn,
+      amountInUsd: Number(amountIn) / 1e6,
+      holdings: {
+        ethWei: eth,
+        tokens: { USDC: usdc, WETH: weth, cbBTC: 0n },
+        valueUsd: Number(usdc + wethUsd) / 1e6,
+      },
+      realizedLossUsd: 0,
+      feeTier,
+      whitelisted: true,
+    });
+    if (check !== null) {
+      console.log("checkSwap 拒绝:", check);
+      return;
+    }
+    console.log("checkSwap 通过");
+
+    if (dryRun) {
+      console.log("--dry-run：不签名也不广播");
+      return;
+    }
+
+    const allowance = await chain.allowance("USDC", network.router);
+    if (allowance < amountIn) {
+      const signedApprove = await chain.sign(approve);
+      await chain.broadcast(signedApprove.raw);
+      console.log("broadcast approve:", signedApprove.hash);
+      const approveReceipt = await chain.receipt(
+        signedApprove.hash,
+        RECEIPT_TIMEOUT_MS,
+      );
+      console.log(
+        "approve receipt:",
+        approveReceipt === null ? "超时仍未上链" : approveReceipt.status,
+      );
+      if (approveReceipt?.status !== "success") return;
+    }
+
+    const signed = await chain.sign(swap);
+    await chain.broadcast(signed.raw);
+    console.log("broadcast:", signed.hash);
+
+    const receipt = await chain.receipt(signed.hash, RECEIPT_TIMEOUT_MS);
+    console.log(
+      "receipt:",
+      receipt === null ? "超时仍未上链" : receipt.status,
+    );
+    return;
+  }
 
   const amount = TRANSFER_USDC * ONE_USDC;
   const tx = transferTx(network, owner, amount);

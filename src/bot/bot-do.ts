@@ -57,6 +57,7 @@ export type BotInit = {
   defaultIntervalMs: number;
   firstWakeAt: number;
   rules?: string;
+  earner?: boolean;
 };
 
 export type BotSnapshot = {
@@ -188,6 +189,7 @@ export class BotDO extends DurableObject<Env> {
       wakesDay: utcDay(getClock().now()),
       wakesCount: 0,
       pendingSteer: [],
+      ...(spec.earner ? { earner: true } : {}),
     };
     this.store.writeMeta(meta);
     const rules = spec.rules?.trim();
@@ -572,7 +574,7 @@ export class BotDO extends DurableObject<Env> {
       const tier = await readTier(this.env);
       const manualWake =
         meta.manualWakeAt != null && meta.manualWakeAt === meta.nextWakeAt;
-      if (dietHolds(tier, manualWake)) {
+      if (dietHolds(tier, manualWake, meta.earner === true)) {
         meta.nextWakeAt = now + DIET_RECHECK_MS;
         this.store.writeMeta(meta);
         await this.ctx.storage.setAlarm(meta.nextWakeAt);

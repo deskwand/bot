@@ -1,10 +1,13 @@
 import { env, runInDurableObject } from "cloudflare:test";
+import type { Address } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BotChatDO } from "../../src/bot/bot-chat-do";
 import { ButlerDO } from "../../src/butler/butler-do";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
+import { setWalletChainOverride } from "../../src/wallet/wallet-do";
 import { fakeChannel } from "../helpers/fake-channel";
+import { FakeChain } from "../helpers/fake-chain";
 import { scriptedModel } from "../helpers/scripted-model";
 
 declare module "cloudflare:test" {
@@ -13,6 +16,13 @@ declare module "cloudflare:test" {
 
 const ENV = env as unknown as Record<string, unknown>;
 const savedEnv = new Map<string, unknown>();
+const OWNER = "0x1111111111111111111111111111111111111111" as Address;
+const EARNER_TOOLS = [
+  "wallet_balances",
+  "market_prices",
+  "wallet_swap",
+  "wallet_history",
+];
 
 function setEnv(patch: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(patch)) {
@@ -34,6 +44,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setWalletChainOverride(null);
   setModelOverride(null);
   setChannelOverride("telegram", null);
   vi.restoreAllMocks();
@@ -49,6 +60,35 @@ describe("BotChatDO execution tools", () => {
     const stub = env.BOT_CHAT.get(env.BOT_CHAT.idFromName("t-wallet-registry"));
 
     const names = await runInDurableObject(stub, (instance: BotChatDO) =>
+      instance.registry
+        .snapshot()
+        .tools()
+        .map(({ tool }) => tool.name),
+    );
+
+    expect(names.filter((name) => name.startsWith("wallet_"))).toEqual([]);
+  });
+});
+
+describe("Butler wallet tools", () => {
+  it("adds the resume switch only when the wallet is configured", async () => {
+    setWalletChainOverride({ chain: new FakeChain(), owner: OWNER });
+    const stub = env.BUTLER.get(env.BUTLER.idFromName("t-butler-wallet"));
+    const names = await runInDurableObject(stub, (instance: ButlerDO) =>
+      instance.registry
+        .snapshot()
+        .tools()
+        .map(({ tool }) => tool.name),
+    );
+
+    expect(names).toContain("wallet_status");
+    expect(names).toContain("wallet_resume_trading");
+    for (const name of EARNER_TOOLS) expect(names).not.toContain(name);
+  });
+
+  it("installs no wallet tools when the wallet is not configured", async () => {
+    const stub = env.BUTLER.get(env.BUTLER.idFromName("t-butler-no-wallet"));
+    const names = await runInDurableObject(stub, (instance: ButlerDO) =>
       instance.registry
         .snapshot()
         .tools()
@@ -83,6 +123,7 @@ describe("TaskDO execution tools", () => {
     );
     expect(names.filter((name) => name.startsWith("life_"))).toEqual([]);
     expect(names.filter((name) => name.startsWith("wallet_"))).toEqual([]);
+    for (const name of EARNER_TOOLS) expect(names).not.toContain(name);
   });
 
   it("reports save_artifact progress to the Butler without the outbox", async () => {

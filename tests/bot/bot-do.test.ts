@@ -249,6 +249,17 @@ describe("BotDO lifecycle", () => {
     expect(await alarmAt(stub)).toBe(now + WATCHDOG_MS);
   });
 
+  it("marks only the earner bot in meta", async () => {
+    fakeButler();
+    const plain = botStub("b-lifecycle-meta-plain");
+    await initBot(plain);
+    expect((await plain.snapshot())?.meta).not.toHaveProperty("earner");
+
+    const earner = botStub("b-lifecycle-meta-earner");
+    await initBot(earner, { earner: true });
+    expect((await earner.snapshot())?.meta.earner).toBe(true);
+  });
+
   it("alarm during a run does not spawn again", async () => {
     const fake = fakeButler();
     const stub = botStub("b-lifecycle-running");
@@ -1635,6 +1646,40 @@ describe("BotDO diet", () => {
       expect(snapshot?.meta.status).toBe("active");
       expect(fake.notices).toEqual([]);
       expect(await alarmAt(stub)).toBe(now + DIET_RECHECK_MS);
+    } finally {
+      await resetLife();
+    }
+  });
+
+  it("runs an earner bot when critical", async () => {
+    const fake = fakeButler();
+    try {
+      await driveLifeTo("critical");
+      const stub = botStub("b-diet-earner-critical");
+      await initBot(stub, { earner: true });
+
+      await fireAlarm(stub);
+
+      expect(fake.spawns).toHaveLength(1);
+      expect((await stub.snapshot())?.meta.currentTaskId).toBe("t1");
+    } finally {
+      await resetLife();
+    }
+  });
+
+  it("holds an earner bot when dormant", async () => {
+    const fake = fakeButler();
+    try {
+      await driveLifeTo("dormant");
+      const stub = botStub("b-diet-earner-dormant");
+      await initBot(stub, { earner: true });
+
+      await fireAlarm(stub);
+
+      expect(fake.spawns).toHaveLength(0);
+      expect((await stub.snapshot())?.meta.nextWakeAt).toBe(
+        now + DIET_RECHECK_MS,
+      );
     } finally {
       await resetLife();
     }

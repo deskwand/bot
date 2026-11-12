@@ -10,6 +10,7 @@ import {
   parseDuration,
   wakeCeilingMs,
 } from "../bot/wake";
+import { t, type Locale } from "../i18n";
 import type { BotsRepo } from "./bots-repo";
 import { getClock } from "./notifier";
 import type { TaskControl } from "./tools";
@@ -18,13 +19,26 @@ export type { TaskControl };
 
 const DURATION_HINT = "（示例：30m、2h、1d）";
 
-const CreateBot = Type.Object({
+const CreateBotProps = {
   name: Type.String(),
   mission: Type.String(),
   default_interval: Type.String(),
   first_wake_after: Type.Optional(Type.String()),
   rules: Type.Optional(Type.String()),
+};
+
+const CreateBot = Type.Object(CreateBotProps);
+
+const CreateBotEarner = Type.Object({
+  ...CreateBotProps,
+  earner: Type.Optional(Type.Boolean()),
 });
+
+const CREATE_BOT_DESCRIPTION =
+  "Create a long-lived bot that keeps working on a recurring mission and wakes itself up.";
+
+const EARNER_DESCRIPTION =
+  " Set `earner: true` to give it the wallet trading tools; only one earner bot may exist per deployment, and a 4h interval is recommended.";
 
 const BotId = Type.Object({ id: Type.String() });
 
@@ -83,6 +97,8 @@ export type BotToolDeps = {
     destroy(): Promise<void>;
   };
   task(id: string): TaskControl;
+  walletConfigured?: boolean;
+  locale?: Locale;
 };
 
 function output(text: string) {
@@ -111,13 +127,23 @@ export function durationRangeError(text: string): string {
  */
 export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
   const { bots, bot, botChat, task } = deps;
+  const walletConfigured = deps.walletConfigured === true;
+  const locale = deps.locale ?? "zh";
 
-  const createBot: ToolRegistration<typeof CreateBot> = {
+  const createBot: ToolRegistration<typeof CreateBotEarner> = {
     name: "create_bot",
-    description:
-      "Create a long-lived bot that keeps working on a recurring mission and wakes itself up.",
-    parameters: CreateBot,
-    async execute({ name, mission, default_interval, first_wake_after, rules }) {
+    description: walletConfigured
+      ? CREATE_BOT_DESCRIPTION + EARNER_DESCRIPTION
+      : CREATE_BOT_DESCRIPTION,
+    parameters: (walletConfigured ? CreateBotEarner : CreateBot) as typeof CreateBotEarner,
+    async execute({
+      name,
+      mission,
+      default_interval,
+      first_wake_after,
+      rules,
+      earner,
+    }) {
       try {
         const intervalMs = parseDuration(default_interval);
         if (intervalMs === null) return output(durationError(default_interval));
@@ -127,6 +153,16 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
             allowRules: true,
           });
           if (!check.ok) return output(check.message);
+        }
+
+        const wantsEarner = walletConfigured && earner === true;
+        if (wantsEarner) {
+          for (const row of bots.list()) {
+            const snapshot = await bot(row.id).snapshot();
+            if (snapshot?.meta.earner === true) {
+              return output(t(locale, "wallet.earner.exists"));
+            }
+          }
         }
 
         const now = getClock().now();
@@ -142,6 +178,11 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
           ).at;
         }
 
+        const effectiveRules =
+          wantsEarner && (rules === undefined || rules.trim() === "")
+            ? t(locale, "wallet.earner.defaultRules")
+            : rules;
+
         const id = bots.nextId();
         bots.insert({ id, name });
         try {
@@ -151,7 +192,8 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
             mission,
             defaultIntervalMs,
             firstWakeAt,
-            ...(rules === undefined ? {} : { rules }),
+            ...(effectiveRules === undefined ? {} : { rules: effectiveRules }),
+            ...(wantsEarner ? { earner: true } : {}),
           });
         } catch (error) {
           // Do not leave an index row pointing at a bot that never started.
