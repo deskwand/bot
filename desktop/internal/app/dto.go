@@ -142,6 +142,19 @@ type ExchangeProbeDTO struct {
 	Message    string   `json:"message,omitempty"`
 }
 
+// ExchangeSyncDTO is one locally stored Binance account's last desktop sync.
+// At is RFC3339 and empty until the account synced once; Code and Message
+// describe a refusal, never a secret.
+type ExchangeSyncDTO struct {
+	AccountID  string   `json:"accountId"`
+	At         string   `json:"at,omitempty"`
+	OK         bool     `json:"ok"`
+	Currencies int      `json:"currencies,omitempty"`
+	Total      *float64 `json:"total,omitempty"`
+	Code       string   `json:"code,omitempty"`
+	Message    string   `json:"message,omitempty"`
+}
+
 // ExchangeAccountDTO is one exchange account in the config document. Secrets
 // never appear here; they travel as EXCHANGE_SECRET_<ID> edits.
 type ExchangeAccountDTO struct {

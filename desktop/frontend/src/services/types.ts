@@ -19,6 +19,7 @@ import type {
   EntryResultDTO,
   ExchangeAccountDTO,
   ExchangeProbeDTO,
+  ExchangeSyncDTO,
   ImportInputDTO as GeneratedImportInputDTO,
   ImportPreviewDTO,
   InstallInputDTO,
@@ -66,6 +67,7 @@ export type {
   EntryResultDTO,
   ExchangeAccountDTO,
   ExchangeProbeDTO,
+  ExchangeSyncDTO,
   ImportPreviewDTO,
   InstallInputDTO,
   LoginStatusDTO,
@@ -183,6 +185,8 @@ export interface ClientService {
   removeMcpServer(name: string): Promise<ResultDTO>;
   probeMcp(name: string): Promise<McpProbeDTO>;
   testExchange(accountId: string): Promise<ExchangeProbeDTO>;
+  syncExchange(accountId: string): Promise<ExchangeSyncDTO>;
+  exchangeSyncStatus(): Promise<ExchangeSyncDTO[]>;
   walletStatus(): Promise<WalletStatusDTO>;
   saveWallet(input: WalletEditDTO): Promise<ResultDTO>;
   mcpStatus(): Promise<McpAuthDTO[]>;

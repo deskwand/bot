@@ -33,6 +33,7 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 - 自主机器人：`BotDO`（每个机器人一个实例，独立记忆，自己决定下次唤醒，执行仍交给 TaskDO）
 - 生命账本：`LifeDO`（全局单实例，模型开销、入账、生命体征与档位）
 - 钱包：`WalletDO`（全局单实例，Base 链上的余额、估值、自动汇款与对账）
+- 交易所快照：`ExchangeDO`（全局单实例，桌面端同步来的 Binance 余额快照）
 - 外部服务：`McpAuthDO`（全局单实例，远程 MCP 的 OAuth 注册、token 保管与续期，以及桌面端"测试连接"）
 - 定时任务：通过 Agents SDK `Agent.schedule` 注册 cron（渠道轮询保活另用每 5 分钟一次的 Cron Trigger），cron 按 **UTC** 解释
 - 产物：写入 R2，任务完成时由渠道以文件/图片本体直接送达（不进公开 URL）。单文件上限 15MB，超过在 `save_artifact` 阶段即被拒绝
@@ -93,6 +94,7 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 - 多平台可以同时配。一次查询默认覆盖全部账号；某个账号失败只让它自己跳过，不影响其他账号。
 - 结果缓存 60 秒，避免连环查询把交易所的限频打爆。
 - Binance 对来自受限地区（例如美国）的出口 IP 返回 451。桌面端「测试连接」会直接指出这一点；解决办法是给该账号配一个非美区的 `baseUrl` 代理。
+- Binance 被 451 拦住时，开着桌面端就会每 5 分钟用本机 IP 同步一次余额；Worker 查询遇到地区、网络或超时会改用这份快照，并注明来源与时间，超过 30 分钟会提醒桌面端可能没开。密钥仍只写进 Cloudflare 与本机钥匙串。
 - OKX 按区域拆站（`www` / `us` / `eea` / `tr`），key 只在创建它的站点有效，`baseUrl` 要跟站点一致，否则报 `50119`。
 - 已知限制：Binance 币本位合约只算钱包余额、不列仓位（`positionAmt` 的单位是张，换算需要合约乘数）。
 
@@ -533,7 +535,7 @@ Telegram 由 Worker 主动长轮询收消息，本地调试不需要公网地址
 
 ## 升级与迁移说明
 
-- 升级不重建已有的 Durable Object：业务表只追加列（`tasks.progress_message_ref_json`、`approval_messages.message_ref_json`、`tasks.bot_id`），旧行保持原样。自主机器人新增了 `BotDO` 类（migration `v3`），只新建、不改动已有类。外部服务（MCP）新增了 `McpAuthDO` 类（migration `v4`，全局单实例，保管 OAuth token），同样只新建。生命账本新增了 `LifeDO` 类（migration `v6`，全局单实例），同样只新建。钱包新增了 `WalletDO` 类（migration `v7`，全局单实例），同样只新建。
+- 升级不重建已有的 Durable Object：业务表只追加列（`tasks.progress_message_ref_json`、`approval_messages.message_ref_json`、`tasks.bot_id`），旧行保持原样。自主机器人新增了 `BotDO` 类（migration `v3`），只新建、不改动已有类。外部服务（MCP）新增了 `McpAuthDO` 类（migration `v4`，全局单实例，保管 OAuth token），同样只新建。生命账本新增了 `LifeDO` 类（migration `v6`，全局单实例），同样只新建。钱包新增了 `WalletDO` 类（migration `v7`，全局单实例），同样只新建。交易所快照新增了 `ExchangeDO` 类（migration `v8`，全局单实例），同样只新建。
 - 消息引用（`ChannelMessageRef`）记录渠道、会话、部署归属和消息 ID。引用只在同一部署、同一选择、同一会话时才能编辑；旧版本只留下裸消息 ID 的记录无法推断归属，会安全降级为新发一条消息。
 - 普通代码发布会改变 route key：切换后或有旧消息引用时，下一条进度改发新消息，这是预期代价。A→B→A 切换即使中间版本没有唤醒 Channel DO，也不会复用旧引用。
 - 旧版本在途的长轮询或模型请求可能在新配置发布后完成；新版本处理的请求使用新选择。不承诺跨版本同时在途请求的原子切换。

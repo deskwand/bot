@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
 import { PageHeader } from "@/components/page-header";
@@ -18,7 +19,7 @@ import { Label } from "@/components/ui/label";
 import { useDirty } from "@/components/use-dirty";
 import { useT, type MessageKey } from "@/i18n";
 import { toClientError } from "@/services/errors";
-import { useConfigQuery, useInvalidate } from "@/services/queries";
+import { useConfigQuery, useInvalidate, queryKeys } from "@/services/queries";
 import type {
   ConfigDTO,
   ConfigEditDTO,
@@ -27,6 +28,7 @@ import type {
   SecretEditDTO,
 } from "@/services/types";
 import { EXCHANGE_VENUES, exchangeSecretName, venueOption } from "./providers";
+import { SyncStatus } from "./SyncStatus";
 import { accountProblems } from "./validate";
 
 type SecretDraft = { key: string; secret: string; passphrase: string };
@@ -52,6 +54,12 @@ export function Exchanges() {
   const { client } = useApp();
   const t = useT();
   const configQuery = useConfigQuery();
+  const syncQuery = useQuery({
+    queryKey: queryKeys.exchangeSyncStatus,
+    queryFn: () => client.exchangeSyncStatus(),
+    refetchInterval: 30_000,
+  });
+  const queryClient = useQueryClient();
   const invalidate = useInvalidate();
   const [baseline, setBaseline] = useState<ConfigDTO | null>(null);
   const config = baseline ?? configQuery.data ?? null;
@@ -135,6 +143,13 @@ export function Exchanges() {
     [rows],
   );
   const problems = useMemo(() => accountProblems(accounts), [accounts]);
+  const syncById = useMemo(
+    () =>
+      new Map(
+        (syncQuery.data ?? []).map((status) => [status.accountId, status]),
+      ),
+    [syncQuery.data],
+  );
 
   const draftOf = (rowKey: string): SecretDraft =>
     drafts[rowKey] ?? emptyDraft();
@@ -309,6 +324,10 @@ export function Exchanges() {
       setAwaitingFreshConfig(true);
       setBaseline(null);
       invalidate.config();
+      // A Binance key saved just now is in the local vault: show its sync row.
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.exchangeSyncStatus,
+      });
       // The refetch re-seeds the form and clears the write-only drafts. On a
       // failure the drafts stay: a pasted API secret cannot be read back.
       const fresh = await applyFreshConfig();
@@ -602,6 +621,20 @@ export function Exchanges() {
                               probe.result.message ?? probe.result.code ?? "",
                           })}
                   </p>
+                ) : null}
+
+                {account.venue === "binance" ? (
+                  <SyncStatus
+                    accountId={account.id}
+                    index={index}
+                    status={syncById.get(account.id)}
+                    hasLocalKey={syncById.has(account.id)}
+                    onSynced={() =>
+                      void queryClient.invalidateQueries({
+                        queryKey: queryKeys.exchangeSyncStatus,
+                      })
+                    }
+                  />
                 ) : null}
               </li>
             );

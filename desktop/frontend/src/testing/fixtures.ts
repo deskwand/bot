@@ -16,6 +16,7 @@ import type {
   CustomProviderDTO,
   ExchangeAccountDTO,
   ExchangeProbeDTO,
+  ExchangeSyncDTO,
   EntryResultDTO,
   ImportInputDTO,
   ImportPreviewDTO,
@@ -63,6 +64,8 @@ type Scenario =
   | "search-tavily"
   | "exchange-okx"
   | "exchange-binance"
+  | "exchange-sync-failed"
+  | "exchange-sync-off"
   | "exchange-secret-missing"
   | "exchange-refused"
   | "wallet-unconfigured"
@@ -340,6 +343,8 @@ function scenarioFromLocation(): Scenario {
     case "search-tavily":
     case "exchange-okx":
     case "exchange-binance":
+    case "exchange-sync-failed":
+    case "exchange-sync-off":
     case "exchange-secret-missing":
     case "exchange-refused":
     case "wallet-unconfigured":
@@ -438,6 +443,8 @@ function initialState(): MockState {
     "search-tavily",
     "exchange-okx",
     "exchange-binance",
+    "exchange-sync-failed",
+    "exchange-sync-off",
     "exchange-secret-missing",
     "exchange-refused",
     "wallet-unconfigured",
@@ -491,9 +498,12 @@ function initialState(): MockState {
       scenario === "exchange-refused" ||
       scenario === "exchange-secret-missing"
         ? [{ id: "okx-main", venue: "okx", label: "OKX 主号" }]
-        : scenario === "exchange-binance"
+        : scenario === "exchange-binance" ||
+            scenario === "exchange-sync-failed"
           ? [{ id: "bn-main", venue: "binance", label: "Binance" }]
-          : [],
+          : scenario === "exchange-sync-off"
+            ? [{ id: "bn-main", venue: "binance" }]
+            : [],
     wallet: ["wallet-configured", "wallet-unavailable", "wallet-zero"].includes(
       scenario,
     )
@@ -746,6 +756,35 @@ export function createMockClient(): ClientService {
         .sort()
         .map((name) => ({ name, configured: state.secrets[name] === true })),
     };
+  };
+
+  const exchangeSyncStatuses = (): ExchangeSyncDTO[] => {
+    const account = state.exchangeAccounts.find(
+      (entry) => entry.venue === "binance",
+    );
+    if (!account) return [];
+    if (state.scenario === "exchange-binance") {
+      return [
+        {
+          accountId: account.id,
+          at: "2026-11-12T08:00:00Z",
+          ok: true,
+          currencies: 3,
+          total: 120.5,
+        },
+      ];
+    }
+    if (state.scenario === "exchange-sync-failed") {
+      return [
+        {
+          accountId: account.id,
+          at: "2026-11-12T08:05:00Z",
+          ok: false,
+          code: "EXCHANGE_NETWORK",
+        },
+      ];
+    }
+    return [];
   };
 
   const hasCachedSnapshot = ["cloud-slow", "cloud-offline", "cloud-updated"].includes(state.scenario);
@@ -1244,6 +1283,25 @@ export function createMockClient(): ClientService {
         };
       }
       return { ok: true, venue: "okx", currencies: 2, total: 12.5 };
+    },
+
+    async syncExchange(accountId: string): Promise<ExchangeSyncDTO> {
+      record("syncExchange", accountId);
+      return (
+        exchangeSyncStatuses().find(
+          (status) => status.accountId === accountId,
+        ) ?? {
+          accountId,
+          at: "2026-11-12T08:00:00Z",
+          ok: true,
+          currencies: 3,
+          total: 120.5,
+        }
+      );
+    },
+
+    async exchangeSyncStatus(): Promise<ExchangeSyncDTO[]> {
+      return exchangeSyncStatuses();
     },
 
     async walletStatus(): Promise<WalletStatusDTO> {

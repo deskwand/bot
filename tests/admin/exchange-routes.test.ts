@@ -11,7 +11,7 @@ function routes(
     currencies: 2,
   })),
 ) {
-  return { probe, gateway: createExchangeRoutes(probe) };
+  return { probe, gateway: createExchangeRoutes({ probe }) };
 }
 
 function call(
@@ -78,5 +78,126 @@ describe("exchange probe route", () => {
     expect(await response.json()).toMatchObject({
       code: "EXCHANGE_REGION_BLOCKED",
     });
+  });
+});
+
+describe("exchange snapshot route", () => {
+  const probe = async (): Promise<ExchangeProbeResult> => ({
+    ok: true,
+    venue: "binance",
+    currencies: 0,
+  });
+
+  function snapshotRoutes(
+    ingest: (body: unknown) => Promise<ExchangeProbeResult>,
+  ) {
+    return createExchangeRoutes({ probe, ingest });
+  }
+
+  it("rejects a body over 2MB", async () => {
+    const ingest = vi.fn(async (): Promise<ExchangeProbeResult> => ({
+      ok: true,
+      venue: "binance",
+      currencies: 1,
+    }));
+    const gateway = snapshotRoutes(ingest);
+    const response = await call(gateway, "/admin/exchange/snapshot", {
+      body: "x".repeat(2 * 1024 * 1024 + 1),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "EXCHANGE_INVALID" });
+    expect(ingest).not.toHaveBeenCalled();
+  });
+
+  it("measures the 2MB cap in bytes, not characters", async () => {
+    const ingest = vi.fn(async (): Promise<ExchangeProbeResult> => ({
+      ok: true,
+      venue: "binance",
+      currencies: 1,
+    }));
+    const gateway = snapshotRoutes(ingest);
+    // 1.1M two-byte characters: under 2M code units, over 2MB on the wire.
+    // A stream body carries no content-length, so only the read size counts.
+    const bytes = new TextEncoder().encode("é".repeat(1_100_000));
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    const response = await gateway.fetch(
+      new Request("https://example.com/admin/exchange/snapshot", {
+        method: "POST",
+        body: stream,
+        duplex: "half",
+      } as RequestInit),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "EXCHANGE_INVALID" });
+    expect(ingest).not.toHaveBeenCalled();
+  });
+
+  it("rejects a body that is not JSON", async () => {
+    const ingest = vi.fn(async (): Promise<ExchangeProbeResult> => ({
+      ok: true,
+      venue: "binance",
+      currencies: 1,
+    }));
+    const gateway = snapshotRoutes(ingest);
+    const response = await call(gateway, "/admin/exchange/snapshot", {
+      body: "{oops",
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "EXCHANGE_INVALID" });
+    expect(ingest).not.toHaveBeenCalled();
+  });
+
+  it("forwards a parsed body and returns the ingest result", async () => {
+    const result = {
+      ok: true as const,
+      venue: "binance",
+      currencies: 1,
+      total: 10,
+    };
+    const ingest = vi.fn(async () => result);
+    const gateway = snapshotRoutes(ingest);
+    const payload = {
+      account: "bn-main",
+      fetchedAt: 1000,
+      responses: [
+        { method: "GET", path: "/api/v3/account", status: 200, body: "{}" },
+      ],
+    };
+
+    const response = await call(gateway, "/admin/exchange/snapshot", {
+      body: JSON.stringify(payload),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(result);
+    expect(ingest).toHaveBeenCalledWith(payload);
+  });
+
+  it("passes a snapshot refusal through as 400", async () => {
+    const gateway = snapshotRoutes(async () => ({
+      ok: false,
+      code: "EXCHANGE_ACCOUNT_UNKNOWN",
+      message: "x",
+    }));
+    const response = await call(gateway, "/admin/exchange/snapshot", {
+      body: JSON.stringify({ account: "bn-main", fetchedAt: 1, responses: [] }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      code: "EXCHANGE_ACCOUNT_UNKNOWN",
+    });
+  });
+
+  it("returns 404 when ingest is not wired", async () => {
+    const { gateway } = routes();
+    const response = await call(gateway, "/admin/exchange/snapshot", {
+      body: JSON.stringify({ account: "bn-main", fetchedAt: 1, responses: [] }),
+    });
+    expect(response.status).toBe(404);
   });
 });

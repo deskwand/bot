@@ -13,6 +13,8 @@ export const exchange = {
     parse: "交易所返回了看不懂的内容",
     refused: "交易所拒绝了这次查询（功能没开通或账户模式不支持）",
     account: "没有这个交易所账号：{id}",
+    syncUnsupported: "只有 Binance 账号支持桌面端同步",
+    invalidSync: "桌面端推来的数据格式不对",
   },
   progress: {
     assets: "查资产：{account}",
@@ -23,6 +25,8 @@ export const exchange = {
     rules: "只能读：查余额和持仓。不要下单、撤单、划转或提现。",
     omitted:
       "未指定账号时查全部账号；估值单位是 USDT，OKX 的 USD 数值按 1:1 标为 USD≈USDT。",
+    synced:
+      "Binance 数据可能来自桌面端同步；回答时保留来源与时间说明。",
   },
   bucket: {
     spot: "现货",
@@ -61,5 +65,8 @@ export const exchange = {
     overCap: "还有 {count} 个账号未查（单次最多 8 个）：{list}",
     allFailed: "共 {count} 个账号全部失败",
     positions: "仓位",
+    synced: "数据由桌面端同步，取自 {minutes} 分钟前",
+    syncedStale: "桌面端可能没开，数据可能不是最新",
+    syncHint: "可在桌面端交易所页开启本机同步",
   },
 } as const;

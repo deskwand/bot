@@ -8,6 +8,7 @@ import { cacheKey, type SnapshotCache } from "../exchange/cache";
 import {
   BUCKETS,
   ExchangeError,
+  type ErrorBucket,
   type ExchangeAccount,
   type Include,
   type VenueAdapter,
@@ -35,6 +36,9 @@ export type ExchangeToolDeps = {
   locale: () => Locale;
   adapters: Record<VenueId, VenueAdapter>;
   cache: SnapshotCache;
+  /** The latest snapshot the desktop sync pushed for this account. */
+  synced?: (accountId: string) => Promise<VenueSnapshot | null>;
+  now?: () => number;
 };
 
 function ok(text: string): ToolExecutionResult {
@@ -45,10 +49,21 @@ function fail(text: string): ToolExecutionResult {
   return { output: [{ type: "text", text }], isError: true };
 }
 
+function errorBucket(error: unknown): ErrorBucket {
+  return error instanceof ExchangeError ? error.bucket : "network";
+}
+
 function errorText(locale: Locale, error: unknown): string {
-  const bucket = error instanceof ExchangeError ? error.bucket : "network";
+  const bucket = errorBucket(error);
   return t(locale, `exchange.error.${bucket}` as MessageKey);
 }
+
+/** Direct reads may fall back to the desktop snapshot for these failures only. */
+export const SYNC_FALLBACK_BUCKETS: readonly ErrorBucket[] = [
+  "region",
+  "network",
+  "timeout",
+];
 
 export function exchangeProgressText(args: unknown, locale: Locale): string {
   const account = (args ?? {}) as { account?: unknown };
@@ -110,6 +125,39 @@ function valueText(value: number): string {
   return text.includes(".") ? text.replace(/\.?0+$/, "") : text;
 }
 
+/**
+ * A synced snapshot always covers every endpoint, so a request for one bucket
+ * must not surface the others. Totals follow the kept buckets.
+ */
+export function filterSnapshot(
+  snapshot: VenueSnapshot,
+  wanted: readonly Include[],
+): VenueSnapshot {
+  const keep = new Set<string>(wanted);
+  const buckets = snapshot.buckets.filter((bucket) => keep.has(bucket.bucket));
+  const keepPositions = keep.has("futures") || keep.has("positions");
+  const positions = keepPositions ? snapshot.positions : [];
+  const degraded = snapshot.degraded.filter(
+    (item) =>
+      keep.has(item.part) ||
+      item.part === "valuation" ||
+      (keepPositions && item.part === "positions"),
+  );
+  const total = buckets.reduce<number | undefined>((sum, bucket) => {
+    if (bucket.value === undefined) return sum;
+    return (sum ?? 0) + bucket.value;
+  }, undefined);
+  return {
+    venue: snapshot.venue,
+    account: snapshot.account,
+    fetchedAt: snapshot.fetchedAt,
+    total,
+    buckets,
+    positions,
+    degraded,
+  };
+}
+
 function label(locale: Locale, key: string): string {
   return t(locale, `exchange.${key}` as MessageKey);
 }
@@ -142,10 +190,26 @@ function formatAccount(
   account: ExchangeAccount,
   snapshot: VenueSnapshot,
   locale: Locale,
-  options: { minValue: number; limit: number; mergedMargin: boolean },
+  options: {
+    minValue: number;
+    limit: number;
+    mergedMargin: boolean;
+    syncedAt?: number;
+    now: number;
+  },
 ): string[] {
   const { minValue, limit } = options;
   const lines: string[] = [`## ${account.label}（${account.id}）`];
+  if (options.syncedAt !== undefined) {
+    const minutes = Math.max(
+      0,
+      Math.round((options.now - options.syncedAt) / 60_000),
+    );
+    lines.push(t(locale, "exchange.result.synced", { minutes }));
+    if (minutes > 30) {
+      lines.push(t(locale, "exchange.result.syncedStale"));
+    }
+  }
   if (snapshot.total !== undefined) {
     lines.push(
       t(locale, "exchange.result.accountTotal", {
@@ -236,8 +300,22 @@ type Outcome =
       snapshot: VenueSnapshot;
       ageMs: number;
       fromCache: boolean;
+      syncedAt?: number;
     }
   | { account: ExchangeAccount; error: unknown };
+
+/** Whether a failed Binance read is one the desktop snapshot could stand in for. */
+function wantsSyncHint(
+  account: ExchangeAccount,
+  error: unknown,
+  deps: ExchangeToolDeps,
+): boolean {
+  return (
+    account.venue === "binance" &&
+    deps.synced !== undefined &&
+    SYNC_FALLBACK_BUCKETS.includes(errorBucket(error))
+  );
+}
 
 export function exchangeAssetsTool(
   accounts: ExchangeAccount[],
@@ -255,6 +333,7 @@ export function exchangeAssetsTool(
     async execute(args, _api, context): Promise<ToolExecutionResult> {
       const locale = deps.locale();
       const include = requestedIncludes(args.include);
+      const now = (deps.now ?? Date.now)();
 
       let selected: ExchangeAccount[];
       if (args.account !== undefined && args.account !== "") {
@@ -318,6 +397,19 @@ export function exchangeAssetsTool(
             outcomes[index] = { account, snapshot, ageMs: 0, fromCache: false };
           } catch (error) {
             if (context.abortSignal?.aborted) throw error;
+            if (deps.synced !== undefined && wantsSyncHint(account, error, deps)) {
+              const synced = await deps.synced(account.id).catch(() => null);
+              if (synced !== null) {
+                outcomes[index] = {
+                  account,
+                  snapshot: filterSnapshot(synced, wanted),
+                  ageMs: 0,
+                  fromCache: false,
+                  syncedAt: synced.fetchedAt,
+                };
+                continue;
+              }
+            }
             outcomes[index] = { account, error };
           }
         }
@@ -335,8 +427,12 @@ export function exchangeAssetsTool(
       if (succeeded.length === 0) {
         const first = outcomes[0]!;
         const reason = "error" in first ? errorText(locale, first.error) : "";
+        const hint =
+          "error" in first && wantsSyncHint(first.account, first.error, deps)
+            ? ` ${t(locale, "exchange.result.syncHint")}`
+            : "";
         return fail(
-          `${reason}\n${t(locale, "exchange.result.allFailed", {
+          `${reason}${hint}\n${t(locale, "exchange.result.allFailed", {
             count: outcomes.length,
           })}`,
         );
@@ -379,13 +475,18 @@ export function exchangeAssetsTool(
               t(locale, "exchange.result.skipped", {
                 account: outcome.account.label,
                 reason: errorText(locale, outcome.error),
-              }),
+              }) +
+                (wantsSyncHint(outcome.account, outcome.error, deps)
+                  ? ` ${t(locale, "exchange.result.syncHint")}`
+                  : ""),
             ]
           : formatAccount(outcome.account, outcome.snapshot, locale, {
               minValue,
               limit,
               mergedMargin:
                 include.includes("margin") && outcome.account.venue === "okx",
+              syncedAt: outcome.syncedAt,
+              now,
             }),
       );
       if (skippedAccounts.length > 0) {

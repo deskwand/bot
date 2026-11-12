@@ -190,6 +190,11 @@ func main() {
 	})
 	go backupScheduler.Run(context.Background())
 
+	// The Binance bundle is only refreshed while the client is open: the
+	// requests must leave from this machine's network address.
+	exchangeSync := app.NewExchangeSyncScheduler(app.ExchangeSyncStep(service))
+	go exchangeSync.Run(context.Background())
+
 	mygo.Use(updater.New(updater.Options{Interval: 6 * time.Hour}))
 	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
 		{Label: "DeskWand Bot", Submenu: []*mygo.MenuItem{

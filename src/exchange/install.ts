@@ -6,6 +6,7 @@ import { withProgress } from "../tools/wrap";
 import { configuredAccounts } from "./accounts";
 import { binanceAdapter } from "./binance";
 import { createSnapshotCache } from "./cache";
+import { exchangeStub } from "./exchange-do";
 import { okxAdapter } from "./okx";
 import type { ExchangeAccount } from "./types";
 
@@ -27,6 +28,9 @@ export function exchangeSectionText(
         .join("、"),
     }),
     t(locale, "exchange.section.rules"),
+    ...(accounts.some((account) => account.venue === "binance")
+      ? [t(locale, "exchange.section.synced")]
+      : []),
     t(locale, "exchange.section.omitted"),
   ].join("\n");
 }
@@ -47,6 +51,7 @@ export function exchangeExtension(
     locale: deps.locale,
     adapters: { okx: okxAdapter, binance: binanceAdapter },
     cache: createSnapshotCache(),
+    synced: (id) => exchangeStub(env).get(id),
   });
   const wrapped =
     deps.progress === undefined

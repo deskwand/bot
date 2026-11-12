@@ -33,6 +33,7 @@ Command-line deployment, secrets and the `DESKWAND_CONFIG` format are documented
 - `BotDO` — one instance per resident bot: its own memory and wake schedule; execution is still delegated to `TaskDO`
 - `LifeDO` — the global life ledger: model spend, credits, vitals and tier
 - `WalletDO` — the global Base wallet: balances, valuation, automatic remittances and reconciliation
+- `ExchangeDO` — the global snapshot store for Binance balances synced from the desktop app
 - `McpAuthDO` — remote MCP OAuth registration, token storage and renewal
 - Scheduled work goes through the Agents SDK `Agent.schedule` onto cron triggers, interpreted in **UTC**
 - Artifacts land in R2 and are delivered as files or images through the channel, never behind a public URL. 15MB per file
@@ -224,7 +225,7 @@ Exports and restores include the `remittances`, `trades` and `prices` tables. Th
 
 A backup made by the new worker carries a `wallet` object. An older desktop client does not understand it and rejects the whole backup; update the client first, then restore.
 
-The wallet is a new `WalletDO` class (migration `v7`, one global instance); it only adds a class and does not touch existing ones.
+The wallet is a new `WalletDO` class (migration `v7`, one global instance); it only adds a class and does not touch existing ones. Exchange snapshots are a new `ExchangeDO` class (migration `v8`, one global instance), added the same way.
 
 ### Known limitations
 
@@ -233,6 +234,10 @@ The wallet is a new `WalletDO` class (migration `v7`, one global instance); it o
 - The breaker only sees realized value changes; a price drop on a position that is not sold does not trip it.
 - Remittances are denominated in USD; convert yourself when funding in CNY.
 - Restoring an old backup can lose a remitted-but-unsettled transfer, and the next tier change may remit again.
+
+## Exchanges
+
+Read-only OKX and Binance keys let tasks read spot, funding, margin and futures balances, valued in USDT. Binance answers 451 to the Worker's egress IP in restricted regions: while the desktop app is running it syncs balances from your own network every five minutes, and the bot falls back to that snapshot — with its source and time — when the Worker is blocked. Keys are written to Cloudflare and, for Binance, also kept in the local keychain for that sync.
 
 ## The two channels
 

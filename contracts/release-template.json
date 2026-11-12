@@ -13,7 +13,8 @@
     { "name": "CHANNELS", "className": "ChannelDO" },
     { "name": "MCP_AUTH", "className": "McpAuthDO" },
     { "name": "LIFE", "className": "LifeDO" },
-    { "name": "WALLET", "className": "WalletDO" }
+    { "name": "WALLET", "className": "WalletDO" },
+    { "name": "EXCHANGE", "className": "ExchangeDO" }
   ],
   "r2Buckets": [
     { "name": "ARTIFACTS", "parameterKey": "r2BucketName" }
@@ -74,6 +75,10 @@
     {
       "tag": "v7",
       "newSqliteClasses": ["WalletDO"]
+    },
+    {
+      "tag": "v8",
+      "newSqliteClasses": ["ExchangeDO"]
     }
   ],
   "installParameters": [

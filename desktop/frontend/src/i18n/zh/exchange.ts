@@ -1,5 +1,5 @@
 export const exchange = {
-  intro: "配置交易所只读 API，任务就能查余额和持仓。密钥只写入 Cloudflare，不会回显。",
+  intro: "配置交易所只读 API，任务就能查余额和持仓。密钥写入 Cloudflare；Binance 的密钥还会存一份在本机钥匙串，用来在 Worker 被拦时由本机同步。页面不会回显密钥。",
   venue: "平台",
   addAccount: "添加账号",
   remove: "移除",
@@ -44,4 +44,22 @@ export const exchange = {
   cloudUpdatedDescription: "后台刷新发现了新版本，你的修改没有被覆盖。",
   loadLatest: "载入最新",
   uneditedKept: "未编辑的账号和密钥会保留。",
+  sync: {
+    title: "本机同步",
+    off: "本机同步未开启：重新填写密钥并保存以开启",
+    waiting: "等待首次同步",
+    ok: "{time} 同步成功：{currencies} 个币种，约 {total} USDT",
+    okNoTotal: "{time} 同步成功：{currencies} 个币种",
+    failed: "{time} 同步失败：{reason}",
+    now: "立即同步",
+    code: {
+      EXCHANGE_UNKNOWN_KEY: "币安不认这个 API key",
+      EXCHANGE_SIGNATURE: "签名不对，通常是 secret 填错",
+      EXCHANGE_TIMESTAMP: "本机时间偏差太大",
+      EXCHANGE_REGION_BLOCKED: "本机网络也被币安判定为受限地区",
+      EXCHANGE_NETWORK: "本机连不上币安，检查代理",
+      EXCHANGE_RATE_LIMITED: "币安限流了，下一轮再试",
+      EXCHANGE_SYNC_TOO_LARGE: "推送内容太大，这次没有同步",
+    },
+  },
 } as const;

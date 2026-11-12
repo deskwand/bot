@@ -16,7 +16,7 @@ export type ExchangeProbe =
   | { ok: false; code: string; message: string };
 
 /** `account` is the code the desktop retries while a fresh version propagates. */
-const PROBE_CODES: Record<ErrorBucket, string> = {
+export const PROBE_CODES: Record<ErrorBucket, string> = {
   region: "EXCHANGE_REGION_BLOCKED",
   unknownKey: "EXCHANGE_UNKNOWN_KEY",
   wrongDomain: "EXCHANGE_WRONG_DOMAIN",
@@ -33,11 +33,15 @@ const PROBE_CODES: Record<ErrorBucket, string> = {
 
 const ADAPTERS = { okx: okxAdapter, binance: binanceAdapter } as const;
 
-function refused(bucket: ErrorBucket, locale: Locale): ExchangeProbe {
+export function refused(
+  bucket: ErrorBucket,
+  locale: Locale,
+  params: Record<string, string | number> = {},
+): ExchangeProbe {
   return {
     ok: false,
     code: PROBE_CODES[bucket],
-    message: t(locale, `exchange.error.${bucket}` as MessageKey),
+    message: t(locale, `exchange.error.${bucket}` as MessageKey, params),
   };
 }
 
@@ -81,7 +85,7 @@ export async function probeExchange(
           code: "EXCHANGE_SECRET_MISSING",
           message: t(locale, "exchange.error.unknownKey"),
         }
-      : refused("account", locale);
+      : refused("account", locale, { id: accountId });
   }
 
   let snapshot: VenueSnapshot;

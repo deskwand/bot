@@ -2,7 +2,7 @@ import type { Messages } from "../types";
 
 export const exchange: Messages["exchange"] = {
   intro:
-    "Point the bot at read-only exchange APIs so tasks can read balances and positions. Keys are written to Cloudflare and never echoed back.",
+    "Point the bot at read-only exchange APIs so tasks can read balances and positions. Keys are written to Cloudflare; Binance keys are also kept in this computer's keychain so the desktop app can sync when the Worker is blocked. Nothing is ever echoed back.",
   venue: "Venue",
   addAccount: "Add account",
   remove: "Remove",
@@ -49,4 +49,22 @@ export const exchange: Messages["exchange"] = {
   cloudUpdatedDescription: "A background refresh found a newer version; your edits were kept.",
   loadLatest: "Load latest",
   uneditedKept: "Accounts and secrets you did not edit are kept.",
+  sync: {
+    title: "Local sync",
+    off: "Local sync is off: re-enter the key and save to turn it on",
+    waiting: "Waiting for the first sync",
+    ok: "Synced at {time}: {currencies} currencies, about {total} USDT",
+    okNoTotal: "Synced at {time}: {currencies} currencies",
+    failed: "Sync failed at {time}: {reason}",
+    now: "Sync now",
+    code: {
+      EXCHANGE_UNKNOWN_KEY: "Binance does not accept this API key",
+      EXCHANGE_SIGNATURE: "The signature is wrong; usually the secret",
+      EXCHANGE_TIMESTAMP: "This computer's clock is off",
+      EXCHANGE_REGION_BLOCKED: "Binance also blocks this computer's network",
+      EXCHANGE_NETWORK: "This computer cannot reach Binance; check the proxy",
+      EXCHANGE_RATE_LIMITED: "Binance is rate limiting; the next round will retry",
+      EXCHANGE_SYNC_TOO_LARGE: "The sync payload was too large; nothing was sent",
+    },
+  },
 };

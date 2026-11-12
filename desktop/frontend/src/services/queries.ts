@@ -19,6 +19,7 @@ export const queryKeys = {
   modelCatalog: ["modelCatalog"],
   mcpCatalog: ["mcpCatalog"],
   mcpStatus: ["mcpStatus"],
+  exchangeSyncStatus: ["exchangeSyncStatus"],
 } as const;
 
 function isAuthLost(error: unknown): boolean {

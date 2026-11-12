@@ -24,6 +24,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/exchangesync"
 	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/modelcatalog"
 	"github.com/deskwand/bot/desktop/internal/platform"
@@ -185,6 +186,9 @@ type ServiceOptions struct {
 	Locale *LocaleState
 	// Telemetry reports anonymous feature use. Nil disables reporting.
 	Telemetry TelemetryReporter
+	// ExchangeFetcher signs and fetches the Binance bundle. Zero value uses
+	// the Binance hosts and the 10 second timeout.
+	ExchangeFetcher exchangesync.Fetcher
 	// TelemetrySettings is the persisted switch and the one-shot facts. Nil
 	// makes TelemetryEnabled report false and SetTelemetryEnabled unavailable.
 	TelemetrySettings TelemetryStore
@@ -227,6 +231,7 @@ type Service struct {
 	theme              ThemeStore
 	locale             *LocaleState
 	telemetry          TelemetryReporter
+	exchangeFetcher    exchangesync.Fetcher
 	telemetrySettings  TelemetryStore
 	cache              SnapshotCache
 	applyTheme         func(string)
@@ -248,6 +253,14 @@ type Service struct {
 	backupMu   sync.Mutex
 	backupPath string
 	backupBusy bool
+
+	// exchangeSyncRun serializes SyncExchange and syncAllExchanges so the
+	// scheduled and manual pushes never overlap.
+	exchangeSyncRun sync.Mutex
+	// exchangeStatusMu guards only exchangeStatus, so reading the page is
+	// never blocked by a sync in flight.
+	exchangeStatusMu sync.Mutex
+	exchangeStatus   map[string]ExchangeSyncDTO
 }
 
 // NewService constructs the application service.
@@ -310,6 +323,7 @@ func NewService(options ServiceOptions) *Service {
 		theme:              options.Theme,
 		locale:             locale,
 		telemetry:          options.Telemetry,
+		exchangeFetcher:    options.ExchangeFetcher,
 		telemetrySettings:  options.TelemetrySettings,
 		cache:              options.Cache,
 		applyTheme:         applyTheme,
@@ -318,6 +332,7 @@ func NewService(options ServiceOptions) *Service {
 		newOpID:            newOpID,
 		now:                now,
 		logins:             map[string]context.CancelFunc{},
+		exchangeStatus:     map[string]ExchangeSyncDTO{},
 	}
 }
 
@@ -1022,6 +1037,7 @@ func (s *Service) PublishConfig(input ConfigEditDTO) (ResultDTO, error) {
 	if s.publish == nil {
 		return ResultDTO{}, s.serviceUnavailable()
 	}
+	keyAccounts, keyPruning, rememberKeys := s.exchangeAccountsForKeys(input)
 	change, err := s.changeFromEdit(ctx, target, input)
 	if err != nil {
 		return ResultDTO{}, safeAppError(err, secretInputValues(input.Secrets)...)
@@ -1029,6 +1045,11 @@ func (s *Service) PublishConfig(input ConfigEditDTO) (ResultDTO, error) {
 	result, err := s.publish.Apply(ctx, target, change)
 	failure := safeAppError(err, secretInputValues(input.Secrets)...)
 	s.reportFeature(telemetry.FeaturePublish, result.State, failure)
+	if rememberKeys && failure == nil && result.State == deployment.StatePublished {
+		if err := s.rememberExchangeKeys(ctx, keyAccounts, keyPruning, input.Secrets); err != nil {
+			slog.Warn("app: remember exchange keys", "error", err)
+		}
+	}
 	return s.summaryFromResult(result, target.ScriptName), failure
 }
 

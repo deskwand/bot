@@ -61,12 +61,27 @@ function adapters(
   };
 }
 
-function deps(overrides: Parameters<typeof adapters>[0] = {}) {
+type ExtraDeps = {
+  synced?: (accountId: string) => Promise<VenueSnapshot | null>;
+  now?: () => number;
+};
+
+function deps(
+  overrides: Parameters<typeof adapters>[0] = {},
+  extra: ExtraDeps = {},
+) {
   return {
     locale: () => "zh" as const,
     adapters: adapters(overrides),
     cache: createSnapshotCache(() => 0),
+    ...extra,
   };
+}
+
+const NOW = 1_000_000_000;
+
+function syncedAt(account: ExchangeAccount, fetchedAt: number): VenueSnapshot {
+  return { ...snapshot(account, 2000), fetchedAt };
 }
 
 async function run(
@@ -272,6 +287,164 @@ describe("exchange_assets", () => {
     const { text } = await run(many, { limit: 100 }, toolDeps);
     expect(text).toContain("个账号未显示");
     expect(text).not.toContain("bn-7");
+  });
+
+  it("falls back to the synced snapshot when Binance answers 451", async () => {
+    const toolDeps = deps(
+      {
+        binance: {
+          async fetch() {
+            throw new ExchangeError("region", 451);
+          },
+        },
+      },
+      { now: () => NOW, synced: async () => syncedAt(bn, NOW - 5 * 60_000) },
+    );
+    const { text, result } = await run([bn], {}, toolDeps);
+    expect(result.isError).toBeFalsy();
+    expect(text).toContain("数据由桌面端同步，取自 5 分钟前");
+    expect(text).not.toContain("桌面端可能没开");
+  });
+
+  it("adds the stale warning past 30 minutes", async () => {
+    const toolDeps = deps(
+      {
+        binance: {
+          async fetch() {
+            throw new ExchangeError("timeout");
+          },
+        },
+      },
+      { now: () => NOW, synced: async () => syncedAt(bn, NOW - 31 * 60_000) },
+    );
+    const { text } = await run([bn], {}, toolDeps);
+    expect(text).toContain("数据由桌面端同步，取自 31 分钟前");
+    expect(text).toContain("桌面端可能没开");
+  });
+
+  it("does not fall back on an unknown key", async () => {
+    let reads = 0;
+    const toolDeps = deps(
+      {
+        binance: {
+          async fetch() {
+            throw new ExchangeError("unknownKey");
+          },
+        },
+      },
+      {
+        now: () => NOW,
+        synced: async () => {
+          reads += 1;
+          return syncedAt(bn, NOW);
+        },
+      },
+    );
+    const { text } = await run([okx, bn], {}, toolDeps);
+    expect(reads).toBe(0);
+    expect(text).toContain("跳过（这家交易所不认这个 API key");
+  });
+
+  it("hints at local sync when there is no snapshot", async () => {
+    const toolDeps = deps(
+      {
+        binance: {
+          async fetch() {
+            throw new ExchangeError("region", 451);
+          },
+        },
+      },
+      { now: () => NOW, synced: async () => null },
+    );
+    const { text } = await run([bn], {}, toolDeps);
+    expect(text).toContain("可在桌面端交易所页开启本机同步");
+    expect(text).not.toContain("数据由桌面端同步");
+  });
+
+  it("never falls back for OKX", async () => {
+    let reads = 0;
+    const toolDeps = deps(
+      {
+        okx: {
+          async fetch() {
+            throw new ExchangeError("region", 451);
+          },
+        },
+      },
+      {
+        now: () => NOW,
+        synced: async () => {
+          reads += 1;
+          return null;
+        },
+      },
+    );
+    const { text } = await run([okx], {}, toolDeps);
+    expect(reads).toBe(0);
+    expect(text).not.toContain("桌面端");
+  });
+
+  it("filters the synced snapshot by include and re-totals", async () => {
+    const bundle: VenueSnapshot = {
+      venue: "binance",
+      account: "bn-main",
+      fetchedAt: NOW,
+      total: 120,
+      buckets: [
+        {
+          bucket: "spot",
+          value: 100,
+          balances: [
+            { ccy: "USDT", amount: 100, value: 100, bucket: "spot" },
+          ],
+        },
+        {
+          bucket: "earn",
+          value: 20,
+          balances: [
+            { ccy: "USDT", amount: 20, value: 20, bucket: "earn" },
+          ],
+        },
+      ],
+      positions: [],
+      degraded: [],
+    };
+    const toolDeps = deps(
+      {
+        binance: {
+          async fetch() {
+            throw new ExchangeError("region", 451);
+          },
+        },
+      },
+      { now: () => NOW, synced: async () => bundle },
+    );
+    const { text } = await run([bn], { include: ["earn"] }, toolDeps);
+    expect(text).toContain("理财 20");
+    expect(text).toContain("总计 ≈ 20 USDT");
+    expect(text).not.toContain("现货");
+  });
+
+  it("treats a failing synced reader as no snapshot", async () => {
+    const toolDeps = deps(
+      {
+        binance: {
+          async fetch() {
+            throw new ExchangeError("network");
+          },
+        },
+      },
+      {
+        now: () => NOW,
+        synced: async () => {
+          throw new Error("boom");
+        },
+      },
+    );
+    const { text, result } = await run([bn], {}, toolDeps);
+    expect(result.isError).toBe(true);
+    expect(text).toContain("可在桌面端交易所页开启本机同步");
+    expect(text).not.toContain("数据由桌面端同步");
   });
 
   it("names an unknown account", async () => {

@@ -1,0 +1,54 @@
+{
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/api/v3/account",
+      "params": { "omitZeroBalances": "true" }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v3/ticker/price",
+      "params": {}
+    },
+    {
+      "method": "POST",
+      "path": "/sapi/v1/asset/get-funding-asset",
+      "params": {}
+    },
+    {
+      "method": "GET",
+      "path": "/sapi/v1/margin/account",
+      "params": {}
+    },
+    {
+      "method": "GET",
+      "path": "/sapi/v1/margin/isolated/account",
+      "params": {}
+    },
+    {
+      "method": "GET",
+      "path": "/fapi/v3/account",
+      "params": {}
+    },
+    {
+      "method": "GET",
+      "path": "/fapi/v3/positionRisk",
+      "params": {}
+    },
+    {
+      "method": "GET",
+      "path": "/dapi/v1/account",
+      "params": {}
+    },
+    {
+      "method": "GET",
+      "path": "/sapi/v1/simple-earn/flexible/position",
+      "params": { "size": "100" }
+    },
+    {
+      "method": "GET",
+      "path": "/sapi/v1/simple-earn/locked/position",
+      "params": { "size": "100" }
+    }
+  ]
+}

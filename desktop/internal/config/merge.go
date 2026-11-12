@@ -531,6 +531,7 @@ var reservedReferenceNames = func() map[string]bool {
 		"MCP_AUTH":            true,
 		"LIFE":                true,
 		"WALLET":              true,
+		"EXCHANGE":            true,
 		"ARTIFACTS":           true,
 		"AI":                  true,
 	}

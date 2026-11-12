@@ -113,6 +113,19 @@ describe("admin gateway", () => {
     expect(await response.json()).toEqual({ code: "ADMIN_UNAUTHORIZED" });
   });
 
+  it("returns 401 for an exchange snapshot without a bearer token", async () => {
+    const gateway = createAdminGateway(deps("admin-snapshot-no-token"));
+
+    const response = await call(gateway, "/admin/exchange/snapshot", {
+      method: "POST",
+      body: { account: "bn-main", fetchedAt: 1, responses: [] },
+      token: null,
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ code: "ADMIN_UNAUTHORIZED" });
+  });
+
   it("returns 409 MAINTENANCE_REQUIRED without a lease", async () => {
     const gateway = createAdminGateway(deps("admin-no-lease"));
 

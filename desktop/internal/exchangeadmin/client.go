@@ -15,6 +15,7 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/exchangesync"
 	"github.com/deskwand/bot/desktop/internal/i18n"
 )
 
@@ -26,6 +27,7 @@ const (
 
 const (
 	probePath       = "/admin/exchange/probe"
+	snapshotPath    = "/admin/exchange/snapshot"
 	defaultTimeout  = 20 * time.Second
 	maxResponseSize = 1 << 20
 )
@@ -78,16 +80,38 @@ func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 
 // Probe asks the deployed Worker to read one account.
 func (c *Client) Probe(ctx context.Context, account string) (Probe, error) {
-	encoded, err := json.Marshal(struct {
+	return c.post(ctx, probePath, struct {
 		Account string `json:"account"`
 	}{Account: account})
+}
+
+// PushSnapshot hands the raw Binance bundle to the Worker, which replays it
+// through the same adapter. The account id is the local mapping's id, not a
+// key: the pushed bundle never carries credentials.
+func (c *Client) PushSnapshot(ctx context.Context, account string, bundle exchangesync.Bundle) (Probe, error) {
+	return c.post(ctx, snapshotPath, struct {
+		Account   string                  `json:"account"`
+		FetchedAt int64                   `json:"fetchedAt"`
+		Responses []exchangesync.Response `json:"responses"`
+	}{
+		Account:   account,
+		FetchedAt: bundle.FetchedAt,
+		Responses: bundle.Responses,
+	})
+}
+
+// post sends one authenticated exchange request. 200 means the Worker did
+// what was asked and 400 means the venue (or the push) was refused; both are
+// results the page renders. Anything else is a gateway problem.
+func (c *Client) post(ctx context.Context, path string, payload any) (Probe, error) {
+	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return Probe{}, fmt.Errorf("exchangeadmin: encode probe: %w", err)
+		return Probe{}, fmt.Errorf("exchangeadmin: encode request: %w", err)
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, c.baseURL+probePath, bytes.NewReader(encoded))
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, c.baseURL+path, bytes.NewReader(encoded))
 	if err != nil {
 		return Probe{}, fmt.Errorf("exchangeadmin: build request: %w", err)
 	}
@@ -105,7 +129,7 @@ func (c *Client) Probe(ctx context.Context, account string) (Probe, error) {
 
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize))
 	if err != nil {
-		return Probe{}, fmt.Errorf("exchangeadmin: read probe response: %w", err)
+		return Probe{}, fmt.Errorf("exchangeadmin: read response: %w", err)
 	}
 	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusNotFound {
 		return Probe{}, c.unavailable()
@@ -115,8 +139,6 @@ func (c *Client) Probe(ctx context.Context, account string) (Probe, error) {
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return Probe{}, domain.Error{Code: CodeRequestFailed, Message: c.t("exchangeadmin.invalidResponse")}
 	}
-	// 200 means the read succeeded and 400 means the venue refused; anything
-	// else is a gateway problem the caller should see.
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusBadRequest {
 		code := probe.Code
 		if code == "" {

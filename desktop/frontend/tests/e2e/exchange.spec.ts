@@ -100,7 +100,7 @@ test("rejects an uppercase account id before publishing", async ({ page }) => {
 });
 
 test("english has no chinese", async ({ page }) => {
-  await useEnglish(page, "/test.html?fixture=exchange-okx");
+  await useEnglish(page, "/test.html?fixture=exchange-binance");
   await page
     .getByRole("navigation", { name: "Main navigation" })
     .getByRole("button", { name: "Exchanges", exact: true })
@@ -150,4 +150,53 @@ test("marks an account that has no secret yet", async ({ page }) => {
   await expect(
     page.getByText("这个账号还没有密钥，部署后机器人会忽略它"),
   ).toBeVisible();
+});
+
+async function syncCalls(page: Page): Promise<unknown[][]> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __mockCalls?: Record<string, unknown[][]> })
+        .__mockCalls?.syncExchange ?? [],
+  );
+}
+
+test("shows the last successful sync on a Binance row", async ({ page }) => {
+  await openExchanges(page, "exchange-binance");
+
+  await expect(page.getByTestId("exchange-sync-0")).toContainText("同步成功");
+  await expect(page.getByTestId("exchange-sync-0")).toContainText("3 个币种");
+});
+
+test("explains a failed sync by code", async ({ page }) => {
+  await openExchanges(page, "exchange-sync-failed");
+
+  await expect(page.getByTestId("exchange-sync-0")).toContainText("同步失败");
+  await expect(page.getByTestId("exchange-sync-0")).toContainText(
+    "本机连不上币安",
+  );
+});
+
+test("sync now calls the service", async ({ page }) => {
+  await openExchanges(page, "exchange-binance");
+
+  await page.getByTestId("exchange-sync-now-0").click();
+  await expect.poll(async () => (await syncCalls(page)).length).toBe(1);
+  expect((await syncCalls(page))[0]).toEqual(["bn-main"]);
+});
+
+test("OKX rows have no sync column", async ({ page }) => {
+  await openExchanges(page, "exchange-okx");
+
+  await expect(
+    page.locator('[data-testid^="exchange-sync-"]'),
+  ).toHaveCount(0);
+});
+
+test("shows the off hint when the key is not local", async ({ page }) => {
+  await openExchanges(page, "exchange-sync-off");
+
+  await expect(page.getByTestId("exchange-sync-0")).toContainText(
+    "本机同步未开启",
+  );
+  await expect(page.getByTestId("exchange-sync-now-0")).toHaveCount(0);
 });

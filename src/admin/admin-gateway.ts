@@ -43,6 +43,8 @@ export type AdminDeps = {
   locale?: () => Locale;
   /** Present only when the deployment wires the exchange probe. */
   probeExchange?(account: string): Promise<ExchangeProbeResult>;
+  /** Present only when the deployment wires the desktop snapshot push. */
+  ingestExchangeSnapshot?(body: unknown): Promise<ExchangeProbeResult>;
   /** Present only when the deployment wires the wallet status route. */
   walletReads?: WalletReads;
 };
@@ -222,7 +224,13 @@ export function createAdminGateway(deps: AdminDeps): {
   const r2 = createR2Routes(deps.artifacts);
   const mcp = createMcpAdminRoutes(deps.mcpAuth, deps.locale);
   const probe = deps.probeExchange;
-  const exchange = probe === undefined ? null : createExchangeRoutes(probe);
+  const exchange =
+    probe === undefined
+      ? null
+      : createExchangeRoutes({
+          probe,
+          ingest: deps.ingestExchangeSnapshot,
+        });
   const wallet =
     deps.walletReads === undefined ? null : createWalletRoutes(deps.walletReads);
 

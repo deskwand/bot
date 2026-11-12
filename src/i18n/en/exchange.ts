@@ -17,6 +17,8 @@ export const exchange: Messages["exchange"] = {
     refused:
       "The venue refused this query (product disabled or account mode unsupported)",
     account: "There is no exchange account named {id}",
+    syncUnsupported: "Only Binance accounts can be synced from the desktop",
+    invalidSync: "The desktop sent a malformed snapshot",
   },
   progress: {
     assets: "Check assets: {account}",
@@ -28,6 +30,8 @@ export const exchange: Messages["exchange"] = {
       "Read-only: balances and positions. Never place, cancel, transfer or withdraw.",
     omitted:
       "Every account is checked when none is named. Values are in USDT; OKX USD figures are shown 1:1 as USD≈USDT.",
+    synced:
+      "Binance figures may come from the desktop sync; keep the source and age in your answer.",
   },
   bucket: {
     spot: "spot",
@@ -66,5 +70,8 @@ export const exchange: Messages["exchange"] = {
     overCap: "{count} more accounts not checked (8 per call): {list}",
     allFailed: "All {count} accounts failed",
     positions: "Positions",
+    synced: "Synced by the desktop app {minutes} min ago",
+    syncedStale: "The desktop app may be closed; this may be out of date",
+    syncHint: "Turn on local sync on the desktop Exchanges page",
   },
 };

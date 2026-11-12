@@ -1,5 +1,6 @@
 import { createAdminGateway } from "./admin/admin-gateway";
 import { liveWalletReads } from "./admin/wallet-routes";
+import { ingestSnapshot } from "./exchange/ingest";
 import { probeExchange } from "./exchange/probe";
 import { ChannelDO } from "./channels/channel-do";
 import { createGateway } from "./gateway";
@@ -15,6 +16,7 @@ export { ChannelDO };
 export { McpAuthDO } from "./mcp/mcp-auth-do";
 export { LifeDO } from "./life/life-do";
 export { WalletDO } from "./wallet/wallet-do";
+export { ExchangeDO } from "./exchange/exchange-do";
 
 function channels(env: Env): DurableObjectStub<ChannelDO> {
   return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
@@ -42,6 +44,7 @@ function admin(env: Env) {
     mcpAuth: () => mcpAuth(env),
     locale: () => ownerLocale(env),
     probeExchange: (account) => probeExchange(env, account),
+    ingestExchangeSnapshot: (body) => ingestSnapshot(env, body),
     walletReads: liveWalletReads(env),
   });
 }

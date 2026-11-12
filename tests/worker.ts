@@ -9,4 +9,5 @@ export { ChannelDO } from "../src/channels/channel-do";
 export { McpAuthDO } from "../src/mcp/mcp-auth-do";
 export { LifeDO } from "../src/life/life-do";
 export { WalletDO } from "../src/wallet/wallet-do";
+export { ExchangeDO } from "../src/exchange/exchange-do";
 export { TestHarnessDO } from "./test-harness-do";

@@ -80,4 +80,36 @@ describe("exchangeSectionText", () => {
     expect(text).toContain("Binance 主号（bn-main）");
     expect(text).toContain("只能读");
   });
+
+  it("mentions the desktop sync when a Binance account exists", () => {
+    const text = exchangeSectionText(
+      [
+        {
+          id: "bn-main",
+          venue: "binance",
+          label: "Binance 主号",
+          baseUrl: "https://api.binance.com",
+          secret: { key: "k", secret: "s" },
+        },
+      ],
+      "zh",
+    );
+    expect(text).toContain("Binance 数据可能来自桌面端同步");
+  });
+
+  it("does not mention the desktop sync for OKX only", () => {
+    const text = exchangeSectionText(
+      [
+        {
+          id: "okx-main",
+          venue: "okx",
+          label: "OKX 主号",
+          baseUrl: "https://www.okx.com",
+          secret: { key: "k", secret: "s", passphrase: "p" },
+        },
+      ],
+      "zh",
+    );
+    expect(text).not.toContain("桌面端同步");
+  });
 });

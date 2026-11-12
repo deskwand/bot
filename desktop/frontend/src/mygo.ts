@@ -209,6 +209,21 @@ export interface ExchangeProbeDTO {
 }
 
 /**
+ * ExchangeSyncDTO is one locally stored Binance account's last desktop sync.
+ * At is RFC3339 and empty until the account synced once; Code and Message
+ * describe a refusal, never a secret.
+ */
+export interface ExchangeSyncDTO {
+  accountId: string;
+  at?: string;
+  ok: boolean;
+  currencies?: number;
+  total?: number;
+  code?: string;
+  message?: string;
+}
+
+/**
  * ImportInputDTO supplies the re-entered values for an imported deployment.
  * Secrets are write-only.
  */
@@ -614,6 +629,13 @@ export const Service = {
     return call("Service.DisconnectCloudflare");
   },
   /**
+   * ExchangeSyncStatus lists every locally stored account, sorted by id. An
+   * account that never synced carries only its id.
+   */
+  exchangeSyncStatus(): Promise<ExchangeSyncDTO[]> {
+    return call("Service.ExchangeSyncStatus");
+  },
+  /**
    * ExportData writes a backup into the configured folder. It opens no dialog:
    * the folder is a setting, so one click is enough. The attempt is recorded so
    * the page can show when the last backup succeeded, and old files beyond the
@@ -810,6 +832,14 @@ export const Service = {
   /** Status returns one evidence-based status item per kind. */
   status(): Promise<StatusItemDTO[]> {
     return call("Service.Status");
+  },
+  /**
+   * SyncExchange fetches one account from the local network and pushes the raw
+   * bundle to the deployed Worker. It is the page's "sync now" button; unlike the
+   * scheduler it may publish an ADMIN_TOKEN through the usual connect path.
+   */
+  syncExchange(accountID: string): Promise<ExchangeSyncDTO> {
+    return call("Service.SyncExchange", accountID);
   },
   /**
    * TelemetryEnabled reports the anonymous usage switch. Telemetry is on unless

@@ -85,6 +85,7 @@ var enApp = map[string]string{
 	"app.exchangeVenueInvalid":      "%s must use okx or binance as its venue",
 	"app.exchangeLabelTooLong":      "The display name of %s is longer than 64 characters",
 	"app.exchangeBaseUrlInvalid":    "The baseUrl of %s must be an https origin",
+	"app.exchangeSyncNoLocalKey":    "This account's key is not stored on this computer; re-enter it and save first",
 	"app.walletPrivateKeyInvalid":   "The wallet private key must be 0x followed by 64 hexadecimal characters",
 	"app.walletOwnerAddressInvalid": "The payout address must be 0x followed by 40 hexadecimal characters",
 }

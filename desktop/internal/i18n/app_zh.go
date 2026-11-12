@@ -85,6 +85,7 @@ var zhApp = map[string]string{
 	"app.exchangeVenueInvalid":      "交易所账号 %s 的平台只能是 okx 或 binance",
 	"app.exchangeLabelTooLong":      "交易所账号 %s 的名称超过 64 个字符",
 	"app.exchangeBaseUrlInvalid":    "交易所账号 %s 的 baseUrl 必须是 https 站点根地址",
+	"app.exchangeSyncNoLocalKey":    "这个账号的密钥没有存在本机：重新填写密钥并保存后再同步",
 	"app.walletPrivateKeyInvalid":   "钱包私钥必须是 0x 开头的 64 位十六进制字符",
 	"app.walletOwnerAddressInvalid": "收款地址必须是 0x 开头的 40 位十六进制地址",
 }

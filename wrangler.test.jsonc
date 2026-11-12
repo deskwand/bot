@@ -35,7 +35,8 @@
       { "name": "CHANNELS", "class_name": "ChannelDO" },
       { "name": "MCP_AUTH", "class_name": "McpAuthDO" },
       { "name": "LIFE", "class_name": "LifeDO" },
-      { "name": "WALLET", "class_name": "WalletDO" }
+      { "name": "WALLET", "class_name": "WalletDO" },
+      { "name": "EXCHANGE", "class_name": "ExchangeDO" }
     ]
   },
   "migrations": [
@@ -66,6 +67,10 @@
     {
       "tag": "v7",
       "new_sqlite_classes": ["WalletDO"]
+    },
+    {
+      "tag": "v8",
+      "new_sqlite_classes": ["ExchangeDO"]
     }
   ],
   "triggers": {
