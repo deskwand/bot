@@ -85,6 +85,8 @@ import {
   cancelBlockedText,
   cancelNotStartedText,
   cancelOkText,
+  continueNotCompletedText,
+  continueOkText,
   missingApprovalIdText,
   parkedTaskText,
   progressArtifactText,
@@ -120,6 +122,19 @@ type ControlResult = { ok: boolean; message: string };
 
 /** How long `cancel()` waits for pi to become idle before returning anyway. */
 const ABORT_TIMEOUT_MS = 10_000;
+
+/**
+ * The follow-up as the model reads it: a new request on a finished task.
+ * Drafts were cleared when the earlier round finished; artifacts were not.
+ */
+function continuationInput(text: string): string {
+  return [
+    "Follow-up from the owner on this finished task:", // i18n-ignore: model-facing
+    text,
+    "",
+    "Your private drafts from the earlier round were cleared; saved artifacts are still readable with get_artifact. Call finish_task again when this is done.", // i18n-ignore: model-facing
+  ].join("\n");
+}
 
 const FinishTask = Type.Object({
   summary: Type.String(),
@@ -805,6 +820,54 @@ export class TaskDO extends Agent<Env> {
     return { ok: true, message: retryOkText(locale, taskId) };
   }
 
+  /**
+   * Runs a follow-up on a completed task in the same pi conversation, so the
+   * model keeps everything the earlier rounds read and decided. Each round is
+   * a fresh `started` … `completed` pair in the outbox.
+   */
+  async continueTask(text: string): Promise<ControlResult> {
+    await this.flushOutbox();
+    const taskId = this.currentTaskId();
+    const state = this.currentState();
+    const locale = ownerLocale(this.env);
+    if (!taskId || state !== "completed") {
+      return {
+        ok: false,
+        message: continueNotCompletedText(locale, taskId ?? "", state),
+      };
+    }
+
+    // Claim the round before the first await, so two follow-ups arriving
+    // together cannot both pass the check above. Running also comes before
+    // `started` and the submit: a fast finish_task must see the new round.
+    this.setMeta("state", "running");
+    const round = Number(this.readMeta("continuations") ?? "0") + 1;
+    const operationId = `task:${taskId}:continue:${round}`;
+    this.setMeta("continuations", String(round));
+    this.setMeta("operation_id", operationId);
+
+    let started = false;
+    try {
+      await this.ensureMcpTools();
+      await this.ensureBotTools();
+      await this.ensureMailTools();
+      await this.ensureExchangeTools();
+      started = true;
+      await this.outboxFor(taskId).emit({ type: "started" });
+      await this.harness.submit(continuationInput(text), { operationId });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      // Before `started` the earlier round still stands: undo the claim.
+      if (started) await this.failWith(reason, false);
+      else this.setMeta("state", "completed");
+      return { ok: false, message: reason };
+    }
+    await this.beginStallWatch();
+    this.ctx.waitUntil(this.watchRun(operationId));
+
+    return { ok: true, message: continueOkText(locale, taskId) };
+  }
+
   async handleAction(evt: ActionEvent): Promise<string> {
     await this.flushOutbox();
     if (evt.action === "cancel") return (await this.cancel()).message;
@@ -1210,8 +1273,20 @@ export class TaskDO extends Agent<Env> {
     );
   }
 
+  /**
+   * Whether the current round has completed. A continued task starts a new
+   * round with a later `started`, so an earlier round's `completed` no longer
+   * makes it terminal.
+   */
   private hasCompletedEvent(): boolean {
-    return this.hasEvent("completed");
+    const row = this.db
+      .exec<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM events
+         WHERE type = 'completed'
+           AND seq > COALESCE((SELECT MAX(seq) FROM events WHERE type = 'started'), 0)`,
+      )
+      .toArray()[0];
+    return (row?.count ?? 0) > 0;
   }
 
   private hasFailedSinceLastStart(): boolean {

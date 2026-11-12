@@ -30,6 +30,8 @@ export const task: Messages["task"] = {
     retryBlocked: "Task {taskId} is {state}, cannot retry",
     retryNotRetryable: "The failure of task {taskId} cannot be retried",
     retryOk: "Task {taskId} restarted",
+    continueNotCompleted: "Task {taskId} is {state}; only a completed task can be continued",
+    continueOk: "Task {taskId} continues in its earlier context",
     missingApprovalId: "Missing approval ID",
   },
   notice: {

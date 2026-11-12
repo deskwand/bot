@@ -1512,6 +1512,7 @@ describe("butler chat", () => {
         steer: async () => ({ ok: false, message: "" }),
         cancel: async () => ({ ok: false, message: "" }),
         retryTask: async () => ({ ok: false, message: "" }),
+        continueTask: async () => ({ ok: false, message: "" }),
         pendingApprovals: async () => [
           {
             approvalId: "ap1",

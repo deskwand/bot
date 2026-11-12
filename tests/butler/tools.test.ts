@@ -115,6 +115,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            continueTask: async () => ({ ok: false, message: "" }),
             liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
@@ -163,6 +164,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            continueTask: async () => ({ ok: false, message: "" }),
             liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
@@ -224,6 +226,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            continueTask: async () => ({ ok: false, message: "" }),
             liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
@@ -275,6 +278,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            continueTask: async () => ({ ok: false, message: "" }),
             liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
@@ -334,6 +338,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            continueTask: async () => ({ ok: false, message: "" }),
             liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
@@ -371,6 +376,62 @@ describe("butler control tools", () => {
     expect(result.spawnCalls).toBe(0);
   });
 
+  it("continue_task forwards the follow-up and refuses a bot task", async () => {
+    const result = await runInDurableObject(
+      butler("tools-continue"),
+      async (_instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        repo.insert({ id: "t1", title: "写报告", chatId: null });
+        repo.insert({ id: "t2", title: "盯价格", chatId: null, botId: "b1" });
+        const continued: { id: string; text: string }[] = [];
+        const tools = createButlerTools({
+          repo,
+          task: (id) => ({
+            start: async () => {},
+            status: async () => ({ state: "completed", title: "" }),
+            steer: async () => ({ ok: false, message: "" }),
+            cancel: async () => ({ ok: false, message: "" }),
+            retryTask: async () => ({ ok: false, message: "" }),
+            continueTask: async (text) => {
+              continued.push({ id, text });
+              return { ok: true, message: `已继续 ${id}` };
+            },
+            liveness: async () => ({ state: "running", reattached: false }),
+            pendingApprovals: async () => [],
+          }),
+          spawn: async () => "t3",
+          resolveAttachment: async () => null,
+          memory: new MemoryStore(state.storage.sql),
+          createSchedule: async () => "s1",
+          listSchedules: () => [],
+          removeSchedule: async () => false,
+          lookup: async () => ({ ok: false }),
+        });
+
+        const tool = tools.find((entry) => entry.name === "continue_task");
+        const run = async (args: { id: string; text: string }) => {
+          const outcome = await tool!.execute(
+            args as never,
+            {} as never,
+            {} as never,
+          );
+          return (outcome.output?.[0] as { text: string }).text;
+        };
+        return {
+          own: await run({ id: "t1", text: "再加一段" }),
+          bot: await run({ id: "t2", text: "x" }),
+          missing: await run({ id: "t9", text: "x" }),
+          continued,
+        };
+      },
+    );
+
+    expect(result.own).toBe("已继续 t1");
+    expect(result.bot).toContain("机器人 b1");
+    expect(result.missing).toBe("没有任务 t9");
+    expect(result.continued).toEqual([{ id: "t1", text: "再加一段" }]);
+  });
+
   it("retry_task refuses a bot task", async () => {
     const result = await runInDurableObject(
       butler("tools-retry-bot"),
@@ -389,6 +450,7 @@ describe("butler control tools", () => {
               retried = true;
               return { ok: true, message: "已重试" };
             },
+            continueTask: async () => ({ ok: false, message: "" }),
             liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
@@ -657,6 +719,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            continueTask: async () => ({ ok: false, message: "" }),
             liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),
@@ -782,6 +845,7 @@ describe("butler control tools", () => {
             steer: async () => ({ ok: false, message: "" }),
             cancel: async () => ({ ok: false, message: "" }),
             retryTask: async () => ({ ok: false, message: "" }),
+            continueTask: async () => ({ ok: false, message: "" }),
             liveness: async () => ({ state: "running", reattached: false }),
             pendingApprovals: async () => [],
           }),

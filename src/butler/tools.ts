@@ -56,6 +56,7 @@ export type TaskControl = {
   steer(text: string): Promise<{ ok: boolean; message: string }>;
   cancel(): Promise<{ ok: boolean; message: string }>;
   retryTask(): Promise<{ ok: boolean; message: string }>;
+  continueTask(text: string): Promise<{ ok: boolean; message: string }>;
   liveness(): Promise<{ state: string; reattached: boolean }>;
   pendingApprovals(): Promise<
     {
@@ -290,6 +291,27 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     },
   };
 
+  const continueTask: ToolRegistration<typeof SteerTask> = {
+    name: "continue_task",
+    description:
+      "Give a completed task a follow-up. It runs in the task's own context (everything it read and decided), so prefer this over a new spawn_task for more work on the same thing.",
+    parameters: SteerTask,
+    async execute({ id, text }) {
+      try {
+        const row = repo.get(id);
+        if (!row) return output(`没有任务 ${id}`);
+        if (row.botId !== null) {
+          return output(
+            `任务 ${id} 属于机器人 ${row.botId}，请用 steer_bot 给它加指令`,
+          );
+        }
+        return output((await task(id).continueTask(text)).message);
+      } catch (error) {
+        return output(errorText(error));
+      }
+    },
+  };
+
   const remember: ToolRegistration<typeof Remember> = {
     name: "remember",
     description:
@@ -399,6 +421,7 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
     quickLookupTool,
     cancelTask,
     retryTask,
+    continueTask,
     remember,
     recall,
     forget,

@@ -129,6 +129,7 @@ function fakeTask(): TaskControl {
     steer: async () => ({ ok: true, message: "" }),
     cancel: async () => ({ ok: true, message: "" }),
     retryTask: async () => ({ ok: true, message: "" }),
+    continueTask: async () => ({ ok: false, message: "" }),
     liveness: async () => ({
       state: "running",
       reattached: false,

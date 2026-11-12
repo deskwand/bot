@@ -103,6 +103,21 @@ export function retryNotRetryableText(locale: Locale, taskId: string): string {
   return t(locale, "task.control.retryNotRetryable", { taskId });
 }
 
+export function continueNotCompletedText(
+  locale: Locale,
+  taskId: string,
+  state: TaskState,
+): string {
+  return t(locale, "task.control.continueNotCompleted", {
+    taskId,
+    state: taskStateLabel(locale, state),
+  });
+}
+
+export function continueOkText(locale: Locale, taskId: string): string {
+  return t(locale, "task.control.continueOk", { taskId });
+}
+
 export function retryOkText(locale: Locale, taskId: string): string {
   return t(locale, "task.control.retryOk", { taskId });
 }

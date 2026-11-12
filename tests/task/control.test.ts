@@ -156,6 +156,63 @@ describe("TaskDO control", () => {
     expect(result.message).toContain("已完成");
   });
 
+  it("continues a completed task in its own conversation", async () => {
+    // The Butler's announcements share this script, so record every request
+    // instead of relying on which step the follow-up lands on.
+    const requests: string[] = [];
+    const record = {
+      observe: (context: { messages: unknown }) => {
+        requests.push(JSON.stringify(context.messages));
+      },
+    };
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "finish_task", args: { summary: "first" } }] },
+        ...Array.from({ length: 8 }, () => ({ text: "second", ...record })),
+      ]),
+    );
+    const taskId = "t-continue";
+    const stub = taskStub(taskId);
+
+    await stub.start(spec(taskId, "写一份初稿"));
+    await vi.waitFor(
+      async () => {
+        expect((await stub.status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+
+    const result = await stub.continueTask("再补一段结论");
+    expect(result.ok).toBe(true);
+
+    await vi.waitFor(
+      async () => {
+        const events = await butler().debugEvents(taskId);
+        expect(events.map((event) => event.type)).toEqual([
+          "started",
+          "completed",
+          "started",
+          "completed",
+        ]);
+        expect(events[3]?.payload).toMatchObject({ summary: "second" });
+      },
+      { timeout: 10_000 },
+    );
+    expect((await stub.status()).state).toBe("completed");
+
+    // The follow-up ran on the same transcript: the first round is still there.
+    const followUp = requests.find((request) => request.includes("再补一段结论"));
+    expect(followUp).toBeDefined();
+    expect(followUp).toContain("写一份初稿");
+    expect(followUp).toContain("first");
+  }, 30_000);
+
+  it("refuses to continue a task that has not completed", async () => {
+    const stub = taskStub("t-continue-new");
+    const result = await stub.continueTask("x");
+    expect(result.ok).toBe(false);
+  });
+
   it("cancels a running task once", async () => {
     setModelOverride(
       scriptedModel([

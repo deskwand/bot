@@ -28,6 +28,8 @@ export const task = {
     retryBlocked: "任务 {taskId} 已{state}，无法重试",
     retryNotRetryable: "任务 {taskId} 的失败不可重试",
     retryOk: "任务 {taskId} 已重新开始",
+    continueNotCompleted: "任务 {taskId} {state}，只有已完成的任务可以继续",
+    continueOk: "任务 {taskId} 已在原有上下文中继续",
     missingApprovalId: "缺少审批编号",
   },
   notice: {

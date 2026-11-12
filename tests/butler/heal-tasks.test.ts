@@ -50,6 +50,7 @@ async function installProbe(
       steer: async () => ({ ok: true, message: "" }),
       cancel: async () => ({ ok: true, message: "" }),
       retryTask: async () => ({ ok: true, message: "" }),
+      continueTask: async () => ({ ok: false, message: "" }),
       pendingApprovals: async () => [],
       liveness: async () => {
         probed.push(id);
