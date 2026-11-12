@@ -144,6 +144,42 @@ describe("butler control tools", () => {
     expect(result).toBe("任务 t1 启动失败：boom");
   });
 
+  it("describes spawn_task as the way to do what the butler cannot", async () => {
+    const description = await runInDurableObject(
+      butler("tools-dispatch-desc"),
+      async (_instance, state) => {
+        const repo = new TasksRepo(state.storage.sql);
+        const tools = createButlerTools({
+          repo,
+          task: () => ({
+            start: async () => {},
+            status: async () => ({ state: "queued", title: "" }),
+            steer: async () => ({ ok: false, message: "" }),
+            cancel: async () => ({ ok: false, message: "" }),
+            retryTask: async () => ({ ok: false, message: "" }),
+            continueTask: async () => ({ ok: false, message: "" }),
+            liveness: async () => ({ state: "running", reattached: false }),
+            pendingApprovals: async () => [],
+          }),
+          spawn: async () => "t1",
+          resolveAttachment: async () => null,
+          memory: new MemoryStore(state.storage.sql),
+          createSchedule: async () => "s1",
+          listSchedules: () => [],
+          removeSchedule: async () => false,
+          lookup: async () => ({ ok: false }),
+        });
+        return tools.find((tool) => tool.name === "spawn_task")!.description;
+      },
+    );
+    expect(description).toContain("anything your own tools cannot do");
+    expect(description).toContain(
+      "Never tell the owner something is impossible without trying this first.",
+    );
+    expect(description).not.toContain("web_fetch");
+    expect(description).not.toContain("http_request");
+  });
+
   it("passes resolved attachments to spawn", async () => {
     const result = await runInDurableObject(
       butler("tools-attachments"),

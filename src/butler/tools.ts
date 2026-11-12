@@ -142,7 +142,7 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
   const spawnTask: ToolRegistration<typeof SpawnTask> = {
     name: "spawn_task",
     description:
-      "Start a background task for work that needs many searches/reads or more than about a minute.",
+      "Hand work to a background worker that has many more tools than you (web pages, HTTP, files, scripts, connected services, and more over time). Use it for anything your own tools cannot do, and for work that needs many searches/reads or more than about a minute. Never tell the owner something is impossible without trying this first.",
     parameters: SpawnTask,
     async execute({ title, instructions, attachments }) {
       try {
