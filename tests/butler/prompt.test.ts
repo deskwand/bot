@@ -129,11 +129,11 @@ it("lays out the chat, quick lookup and task lanes", () => {
 it("dispatches whatever the butler's own tools cannot do", () => {
   const prompt = butlerSystemPrompt("zh", [], "telegram");
   const principle =
-    "主人要办的事，只要你自己的工具办不了，就 spawn_task，交给执行者判断能不能做。";
+    "主人要办的事，只要你自己的工具办不了，就派出去（spawn_task；已有任务的后续用 continue_task 或 steer_task），交给执行者判断能不能做。";
   expect(prompt).toContain("你手上的工具只是一小部分；执行者有更多工具，而且会不断增加。");
   expect(prompt).toContain(principle);
   expect(prompt).toContain(
-    "绝不对主人说做不到、没法访问、没有权限；做不到的话由任务结果说明缺什么。",
+    "没派出去试过，绝不对主人说做不到、没法访问、没有权限；做不到的话由任务结果说明缺什么，你如实转告。",
   );
   expect(prompt.indexOf(principle)).toBeLessThan(
     prompt.indexOf("怎么处理主人的话，三选一："),
@@ -144,4 +144,6 @@ it("dispatches whatever the butler's own tools cannot do", () => {
   expect(prompt).toContain(
     "- 聊天：闲聊、解释概念、不依赖外部最新状态的问答，直接答。",
   );
+  expect(prompt).not.toContain("调用 spawn_task：当工作预计需要多次搜索");
+  expect(prompt).toContain("调用 spawn_task 时，title 写简短的任务名");
 });
