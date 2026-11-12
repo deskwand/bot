@@ -37,6 +37,17 @@ export const BINANCE_ENDPOINTS: readonly {
 export const PRIMARY_PATH = "/api/v3/account";
 
 /**
+ * Endpoints Binance serves to anyone. The contract marks them `signed: false`;
+ * they carry no timestamp, no recvWindow and no signature, because Binance
+ * answers -1104 to parameters a public endpoint does not read.
+ */
+export const PUBLIC_PATHS: ReadonlySet<string> = new Set(
+  endpoints.endpoints
+    .filter((endpoint) => (endpoint as { signed?: boolean }).signed === false)
+    .map((endpoint) => endpoint.path),
+);
+
+/**
  * Turns a recorded bundle back into a `fetch`-shaped function. Hosts, query
  * strings and the signature are ignored: the adapter only cares about the
  * method, the path, the status and the body.

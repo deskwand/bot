@@ -91,6 +91,15 @@ func TestFetchSignsEveryRequestInOrder(t *testing.T) {
 		if request.URL.Path != endpoint.Path {
 			t.Fatalf("path = %s, want %s", request.URL.Path, endpoint.Path)
 		}
+		if !endpoint.signed() {
+			if request.URL.RawQuery != "" {
+				t.Fatalf("%s: query = %q, want none", endpoint.Path, request.URL.RawQuery)
+			}
+			if got := request.Header.Get("X-MBX-APIKEY"); got != "" {
+				t.Fatalf("%s: X-MBX-APIKEY = %q, want none", endpoint.Path, got)
+			}
+			continue
+		}
 		if got := request.Header.Get("X-MBX-APIKEY"); got != testKey {
 			t.Fatalf("%s: X-MBX-APIKEY = %q", endpoint.Path, got)
 		}
@@ -100,6 +109,35 @@ func TestFetchSignsEveryRequestInOrder(t *testing.T) {
 			t.Fatalf("%s: query = %q, want %q", endpoint.Path, request.URL.RawQuery, wantQuery)
 		}
 	}
+}
+
+// A public endpoint rejects the signed parameters with -1104, so the bundle
+// would carry a 400 where the adapter expects a price list.
+func TestFetchLeavesPublicEndpointsUnsigned(t *testing.T) {
+	var seen []*http.Request
+	server := signTestServer(t, &seen)
+	defer server.Close()
+
+	fetcher := testFetcher(nil, map[string]string{
+		"api": server.URL, "fapi": server.URL, "dapi": server.URL,
+	})
+	if _, err := fetcher.Fetch(context.Background(), Credentials{Key: testKey, Secret: testSecret}); err != nil {
+		t.Fatalf("Fetch() = %v", err)
+	}
+
+	for _, request := range seen {
+		if request.URL.Path != "/api/v3/ticker/price" {
+			continue
+		}
+		if request.URL.RawQuery != "" {
+			t.Fatalf("ticker query = %q, want none", request.URL.RawQuery)
+		}
+		if got := request.Header.Get("X-MBX-APIKEY"); got != "" {
+			t.Fatalf("ticker X-MBX-APIKEY = %q, want none", got)
+		}
+		return
+	}
+	t.Fatal("/api/v3/ticker/price was not requested")
 }
 
 func wantSignedQuery(t *testing.T, timestamp int64, params map[string]string) string {
@@ -376,6 +414,9 @@ func TestFetchSignsEachRequestWithItsOwnTimestamp(t *testing.T) {
 	for _, request := range seen {
 		query := request.URL.RawQuery
 		cut := strings.LastIndex(query, "&signature=")
+		if cut < 0 {
+			continue // a public endpoint carries no signature to check
+		}
 		if Sign(testSecret, query[:cut]) != query[cut+len("&signature="):] {
 			t.Fatalf("bad signature for %s", request.URL.Path)
 		}

@@ -147,6 +147,23 @@ export const binanceAdapter: VenueAdapter = {
     const positions: VenuePosition[] = [];
     const degraded: VenueSnapshot["degraded"] = [];
     const fetchedAt = (deps.now ?? Date.now)();
+    let primaryProven = false;
+
+    // -2015 means "no permission for this endpoint" and also "bad key". Only
+    // the primary call tells them apart, and the caller may not have asked for
+    // spot, so it is issued before a part failure is blamed on the key. It
+    // throws when the key really is bad, which ends the account.
+    async function proveKey(): Promise<void> {
+      if (primaryProven) return;
+      await binanceGet(
+        deps,
+        account,
+        "/api/v3/account",
+        { omitZeroBalances: "true" },
+        signal,
+      );
+      primaryProven = true;
+    }
 
     async function soft<T>(
       part: VenueSnapshot["degraded"][number]["part"],
@@ -155,7 +172,13 @@ export const binanceAdapter: VenueAdapter = {
       try {
         return await run();
       } catch (error) {
-        const reason = error instanceof ExchangeError ? error.bucket : "network";
+        let reason = error instanceof ExchangeError ? error.bucket : "network";
+        if (reason === "unknownKey") {
+          await proveKey();
+          // The key just read the primary endpoint, so this part is simply not
+          // enabled; saying "not this key" here would blame a working key.
+          reason = "refused";
+        }
         if (FATAL_BUCKETS.includes(reason)) throw error;
         if (!degraded.some((item) => item.part === part)) {
           degraded.push({ part, reason });
@@ -188,6 +211,7 @@ export const binanceAdapter: VenueAdapter = {
           signal,
         ),
       );
+      primaryProven = true;
       const balances = fromFreeLocked(prices, "spot", rows(body.balances));
       buckets.push({ bucket: "spot", value: sumValue(balances), balances });
     }

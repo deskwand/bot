@@ -1,3 +1,4 @@
+import { PUBLIC_PATHS } from "./replay";
 import {
   ExchangeError,
   type AdapterDeps,
@@ -234,25 +235,32 @@ export async function binanceGet(
   params: Record<string, string> = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const timestamp = String((deps.now ?? Date.now)());
-  // Binance does not require a particular order, but a fixed one keeps the
-  // signature reproducible: timestamp, recvWindow, then caller params.
-  const query = new URLSearchParams({
-    timestamp,
-    recvWindow: "5000",
-    ...params,
-  }).toString();
-  const signature = await binanceSignature(account.secret.secret, query);
   const host = hostFor(account, path);
-  const raw = await send(
-    deps,
-    `${host}${path}?${query}&signature=${signature}`,
-    {
-      method: methodFor(path),
-      headers: { "X-MBX-APIKEY": account.secret.key },
-      signal: signalOf(deps, signal),
-    },
-  );
+  let url = `${host}${path}`;
+  let headers: Record<string, string> | undefined;
+  if (PUBLIC_PATHS.has(path)) {
+    // A public endpoint reads no timestamp and no signature, and rejects them
+    // with -1104, so it goes out as it is.
+    const query = new URLSearchParams(params).toString();
+    if (query !== "") url += `?${query}`;
+  } else {
+    const timestamp = String((deps.now ?? Date.now)());
+    // Binance does not require a particular order, but a fixed one keeps the
+    // signature reproducible: timestamp, recvWindow, then caller params.
+    const query = new URLSearchParams({
+      timestamp,
+      recvWindow: "5000",
+      ...params,
+    }).toString();
+    const signature = await binanceSignature(account.secret.secret, query);
+    url += `?${query}&signature=${signature}`;
+    headers = { "X-MBX-APIKEY": account.secret.key };
+  }
+  const raw = await send(deps, url, {
+    method: methodFor(path),
+    headers,
+    signal: signalOf(deps, signal),
+  });
 
   const failure = refusal(raw, BINANCE_CODES);
   if (failure !== null) {

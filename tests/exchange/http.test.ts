@@ -120,6 +120,26 @@ describe("binanceGet", () => {
     expect(url.search.endsWith(`&signature=${signature}`)).toBe(true);
   });
 
+  it("sends a public endpoint without a key, a timestamp or a signature", async () => {
+    const fetchImpl = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        jsonResponse([]),
+    );
+    await binanceGet(
+      {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        now: () => 1700000000000,
+      },
+      account("binance"),
+      "/api/v3/ticker/price",
+    );
+
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("https://api.binance.com/api/v3/ticker/price");
+    // Binance answers -1104 for parameters a public endpoint does not read.
+    expect((init as RequestInit).headers).toBeUndefined();
+  });
+
   it("routes futures and coin-M paths to their own hosts by default", async () => {
     const fetchImpl = vi.fn(
       async (_input: string | URL | Request, _init?: RequestInit) =>

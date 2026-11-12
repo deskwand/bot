@@ -230,4 +230,119 @@ describe("binanceAdapter", () => {
       }),
     ).rejects.toMatchObject({ bucket: "region" });
   });
+
+  it("keeps spot data when a futures endpoint refuses a key with no futures permission", async () => {
+    // A read-only key sees -2015 on every futures endpoint it has no permission
+    // for. The spot call already proved the key works, so only those parts go.
+    const denied = JSON.stringify({
+      code: -2015,
+      msg: "Invalid API-key, IP, or permissions for action",
+    });
+    const fetchImpl = async (input: string | URL | Request) => {
+      const { pathname } = new URL(String(input));
+      if (pathname === "/api/v3/account") {
+        return new Response(
+          JSON.stringify({
+            balances: [{ asset: "USDT", free: "10", locked: "0" }],
+          }),
+          { status: 200 },
+        );
+      }
+      if (pathname === "/api/v3/ticker/price") {
+        return new Response(JSON.stringify(prices), { status: 200 });
+      }
+      return new Response(denied, { status: 401 });
+    };
+
+    const snapshot = await binanceAdapter.fetch(
+      account,
+      { include: ["spot", "futures", "positions"] },
+      undefined,
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
+    );
+
+    expect(snapshot.buckets.map((bucket) => bucket.bucket)).toEqual(["spot"]);
+    // Not "unknownKey": the key just read spot, so it is the futures product
+    // that is missing, not this key. Saying otherwise sends the owner off to
+    // regenerate a working key.
+    expect(snapshot.degraded).toEqual([
+      { part: "futures", reason: "refused" },
+      { part: "positions", reason: "refused" },
+    ]);
+    expect(snapshot.total).toBe(10);
+  });
+
+  it("rejects the whole account when the primary endpoint refuses the key", async () => {
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          code: -2015,
+          msg: "Invalid API-key, IP, or permissions for action",
+        }),
+        { status: 401 },
+      );
+
+    await expect(
+      binanceAdapter.fetch(account, { include: ["spot"] }, undefined, {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({ bucket: "unknownKey" });
+  });
+
+  it("proves the key through the primary call when spot was not requested", async () => {
+    const seen: string[] = [];
+    const fetchImpl = async (input: string | URL | Request) => {
+      const { pathname } = new URL(String(input));
+      seen.push(pathname);
+      if (pathname === "/api/v3/ticker/price") {
+        return new Response("[]", { status: 200 });
+      }
+      if (pathname === "/api/v3/account") {
+        return new Response(JSON.stringify({ balances: [] }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ code: -2015, msg: "no permission" }),
+        { status: 401 },
+      );
+    };
+
+    const snapshot = await binanceAdapter.fetch(
+      account,
+      { include: ["futures"] },
+      undefined,
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
+    );
+
+    expect(seen).toContain("/api/v3/account");
+    expect(snapshot.buckets).toEqual([]);
+    // The futures block reads positions as well, so both parts degrade.
+    expect(snapshot.degraded).toEqual([
+      { part: "futures", reason: "refused" },
+      { part: "positions", reason: "refused" },
+    ]);
+  });
+
+  it("rejects a read that never proved the key", async () => {
+    // No spot in the include set, and the key is revoked: without the proof
+    // call this would report an empty account instead of a bad key.
+    const fetchImpl = async (input: string | URL | Request) => {
+      const { pathname } = new URL(String(input));
+      if (pathname === "/api/v3/ticker/price") {
+        return new Response("[]", { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          code: -2015,
+          msg: "Invalid API-key, IP, or permissions for action",
+        }),
+        { status: 401 },
+      );
+    };
+
+    await expect(
+      binanceAdapter.fetch(account, { include: ["futures"] }, undefined, {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({ bucket: "unknownKey" });
+  });
 });

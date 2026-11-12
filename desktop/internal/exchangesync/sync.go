@@ -44,7 +44,14 @@ type Endpoint struct {
 	Method string            `json:"method"`
 	Path   string            `json:"path"`
 	Params map[string]string `json:"params"`
+	// Signed is absent for an endpoint that carries credentials. A public
+	// endpoint says so with "signed": false and must not be signed, because
+	// Binance answers -1104 to parameters it does not read.
+	Signed *bool `json:"signed,omitempty"`
 }
+
+// signed reports whether the request carries a timestamp and a signature.
+func (e Endpoint) signed() bool { return e.Signed == nil || *e.Signed }
 
 // Response is one raw response, exactly as the Worker replays it.
 type Response struct {
@@ -125,7 +132,12 @@ func Endpoints() []Endpoint {
 		for key, value := range endpoint.Params {
 			params[key] = value
 		}
-		out = append(out, Endpoint{Method: endpoint.Method, Path: endpoint.Path, Params: params})
+		out = append(out, Endpoint{
+			Method: endpoint.Method,
+			Path:   endpoint.Path,
+			Params: params,
+			Signed: endpoint.Signed,
+		})
 	}
 	return out
 }
@@ -199,12 +211,23 @@ func (f Fetcher) send(
 	endpoint Endpoint,
 	timestamp int64,
 ) (int, []byte, error) {
-	query := signedQuery(timestamp, endpoint.Params, creds.Secret)
-	request, err := http.NewRequestWithContext(ctx, endpoint.Method, f.host(endpoint.Path)+endpoint.Path+"?"+query, nil)
+	var query string
+	if endpoint.signed() {
+		query = signedQuery(timestamp, endpoint.Params, creds.Secret)
+	} else {
+		query = paramsQuery(endpoint.Params)
+	}
+	target := f.host(endpoint.Path) + endpoint.Path
+	if query != "" {
+		target += "?" + query
+	}
+	request, err := http.NewRequestWithContext(ctx, endpoint.Method, target, nil)
 	if err != nil {
 		return 0, nil, err
 	}
-	request.Header.Set("X-MBX-APIKEY", creds.Key)
+	if endpoint.signed() {
+		request.Header.Set("X-MBX-APIKEY", creds.Key)
+	}
 
 	response, err := client.Do(request)
 	if err != nil {
@@ -218,6 +241,27 @@ func (f Fetcher) send(
 		return 0, nil, err
 	}
 	return response.StatusCode, body, nil
+}
+
+// paramsQuery joins a public endpoint's parameters in a stable order. It adds
+// no timestamp, no recvWindow and no signature.
+func paramsQuery(params map[string]string) string {
+	keys := make([]string, 0, len(params))
+	for key := range params {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var builder strings.Builder
+	for _, key := range keys {
+		if builder.Len() > 0 {
+			builder.WriteString("&")
+		}
+		builder.WriteString(url.QueryEscape(key))
+		builder.WriteString("=")
+		builder.WriteString(url.QueryEscape(params[key]))
+	}
+	return builder.String()
 }
 
 // signedQuery builds timestamp, recvWindow, then params sorted by key, and
