@@ -73,6 +73,8 @@ export const butler: Messages["butler"] = {
     kindSlow: "Task still running",
     kindBotMessage: "Bot message",
     kindLifeTier: "Life tier change",
+    kindWalletRemit: "Remittance sent",
+    kindWalletRemitFailed: "Remittance failed",
   },
   quickLookup: {
     system:

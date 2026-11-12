@@ -14,10 +14,12 @@ import type { Locale } from "../i18n";
 import type { LifeDO } from "../life/life-do";
 import type { McpAuthDO } from "../mcp/mcp-auth-do";
 import type { TaskDO } from "../task/task-do";
+import type { WalletDO } from "../wallet/wallet-do";
 import {
   createExchangeRoutes,
   type ExchangeProbeResult,
 } from "./exchange-routes";
+import { createWalletRoutes, type WalletReads } from "./wallet-routes";
 import { createMcpAdminRoutes } from "./mcp-routes";
 import { createR2Routes } from "./r2-routes";
 import type {
@@ -35,11 +37,14 @@ export type AdminDeps = {
   task(id: string): DurableObjectStub<TaskDO>;
   bot(id: string): DurableObjectStub<BotDO>;
   life(): DurableObjectStub<LifeDO>;
+  wallet(): DurableObjectStub<WalletDO>;
   artifacts: R2Bucket;
   mcpAuth(): DurableObjectStub<McpAuthDO>;
   locale?: () => Locale;
   /** Present only when the deployment wires the exchange probe. */
   probeExchange?(account: string): Promise<ExchangeProbeResult>;
+  /** Present only when the deployment wires the wallet status route. */
+  walletReads?: WalletReads;
 };
 
 /** The DO RPC surface used by the backup and restore routes. */
@@ -118,6 +123,8 @@ function backupStub(deps: AdminDeps, url: URL): BackupStub | Response {
       return deps.bot(id);
     case "life":
       return deps.life();
+    case "wallet":
+      return deps.wallet();
     default:
       return json(
         { code: "BACKUP_INVALID", message: `unknown do kind: ${kind ?? ""}` },
@@ -216,6 +223,8 @@ export function createAdminGateway(deps: AdminDeps): {
   const mcp = createMcpAdminRoutes(deps.mcpAuth, deps.locale);
   const probe = deps.probeExchange;
   const exchange = probe === undefined ? null : createExchangeRoutes(probe);
+  const wallet =
+    deps.walletReads === undefined ? null : createWalletRoutes(deps.walletReads);
 
   async function handle(req: Request, url: URL): Promise<Response> {
     if (req.method === "POST" && url.pathname === ACQUIRE_PATH) {
@@ -233,6 +242,11 @@ export function createAdminGateway(deps: AdminDeps): {
     // Exchange probing is a read-only health check and needs no lease.
     if (url.pathname.startsWith("/admin/exchange/") && exchange !== null) {
       return exchange.fetch(req);
+    }
+
+    // Wallet status is a read-only health check and needs no lease.
+    if (url.pathname.startsWith("/admin/wallet/") && wallet !== null) {
+      return wallet.fetch(req);
     }
 
     if (url.pathname.startsWith(R2_PREFIX)) {

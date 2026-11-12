@@ -23,6 +23,7 @@ function deps(name: string, token: string | null = TOKEN): AdminDeps {
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     life: () => env.LIFE.get(env.LIFE.idFromName(`${name}-life`)),
+    wallet: () => env.WALLET.get(env.WALLET.idFromName("global")),
     artifacts: env.ARTIFACTS,
     mcpAuth: () => env.MCP_AUTH.get(env.MCP_AUTH.idFromName("global")),
   };
@@ -184,6 +185,20 @@ describe("admin gateway", () => {
     expect(names).toContain("credit");
   });
 
+  it("schema accepts do=wallet", async () => {
+    const gateway = createAdminGateway(deps("admin-wallet-schema"));
+    expect((await acquire(gateway)).status).toBe(200);
+
+    const response = await call(gateway, "/admin/backup/schema?do=wallet");
+
+    expect(response.status).toBe(200);
+    const schema = (await response.json()) as {
+      tables: { name: string }[];
+    };
+    const names = schema.tables.map((table) => table.name);
+    expect(names).toContain("remittances");
+  });
+
   it("returns 400 for an unknown do kind", async () => {
     const gateway = createAdminGateway(deps("admin-unknown-do"));
     expect((await acquire(gateway)).status).toBe(200);
@@ -242,6 +257,9 @@ describe("admin gateway", () => {
         throw new Error("unused");
       },
       life: () => {
+        throw new Error("unused");
+      },
+      wallet: () => {
         throw new Error("unused");
       },
       artifacts: env.ARTIFACTS,

@@ -50,6 +50,12 @@ export const life: Messages["life"] = {
     calibrate:
       "Balance calibrated to {amount}. Balance: {balance}, tier: {tier}",
     badAmount: "That amount is not a valid finite number",
+    remittanceUnknown:
+      "No remittance has that id, so this is booked as an owner top-up.",
+    remittanceAlready:
+      "That remittance was already settled, so this is booked as an owner top-up.",
+    remittanceUnavailable:
+      "The wallet is unavailable, so the remittance could not be settled; this is booked as an owner top-up.",
     failed: "The ledger write failed: {error}",
   },
 };

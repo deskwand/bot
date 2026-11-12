@@ -71,6 +71,8 @@ export const errors = {
   MCP_FAILED: "云端管理请求失败。",
   EXCHANGE_ADMIN_UNAVAILABLE: "这个部署的管理接口不可用，请确认部署已完成。",
   EXCHANGE_FAILED: "交易所测试失败，请查看下方详情。",
+  WALLET_ADMIN_UNAVAILABLE: "钱包管理接口不可用，请确认部署已完成。",
+  WALLET_FAILED: "钱包请求失败，请稍后重试。",
   MCP_SERVER_NOT_FOUND: "服务不存在",
   MCP_SERVER_NOT_FOUND_OR_NO_AUTH: "服务不存在或不需要授权",
   MCP_DCR_UNSUPPORTED: "该服务不支持自动注册（DCR）",

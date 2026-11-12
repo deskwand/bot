@@ -14,7 +14,7 @@ export type SpendEntry = {
   priced: boolean;
 };
 
-export type CreditSource = "owner_topup" | "calibration";
+export type CreditSource = "owner_topup" | "earned" | "calibration";
 
 type TotalsRow = {
   credit_usd: number;

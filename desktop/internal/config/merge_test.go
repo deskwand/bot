@@ -1017,3 +1017,54 @@ func TestMergePreservesUnknownExchangeFields(t *testing.T) {
 		t.Fatalf("patch did not land: %s", plan.ConfigJSON)
 	}
 }
+
+func TestApplyPatchWritesWallet(t *testing.T) {
+	raw := json.RawMessage(`{"rpcUrl":"https://rpc.example"}`)
+	document := map[string]any{}
+	if err := applyPatch(document, domain.EditablePatch{Wallet: &raw}); err != nil {
+		t.Fatalf("applyPatch: %v", err)
+	}
+	section, ok := document["wallet"].(map[string]any)
+	if !ok {
+		t.Fatalf("wallet section = %#v", document["wallet"])
+	}
+	if section["rpcUrl"] != "https://rpc.example" {
+		t.Fatalf("rpcUrl = %#v", section["rpcUrl"])
+	}
+}
+
+func TestApplyPatchRejectsNonObjectWallet(t *testing.T) {
+	raw := json.RawMessage(`[]`)
+	if err := applyPatch(map[string]any{}, domain.EditablePatch{Wallet: &raw}); err == nil {
+		t.Fatal("an array wallet patch must be rejected")
+	}
+}
+
+func TestMergePreservesUnknownWalletFields(t *testing.T) {
+	base := baseSnapshot(t)
+	canonical, err := domain.CanonicalizeJSON([]byte(`{
+		"schemaVersion":1,
+		"owner":{"telegramUserIds":[]},
+		"models":{"butler":{"provider":"opencode-go","id":"deepseek-v4.1-flash"},"task":{"provider":"opencode-go","id":"kimi-k3"}},
+		"mcpServers":[],
+		"wallet":{"rpcUrl":"https://old.example","futureField":{"keep":true}}
+	}`))
+	if err != nil {
+		t.Fatalf("canonicalize: %v", err)
+	}
+	base.ConfigJSON = canonical
+	raw := json.RawMessage(`{"rpcUrl":"https://new.example"}`)
+	plan, err := Merge(base, domain.Change{
+		BaseFingerprint: base.Fingerprint,
+		Patch:           domain.EditablePatch{Wallet: &raw},
+	})
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if !strings.Contains(string(plan.ConfigJSON), `"futureField"`) {
+		t.Fatalf("unknown field dropped: %s", plan.ConfigJSON)
+	}
+	if !strings.Contains(string(plan.ConfigJSON), `"https://new.example"`) {
+		t.Fatalf("patch did not land: %s", plan.ConfigJSON)
+	}
+}

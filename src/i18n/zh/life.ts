@@ -43,6 +43,10 @@ export const life = {
     credit: "已记入 {amount}。额度：{balance}，档位：{tier}",
     calibrate: "余额已校准为 {amount}。额度：{balance}，档位：{tier}",
     badAmount: "金额无效，需要一个有限数字",
+    remittanceUnknown: "没找到这个汇款编号，这笔按主人充值记账。",
+    remittanceAlready: "这笔汇款已经结清过，按主人充值记账。",
+    remittanceUnavailable:
+      "钱包暂时不可用，汇款没能结清，按主人充值记账。",
     failed: "记账失败：{error}",
   },
 } as const;

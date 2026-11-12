@@ -8,4 +8,5 @@ export { BotChatDO } from "../src/bot/bot-chat-do";
 export { ChannelDO } from "../src/channels/channel-do";
 export { McpAuthDO } from "../src/mcp/mcp-auth-do";
 export { LifeDO } from "../src/life/life-do";
+export { WalletDO } from "../src/wallet/wallet-do";
 export { TestHarnessDO } from "./test-harness-do";

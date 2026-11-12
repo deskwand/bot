@@ -26,6 +26,13 @@ import type { Meter } from "../life/meter";
 import { lifeBlock } from "../life/prompt";
 import { createLifeTools } from "../life/tools";
 import type { Tier } from "../life/vitals";
+import { readWalletStatus, readWalletValue } from "../wallet/client";
+import { createWalletTools } from "../wallet/tools";
+import {
+  walletConfigured,
+  walletStub,
+  type WalletNotice,
+} from "../wallet/wallet-do";
 import { phoneRules } from "../phone/style";
 import { isInboxKey } from "../channels/inbox";
 import { parseActiveChannel } from "../channels/route-identity";
@@ -369,9 +376,14 @@ export class ButlerDO extends Agent<Env> {
           key: "life",
           tag: false,
           render: async () => {
+            const vitals = await readVitals(this.env);
+            const walletValue = vitals?.metabolismStarted
+              ? await readWalletValue(this.env)
+              : null;
             const block = lifeBlock(
               ownerLocale(this.env),
-              await readVitals(this.env),
+              vitals,
+              walletValue,
             );
             return block.length > 0 ? block : undefined;
           },
@@ -383,7 +395,14 @@ export class ButlerDO extends Agent<Env> {
       name: "life",
       tools: createLifeTools({
         vitals: () => lifeStub(this.env).vitals(),
-        credit: (usd, note) => lifeStub(this.env).recordCredit(usd, note),
+        credit: (usd, note, source) =>
+          lifeStub(this.env).recordCredit(usd, note, source),
+        settleRemittance: walletConfigured(this.env)
+          ? (id) => walletStub(this.env).settleRemittance(id)
+          : undefined,
+        wallet: walletConfigured(this.env)
+          ? () => readWalletStatus(this.env)
+          : undefined,
         calibrate: (balanceUsd, note) =>
           lifeStub(this.env).calibrate(balanceUsd, note),
         effectiveModels: async () => {
@@ -407,6 +426,20 @@ export class ButlerDO extends Agent<Env> {
         locale: ownerLocale(this.env),
       }),
     });
+
+    if (walletConfigured(this.env)) {
+      this.registry.install({
+        name: "wallet",
+        tools: createWalletTools({
+          status: async () => {
+            const status = await readWalletStatus(this.env);
+            if (status === null) throw new Error("wallet is unavailable");
+            return status;
+          },
+          locale: ownerLocale(this.env),
+        }),
+      });
+    }
 
     // The default is a getter: pi only evaluates it when it opens the session,
     // so a missing DESKWAND_CONFIG does not make this object unconstructable.
@@ -889,6 +922,15 @@ export class ButlerDO extends Agent<Env> {
       { kind: "life.tier", tier, runwayDays, body: "" },
       { refId: "life:" + tier, priority: "alert" },
     );
+  }
+
+  /** Tells the owner about a remittance. Fixed copy, no model call. */
+  async notifyRemittance(event: WalletNotice): Promise<void> {
+    await this.say(event, {
+      refId:
+        event.kind === "wallet.remit" ? `remit:${event.id}` : "remit:failed",
+      priority: "alert",
+    });
   }
 
   /** What the Butler knows about the owner, for a bot's wake context. */

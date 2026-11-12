@@ -63,6 +63,16 @@
       },
       "additionalProperties": true
     },
+    "wallet": {
+      "type": "object",
+      "description": "Base-chain wallet settings. This schema only constrains the structure: field-level checks (private key format, owner address checksum, https RPC URL) live in src/wallet/config.ts, which treats a bad field as an unconfigured wallet instead of rejecting the whole document.",
+      "properties": {
+        "rpcUrl": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
     "exchange": {
       "type": "object",
       "description": "Crypto exchange accounts the bot may read. This schema only constrains the structure: field-level checks (id pattern, venue, baseUrl shape, presence of the account secret) live in src/exchange/accounts.ts, which drops a bad account instead of rejecting the whole document.",

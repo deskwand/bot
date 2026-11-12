@@ -10,6 +10,7 @@ import { mcp } from "./mcp";
 import { phone } from "./phone";
 import { prompt } from "./prompt";
 import { task } from "./task";
+import { wallet } from "./wallet";
 
 export const en: Messages = {
   bot,
@@ -23,4 +24,5 @@ export const en: Messages = {
   phone,
   prompt,
   task,
+  wallet,
 };

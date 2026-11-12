@@ -32,6 +32,7 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 - 执行链路：`TaskDO`（每任务一个实例，工具调用、审批、崩溃恢复）
 - 自主机器人：`BotDO`（每个机器人一个实例，独立记忆，自己决定下次唤醒，执行仍交给 TaskDO）
 - 生命账本：`LifeDO`（全局单实例，模型开销、入账、生命体征与档位）
+- 钱包：`WalletDO`（全局单实例，Base 链上的余额、估值、自动汇款与对账）
 - 外部服务：`McpAuthDO`（全局单实例，远程 MCP 的 OAuth 注册、token 保管与续期，以及桌面端"测试连接"）
 - 定时任务：通过 Agents SDK `Agent.schedule` 注册 cron（渠道轮询保活另用每 5 分钟一次的 Cron Trigger），cron 按 **UTC** 解释
 - 产物：写入 R2，任务完成时由渠道以文件/图片本体直接送达（不进公开 URL）。单文件上限 15MB，超过在 `save_artifact` 阶段即被拒绝
@@ -207,6 +208,59 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 - 「记一笔入账」和「校准余额」没有审批步骤。它们只出现在管家的主人对话里，但管家读到的外部文字仍可能诱导她记账；发现不对时用「余额校准成 12 美元」修正。
 - 延后执行（deferred）的模型调用和图片生成不计入账本，实际开销可能比账面高；窗口内有未计价模型时 `life_vitals` 会注明。
 
+## 钱包
+
+她有一个 Base 主网上的钱包。默认不配置；私钥和收款地址都配好之后钱包才会出现。
+
+钱包的配置只能由主人在桌面端或 wrangler 里设置，没有任何工具能读取或修改：
+
+| 名称 | 类型 | 说明 |
+| --- | --- | --- |
+| `WALLET_PRIVATE_KEY` | secret | 钱包私钥，`0x` 加 64 位 hex |
+| `WALLET_OWNER_ADDRESS` | secret | 收款地址，不能是零地址，也不能等于钱包自己的地址 |
+| `DESKWAND_CONFIG.wallet.rpcUrl` | var | 可选；Base 主网 RPC，默认 `https://mainnet.base.org`，必须是 https |
+
+`wallet.rpcUrl` 写在明文配置里，不要填带 API key 的地址；带 key 的 RPC 请改用默认公共 RPC 或不含 key 的地址。
+
+私钥或收款地址缺失、格式不对时，钱包算未配置：`wallet_status`、提示词里的钱包段和自动汇款都不存在，行为与升级前完全一致。私钥、收款地址和 RPC URL 不会出现在任何工具输出、提示词或日志里；只有私钥推出的钱包地址可以显示。
+
+### 自动汇款
+
+档位变差时（例如从充裕掉到吃紧），她按「21 天的日均开销 − 余额」算出还差多少，用钱包里的 USDC 汇给收款地址：单笔不少于 5 美元，最多汇到 USDC 余额。同一档位内不重复；已有汇款还没确认时也不会再汇。汇出（或失败）后通过管家通知主人一次。
+
+主人确认收到后，把汇款编号一并报给 `life_credit`，这笔入账记为 `earned`，汇款结清；不带编号的入账仍记为 `owner_topup`。
+
+### 跟她说
+
+- 「钱包里有多少钱」（`wallet_status`）：钱包地址、各币持仓、总估值和待确认的汇款。只注册在管家的主人对话里。
+
+### 在 Sepolia 上试跑
+
+`scripts/wallet-sepolia.ts` 在 Base Sepolia 上手动验证链上读写，不进 CI。它会打印钱包地址、ETH 和 USDC 余额、1 USDC 换 WETH 的报价，再构造一笔 5 USDC（最小汇款额）转给收款地址的转账：
+
+```bash
+# 干跑：随机私钥，只签名不广播，不写入任何真实资金
+HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 \
+  node --use-env-proxy --experimental-strip-types scripts/wallet-sepolia.ts --dry-run --random-key
+```
+
+真跑时设置 `WALLET_PRIVATE_KEY` 和 `WALLET_OWNER_ADDRESS`，去掉 `--dry-run`；`SEPOLIA_RPC_URL` 可选，默认 `https://sepolia.base.org`。余额为 0 时风控会拒绝并打印原因，脚本正常退出。
+
+### 备份
+
+导出与恢复包含 `remittances` 表。私钥、收款地址和 RPC 地址不进备份。恢复不含钱包的旧备份会清空钱包表：链上资产不受影响，只是丢了历史。还没升级到带钱包版本的 Worker 在导出时直接不带钱包，恢复时也不会去动它。
+
+新版 Worker 导出的备份带 `wallet` 对象；旧版桌面客户端不认识它，会拒绝恢复整份备份。先用旧客户端升级，再做恢复。
+
+钱包新增了 `WalletDO` 类（migration `v7`，全局单实例），同样只新建、不改动已有类。
+
+### 已知的限制
+
+- 信任根是 Worker。Cloudflare 账号被攻破时，私钥可以被导出。资金量大了以后应升级为链上金库合约。
+- 估值用 Quoter 的即时报价，大额持仓的真实可变现价值会更低。
+- 汇款金额以美元计，主人用人民币充值时自己换算。
+- 恢复旧备份可能丢掉一笔已汇出、还没结清的汇款记录，之后可能再汇一笔。
+
 ## 前置条件
 
 - Node.js 22.6+（推荐 Node 26；本地脚本使用 Node 原生 TypeScript 类型擦除）
@@ -264,6 +318,8 @@ cp .dev.vars.example .dev.vars
 | `MODEL_KEY_<ID>` | secret | 模型调用；`<ID>` 是厂商 id 转大写、`-` 换 `_`（如 `MODEL_KEY_OPENCODE_GO`、`MODEL_KEY_DEEPSEEK`）；缺失时只影响该厂商的模型 |
 | `TELEGRAM_BOT_TOKEN` | secret | BotFather 提供的 token |
 | `WECHAT_CREDENTIALS` | secret | 可选；微信 iLink 登录凭据，由 `npm run wechat-login` 写入 |
+| `WALLET_PRIVATE_KEY` | secret | 可选；Base 钱包私钥，`0x` 加 64 位 hex |
+| `WALLET_OWNER_ADDRESS` | secret | 可选；汇款的收款地址，不能是零地址或钱包自己 |
 | `PUBLIC_BASE_URL` | var | 部署后的公开地址（MCP OAuth 回调使用） |
 | `DESKWAND_CONFIG` | var | 非敏感业务配置（owner、模型、MCP），结构见 `contracts/deployment-config.schema.json` |
 | `ACTIVE_CHANNEL` | var | 业务渠道选择：`telegram` 或 `wechat`。生产模板不声明，由发布配置提供 |
@@ -459,7 +515,7 @@ Telegram 由 Worker 主动长轮询收消息，本地调试不需要公网地址
 
 ## 升级与迁移说明
 
-- 升级不重建已有的 Durable Object：业务表只追加列（`tasks.progress_message_ref_json`、`approval_messages.message_ref_json`、`tasks.bot_id`），旧行保持原样。自主机器人新增了 `BotDO` 类（migration `v3`），只新建、不改动已有类。外部服务（MCP）新增了 `McpAuthDO` 类（migration `v4`，全局单实例，保管 OAuth token），同样只新建。生命账本新增了 `LifeDO` 类（migration `v6`，全局单实例），同样只新建。
+- 升级不重建已有的 Durable Object：业务表只追加列（`tasks.progress_message_ref_json`、`approval_messages.message_ref_json`、`tasks.bot_id`），旧行保持原样。自主机器人新增了 `BotDO` 类（migration `v3`），只新建、不改动已有类。外部服务（MCP）新增了 `McpAuthDO` 类（migration `v4`，全局单实例，保管 OAuth token），同样只新建。生命账本新增了 `LifeDO` 类（migration `v6`，全局单实例），同样只新建。钱包新增了 `WalletDO` 类（migration `v7`，全局单实例），同样只新建。
 - 消息引用（`ChannelMessageRef`）记录渠道、会话、部署归属和消息 ID。引用只在同一部署、同一选择、同一会话时才能编辑；旧版本只留下裸消息 ID 的记录无法推断归属，会安全降级为新发一条消息。
 - 普通代码发布会改变 route key：切换后或有旧消息引用时，下一条进度改发新消息，这是预期代价。A→B→A 切换即使中间版本没有唤醒 Channel DO，也不会复用旧引用。
 - 旧版本在途的长轮询或模型请求可能在新配置发布后完成；新版本处理的请求使用新选择。不承诺跨版本同时在途请求的原子切换。

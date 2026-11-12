@@ -8,6 +8,10 @@ import {
   type TableSchema,
 } from "../admin/sql-dump";
 import { getClock } from "../butler/notifier";
+import {
+  walletConfigured,
+  walletStub,
+} from "../wallet/wallet-do";
 import { Books, type SpendEntry } from "./books";
 import { computeVitals, tierRank, type Tier, type Vitals } from "./vitals";
 
@@ -79,8 +83,12 @@ export class LifeDO extends DurableObject<Env> {
     await this.considerNotice(vitals, true);
   }
 
-  async recordCredit(usd: number, note: string): Promise<Vitals> {
-    this.books.recordCredit(getClock().now(), usd, "owner_topup", note);
+  async recordCredit(
+    usd: number,
+    note: string,
+    source: "owner_topup" | "earned" = "owner_topup",
+  ): Promise<Vitals> {
+    this.books.recordCredit(getClock().now(), usd, source, note);
     this.cachedVitals = undefined;
     const vitals = await this.vitals();
     await this.considerNotice(vitals, false);
@@ -106,6 +114,16 @@ export class LifeDO extends DurableObject<Env> {
     const vitals = computeVitals(this.books.vitalsInput(now));
     this.cachedVitals = { hour, vitals };
     return vitals;
+  }
+
+  /** Asks the wallet to remit; replaced by a stub in tests. */
+  async requestRemit(vitals: Vitals): Promise<void> {
+    if (!walletConfigured(this.env)) return;
+    await walletStub(this.env).autoRemit({
+      dailySpendUsd: vitals.dailySpendUsd,
+      balanceUsd: vitals.balanceUsd,
+      metabolismStarted: vitals.metabolismStarted,
+    });
   }
 
   /** Tells the owner through the Butler; replaced by a stub in tests. */
@@ -137,6 +155,16 @@ export class LifeDO extends DurableObject<Env> {
           console.warn,
         ),
       );
+      if (tierRank(vitals.tier) > tierRank(notified)) {
+        this.ctx.waitUntil(
+          this.requestRemit(vitals).catch((error) => {
+            console.warn(
+              "life: remit request failed",
+              error instanceof Error ? error.constructor.name : "Error",
+            );
+          }),
+        );
+      }
     } catch (error) {
       console.warn("life: tier notice bookkeeping failed", error);
     }

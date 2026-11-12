@@ -74,6 +74,9 @@ export const errors: Messages["errors"] = {
   MCP_FAILED: "Cloud admin request failed.",
   EXCHANGE_ADMIN_UNAVAILABLE: "This deployment's admin API is unavailable; check that it finished deploying.",
   EXCHANGE_FAILED: "The exchange test failed; see the details below.",
+  WALLET_ADMIN_UNAVAILABLE:
+    "This deployment's admin API is unavailable; check that it finished deploying.",
+  WALLET_FAILED: "The wallet request failed; retry later.",
   MCP_SERVER_NOT_FOUND: "Service not found",
   MCP_SERVER_NOT_FOUND_OR_NO_AUTH:
     "The service does not exist or needs no authorization",

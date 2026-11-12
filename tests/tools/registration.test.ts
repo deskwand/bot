@@ -1,5 +1,6 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BotChatDO } from "../../src/bot/bot-chat-do";
 import { ButlerDO } from "../../src/butler/butler-do";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
@@ -43,6 +44,21 @@ function butler() {
   return env.BUTLER.get(env.BUTLER.idFromName("owner"));
 }
 
+describe("BotChatDO execution tools", () => {
+  it("installs no wallet tools", async () => {
+    const stub = env.BOT_CHAT.get(env.BOT_CHAT.idFromName("t-wallet-registry"));
+
+    const names = await runInDurableObject(stub, (instance: BotChatDO) =>
+      instance.registry
+        .snapshot()
+        .tools()
+        .map(({ tool }) => tool.name),
+    );
+
+    expect(names.filter((name) => name.startsWith("wallet_"))).toEqual([]);
+  });
+});
+
 describe("TaskDO execution tools", () => {
   it("installs web_search, web_fetch and save_artifact", async () => {
     const stub = env.TASK.get(env.TASK.idFromName("t-tools-registry"));
@@ -66,6 +82,7 @@ describe("TaskDO execution tools", () => {
       ]),
     );
     expect(names.filter((name) => name.startsWith("life_"))).toEqual([]);
+    expect(names.filter((name) => name.startsWith("wallet_"))).toEqual([]);
   });
 
   it("reports save_artifact progress to the Butler without the outbox", async () => {

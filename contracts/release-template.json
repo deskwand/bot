@@ -12,7 +12,8 @@
     { "name": "BOT_CHAT", "className": "BotChatDO" },
     { "name": "CHANNELS", "className": "ChannelDO" },
     { "name": "MCP_AUTH", "className": "McpAuthDO" },
-    { "name": "LIFE", "className": "LifeDO" }
+    { "name": "LIFE", "className": "LifeDO" },
+    { "name": "WALLET", "className": "WalletDO" }
   ],
   "r2Buckets": [
     { "name": "ARTIFACTS", "parameterKey": "r2BucketName" }
@@ -36,7 +37,9 @@
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
     "WECHAT_CREDENTIALS",
-    "ADMIN_TOKEN"
+    "ADMIN_TOKEN",
+    "WALLET_PRIVATE_KEY",
+    "WALLET_OWNER_ADDRESS"
   ],
   "plainVars": ["ACTIVE_CHANNEL", "PUBLIC_BASE_URL"],
   "crons": ["* * * * *"],
@@ -67,6 +70,10 @@
     {
       "tag": "v6",
       "newSqliteClasses": ["LifeDO"]
+    },
+    {
+      "tag": "v7",
+      "newSqliteClasses": ["WalletDO"]
     }
   ],
   "installParameters": [

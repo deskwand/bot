@@ -151,6 +151,62 @@ type ExchangeAccountDTO struct {
 	BaseURL string `json:"baseUrl,omitempty"`
 }
 
+// WalletStatusDTO is the deployed wallet's public state. The owner address
+// and the private key never appear here.
+type WalletStatusDTO struct {
+	Configured bool     `json:"configured"`
+	Address    string   `json:"address,omitempty"`
+	ValueUSD   *float64 `json:"valueUsd,omitempty"`
+}
+
+// WalletEditDTO is the write-only 保存钱包 input. An empty field means
+// unchanged, so a page that only changes the RPC URL never rewrites a secret.
+type WalletEditDTO struct {
+	PrivateKey   string `json:"privateKey,omitempty"`
+	OwnerAddress string `json:"ownerAddress,omitempty"`
+	RPCURL       string `json:"rpcUrl,omitempty"`
+}
+
+// WalletSectionDTO is the public half of the wallet config section.
+type WalletSectionDTO struct {
+	RPCURL string `json:"rpcUrl"`
+}
+
+// MarshalJSON omits the write-only values, like SecretEditDTO.
+func (w WalletEditDTO) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		RPCURL string `json:"rpcUrl,omitempty"`
+	}{RPCURL: w.RPCURL})
+}
+
+func (w WalletEditDTO) safeString() string {
+	return fmt.Sprintf("WalletEditDTO{privateKey=%q ownerAddress=%q rpcUrl=%q}",
+		redactedIfSet(w.PrivateKey), redactedIfSet(w.OwnerAddress), redactedIfSet(w.RPCURL))
+}
+
+func (w WalletEditDTO) String() string { return w.safeString() }
+
+func (w WalletEditDTO) GoString() string { return w.safeString() }
+
+func (w WalletEditDTO) Format(state fmt.State, _ rune) {
+	fmt.Fprint(state, w.safeString())
+}
+
+func (w WalletEditDTO) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("privateKey", redactedIfSet(w.PrivateKey)),
+		slog.String("ownerAddress", redactedIfSet(w.OwnerAddress)),
+		slog.String("rpcUrl", redactedIfSet(w.RPCURL)),
+	)
+}
+
+func redactedIfSet(value string) string {
+	if value == "" {
+		return ""
+	}
+	return "<redacted>"
+}
+
 // SecretEditDTO is a write-only secret edit. Value is accepted from the
 // frontend and never returned in any DTO, error or journal.
 type SecretEditDTO struct {
@@ -218,6 +274,7 @@ type ConfigEditDTO struct {
 	ApprovalMode     *string               `json:"approvalMode,omitempty"`
 	SearchProvider   *string               `json:"searchProvider,omitempty"`
 	ExchangeAccounts *[]ExchangeAccountDTO `json:"exchangeAccounts,omitempty"`
+	Wallet           *WalletSectionDTO     `json:"wallet,omitempty"`
 	Secrets          []SecretEditDTO       `json:"secrets,omitempty"`
 }
 

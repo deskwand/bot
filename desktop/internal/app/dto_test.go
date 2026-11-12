@@ -11,6 +11,7 @@ import (
 )
 
 const dtoSentinel = "DTO-SENTINEL-must-never-serialize"
+const dtoRPCSentinel = "https://rpc.example/RPC-KEY-SENTINEL"
 
 func TestSecretInputDTOsMarshalWithoutValues(t *testing.T) {
 	config := ConfigEditDTO{
@@ -28,6 +29,7 @@ func TestSecretInputDTOsMarshalWithoutValues(t *testing.T) {
 	for _, value := range []any{
 		SecretEditDTO{Name: "X", Operation: "replace", Value: dtoSentinel},
 		ImportSecretDTO{Name: "X", Value: dtoSentinel},
+		WalletEditDTO{PrivateKey: dtoSentinel, OwnerAddress: dtoSentinel},
 		config,
 		importInput,
 	} {
@@ -55,19 +57,25 @@ func TestSecretInputDTOsFormatAndLogWithoutValues(t *testing.T) {
 		}},
 	}
 	for _, format := range []string{"%v", "%+v", "%#v", "%s"} {
-		for _, value := range []any{config, importInput} {
+		for _, value := range []any{config, importInput, WalletEditDTO{PrivateKey: dtoSentinel, OwnerAddress: dtoSentinel, RPCURL: dtoRPCSentinel}} {
 			rendered := fmt.Sprintf(format, value)
 			if strings.Contains(rendered, dtoSentinel) {
 				t.Fatalf("%s on %T leaked the value: %s", format, value, rendered)
+			}
+			if strings.Contains(rendered, dtoRPCSentinel) {
+				t.Fatalf("%s on %T leaked the RPC URL: %s", format, value, rendered)
 			}
 		}
 	}
 
 	var buffer bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buffer, nil))
-	logger.Info("input", "config", config, "import", importInput)
+	logger.Info("input", "config", config, "import", importInput, "wallet", WalletEditDTO{PrivateKey: dtoSentinel, OwnerAddress: dtoSentinel, RPCURL: dtoRPCSentinel})
 	if strings.Contains(buffer.String(), dtoSentinel) {
 		t.Fatalf("slog JSON leaked the value: %s", buffer.String())
+	}
+	if strings.Contains(buffer.String(), dtoRPCSentinel) {
+		t.Fatalf("slog JSON leaked the RPC URL: %s", buffer.String())
 	}
 }
 
@@ -90,6 +98,7 @@ func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 		"SelectDeployment": true, "SetLocale": true, "SetTheme": true, "SetTelemetryEnabled": true, "StartMcpOAuth": true,
 		"SelectEntry": true, "StartWeChatLogin": true, "Status": true,
 		"TelemetryEnabled": true, "TestExchange": true, "Theme": true, "UpdateMcpServer": true, "Upgrade": true, "UpgradeAvailable": true,
+		"SaveWallet": true, "WalletStatus": true,
 	}
 	serviceType := reflect.TypeOf(&Service{})
 	seen := map[string]bool{}

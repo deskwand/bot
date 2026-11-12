@@ -128,8 +128,9 @@ test("html lang follows the locale", async ({ page }) => {
 
 test("formatDateTime follows the locale", async ({ page }) => {
   // Index-based nav keeps working once the shell itself is translated.
+  // The wallet page was inserted between Exchanges and Services.
   const backupNav = () =>
-    page.locator("#primary-nav").getByRole("button").nth(7);
+    page.locator("#primary-nav").getByRole("button").nth(8);
 
   await page.goto("/test.html?fixture=backup");
   await backupNav().click();

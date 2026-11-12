@@ -141,6 +141,15 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 			json.RawMessage(`{"__rowid":1,"id":1,"usd":20}`),
 		},
 	})
+	worker.setDO(DORef{DO: "wallet"}, DBSchema{
+		Tables: []TableSchema{
+			{Name: "remittances", Create: `CREATE TABLE remittances (id TEXT PRIMARY KEY, usdc TEXT, status TEXT)`},
+		},
+	}, map[string][]json.RawMessage{
+		"remittances": {
+			json.RawMessage(`{"__rowid":1,"id":"r1","usdc":"32000000","status":"confirmed"}`),
+		},
+	})
 	worker.setDO(DORef{DO: "channel"}, DBSchema{
 		Tables: []TableSchema{{Name: "__kv", WithoutRowid: true}},
 	}, map[string][]json.RawMessage{
@@ -166,7 +175,7 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 	if got := manifest.ExportedAt; got != deps.Now() {
 		t.Fatalf("exportedAt = %v", got)
 	}
-	if len(manifest.DurableObjects) != 6 {
+	if len(manifest.DurableObjects) != 7 {
 		t.Fatalf("durable objects = %d", len(manifest.DurableObjects))
 	}
 	var butler *DOManifest
@@ -178,7 +187,7 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 			butler = object
 		}
 	}
-	if want := []string{"task/t1", "task/t2", "bot/b1", "life/", "channel/", "butler/"}; !reflect.DeepEqual(order, want) {
+	if want := []string{"task/t1", "task/t2", "bot/b1", "life/", "wallet/", "channel/", "butler/"}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("export order = %v, want %v", order, want)
 	}
 	if butler == nil || butler.Rows["memories"] != 2 || butler.Rows["schedules"] != 1 {
@@ -206,6 +215,8 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 		worker.rowsOf(DORef{DO: "task", ID: "t1"})["meta"])
 	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "life"}, "credit"),
 		worker.rowsOf(DORef{DO: "life"})["credit"])
+	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "wallet"}, "remittances"),
+		worker.rowsOf(DORef{DO: "wallet"})["remittances"])
 	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "channel"}, "__kv"),
 		worker.rowsOf(DORef{DO: "channel"})["__kv"])
 
@@ -232,7 +243,7 @@ func TestExportRefsOrdersBotsAfterTasks(t *testing.T) {
 	for _, ref := range refs {
 		got = append(got, ref.DO+"/"+ref.ID)
 	}
-	want := []string{"task/t1", "task/t2", "bot/b1", "bot/b2", "life/", "channel/", "butler/"}
+	want := []string{"task/t1", "task/t2", "bot/b1", "bot/b2", "life/", "wallet/", "channel/", "butler/"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("export order = %v, want %v", got, want)
 	}
@@ -618,5 +629,39 @@ func TestExportFailsOnLifeServerError(t *testing.T) {
 	_, err := Export(context.Background(), deps, backupTestTarget, path)
 	if code := adminErrorCode(t, err); code != CodeBackupInvalid {
 		t.Fatalf("code = %q", code)
+	}
+}
+
+func TestExportSkipsWalletBeforeTheWorkerIsUpdated(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.versionID = "version-1"
+	worker.botIDs = []string{"b1"}
+	worker.noWallet = true
+	worker.setDO(DORef{DO: "butler"}, DBSchema{}, nil)
+	worker.setDO(DORef{DO: "channel"}, DBSchema{}, nil)
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	path := filepath.Join(t.TempDir(), "backup.zip")
+
+	manifest, err := Export(context.Background(), deps, backupTestTarget, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range manifest.DurableObjects {
+		if object.DO == "wallet" {
+			t.Fatal("a worker without a wallet exported a wallet object")
+		}
+	}
+
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for _, object := range reader.Manifest().DurableObjects {
+		if object.DO == "wallet" {
+			t.Fatal("the archive contains a wallet object")
+		}
 	}
 }

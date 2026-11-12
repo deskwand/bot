@@ -14,6 +14,7 @@ import { setup } from "./setup";
 import { shell } from "./shell";
 import { states } from "./states";
 import { updates } from "./updates";
+import { wallet } from "./wallet";
 
 export const en: Messages = {
   locale,
@@ -28,6 +29,7 @@ export const en: Messages = {
   search,
   mcp,
   exchange,
+  wallet,
   entries,
   backup,
   setup,

@@ -5,6 +5,8 @@ declare namespace Cloudflare {
     [key: `MODEL_KEY_${string}`]: string | undefined;
     [key: `EXCHANGE_SECRET_${string}`]: string | undefined;
     TELEGRAM_BOT_TOKEN?: string;
+    WALLET_PRIVATE_KEY?: string;
+    WALLET_OWNER_ADDRESS?: string;
     WECHAT_CREDENTIALS?: string;
     /** Bearer token guarding `/admin/*`; unset disables the routes. */
     ADMIN_TOKEN?: string;

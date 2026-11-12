@@ -143,6 +143,7 @@ export interface ConfigEditDTO {
   approvalMode?: string;
   searchProvider?: string;
   exchangeAccounts?: ExchangeAccountDTO[];
+  wallet?: WalletSectionDTO;
   secrets?: unknown[];
 }
 
@@ -186,6 +187,10 @@ export interface EntryResultDTO {
   warning?: string;
 }
 
+/**
+ * ExchangeAccountDTO is one exchange account in the config document. Secrets
+ * never appear here; they travel as EXCHANGE_SECRET_<ID> edits.
+ */
 export interface ExchangeAccountDTO {
   id: string;
   venue: string;
@@ -193,13 +198,7 @@ export interface ExchangeAccountDTO {
   baseUrl?: string;
 }
 
-/**
- * SecretEditDTO is a write-only secret edit. Value is accepted from the
- * frontend and never returned in any DTO, error or journal.
- * ExchangeAccountDTO is one exchange account in the config document. Secrets
- * never appear here; they travel as EXCHANGE_SECRET_<ID> edits.
- * ExchangeProbeDTO is one account's health check from the deployed Worker.
- */
+/** ExchangeProbeDTO is one account's health check from the deployed Worker. */
 export interface ExchangeProbeDTO {
   ok: boolean;
   venue?: string;
@@ -464,6 +463,21 @@ export interface UpgradeDTO {
   modelKeysMissing?: string[];
 }
 
+/** WalletSectionDTO is the public half of the wallet config section. */
+export interface WalletSectionDTO {
+  rpcUrl: string;
+}
+
+/**
+ * WalletStatusDTO is the deployed wallet's public state. The owner address
+ * and the private key never appear here.
+ */
+export interface WalletStatusDTO {
+  configured: boolean;
+  address?: string;
+  valueUsd?: number;
+}
+
 /** WorkerDTO is one Worker script summary. */
 export interface WorkerDTO {
   name: string;
@@ -726,6 +740,13 @@ export const Service = {
     return call("Service.SaveBackupSettings", input);
   },
   /**
+   * SaveWallet writes the wallet secrets and the optional RPC URL, then
+   * publishes. An empty field leaves that value untouched.
+   */
+  saveWallet(input: unknown): Promise<ResultDTO> {
+    return call("Service.SaveWallet", input);
+  },
+  /**
    * SelectDeployment persists the managed Worker target in app data. The target
    * is not a secret and never includes a token.
    */
@@ -826,6 +847,10 @@ export const Service = {
   /** UpgradeAvailable compares the embedded release with the active deployment. */
   upgradeAvailable(): Promise<UpgradeDTO> {
     return call("Service.UpgradeAvailable");
+  },
+  /** WalletStatus reads the deployed wallet's public state. */
+  walletStatus(): Promise<WalletStatusDTO> {
+    return call("Service.WalletStatus");
   },
 } as const;
 

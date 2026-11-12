@@ -2,7 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setClockOverride } from "../../src/butler/notifier";
 import { Books, type SpendEntry } from "../../src/life/books";
-import type { Tier } from "../../src/life/vitals";
+import type { Tier, Vitals } from "../../src/life/vitals";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -61,6 +61,17 @@ async function recordNotices(
     instance.notifyTierChange = async (tier, runwayDays) => {
       notices.push({ tier, runwayDays });
       if (options.fail === true) throw new Error("notice failed");
+    };
+  });
+}
+
+async function recordRemits(
+  stub: LifeStub,
+  remits: Vitals[],
+): Promise<void> {
+  await runInDurableObject(stub, (instance) => {
+    instance.requestRemit = async (vitals) => {
+      remits.push(vitals);
     };
   });
 }
@@ -443,5 +454,60 @@ describe("LifeDO tier notices", () => {
     expect((await stub.vitals()).tier).toBe("lean");
     expect(notices.map((notice) => notice.tier)).toEqual(["lean"]);
     warn.mockRestore();
+  });
+});
+
+describe("LifeDO remittance trigger", () => {
+  async function descent(
+    stub: LifeStub,
+    remits: Vitals[],
+    notices: Notice[],
+  ): Promise<void> {
+    await recordNotices(stub, notices);
+    await recordRemits(stub, remits);
+    await stub.recordCredit(20, "");
+
+    now = START + Math.round(0.5 * DAY_MS);
+    await stub.recordSpend(entry({ usd: 2 }));
+    for (const day of [1.5, 2.5, 3.5, 4.5, 5.5]) {
+      now = START + Math.round(day * DAY_MS);
+      await stub.recordSpend(entry({ usd: 2 }));
+    }
+    now = START + Math.round(6.5 * DAY_MS);
+    await stub.recordSpend(entry({ usd: 2 }));
+  }
+
+  it("asks for a remittance when the tier worsens", async () => {
+    const stub = life("life-remit-descent");
+    const remits: Vitals[] = [];
+    const notices: Notice[] = [];
+
+    await descent(stub, remits, notices);
+
+    expect(remits.map((vitals) => vitals.tier)).toEqual(["lean", "critical"]);
+  });
+
+  it("does not ask again when a credit lifts the tier to ample", async () => {
+    const stub = life("life-remit-ample");
+    const remits: Vitals[] = [];
+    const notices: Notice[] = [];
+    await descent(stub, remits, notices);
+
+    await stub.recordCredit(100, "");
+
+    expect(remits).toHaveLength(2);
+    expect((await stub.vitals()).tier).toBe("ample");
+  });
+
+  it("does not ask again when a credit lifts critical to lean", async () => {
+    const stub = life("life-remit-rebound");
+    const remits: Vitals[] = [];
+    const notices: Notice[] = [];
+    await descent(stub, remits, notices);
+
+    await stub.recordCredit(4, "");
+
+    expect(remits).toHaveLength(2);
+    expect((await stub.vitals()).tier).toBe("lean");
   });
 });

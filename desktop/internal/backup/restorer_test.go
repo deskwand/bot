@@ -588,7 +588,7 @@ func TestRestoreOrder(t *testing.T) {
 			groups = append(groups, group)
 		}
 	}
-	wantGroups := []string{"task/t1", "task/t2", "bot/b1", "life", "channel", "butler"}
+	wantGroups := []string{"task/t1", "task/t2", "bot/b1", "life", "wallet", "channel", "butler"}
 	if !reflect.DeepEqual(groups, wantGroups) {
 		t.Fatalf("restore order = %v, want %v", groups, wantGroups)
 	}
@@ -1065,5 +1065,103 @@ func TestRestoreToleratesAWorkerWithoutLife(t *testing.T) {
 	}
 	if lifeCalls != 1 {
 		t.Fatalf("life calls = %d, want the single tolerated clear reset", lifeCalls)
+	}
+}
+
+func TestRestoreClearsWalletMissingFromBackup(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	// Export as a Worker that predates the wallet: the archive has no wallet.
+	worker.noWallet = true
+	path := makeRestoreBackup(t, worker, "1.2.3")
+	// The deployment is updated before the restore runs.
+	worker.noWallet = false
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
+		t.Fatal(err)
+	}
+
+	wallet := DORef{DO: "wallet"}
+	var walletCalls []fakeRequest
+	for _, call := range restoreCalls(worker) {
+		if call.DO == "wallet" {
+			walletCalls = append(walletCalls, call)
+		}
+	}
+	wantPaths := []string{restoreResetPath, restoreBeginPath, restoreResetPath}
+	if len(walletCalls) != len(wantPaths) {
+		t.Fatalf("wallet calls = %v", walletCalls)
+	}
+	for i, want := range wantPaths {
+		if walletCalls[i].Path != want {
+			t.Fatalf("wallet call %d = %s, want %s", i, walletCalls[i].Path, want)
+		}
+	}
+	if got := worker.resetsOf(wallet); got != 2 {
+		t.Fatalf("wallet resets = %d, want 2", got)
+	}
+	if rows := worker.rowsOf(wallet); len(rows) != 0 {
+		t.Fatalf("wallet rows = %+v, want none", rows)
+	}
+}
+
+func TestRestoreKeepsWalletInTheBackup(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	wallet := DORef{DO: "wallet"}
+	worker.setDO(wallet, DBSchema{
+		Tables: []TableSchema{{Name: "remittances", Create: `CREATE TABLE remittances (id TEXT PRIMARY KEY, usdc TEXT)`}},
+	}, map[string][]json.RawMessage{
+		"remittances": {json.RawMessage(`{"__rowid":1,"id":"r1","usdc":"32000000"}`)},
+	})
+	original := worker.rowsOf(wallet)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+
+	worker.setDO(wallet, worker.schemaOf(wallet), map[string][]json.RawMessage{
+		"remittances": {json.RawMessage(`{"__rowid":1,"id":"other","usdc":"9"}`)},
+	})
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
+		t.Fatal(err)
+	}
+
+	// One reset before the wallet and one after: no separate clear.
+	if got := worker.resetsOf(wallet); got != 2 {
+		t.Fatalf("wallet resets = %d, want 2", got)
+	}
+	assertRowsEqual(t, worker.rowsOf(wallet)["remittances"], original["remittances"])
+}
+
+func TestRestoreToleratesAWorkerWithoutWallet(t *testing.T) {
+	worker := seedRestoreWorker(t)
+	worker.noWallet = true
+	original := captureRows(t, worker, restoreTestRefs)
+	path := makeRestoreBackup(t, worker, "1.2.3")
+
+	// Replace a table so the restore has something to put back.
+	worker.setDO(DORef{DO: "butler"}, worker.schemaOf(DORef{DO: "butler"}), map[string][]json.RawMessage{
+		"memories": {json.RawMessage(`{"__rowid":1,"id":"other","text":"多余"}`)},
+		"tasks":    {json.RawMessage(`{"__rowid":1,"id":"t1"}`)},
+	})
+
+	journal := newRestoreJournal(t)
+	deps := restoreTestDeps(t, worker, "1.2.3")
+	if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ref := range restoreTestRefs {
+		assertDORows(t, worker, ref, original[doKey(ref)])
+	}
+	var walletCalls int
+	for _, call := range restoreCalls(worker) {
+		if call.DO == "wallet" {
+			walletCalls++
+		}
+	}
+	if walletCalls != 1 {
+		t.Fatalf("wallet calls = %d, want the single tolerated clear reset", walletCalls)
 	}
 }

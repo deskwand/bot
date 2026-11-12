@@ -7,8 +7,10 @@ import { TasksRepo } from "../../src/butler/tasks-repo";
 import { createButlerTools, SpawnFailedError } from "../../src/butler/tools";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
+import { setWalletChainOverride } from "../../src/wallet/wallet-do";
 import type { AdmittedMessage, RouteSnapshot, TaskSpec } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
+import { FakeChain } from "../helpers/fake-chain";
 import { seedOwnerAddress } from "../helpers/channel-ref";
 import { scriptedModel } from "../helpers/scripted-model";
 
@@ -82,6 +84,7 @@ afterEach(() => {
   setClockOverride(null);
   setModelOverride(null);
   setChannelOverride("telegram", null);
+  setWalletChainOverride(null);
   vi.restoreAllMocks();
 });
 
@@ -699,6 +702,71 @@ describe("butler control tools", () => {
         "life_calibrate",
       ]),
     );
+  });
+
+  it("shows no wallet tools while the wallet is not configured", async () => {
+    const names = await runInDurableObject(
+      butler("tools-wallet-unconfigured"),
+      (instance) =>
+        instance.registry
+          .snapshot()
+          .tools()
+          .map(({ tool }) => tool.name),
+    );
+
+    expect(names.filter((name) => name.startsWith("wallet_"))).toEqual([]);
+  });
+
+  it("registers wallet_status once the wallet is configured", async () => {
+    setWalletChainOverride({
+      chain: new FakeChain(),
+      owner: "0x1111111111111111111111111111111111111111",
+    });
+
+    const names = await runInDurableObject(
+      butler("tools-wallet-configured"),
+      (instance) =>
+        instance.registry
+          .snapshot()
+          .tools()
+          .map(({ tool }) => tool.name),
+    );
+
+    expect(names).toContain("wallet_status");
+  });
+
+  it("reports wallet_status as unavailable when the wallet read fails", async () => {
+    const chain = new FakeChain();
+    // The read never answers; the client's timeout turns it into null and the
+    // tool falls back to the unavailable copy.
+    chain.tokenBalance = () => new Promise<bigint>(() => {});
+    setWalletChainOverride({
+      chain,
+      owner: "0x1111111111111111111111111111111111111111",
+    });
+
+    const result = await runInDurableObject(
+      butler("tools-wallet-status-failure"),
+      async (instance) => {
+        const entry = instance.registry
+          .snapshot()
+          .tools()
+          .find(({ tool }) => tool.name === "wallet_status");
+        if (!entry) throw new Error("missing wallet_status");
+        const outcome = await entry.tool.execute(
+          {} as never,
+          {} as never,
+          {} as never,
+        );
+        return {
+          text: (outcome.output?.[0] as { text: string }).text,
+          isError: outcome.isError,
+        };
+      },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("钱包：暂不可用");
   });
 
   it("tells the model to spawn a task when quick_lookup finds nothing", async () => {

@@ -10,6 +10,7 @@ export const shell: Messages["shell"] = {
     search: "Search",
     mcp: "Services",
     exchange: "Exchanges",
+    wallet: "Wallet",
     entries: "Channels",
     diagnostics: "Diagnostics",
     backup: "Backup",

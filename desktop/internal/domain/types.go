@@ -169,6 +169,9 @@ type EditablePatch struct {
 	// Exchange carries the whole section. applyPatch merges it key by key, so
 	// unknown sibling keys survive; unknown per-account keys do not.
 	Exchange *json.RawMessage `json:"exchange"`
+	// Wallet carries the whole section. applyPatch merges it key by key, so
+	// unknown sibling keys survive.
+	Wallet *json.RawMessage `json:"wallet"`
 }
 
 // ConfigReference rewrites one existing JSON string in DESKWAND_CONFIG to an

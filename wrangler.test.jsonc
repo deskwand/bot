@@ -34,7 +34,8 @@
       { "name": "TEST_HARNESS", "class_name": "TestHarnessDO" },
       { "name": "CHANNELS", "class_name": "ChannelDO" },
       { "name": "MCP_AUTH", "class_name": "McpAuthDO" },
-      { "name": "LIFE", "class_name": "LifeDO" }
+      { "name": "LIFE", "class_name": "LifeDO" },
+      { "name": "WALLET", "class_name": "WalletDO" }
     ]
   },
   "migrations": [
@@ -61,6 +62,10 @@
     {
       "tag": "v6",
       "new_sqlite_classes": ["LifeDO"]
+    },
+    {
+      "tag": "v7",
+      "new_sqlite_classes": ["WalletDO"]
     }
   ],
   "triggers": {

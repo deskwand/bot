@@ -81,6 +81,10 @@ type fakeWorker struct {
 	// every do=life request answers 400 BACKUP_INVALID as an unknown kind.
 	noLife bool
 
+	// noWallet makes the fake behave like a Worker deployed before the wallet:
+	// every do=wallet request answers 400 BACKUP_INVALID as an unknown kind.
+	noWallet bool
+
 	dos     map[string]*fakeDO
 	objects map[string]*fakeObject
 
@@ -225,7 +229,7 @@ func (f *fakeWorker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch record.Path {
 	case schemaPath, pagePath, restoreBeginPath, restorePagePath, restoreCommitPath, restoreResetPath:
-		if !validDOKind(record.DO) || (record.DO == "life" && f.noLife) {
+		if !validDOKind(record.DO) || (record.DO == "life" && f.noLife) || (record.DO == "wallet" && f.noWallet) {
 			f.writeJSON(w, http.StatusBadRequest, map[string]string{
 				"code":    "BACKUP_INVALID",
 				"message": "unknown do kind: " + record.DO,
@@ -516,7 +520,7 @@ func fakeOffset(w http.ResponseWriter, cursor string, length int) (int, bool) {
 
 func validDOKind(kind string) bool {
 	switch kind {
-	case "butler", "task", "bot", "life", "channel":
+	case "butler", "task", "bot", "life", "wallet", "channel":
 		return true
 	default:
 		return false

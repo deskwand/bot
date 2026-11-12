@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { t } from "../../src/i18n";
 import { formatUsd, lifeBlock } from "../../src/life/prompt";
 import type { Vitals } from "../../src/life/vitals";
 
@@ -49,6 +50,24 @@ describe("lifeBlock", () => {
     for (const principle of ZH_PRINCIPLES) {
       expect(text).toContain(principle);
     }
+  });
+
+  it("is unchanged without a wallet value", () => {
+    const plain = lifeBlock("zh", vitals());
+
+    expect(lifeBlock("zh", vitals(), undefined)).toBe(plain);
+    expect(lifeBlock("zh", vitals(), null)).toBe(plain);
+  });
+
+  it("adds the rounded wallet value after the balance", () => {
+    const lines = lifeBlock("zh", vitals(), 12.6).split("\n");
+    const balance = lines.findIndex((line) =>
+      line.includes(t("zh", "life.prompt.balance", { balance: "$13" })),
+    );
+
+    expect(lines[balance + 1]).toBe(
+      t("zh", "wallet.prompt.value", { value: "$13" }),
+    );
   });
 
   it("rounds the balance to whole dollars", () => {

@@ -201,6 +201,14 @@ func applyPatch(document map[string]any, patch domain.EditablePatch) error {
 		document["exchange"] = mergeExchangeSection(document["exchange"], section)
 	}
 
+	if patch.Wallet != nil {
+		section, err := decodeWalletSection(*patch.Wallet)
+		if err != nil {
+			return err
+		}
+		document["wallet"] = mergeWalletSection(document["wallet"], section)
+	}
+
 	if patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil {
 		return nil
 	}
@@ -330,25 +338,46 @@ func mergeExchangeSection(existing any, patch map[string]any) map[string]any {
 }
 
 func decodeExchangeSection(raw json.RawMessage) (map[string]any, error) {
+	return decodeObjectSection(raw, "exchange")
+}
+
+// mergeWalletSection replaces the keys this patch writes and keeps the rest,
+// so an advanced setting written by a newer client is not dropped by a save.
+func mergeWalletSection(existing any, patch map[string]any) map[string]any {
+	current, ok := existing.(map[string]any)
+	if !ok {
+		return patch
+	}
+	for key, value := range patch {
+		current[key] = value
+	}
+	return current
+}
+
+func decodeWalletSection(raw json.RawMessage) (map[string]any, error) {
+	return decodeObjectSection(raw, "wallet")
+}
+
+func decodeObjectSection(raw json.RawMessage, name string) (map[string]any, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return nil, domain.Error{
 			Code:    domain.UNSUPPORTED_SCHEMA,
-			Message: "an exchange patch must be a JSON object",
+			Message: "a " + name + " patch must be a JSON object",
 		}
 	}
 	value, err := domain.DecodeJSON(trimmed)
 	if err != nil {
 		return nil, domain.Error{
 			Code:    domain.UNSUPPORTED_SCHEMA,
-			Message: "an exchange patch is not valid JSON",
+			Message: "a " + name + " patch is not valid JSON",
 		}
 	}
 	section, ok := value.(map[string]any)
 	if !ok {
 		return nil, domain.Error{
 			Code:    domain.UNSUPPORTED_SCHEMA,
-			Message: "an exchange patch must be a JSON object",
+			Message: "a " + name + " patch must be a JSON object",
 		}
 	}
 	return section, nil
@@ -477,7 +506,7 @@ func copyObject(source map[string]any) map[string]any {
 }
 
 func patchIsEmpty(patch domain.EditablePatch) bool {
-	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil && patch.McpServers == nil && patch.Exchange == nil
+	return patch.TelegramUserIDs == nil && patch.ButlerModel == nil && patch.TaskModel == nil && patch.CustomProviders == nil && patch.McpServers == nil && patch.Exchange == nil && patch.Wallet == nil
 }
 
 var (
@@ -501,6 +530,7 @@ var reservedReferenceNames = func() map[string]bool {
 		"CHANNELS":            true,
 		"MCP_AUTH":            true,
 		"LIFE":                true,
+		"WALLET":              true,
 		"ARTIFACTS":           true,
 		"AI":                  true,
 	}
@@ -797,6 +827,8 @@ var templateSecretNames = []string{
 	"TELEGRAM_WEBHOOK_SECRET",
 	"WECHAT_CREDENTIALS",
 	"ADMIN_TOKEN",
+	"WALLET_PRIVATE_KEY",
+	"WALLET_OWNER_ADDRESS",
 }
 
 // templateSecretNamePatterns is the runtime copy of the release template's

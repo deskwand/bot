@@ -38,6 +38,8 @@ import type {
   StatusItemDTO,
   StepDTO,
   ThemeSource,
+  WalletEditDTO,
+  WalletStatusDTO,
   WorkerDTO,
 } from "../services/types";
 import type { ClientService } from "../services/types";
@@ -63,6 +65,10 @@ type Scenario =
   | "exchange-binance"
   | "exchange-secret-missing"
   | "exchange-refused"
+  | "wallet-unconfigured"
+  | "wallet-configured"
+  | "wallet-unavailable"
+  | "wallet-zero"
   | "client-update-failed"
   | "catalog-unavailable"
   | "pending-operations"
@@ -117,6 +123,7 @@ interface MockState {
   approvalMode: "autonomous" | "reviewed";
   searchProvider: string;
   exchangeAccounts: ExchangeAccountDTO[];
+  wallet: WalletStatusDTO;
   localeSaveFails: boolean;
   telemetry: boolean;
   connected: boolean;
@@ -335,6 +342,10 @@ function scenarioFromLocation(): Scenario {
     case "exchange-binance":
     case "exchange-secret-missing":
     case "exchange-refused":
+    case "wallet-unconfigured":
+    case "wallet-configured":
+    case "wallet-unavailable":
+    case "wallet-zero":
     case "client-update-failed":
     case "catalog-unavailable":
     case "pending-operations":
@@ -429,6 +440,10 @@ function initialState(): MockState {
     "exchange-binance",
     "exchange-secret-missing",
     "exchange-refused",
+    "wallet-unconfigured",
+    "wallet-configured",
+    "wallet-unavailable",
+    "wallet-zero",
     "client-update-failed",
     "pending-operations",
     "pending-other-account",
@@ -479,6 +494,17 @@ function initialState(): MockState {
         : scenario === "exchange-binance"
           ? [{ id: "bn-main", venue: "binance", label: "Binance" }]
           : [],
+    wallet: ["wallet-configured", "wallet-unavailable", "wallet-zero"].includes(
+      scenario,
+    )
+      ? {
+          configured: true,
+          address: `0x${"ab".repeat(20)}`,
+          ...(scenario === "wallet-unavailable"
+            ? {}
+            : { valueUsd: scenario === "wallet-zero" ? 0 : 12.5 }),
+        }
+      : { configured: false },
     localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
     connected: shellScenario,
@@ -504,6 +530,12 @@ function initialState(): MockState {
       MODEL_KEY_DEEPSEEK: scenario === "search-deepseek",
       EXCHANGE_SECRET_OKX_MAIN:
         scenario === "exchange-okx" || scenario === "exchange-refused",
+      WALLET_PRIVATE_KEY: ["wallet-configured", "wallet-unavailable", "wallet-zero"].includes(
+        scenario,
+      ),
+      WALLET_OWNER_ADDRESS: ["wallet-configured", "wallet-unavailable", "wallet-zero"].includes(
+        scenario,
+      ),
       WECHAT_CREDENTIALS: scenario === "user-evidence",
     },
     mcpServers:
@@ -647,6 +679,14 @@ export function createMockClient(): ClientService {
       __configCalls?: typeof configCalls;
     }
   ).__configCalls = configCalls;
+  const walletCalls = {
+    saves: [] as WalletEditDTO[],
+  };
+  (
+    window as unknown as {
+      __walletCalls?: typeof walletCalls;
+    }
+  ).__walletCalls = walletCalls;
   const mcpCalls = {
     update: [] as { name: string; server: MockMcpServer; secrets: unknown[] }[],
     remove: [] as string[],
@@ -1204,6 +1244,29 @@ export function createMockClient(): ClientService {
         };
       }
       return { ok: true, venue: "okx", currencies: 2, total: 12.5 };
+    },
+
+    async walletStatus(): Promise<WalletStatusDTO> {
+      record("walletStatus");
+      return { ...state.wallet };
+    },
+
+    async saveWallet(input: WalletEditDTO): Promise<ResultDTO> {
+      record("saveWallet", input);
+      walletCalls.saves.push(input);
+      if (input.privateKey) state.secrets.WALLET_PRIVATE_KEY = true;
+      if (input.ownerAddress) state.secrets.WALLET_OWNER_ADDRESS = true;
+      const configured =
+        state.secrets.WALLET_PRIVATE_KEY === true &&
+        state.secrets.WALLET_OWNER_ADDRESS === true;
+      state.wallet = configured
+        ? {
+            configured: true,
+            address: state.wallet.address ?? `0x${"ab".repeat(20)}`,
+            valueUsd: state.wallet.valueUsd ?? 12.5,
+          }
+        : { configured: false };
+      return published(`op-wallet-${++sequence}`);
     },
 
     async probeMcp(name: string): Promise<McpProbeDTO> {

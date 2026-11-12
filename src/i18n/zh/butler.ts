@@ -66,6 +66,8 @@ export const butler = {
     kindSlow: "任务还在进行",
     kindBotMessage: "机器人消息",
     kindLifeTier: "档位变化",
+    kindWalletRemit: "汇款到账",
+    kindWalletRemitFailed: "汇款失败",
   },
   quickLookup: {
     system:

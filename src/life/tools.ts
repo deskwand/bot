@@ -2,15 +2,32 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { t, type Locale } from "../i18n";
 import type { ModelRef, Role } from "../llm/models";
+import { walletStatusLines } from "../wallet/tools";
+import type { WalletStatus } from "../wallet/wallet-do";
 import { formatUsd, tierName } from "./prompt";
 import type { Vitals } from "./vitals";
 
 const LifeVitals = Type.Object({});
 
-const LifeCredit = Type.Object({
+const LifeCreditFields = {
   usd: Type.Number({ description: "US dollars the owner added" }),
   note: Type.Optional(Type.String()),
+};
+
+const LifeCredit = Type.Object(LifeCreditFields);
+
+const LifeCreditWithRemittance = Type.Object({
+  ...LifeCreditFields,
+  remittance_id: Type.Optional(
+    Type.String({ description: "The remittance this credit settles" }),
+  ),
 });
+
+type CreditArgs = {
+  usd: number;
+  note?: string;
+  remittance_id?: string;
+};
 
 const LifeCalibrate = Type.Object({
   balance_usd: Type.Number({
@@ -21,8 +38,17 @@ const LifeCalibrate = Type.Object({
 
 export type LifeToolDeps = {
   vitals(): Promise<Vitals>;
-  credit(usd: number, note: string): Promise<Vitals>;
+  credit(
+    usd: number,
+    note: string,
+    source?: "owner_topup" | "earned",
+  ): Promise<Vitals>;
+  settleRemittance?(
+    id: string,
+  ): Promise<"settled" | "unknown" | "already">;
   calibrate(balanceUsd: number, note: string): Promise<Vitals>;
+  /** The chain wallet, or null when it cannot be read. Omitted when unconfigured. */
+  wallet?(): Promise<WalletStatus | null>;
   /** The model each role would use right now. */
   effectiveModels(): Promise<Record<Role, ModelRef>>;
   locale: Locale;
@@ -95,6 +121,19 @@ export function createLifeTools(deps: LifeToolDeps): ToolRegistration[] {
             task: modelLabel(models.task),
           }),
         );
+        if (deps.wallet !== undefined) {
+          let wallet: WalletStatus | null = null;
+          try {
+            wallet = await deps.wallet();
+          } catch {
+            wallet = null;
+          }
+          lines.push(
+            wallet === null
+              ? t(locale, "wallet.vitals.unavailable")
+              : walletStatusLines(locale, wallet).join("\n"),
+          );
+        }
         return output(lines.join("\n"));
       } catch (error) {
         return failed(error);
@@ -102,24 +141,53 @@ export function createLifeTools(deps: LifeToolDeps): ToolRegistration[] {
     },
   };
 
-  const creditTool: ToolRegistration<typeof LifeCredit> = {
+  const creditTool: ToolRegistration = {
     name: "life_credit",
     description:
-      "Record credit the owner added to the deployment, in US dollars.",
-    parameters: LifeCredit,
-    async execute({ usd, note }) {
+      deps.settleRemittance === undefined
+        ? "Record credit the owner added to the deployment, in US dollars."
+        : "Record credit the owner added to the deployment, in US dollars. Pass remittance_id from wallet_status when the owner confirms a remittance arrived.",
+    parameters:
+      deps.settleRemittance === undefined
+        ? LifeCredit
+        : LifeCreditWithRemittance,
+    async execute(args) {
+      const { usd, note, remittance_id } = args as CreditArgs;
       if (!Number.isFinite(usd) || usd <= 0) {
         return errorOutput(t(locale, "life.tool.badAmount"));
       }
+
+      let source: "owner_topup" | "earned" = "owner_topup";
+      let extra: string | null = null;
+      if (remittance_id !== undefined && deps.settleRemittance !== undefined) {
+        try {
+          const outcome = await deps.settleRemittance(remittance_id);
+          if (outcome === "settled") {
+            source = "earned";
+          } else {
+            extra = t(
+              locale,
+              outcome === "unknown"
+                ? "life.tool.remittanceUnknown"
+                : "life.tool.remittanceAlready",
+            );
+          }
+        } catch {
+          extra = t(locale, "life.tool.remittanceUnavailable");
+        }
+      }
+
       try {
-        const vitals = await deps.credit(usd, note ?? "");
-        return output(
-          t(locale, "life.tool.credit", {
-            amount: formatUsd(usd),
-            balance: formatUsd(vitals.balanceUsd),
-            tier: tierName(locale, vitals.tier),
-          }),
-        );
+        const vitals =
+          source === "earned"
+            ? await deps.credit(usd, note ?? "", "earned")
+            : await deps.credit(usd, note ?? "");
+        const credited = t(locale, "life.tool.credit", {
+          amount: formatUsd(usd),
+          balance: formatUsd(vitals.balanceUsd),
+          tier: tierName(locale, vitals.tier),
+        });
+        return output(extra === null ? credited : `${credited}\n${extra}`);
       } catch (error) {
         return failed(error);
       }

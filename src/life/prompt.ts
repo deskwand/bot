@@ -39,7 +39,11 @@ export function tierName(locale: Locale, tier: Tier): string {
 }
 
 /** The vitals block for a system prompt; "" when vitals is null or metabolism has not started. */
-export function lifeBlock(locale: Locale, vitals: Vitals | null): string {
+export function lifeBlock(
+  locale: Locale,
+  vitals: Vitals | null,
+  walletValueUsd?: number | null,
+): string {
   if (vitals === null || !vitals.metabolismStarted) return "";
 
   const lines = [
@@ -50,6 +54,13 @@ export function lifeBlock(locale: Locale, vitals: Vitals | null): string {
     t(locale, "life.prompt.balance", {
       balance: wholeUsd(vitals.balanceUsd),
     }),
+  ];
+  if (typeof walletValueUsd === "number") {
+    lines.push(
+      t(locale, "wallet.prompt.value", { value: wholeUsd(walletValueUsd) }),
+    );
+  }
+  lines.push(
     vitals.runwayDays === null
       ? t(locale, "life.prompt.noSpend")
       : Math.floor(vitals.runwayDays) < 1
@@ -57,7 +68,7 @@ export function lifeBlock(locale: Locale, vitals: Vitals | null): string {
         : t(locale, "life.prompt.runway", {
             days: Math.floor(vitals.runwayDays),
           }),
-  ];
+  );
   if (vitals.unpriced) lines.push(t(locale, "life.prompt.unpriced"));
   lines.push(t(locale, "life.prompt.principleAlive"));
   lines.push(t(locale, "life.prompt.principleOwner"));

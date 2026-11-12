@@ -9,6 +9,7 @@ import { mcp } from "./mcp";
 import { phone } from "./phone";
 import { prompt } from "./prompt";
 import { task } from "./task";
+import { wallet } from "./wallet";
 
 // Baseline dictionary. Every user-facing string lives here; the English table
 // is typed against it so a missing key fails `tsc`.
@@ -24,4 +25,5 @@ export const zh = {
   phone,
   prompt,
   task,
+  wallet,
 } as const;

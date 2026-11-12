@@ -44,6 +44,7 @@ import type {
   StatusItemDTO,
   StepDTO,
   UpgradeDTO,
+  WalletStatusDTO,
   WorkerDTO,
 } from "../mygo";
 
@@ -89,6 +90,7 @@ export type {
   StatusItemDTO,
   StepDTO,
   UpgradeDTO,
+  WalletStatusDTO,
   WorkerDTO,
 };
 
@@ -101,6 +103,16 @@ export interface SecretEditDTO {
   name: string;
   operation: string;
   value?: string;
+}
+
+/**
+ * Write-only wallet edit. Empty fields stay unchanged, so changing only the
+ * RPC URL never rewrites a secret; the private key is never read back.
+ */
+export interface WalletEditDTO {
+  privateKey?: string;
+  ownerAddress?: string;
+  rpcUrl?: string;
 }
 
 export interface ImportSecretDTO {
@@ -171,6 +183,8 @@ export interface ClientService {
   removeMcpServer(name: string): Promise<ResultDTO>;
   probeMcp(name: string): Promise<McpProbeDTO>;
   testExchange(accountId: string): Promise<ExchangeProbeDTO>;
+  walletStatus(): Promise<WalletStatusDTO>;
+  saveWallet(input: WalletEditDTO): Promise<ResultDTO>;
   mcpStatus(): Promise<McpAuthDTO[]>;
   startMcpOAuth(name: string): Promise<void>;
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]>;

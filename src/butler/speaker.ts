@@ -1,5 +1,6 @@
-import { t, type Locale, type MessageKey } from "../i18n";
+import { t, tryT, type Locale, type MessageKey } from "../i18n";
 import { phoneRules } from "../phone/style";
+import { formatUsd } from "../life/prompt";
 import { persona } from "./persona";
 import type { Tier } from "../life/vitals";
 
@@ -10,7 +11,21 @@ export type SpeakEvent =
   | { kind: "task.stalled"; title: string; body: string }
   | { kind: "task.slow"; title: string; body: string }
   | { kind: "bot.message"; botName: string; body: string }
-  | { kind: "life.tier"; tier: Tier; runwayDays: number | null; body: "" };
+  | { kind: "life.tier"; tier: Tier; runwayDays: number | null; body: "" }
+  | {
+      kind: "wallet.remit";
+      id: string;
+      usdc: number;
+      shortUsd: number;
+      txUrl: string;
+      body: "";
+    }
+  | {
+      kind: "wallet.remitFailed";
+      usdc: number;
+      reason: string;
+      body: "";
+    };
 
 export type SpeakComplete = (
   system: string,
@@ -86,6 +101,23 @@ export function fallbackText(event: SpeakEvent, locale: Locale): string {
             });
       return t(locale, TIER_NOTICE[event.tier], { runway });
     }
+    case "wallet.remit": {
+      const head = t(locale, "wallet.notice.remit", {
+        usdc: formatUsd(event.usdc),
+        txUrl: event.txUrl,
+        id: event.id,
+      });
+      return event.shortUsd > 0
+        ? `${head}\n${t(locale, "wallet.notice.remitShort", {
+            short: formatUsd(event.shortUsd),
+          })}`
+        : head;
+    }
+    case "wallet.remitFailed":
+      return t(locale, "wallet.notice.failed", {
+        usdc: formatUsd(event.usdc),
+        reason: tryT(locale, event.reason) ?? event.reason,
+      });
   }
 }
 
@@ -120,6 +152,10 @@ function kindLabel(event: SpeakEvent, locale: Locale): string {
       return t(locale, "butler.speaker.kindBotMessage");
     case "life.tier":
       return t(locale, "butler.speaker.kindLifeTier");
+    case "wallet.remit":
+      return t(locale, "butler.speaker.kindWalletRemit");
+    case "wallet.remitFailed":
+      return t(locale, "butler.speaker.kindWalletRemitFailed");
   }
 }
 
@@ -160,7 +196,9 @@ function userMessage(
     t(locale, "butler.speaker.userKind", { kind: kindLabel(event, locale) }),
     event.kind === "bot.message"
       ? t(locale, "butler.speaker.userBot", { botName: event.botName })
-      : event.kind === "life.tier"
+      : event.kind === "life.tier" ||
+          event.kind === "wallet.remit" ||
+          event.kind === "wallet.remitFailed"
         ? ""
         : t(locale, "butler.speaker.userTitle", { title: event.title }),
     "",

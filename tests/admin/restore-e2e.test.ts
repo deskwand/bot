@@ -71,6 +71,7 @@ function deps(): AdminDeps {
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     life: () => env.LIFE.get(env.LIFE.idFromName("global")),
+    wallet: () => env.WALLET.get(env.WALLET.idFromName("global")),
     artifacts: env.ARTIFACTS,
     mcpAuth: () => env.MCP_AUTH.get(env.MCP_AUTH.idFromName("global")),
   };
@@ -573,5 +574,161 @@ describe("life ledger backup and restore", () => {
     } finally {
       setClockOverride(null);
     }
+  });
+});
+
+describe("wallet ledger backup and restore", () => {
+  const USDC_HASH = `0x${"ab".repeat(32)}`;
+
+  function wallet() {
+    return env.WALLET.get(env.WALLET.idFromName("global"));
+  }
+
+  async function rows(): Promise<unknown[]> {
+    return runInDurableObject(wallet(), (_instance, state) =>
+      state.storage.sql
+        .exec(
+          `SELECT id, at, usdc, reason, tx_hash, nonce, raw, status, settled_at, error
+           FROM remittances ORDER BY rowid`,
+        )
+        .toArray(),
+    );
+  }
+
+  beforeEach(async () => {
+    await runInDurableObject(wallet(), (_instance, state) => {
+      state.storage.sql.exec(`DELETE FROM remittances`);
+    });
+  });
+
+  it("restores the remittances", async () => {
+    await runInDurableObject(wallet(), (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO remittances
+          (id, at, usdc, reason, tx_hash, status, settled_at, error)
+         VALUES (?, ?, ?, ?, ?, 'confirmed', ?, NULL)`,
+        "r1",
+        START,
+        "32000000",
+        "auto",
+        USDC_HASH,
+        START + 60_000,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO remittances
+          (id, at, usdc, reason, tx_hash, status, settled_at, error)
+         VALUES (?, ?, ?, ?, NULL, 'failed', NULL, ?)`,
+        "r2",
+        START + 1_000,
+        "6000000",
+        "manual",
+        "wallet.error.reverted",
+      );
+    });
+
+    await acquire("export");
+    const walletDump = await dumpDo({ do: "wallet", id: "" });
+    await release();
+
+    const dumped = walletDump.tables.find(
+      ({ table }) => table.name === "remittances",
+    );
+    expect(dumped?.rows).toHaveLength(2);
+
+    // A row written after the backup must not survive the restore.
+    await runInDurableObject(wallet(), (_instance, state) => {
+      state.storage.sql.exec(`DELETE FROM remittances`);
+      state.storage.sql.exec(
+        `INSERT INTO remittances
+          (id, at, usdc, reason, tx_hash, status, settled_at, error)
+         VALUES ('stale', ?, '1', 'auto', NULL, 'pending', NULL, NULL)`,
+        START,
+      );
+    });
+
+    await acquire("restore");
+    await restoreDo({ do: "wallet", id: "" }, walletDump);
+    await release();
+
+    expect(await rows()).toEqual([
+      {
+        id: "r1",
+        at: START,
+        usdc: "32000000",
+        reason: "auto",
+        tx_hash: USDC_HASH,
+        nonce: null,
+        raw: null,
+        status: "confirmed",
+        settled_at: START + 60_000,
+        error: null,
+      },
+      {
+        id: "r2",
+        at: START + 1_000,
+        usdc: "6000000",
+        reason: "manual",
+        tx_hash: null,
+        nonce: null,
+        raw: null,
+        status: "failed",
+        settled_at: null,
+        error: "wallet.error.reverted",
+      },
+    ]);
+  });
+
+  it("clears the wallet when the backup has none", async () => {
+    await runInDurableObject(wallet(), (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO remittances
+          (id, at, usdc, reason, tx_hash, status, settled_at, error)
+         VALUES ('r1', ?, '32000000', 'auto', NULL, 'confirmed', NULL, NULL)`,
+        START,
+      );
+    });
+
+    // An old backup has no wallet object at all; the desktop clears it with
+    // reset -> begin(empty schema) -> reset.
+    await acquire("restore");
+    await clearDo({ do: "wallet", id: "" });
+    await release();
+
+    expect(await rows()).toEqual([]);
+  });
+
+  it("refuses a restore while a signed remittance is still in flight", async () => {
+    await runInDurableObject(wallet(), (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO remittances
+          (id, at, usdc, reason, tx_hash, nonce, raw, status, settled_at, error)
+         VALUES ('r1', ?, '10000000', 'auto', ?, 0, ?, 'pending', NULL, NULL)`,
+        START,
+        USDC_HASH,
+        "0xf8deadbeef",
+      );
+    });
+
+    const outcome = await runInDurableObject(wallet(), async (instance) => {
+      const messages: string[] = [];
+      for (const attempt of [
+        () => instance.restoreBegin({ tables: [], indexes: [] }),
+        () => instance.restoreReset(),
+      ]) {
+        try {
+          await attempt();
+          messages.push("ok");
+        } catch (error) {
+          messages.push((error as Error).message);
+        }
+      }
+      return messages;
+    });
+
+    expect(outcome).toEqual([
+      "a remittance is still in flight; retry the restore in a few minutes",
+      "a remittance is still in flight; retry the restore in a few minutes",
+    ]);
+    expect(await rows()).toHaveLength(1);
   });
 });

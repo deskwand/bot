@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { persona } from "../../src/butler/persona";
+import { t } from "../../src/i18n";
 import {
   fallbackText,
   speak,
@@ -143,6 +144,62 @@ describe("life tier notices", () => {
       runwayDays: 9,
       body: "",
     };
+
+    expect(await speak(event, deps(complete))).toBe(fallbackText(event, "zh"));
+    expect(complete).not.toHaveBeenCalled();
+  });
+});
+
+describe("wallet remittance notices", () => {
+  const txUrl = "https://basescan.org/tx/0xabc123";
+
+  const remit = (shortUsd: number): SpeakEvent => ({
+    kind: "wallet.remit",
+    id: "rem-1",
+    usdc: 32,
+    shortUsd,
+    txUrl,
+    body: "",
+  });
+
+  it.each(["zh", "en"] as const)(
+    "gives the remittance fixed copy in %s",
+    (locale) => {
+      const text = fallbackText(remit(0), locale);
+
+      expect(text.trim()).not.toBe("");
+      expect(text).toContain("32.00");
+      expect(text).toContain(txUrl);
+      expect(text).toContain("rem-1");
+      expect(text).not.toMatch(/还差|short/i);
+    },
+  );
+
+  it("mentions the shortfall only when there is one", () => {
+    const text = fallbackText(remit(12), "zh");
+
+    expect(text).toContain("12.00");
+    expect(text).toContain("还差");
+  });
+
+  it("renders the failing reason from its i18n key", () => {
+    const text = fallbackText(
+      {
+        kind: "wallet.remitFailed",
+        usdc: 32,
+        reason: "wallet.error.reverted",
+        body: "",
+      },
+      "zh",
+    );
+
+    expect(text).toContain("32.00");
+    expect(text).toContain(t("zh", "wallet.error.reverted"));
+  });
+
+  it("does not call the model for a remittance notice", async () => {
+    const complete = vi.fn();
+    const event = remit(0);
 
     expect(await speak(event, deps(complete))).toBe(fallbackText(event, "zh"));
     expect(complete).not.toHaveBeenCalled();

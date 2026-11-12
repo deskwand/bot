@@ -36,6 +36,8 @@ export type AppConfig = {
   email?: { accounts?: unknown[] };
   /** Raw exchange section; every field is validated in src/exchange/accounts.ts. */
   exchange?: { accounts?: unknown[] };
+  /** Raw wallet section; every field is validated in src/wallet/config.ts. */
+  wallet?: { rpcUrl?: unknown };
 };
 
 export function configLocale(cfg: AppConfig): Locale {

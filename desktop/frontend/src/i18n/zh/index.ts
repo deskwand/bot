@@ -13,6 +13,7 @@ import { setup } from "./setup";
 import { shell } from "./shell";
 import { states } from "./states";
 import { updates } from "./updates";
+import { wallet } from "./wallet";
 
 // Baseline dictionary. Every user-facing string the new UI adds lives here;
 // the English table is typed against it so a missing key fails `tsc`.
@@ -29,6 +30,7 @@ export const zh = {
   search,
   mcp,
   exchange,
+  wallet,
   entries,
   backup,
   setup,

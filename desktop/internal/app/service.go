@@ -1679,6 +1679,14 @@ func (s *Service) changeFromEdit(ctx context.Context, target domain.Target, inpu
 		raw := json.RawMessage(encoded)
 		change.Patch.Exchange = &raw
 	}
+	if input.Wallet != nil {
+		encoded, err := walletSectionPatch(*input.Wallet)
+		if err != nil {
+			return domain.Change{}, err
+		}
+		raw := json.RawMessage(encoded)
+		change.Patch.Wallet = &raw
+	}
 	edited := make(map[string]bool, len(input.Secrets))
 	for _, secret := range input.Secrets {
 		if strings.TrimSpace(secret.Name) == hiddenSecretName {

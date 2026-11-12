@@ -102,3 +102,14 @@ func TestExchangeSecretNamesAreAllowed(t *testing.T) {
 		}
 	}
 }
+
+func TestWalletSecretNamesAreAllowed(t *testing.T) {
+	for _, name := range []string{"WALLET_PRIVATE_KEY", "WALLET_OWNER_ADDRESS"} {
+		if !secretNameAllowed(name) {
+			t.Fatalf("%s should be allowed", name)
+		}
+		if !reservedReferenceNames[name] {
+			t.Fatalf("%s should be reserved", name)
+		}
+	}
+}

@@ -1,9 +1,11 @@
 import { createAdminGateway } from "./admin/admin-gateway";
+import { liveWalletReads } from "./admin/wallet-routes";
 import { probeExchange } from "./exchange/probe";
 import { ChannelDO } from "./channels/channel-do";
 import { createGateway } from "./gateway";
 import { ownerLocale } from "./i18n";
 import { lifeStub } from "./life/client";
+import { walletStub } from "./wallet/wallet-do";
 
 export { ButlerDO } from "./butler/butler-do";
 export { TaskDO } from "./task/task-do";
@@ -12,6 +14,7 @@ export { BotChatDO } from "./bot/bot-chat-do";
 export { ChannelDO };
 export { McpAuthDO } from "./mcp/mcp-auth-do";
 export { LifeDO } from "./life/life-do";
+export { WalletDO } from "./wallet/wallet-do";
 
 function channels(env: Env): DurableObjectStub<ChannelDO> {
   return env.CHANNELS.get(env.CHANNELS.idFromName("channels"));
@@ -34,10 +37,12 @@ function admin(env: Env) {
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     life: () => lifeStub(env),
+    wallet: () => walletStub(env),
     artifacts: env.ARTIFACTS,
     mcpAuth: () => mcpAuth(env),
     locale: () => ownerLocale(env),
     probeExchange: (account) => probeExchange(env, account),
+    walletReads: liveWalletReads(env),
   });
 }
 

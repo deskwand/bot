@@ -32,6 +32,7 @@ Command-line deployment, secrets and the `DESKWAND_CONFIG` format are documented
 - `TaskDO` — one instance per task: execution, tool calls, approvals, crash recovery
 - `BotDO` — one instance per resident bot: its own memory and wake schedule; execution is still delegated to `TaskDO`
 - `LifeDO` — the global life ledger: model spend, credits, vitals and tier
+- `WalletDO` — the global Base wallet: balances, valuation, automatic remittances and reconciliation
 - `McpAuthDO` — remote MCP OAuth registration, token storage and renewal
 - Scheduled work goes through the Agents SDK `Agent.schedule` onto cron triggers, interpreted in **UTC**
 - Artifacts land in R2 and are delivered as files or images through the channel, never behind a public URL. 15MB per file
@@ -161,6 +162,59 @@ A backup made by the new worker carries a `life` object. An older desktop client
 - In the dormant tier, if moving a role to Workers AI would shrink its context window more than fourfold, the role keeps its paid model and keeps spending; the balance can go negative. `life_vitals` shows the model each role is actually using.
 - `life_credit` and `life_calibrate` run without an approval step. They exist only in the owner's butler conversation, but text the butler reads could still talk her into writing a row; correct it with a calibration.
 - Deferred calls and image generation are not metered, so the real spend may be higher than the books show; `life_vitals` says so when it sees an unpriced model.
+
+## Wallet
+
+She has a wallet on Base mainnet. It stays unconfigured by default and only appears once both the private key and the owner address are set.
+
+Only the owner can configure it, from the desktop client or wrangler; no tool can read or change it:
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `WALLET_PRIVATE_KEY` | secret | The wallet key, `0x` plus 64 hex characters |
+| `WALLET_OWNER_ADDRESS` | secret | Where remittances go; not the zero address and not the wallet itself |
+| `DESKWAND_CONFIG.wallet.rpcUrl` | var | Optional Base mainnet RPC; defaults to `https://mainnet.base.org` and must be https |
+
+`wallet.rpcUrl` lives in plain-text configuration, so never put a URL carrying an API key there; use the default public RPC or a URL without a key instead.
+
+A missing or malformed key or address means no wallet: `wallet_status`, the wallet section of the prompt and automatic remittances do not exist, exactly as before the upgrade. The private key, owner address and RPC URL never appear in tool output, prompts or logs; only the wallet address derived from the key can be shown.
+
+### Automatic remittances
+
+When the tier worsens (say from ample to lean), she sends the gap between 21 days of daily spend and the balance in USDC to the owner address: at least $5, capped by the USDC balance. One remittance per tier change; nothing is sent while an earlier transfer is still unconfirmed. The Butler tells the owner once when it is out, or when it failed.
+
+When the owner confirms receipt and includes the remittance id in `life_credit`, the credit is booked as `earned` and the remittance is settled; a credit without an id is still booked as `owner_topup`.
+
+### Asking her
+
+- *"How much is in your wallet?"* (`wallet_status`) — the wallet address, holdings, total value and any pending remittance. Only registered in the owner's butler conversation.
+
+### Trying it on Sepolia
+
+`scripts/wallet-sepolia.ts` manually exercises the chain reads and writes against Base Sepolia; it is not part of CI. It prints the wallet address, ETH and USDC balances and the quote for 1 USDC into WETH, then builds a 5 USDC (the minimum remittance) transfer to the owner address:
+
+```bash
+# Dry run: a throwaway key, signs without broadcasting, moves no real funds
+HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 \
+  node --use-env-proxy --experimental-strip-types scripts/wallet-sepolia.ts --dry-run --random-key
+```
+
+For a real run set `WALLET_PRIVATE_KEY` and `WALLET_OWNER_ADDRESS` and drop `--dry-run`; `SEPOLIA_RPC_URL` is optional and defaults to `https://sepolia.base.org`. With a zero balance the guard refuses and prints the reason, and the script exits normally.
+
+### Backups
+
+Exports and restores include the `remittances` table. The private key, owner address and RPC URL are not in the backup. Restoring an old backup with no wallet empties the wallet table; on-chain assets are unaffected, only the history is lost. A worker that has not been updated yet is exported without a wallet, and a restore leaves that worker's (nonexistent) wallet alone.
+
+A backup made by the new worker carries a `wallet` object. An older desktop client does not understand it and rejects the whole backup; update the client first, then restore.
+
+The wallet is a new `WalletDO` class (migration `v7`, one global instance); it only adds a class and does not touch existing ones.
+
+### Known limitations
+
+- The trust root is the Worker. If the Cloudflare account is compromised, the private key can be exported. Move to an on-chain vault contract once the balance grows.
+- Valuation uses the Quoter's spot quote; a large position is worth less than that if actually sold.
+- Remittances are denominated in USD; convert yourself when funding in CNY.
+- Restoring an old backup can lose a remitted-but-unsettled transfer, and the next tier change may remit again.
 
 ## The two channels
 

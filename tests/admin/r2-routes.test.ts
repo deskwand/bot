@@ -26,6 +26,7 @@ function deps(name: string): AdminDeps {
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     life: () => env.LIFE.get(env.LIFE.idFromName(`${name}-life`)),
+    wallet: () => env.WALLET.get(env.WALLET.idFromName("global")),
     artifacts: env.ARTIFACTS,
     mcpAuth: () => env.MCP_AUTH.get(env.MCP_AUTH.idFromName("global")),
   };
