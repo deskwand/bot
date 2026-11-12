@@ -4,7 +4,11 @@ export type WalletDraft = {
   rpcUrl: string;
 };
 
-export type WalletProblem = "privateKey" | "ownerAddress" | "rpcUrl";
+export type WalletProblem =
+  | "privateKey"
+  | "ownerAddress"
+  | "ownerIsAgent"
+  | "rpcUrl";
 
 const PRIVATE_KEY = /^0x[0-9a-fA-F]{64}$/;
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
@@ -27,7 +31,10 @@ function validRPCUrl(value: string): boolean {
 }
 
 /** Same formats the Go save checks; the Worker still checks the checksum. */
-export function walletProblems(draft: WalletDraft): WalletProblem[] {
+export function walletProblems(
+  draft: WalletDraft,
+  agentAddress?: string,
+): WalletProblem[] {
   const problems: WalletProblem[] = [];
   const privateKey = draft.privateKey.trim();
   if (privateKey !== "" && !PRIVATE_KEY.test(privateKey)) {
@@ -36,6 +43,13 @@ export function walletProblems(draft: WalletDraft): WalletProblem[] {
   const ownerAddress = draft.ownerAddress.trim();
   if (ownerAddress !== "" && !ADDRESS.test(ownerAddress)) {
     problems.push("ownerAddress");
+  }
+  if (
+    ownerAddress !== "" &&
+    agentAddress !== undefined &&
+    ownerAddress.toLowerCase() === agentAddress.trim().toLowerCase()
+  ) {
+    problems.push("ownerIsAgent");
   }
   const rpcUrl = draft.rpcUrl.trim();
   if (rpcUrl !== "" && !validRPCUrl(rpcUrl)) {

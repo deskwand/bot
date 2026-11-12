@@ -8,7 +8,7 @@ export const shell = {
     search: "搜索",
     mcp: "服务",
     exchange: "交易所",
-    wallet: "钱包",
+    agent: "智能体",
     entries: "消息入口",
     diagnostics: "诊断",
     backup: "数据备份",

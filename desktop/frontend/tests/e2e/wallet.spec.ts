@@ -15,10 +15,10 @@ async function openWallet(page: Page, scenario: string) {
   await page.goto(`/test.html?fixture=${scenario}`);
   await page
     .getByRole("navigation", { name: "主导航" })
-    .getByRole("button", { name: "钱包", exact: true })
+    .getByRole("button", { name: "智能体", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "钱包", exact: true }),
+    page.getByRole("heading", { name: "智能体", exact: true }),
   ).toBeVisible();
 }
 
@@ -40,12 +40,22 @@ test("blocks saving while every field is empty", async ({ page }) => {
   await expect(page.getByRole("button", { name: "保存并部署" })).toBeDisabled();
 });
 
+test("names the secrets that are still missing", async ({ page }) => {
+  await openWallet(page, "wallet-unconfigured");
+
+  await expect(page.getByTestId("wallet-missing")).toHaveText(
+    "还差：智能体的私钥、你的收款地址",
+  );
+  await expect(page.getByTestId("wallet-key-state")).toHaveText("未设置");
+  await expect(page.getByTestId("wallet-owner-state")).toHaveText("未设置");
+});
+
 test("blocks saving when the private key is not 32 bytes of hex", async ({
   page,
 }) => {
   await openWallet(page, "wallet-unconfigured");
 
-  await page.getByLabel("私钥", { exact: true }).fill("0x1234");
+  await page.getByLabel("智能体的私钥", { exact: true }).fill("0x1234");
 
   await expect(
     page.getByText("私钥必须是 0x 开头的 64 位十六进制"),
@@ -56,8 +66,8 @@ test("blocks saving when the private key is not 32 bytes of hex", async ({
 test("saves the wallet and then shows it as configured", async ({ page }) => {
   await openWallet(page, "wallet-unconfigured");
 
-  await page.getByLabel("私钥", { exact: true }).fill(PRIVATE_KEY);
-  await page.getByLabel("收款地址", { exact: true }).fill(OWNER_ADDRESS);
+  await page.getByLabel("智能体的私钥", { exact: true }).fill(PRIVATE_KEY);
+  await page.getByLabel("你的收款地址", { exact: true }).fill(OWNER_ADDRESS);
   await page.getByRole("button", { name: "保存并部署" }).click();
 
   await expect.poll(async () => (await saves(page)).length).toBe(1);
@@ -68,9 +78,27 @@ test("saves the wallet and then shows it as configured", async ({ page }) => {
   await expect(page.getByTestId("wallet-status")).toHaveText("已配置");
   await expect(page.getByTestId("wallet-address")).toHaveText(WALLET_ADDRESS);
   await expect(page.getByTestId("wallet-value")).toContainText("12.50");
+  await expect(page.getByTestId("wallet-missing")).toHaveCount(0);
   // The write-only key is cleared after a successful save and never echoed.
-  await expect(page.getByLabel("私钥", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("智能体的私钥", { exact: true })).toHaveValue("");
   await expect(page.locator("body")).not.toContainText(PRIVATE_KEY);
+});
+
+test("updates what is missing after saving only the private key", async ({
+  page,
+}) => {
+  await openWallet(page, "wallet-unconfigured");
+
+  await page.getByLabel("智能体的私钥", { exact: true }).fill(PRIVATE_KEY);
+  await page.getByRole("button", { name: "保存并部署" }).click();
+
+  await expect.poll(async () => (await saves(page)).length).toBe(1);
+  expect((await saves(page))[0]).toEqual({ privateKey: PRIVATE_KEY });
+  await expect(page.getByTestId("wallet-missing")).toHaveText(
+    "还差：你的收款地址",
+  );
+  await expect(page.getByTestId("wallet-key-state")).toHaveText("已设置");
+  await expect(page.getByTestId("wallet-owner-state")).toHaveText("未设置");
 });
 
 test("shows the address and valuation of a configured wallet", async ({
@@ -81,7 +109,42 @@ test("shows the address and valuation of a configured wallet", async ({
   await expect(page.getByTestId("wallet-status")).toHaveText("已配置");
   await expect(page.getByTestId("wallet-address")).toHaveText(WALLET_ADDRESS);
   await expect(page.getByTestId("wallet-value")).toContainText("12.50");
-  await expect(page.getByLabel("私钥", { exact: true })).toHaveValue("");
+  await expect(page.getByTestId("wallet-key-state")).toHaveText("已设置");
+  await expect(page.getByTestId("wallet-owner-state")).toHaveText("已设置");
+  await expect(page.getByTestId("wallet-missing")).toHaveCount(0);
+  await expect(page.getByLabel("智能体的私钥", { exact: true })).toHaveValue("");
+});
+
+test("rejects the agent's own address as the payout address", async ({
+  page,
+}) => {
+  await openWallet(page, "wallet-configured");
+
+  await page.getByLabel("你的收款地址", { exact: true }).fill(WALLET_ADDRESS);
+
+  await expect(
+    page.getByText("收款地址不能是智能体自己的地址"),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存并部署" })).toBeDisabled();
+});
+
+test("keeps the RPC details open when the draft is invalid", async ({
+  page,
+}) => {
+  await openWallet(page, "wallet-unconfigured");
+
+  const details = page.locator("details");
+  await expect(details).toHaveJSProperty("open", false);
+
+  await details.locator("summary").click();
+  await expect(details).toHaveJSProperty("open", true);
+
+  await page.getByLabel("RPC 地址（可选）").fill("http://x");
+
+  await expect(details).toHaveJSProperty("open", true);
+  await expect(
+    page.getByText("RPC 地址必须是 https 站点地址"),
+  ).toBeVisible();
 });
 
 test("says the valuation is unavailable when the Worker omits it", async ({
@@ -104,7 +167,10 @@ test("english has no chinese", async ({ page }) => {
   await useEnglish(page, "/test.html?fixture=wallet-configured");
   await page
     .getByRole("navigation", { name: "Main navigation" })
-    .getByRole("button", { name: "Wallet", exact: true })
+    .getByRole("button", { name: "Agent", exact: true })
     .click();
+  await expect(
+    page.getByRole("heading", { name: "Agent", exact: true }),
+  ).toBeVisible();
   await expectNoChinese(page);
 });

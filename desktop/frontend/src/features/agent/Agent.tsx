@@ -10,26 +10,28 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useDirty } from "@/components/use-dirty";
 import { useT, type MessageKey } from "@/i18n";
-import { useInvalidate } from "@/services/queries";
+import { useConfigQuery, useInvalidate } from "@/services/queries";
 import type { WalletEditDTO, WalletStatusDTO } from "@/services/types";
 import {
   walletDraftEmpty,
   walletProblems,
   type WalletDraft,
   type WalletProblem,
-} from "./validate";
+} from "../wallet/validate";
 
 const EMPTY: WalletDraft = { privateKey: "", ownerAddress: "", rpcUrl: "" };
 
 const PROBLEM_COPY: Record<WalletProblem, MessageKey> = {
   privateKey: "wallet.problemPrivateKey",
   ownerAddress: "wallet.problemOwnerAddress",
+  ownerIsAgent: "wallet.problemOwnerIsAgent",
   rpcUrl: "wallet.problemRpcUrl",
 };
 
-export function Wallet() {
+export function Agent() {
   const { client } = useApp();
   const t = useT();
+  const configQuery = useConfigQuery();
   const invalidate = useInvalidate();
   const [draft, setDraft] = useState<WalletDraft>(EMPTY);
   const [status, setStatus] = useState<WalletStatusDTO | null>(null);
@@ -37,6 +39,7 @@ export function Wallet() {
   const [error, setError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [rpcOpen, setRpcOpen] = useState(false);
 
   const loadStatus = useCallback(async () => {
     setLoading(true);
@@ -55,9 +58,24 @@ export function Wallet() {
     void loadStatus();
   }, [loadStatus]);
 
-  const problems = walletProblems(draft);
+  const configured = status?.configured === true;
+  const agentAddress = status?.address;
+
+  const problems = walletProblems(draft, agentAddress);
   const empty = walletDraftEmpty(draft);
   useDirty(!empty);
+
+  const config = configQuery.data;
+  const secretSet = (name: string) =>
+    config?.secrets.find((entry) => entry.name === name)?.configured === true;
+  const keySet = secretSet("WALLET_PRIVATE_KEY");
+  const ownerSet = secretSet("WALLET_OWNER_ADDRESS");
+  const secretsKnown = config !== undefined;
+
+  const missingItems = [
+    ...(keySet ? [] : [t("wallet.missingPrivateKey")]),
+    ...(ownerSet ? [] : [t("wallet.missingOwnerAddress")]),
+  ];
 
   const update = (field: keyof WalletDraft, value: string) => {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -91,12 +109,13 @@ export function Wallet() {
     }
   };
 
-  const configured = status?.configured === true;
+  const rpcDraftPresent = draft.rpcUrl.trim() !== "";
+  const rpcHasProblem = problems.includes("rpcUrl");
 
   return (
     <div>
       <PageHeader
-        title={t("shell.pages.wallet")}
+        title={t("shell.pages.agent")}
         description={t("wallet.intro")}
         actions={
           <Badge variant="outline">
@@ -137,6 +156,22 @@ export function Wallet() {
             </Badge>
           ) : null}
         </div>
+        {!loading && status !== null && !configured && secretsKnown ? (
+          <p
+            className="mt-2 text-xs text-muted-foreground"
+            data-testid="wallet-missing"
+          >
+            {missingItems.length > 0
+              ? t("wallet.missing", {
+                  items: missingItems.join(t("wallet.missingSeparator")),
+                })
+              : t("wallet.missingStillInactive")}
+          </p>
+        ) : null}
+      </section>
+
+      <section className="mt-4 rounded-md border border-border p-4">
+        <h2 className="text-sm font-semibold">{t("wallet.agentWalletTitle")}</h2>
 
         {configured && status ? (
           <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
@@ -164,57 +199,92 @@ export function Wallet() {
             </div>
           </dl>
         ) : null}
-      </section>
 
-      <div className="mt-4 space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="wallet-private-key">{t("wallet.privateKey")}</Label>
+        <div className="mt-4 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Label htmlFor="wallet-private-key">{t("wallet.privateKey")}</Label>
+            <Badge
+              variant={keySet ? "secondary" : "outline"}
+              data-testid="wallet-key-state"
+            >
+              {keySet ? t("wallet.set") : t("wallet.notSet")}
+            </Badge>
+          </div>
           <Input
             id="wallet-private-key"
             type="password"
             value={draft.privateKey}
             onChange={(event) => update("privateKey", event.target.value)}
             placeholder={
-              configured
+              keySet
                 ? t("wallet.keyPlaceholderConfigured")
                 : t("wallet.keyPlaceholderNew")
             }
             autoComplete="new-password"
             spellCheck={false}
           />
-          <p className="text-xs text-muted-foreground">{t("wallet.privateKeyHint")}</p>
+          <p className="text-xs text-muted-foreground">
+            {t("wallet.privateKeyHint")}
+          </p>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="wallet-owner-address">{t("wallet.ownerAddress")}</Label>
+        <details
+          className="mt-4"
+          open={rpcOpen || rpcDraftPresent || rpcHasProblem}
+          onToggle={(event) => setRpcOpen(event.currentTarget.open)}
+        >
+          <summary className="cursor-pointer text-sm font-medium">
+            {t("wallet.advanced")}
+          </summary>
+          <div className="mt-3 space-y-2">
+            <Label htmlFor="wallet-rpc-url">{t("wallet.rpcUrl")}</Label>
+            <Input
+              id="wallet-rpc-url"
+              value={draft.rpcUrl}
+              onChange={(event) => update("rpcUrl", event.target.value)}
+              placeholder={t("wallet.rpcUrlPlaceholder")}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t("wallet.rpcUrlHint")}
+            </p>
+          </div>
+        </details>
+      </section>
+
+      <section className="mt-4 rounded-md border border-border p-4">
+        <h2 className="text-sm font-semibold">{t("wallet.ownerTitle")}</h2>
+
+        <div className="mt-3 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Label htmlFor="wallet-owner-address">{t("wallet.ownerAddress")}</Label>
+            <Badge
+              variant={ownerSet ? "secondary" : "outline"}
+              data-testid="wallet-owner-state"
+            >
+              {ownerSet ? t("wallet.set") : t("wallet.notSet")}
+            </Badge>
+          </div>
           <Input
             id="wallet-owner-address"
             value={draft.ownerAddress}
             onChange={(event) => update("ownerAddress", event.target.value)}
             placeholder={
-              configured
+              ownerSet
                 ? t("wallet.keyPlaceholderConfigured")
                 : t("wallet.ownerAddressPlaceholder")
             }
             autoComplete="off"
             spellCheck={false}
           />
-          <p className="text-xs text-muted-foreground">{t("wallet.ownerAddressHint")}</p>
+          <p className="text-xs text-muted-foreground">
+            {t("wallet.ownerAddressHint")}
+          </p>
         </div>
+      </section>
 
-        <div className="space-y-2">
-          <Label htmlFor="wallet-rpc-url">{t("wallet.rpcUrl")}</Label>
-          <Input
-            id="wallet-rpc-url"
-            value={draft.rpcUrl}
-            onChange={(event) => update("rpcUrl", event.target.value)}
-            placeholder={t("wallet.rpcUrlPlaceholder")}
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <p className="text-xs text-muted-foreground">{t("wallet.rpcUrlHint")}</p>
-        </div>
-
+      <div className="mt-4 space-y-2">
         {problems.map((problem) => (
           <p key={problem} className="text-xs text-destructive">
             {t(PROBLEM_COPY[problem])}

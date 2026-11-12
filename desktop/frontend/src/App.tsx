@@ -12,7 +12,6 @@ import {
   KeyRound,
   Plug,
   Search as SearchIcon,
-  Wallet as WalletIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,7 +41,7 @@ import { Mcp } from "@/features/mcp/Mcp";
 import { Models } from "@/features/models/Models";
 import { Overview } from "@/features/overview/Overview";
 import { Exchanges } from "@/features/exchanges/Exchanges";
-import { Wallet } from "@/features/wallet/Wallet";
+import { Agent } from "@/features/agent/Agent";
 import { Search } from "@/features/search/Search";
 import { Setup } from "@/features/setup/Setup";
 import { Updates } from "@/features/updates/Updates";
@@ -66,7 +65,7 @@ const NAV: { page: Page; icon: typeof LayoutDashboard }[] = [
   { page: "models", icon: Bot },
   { page: "search", icon: SearchIcon },
   { page: "exchange", icon: KeyRound },
-  { page: "wallet", icon: WalletIcon },
+  { page: "agent", icon: Bot },
   { page: "mcp", icon: Plug },
   { page: "entries", icon: MessageSquare },
   { page: "diagnostics", icon: Activity },
@@ -333,7 +332,7 @@ export function App({ client }: { client: ClientService }) {
                   {page === "models" ? <Models /> : null}
                   {page === "search" ? <Search /> : null}
                   {page === "exchange" ? <Exchanges /> : null}
-                  {page === "wallet" ? <Wallet /> : null}
+                  {page === "agent" ? <Agent /> : null}
                   {page === "mcp" ? <Mcp /> : null}
                   {page === "entries" ? (
                     <Suspense fallback={<PageLoading label={t("shell.pageLoading")} />}>
