@@ -18,6 +18,7 @@ import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
 import type { BotChatInput } from "../bot/bot-chat-do";
 import type { RunOutcome } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
+import { ensureEarnerBot, type EnsureEarnerResult } from "./earner";
 import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
 import { lifeStub, readVitals } from "../life/client";
@@ -249,6 +250,9 @@ export class ButlerDO extends Agent<Env> {
   /** Serializes "interrupt, then submit" so two messages cannot race it. */
   private admitting: Promise<unknown> = Promise.resolve();
 
+  /** Single-flight guard for the earner check: cron ticks may overlap. */
+  private ensuringEarner: Promise<EnsureEarnerResult> | null = null;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
@@ -350,7 +354,6 @@ export class ButlerDO extends Agent<Env> {
           bot: (id) => this.botFor(id),
           botChat: (id) => this.botChatFor(id),
           task: (id) => this.taskFor(id),
-          walletConfigured: walletConfigured(this.env),
           locale: ownerLocale(this.env),
         }),
       ],
@@ -527,6 +530,30 @@ export class ButlerDO extends Agent<Env> {
   /** The bots this Butler indexes (backup discovery and management). */
   listBotIds(): string[] {
     return this.bots.list().map((row) => row.id);
+  }
+
+  /**
+   * Cron backstop: guarantees one earner bot once the wallet is configured.
+   * Concurrent ticks share one run so they cannot create two earners.
+   */
+  async ensureEarner(): Promise<EnsureEarnerResult> {
+    if (this.ensuringEarner !== null) return this.ensuringEarner;
+    const run = (async () => {
+      try {
+        if (await this.maintenanceActive()) return "busy";
+        return await ensureEarnerBot({
+          bots: this.bots,
+          bot: (id) => this.botFor(id),
+          walletConfigured: walletConfigured(this.env),
+          locale: ownerLocale(this.env),
+          allowed: () => this.lease.current() === null,
+        });
+      } finally {
+        this.ensuringEarner = null;
+      }
+    })();
+    this.ensuringEarner = run;
+    return run;
   }
 
   /**

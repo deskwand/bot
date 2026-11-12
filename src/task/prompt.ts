@@ -75,7 +75,7 @@ export function taskSystemPrompt(
           "Documents are overwritten whole: start from their current text in the instructions. Changes appear from the next run.",
           "Keep reusable know-how in method documents, not only in artifacts. Use `search_runs` for older runs.",
           "Before finishing, use `bot_note` and `set_next_wake` to arrange the next run; the next run is at most one default interval away.",
-          "Call `finish_bot` only when the whole mission is done for good; it asks the owner, who must approve.",
+          "If `finish_bot` is available, call it only when the whole mission is done for good; it asks the owner, who must approve.",
           "You must still call `finish_task` to end this run.",
         ]),
     "",

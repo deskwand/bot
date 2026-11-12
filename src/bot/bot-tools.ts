@@ -32,6 +32,8 @@ export type BotTaskToolDeps = {
   taskId: () => string;
   notify(text: string): Promise<boolean>;
   approvals: ApprovalGateLike;
+  /** The earner cannot retire itself, so it never sees `finish_bot`. */
+  earner?: boolean;
   locale?: Locale;
 };
 
@@ -308,6 +310,6 @@ export function createBotTaskTools(
     note,
     setNextWake,
     notifyOwner,
-    finishBot,
+    ...(deps.earner === true ? [] : [finishBot]),
   ];
 }

@@ -116,4 +116,20 @@ describe("TaskDO earner wallet tools", () => {
 
     expect(names.filter((name) => name.startsWith("wallet_"))).toEqual([]);
   });
+
+  it("hides finish_bot from an earner bot", async () => {
+    await initBot("earner-c", true);
+
+    const names = await startAndList("t-earner-c", "earner-c");
+
+    expect(names).not.toContain("finish_bot");
+  });
+
+  it("keeps finish_bot for an ordinary bot", async () => {
+    await initBot("plain-b", false);
+
+    const names = await startAndList("t-plain-b", "plain-b");
+
+    expect(names).toContain("finish_bot");
+  });
 });

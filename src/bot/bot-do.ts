@@ -11,6 +11,9 @@ import { getClock } from "../butler/notifier";
 import { ownerLocale } from "../i18n";
 import { readTier, readVitals } from "../life/client";
 import { isQuotaExhaustedSummary } from "../llm/model-errors";
+import { readWalletValue } from "../wallet/client";
+import { MIN_VALUE_USD } from "../wallet/guard";
+import { walletConfigured } from "../wallet/wallet-do";
 import {
   BotStore,
   type BotMeta,
@@ -34,6 +37,8 @@ import {
   CHANNEL_DISABLED_RETRY_MS,
   DAILY_WAKE_LIMIT,
   DIET_RECHECK_MS,
+  EARNER_IDLE_RECHECK_MS,
+  EARNER_MIN_WAKE_MS,
   FAILING_NOTICE_AT,
   HEAL_OVERDUE_MS,
   MIN_WAKE_MS,
@@ -304,6 +309,7 @@ export class BotDO extends DurableObject<Env> {
       now,
       requested,
       wakeCeilingMs(meta.defaultIntervalMs),
+      meta.earner === true ? EARNER_MIN_WAKE_MS : MIN_WAKE_MS,
     );
     meta.nextWakeAt = at;
     this.store.writeMeta(meta);
@@ -380,6 +386,8 @@ export class BotDO extends DurableObject<Env> {
   async finish(reason: string): Promise<void> {
     const meta = this.store.readMeta();
     if (meta === null) return;
+    // The earner is an instinct, not a task: it cannot retire itself.
+    if (meta.earner === true) return;
     meta.status = "finished";
     meta.nextWakeAt = null;
     meta.finishReason = reason;
@@ -578,6 +586,17 @@ export class BotDO extends DurableObject<Env> {
         meta.nextWakeAt = now + DIET_RECHECK_MS;
         this.store.writeMeta(meta);
         await this.ctx.storage.setAlarm(meta.nextWakeAt);
+        return;
+      }
+
+      if (meta.earner === true && !(await this.earnerCanWork())) {
+        // The wallet read may have let the owner pause the bot; never write the
+        // stale wake back, or the pause would be undone.
+        const current = this.store.readMeta();
+        if (current === null || current.status !== "active") return;
+        current.nextWakeAt = now + EARNER_IDLE_RECHECK_MS;
+        this.store.writeMeta(current);
+        await this.ctx.storage.setAlarm(current.nextWakeAt);
         return;
       }
 
@@ -791,6 +810,13 @@ export class BotDO extends DurableObject<Env> {
         ),
       );
     }
+  }
+
+  /** Whether the earner may spend a wake: a configured wallet worth at least $5. */
+  private async earnerCanWork(): Promise<boolean> {
+    if (!walletConfigured(this.env)) return false;
+    const value = await readWalletValue(this.env);
+    return value !== null && value >= MIN_VALUE_USD;
   }
 
   private async notice(meta: BotMeta, text: string): Promise<void> {

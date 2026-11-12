@@ -14,6 +14,7 @@ import {
 import { BotStore, type BotMeta } from "../../src/bot/bot-store";
 import { DIET_RECHECK_MS, WATCHDOG_MS } from "../../src/bot/wake";
 import { BotsRepo } from "../../src/butler/bots-repo";
+import { ensureEarnerBot } from "../../src/butler/earner";
 import {
   createBotTools,
   type TaskControl,
@@ -153,7 +154,6 @@ async function createBot(args: Record<string, unknown>): Promise<{
         ask: async () => "",
       }),
       task: () => fakeTask(),
-      walletConfigured: true,
       locale: "zh",
     });
     const tool = tools.find((candidate) => candidate.name === "create_bot");
@@ -164,6 +164,23 @@ async function createBot(args: Record<string, unknown>): Promise<{
       {} as never,
     )) as ToolOutcome;
     return { text: text(outcome), isError: outcome.isError === true };
+  });
+}
+
+/** Creates the earner through the same path the cron uses. */
+async function ensureEarner(): Promise<string> {
+  return runInDurableObject(butler(), async (_instance, state) => {
+    const bots = new BotsRepo(state.storage.sql);
+    const result = await ensureEarnerBot({
+      bots,
+      bot: (id) => botStub(id),
+      walletConfigured: true,
+      locale: "zh",
+    });
+    expect(result).toBe("created");
+    const row = bots.list()[0];
+    if (row === undefined) throw new Error("missing earner row");
+    return row.id;
   });
 }
 
@@ -278,15 +295,9 @@ describe("earner bot lifecycle end to end", () => {
     });
     expect(walletConfigured(env)).toBe(true);
 
-    // 1. The Butler creates the one earner and an ordinary bot beside it.
-    const created = await createBot({
-      name: "谋生机器人",
-      mission: "让钱包慢慢变多",
-      default_interval: "4h",
-      earner: true,
-    });
-    expect(created.text).toContain("已创建机器人");
-    const earnerId = created.text.split(" ")[1] as string;
+    // 1. The earner is born through the cron's path; an ordinary bot sits
+    // beside it.
+    const earnerId = await ensureEarner();
     const ordinary = await createBot({
       name: "普通哨兵",
       mission: "盯着价格",
@@ -300,7 +311,7 @@ describe("earner bot lifecycle end to end", () => {
     expect(earner.meta.earner).toBe(true);
     expect(earner.docs).toContainEqual({
       name: "守则",
-      content: t("zh", "wallet.earner.defaultRules"),
+      content: t("zh", "wallet.earner.rules"),
     });
 
     // 2. First wake: read prices, then swap a compliant 20 USDC into WETH.

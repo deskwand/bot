@@ -29,16 +29,8 @@ const CreateBotProps = {
 
 const CreateBot = Type.Object(CreateBotProps);
 
-const CreateBotEarner = Type.Object({
-  ...CreateBotProps,
-  earner: Type.Optional(Type.Boolean()),
-});
-
 const CREATE_BOT_DESCRIPTION =
   "Create a long-lived bot that keeps working on a recurring mission and wakes itself up.";
-
-const EARNER_DESCRIPTION =
-  " Set `earner: true` to give it the wallet trading tools; only one earner bot may exist per deployment, and a 4h interval is recommended.";
 
 const BotId = Type.Object({ id: Type.String() });
 
@@ -97,7 +89,6 @@ export type BotToolDeps = {
     destroy(): Promise<void>;
   };
   task(id: string): TaskControl;
-  walletConfigured?: boolean;
   locale?: Locale;
 };
 
@@ -127,22 +118,18 @@ export function durationRangeError(text: string): string {
  */
 export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
   const { bots, bot, botChat, task } = deps;
-  const walletConfigured = deps.walletConfigured === true;
   const locale = deps.locale ?? "zh";
 
-  const createBot: ToolRegistration<typeof CreateBotEarner> = {
+  const createBot: ToolRegistration<typeof CreateBot> = {
     name: "create_bot",
-    description: walletConfigured
-      ? CREATE_BOT_DESCRIPTION + EARNER_DESCRIPTION
-      : CREATE_BOT_DESCRIPTION,
-    parameters: (walletConfigured ? CreateBotEarner : CreateBot) as typeof CreateBotEarner,
+    description: CREATE_BOT_DESCRIPTION,
+    parameters: CreateBot,
     async execute({
       name,
       mission,
       default_interval,
       first_wake_after,
       rules,
-      earner,
     }) {
       try {
         const intervalMs = parseDuration(default_interval);
@@ -153,16 +140,6 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
             allowRules: true,
           });
           if (!check.ok) return output(check.message);
-        }
-
-        const wantsEarner = walletConfigured && earner === true;
-        if (wantsEarner) {
-          for (const row of bots.list()) {
-            const snapshot = await bot(row.id).snapshot();
-            if (snapshot?.meta.earner === true) {
-              return output(t(locale, "wallet.earner.exists"));
-            }
-          }
         }
 
         const now = getClock().now();
@@ -178,11 +155,6 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
           ).at;
         }
 
-        const effectiveRules =
-          wantsEarner && (rules === undefined || rules.trim() === "")
-            ? t(locale, "wallet.earner.defaultRules")
-            : rules;
-
         const id = bots.nextId();
         bots.insert({ id, name });
         try {
@@ -192,8 +164,7 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
             mission,
             defaultIntervalMs,
             firstWakeAt,
-            ...(effectiveRules === undefined ? {} : { rules: effectiveRules }),
-            ...(wantsEarner ? { earner: true } : {}),
+            ...(rules === undefined ? {} : { rules }),
           });
         } catch (error) {
           // Do not leave an index row pointing at a bot that never started.
@@ -464,7 +435,11 @@ export function createBotTools(deps: BotToolDeps): ToolRegistration[] {
     async execute({ id }) {
       try {
         if (!bots.get(id)) return output(`没有机器人 ${id}`);
-        const currentTaskId = (await bot(id).snapshot())?.meta.currentTaskId;
+        const snapshot = await bot(id).snapshot();
+        if (snapshot?.meta.earner === true) {
+          return output(t(locale, "wallet.earner.undeletable"));
+        }
+        const currentTaskId = snapshot?.meta.currentTaskId;
         if (currentTaskId !== null && currentTaskId !== undefined) {
           await task(currentTaskId).cancel();
         }

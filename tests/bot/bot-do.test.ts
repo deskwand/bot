@@ -3,6 +3,7 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
+import type { Address } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFER_MS } from "../../src/admin/maintenance";
 import {
@@ -21,6 +22,8 @@ import {
 import {
   CHANNEL_DISABLED_RETRY_MS,
   DIET_RECHECK_MS,
+  EARNER_IDLE_RECHECK_MS,
+  EARNER_MIN_WAKE_MS,
   MIN_WAKE_MS,
   WATCHDOG_MS,
   nextUtcMidnight,
@@ -34,7 +37,11 @@ import { setClockOverride } from "../../src/butler/notifier";
 import type { SpendEntry } from "../../src/life/books";
 import type { Tier } from "../../src/life/vitals";
 import { QUOTA_EXHAUSTED_TEXT } from "../../src/llm/model-errors";
+import { setWalletChainOverride } from "../../src/wallet/wallet-do";
+import type { Token } from "../../src/wallet/chain";
+import { FakeChain } from "../helpers/fake-chain";
 import { resetLife } from "../helpers/life";
+import { resetWallet } from "../helpers/wallet";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -42,6 +49,7 @@ declare module "cloudflare:test" {
 
 const START = Date.UTC(2030, 0, 1, 9, 0, 0);
 const DAY_MS = 86_400_000;
+const OWNER = "0x1111111111111111111111111111111111111111" as Address;
 
 let now = START;
 
@@ -1653,9 +1661,15 @@ describe("BotDO diet", () => {
 
   it("runs an earner bot when critical", async () => {
     const fake = fakeButler();
+    const chain = new FakeChain();
+    chain.balances.USDC = 5_000_000n;
     try {
       await driveLifeTo("critical");
+      // Install the chain only after the tier moved: the drop's automatic
+      // remittance would otherwise transfer the earner's $5 away.
+      setWalletChainOverride({ chain, owner: OWNER });
       const stub = botStub("b-diet-earner-critical");
+      await stub.destroy();
       await initBot(stub, { earner: true });
 
       await fireAlarm(stub);
@@ -1663,6 +1677,8 @@ describe("BotDO diet", () => {
       expect(fake.spawns).toHaveLength(1);
       expect((await stub.snapshot())?.meta.currentTaskId).toBe("t1");
     } finally {
+      setWalletChainOverride(null);
+      await resetWallet();
       await resetLife();
     }
   });
@@ -1783,5 +1799,169 @@ describe("BotDO diet", () => {
     } finally {
       await resetLife();
     }
+  });
+});
+
+describe("earner gates", () => {
+  const BOTS = [
+    "b-earner-gate-below",
+    "b-earner-gate-unconfigured",
+    "b-earner-gate-manual-empty",
+    "b-earner-gate-funded",
+    "b-earner-gate-ordinary",
+    "b-earner-gate-floor",
+    "b-earner-gate-ceiling",
+    "b-earner-gate-finish",
+    "b-earner-gate-paused-read",
+  ];
+
+  /** A configured chain whose USDC balance alone determines the value. */
+  function fundWallet(usdc: bigint): FakeChain {
+    const chain = new FakeChain();
+    chain.balances.USDC = usdc;
+    setWalletChainOverride({ chain, owner: OWNER });
+    return chain;
+  }
+
+  beforeEach(async () => {
+    setWalletChainOverride(null);
+    for (const name of BOTS) await botStub(name).destroy();
+  });
+
+  afterEach(async () => {
+    setWalletChainOverride(null);
+    await resetWallet();
+  });
+
+  it("skips an earner wake while the wallet is below $5", async () => {
+    const fake = fakeButler();
+    fundWallet(4_000_000n);
+    const stub = botStub("b-earner-gate-below");
+    await initBot(stub, { earner: true });
+
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(0);
+    const meta = (await stub.snapshot())!.meta;
+    expect(meta.nextWakeAt).toBe(now + EARNER_IDLE_RECHECK_MS);
+    expect(meta.wakesCount).toBe(0);
+    expect(await alarmAt(stub)).toBe(now + EARNER_IDLE_RECHECK_MS);
+  });
+
+  it("skips an earner wake when the wallet is not configured", async () => {
+    const fake = fakeButler();
+    setWalletChainOverride(null);
+    const stub = botStub("b-earner-gate-unconfigured");
+    await initBot(stub, { earner: true });
+
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(0);
+    const meta = (await stub.snapshot())!.meta;
+    expect(meta.nextWakeAt).toBe(now + EARNER_IDLE_RECHECK_MS);
+    expect(meta.wakesCount).toBe(0);
+  });
+
+  it("skips a manual earner wake on an empty wallet", async () => {
+    const fake = fakeButler();
+    fundWallet(0n);
+    const stub = botStub("b-earner-gate-manual-empty");
+    await initBot(stub, { earner: true });
+
+    expect(await stub.wakeNow()).toBe("scheduled");
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(0);
+  });
+
+  it("runs an earner wake once the wallet holds $5", async () => {
+    const fake = fakeButler();
+    fundWallet(5_000_000n);
+    const stub = botStub("b-earner-gate-funded");
+    await initBot(stub, { earner: true });
+
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(1);
+    expect((await stub.snapshot())?.meta.currentTaskId).toBe("t1");
+  });
+
+  it("does not gate an ordinary bot on the wallet", async () => {
+    const fake = fakeButler();
+    fundWallet(0n);
+    const stub = botStub("b-earner-gate-ordinary");
+    await initBot(stub);
+
+    await fireAlarm(stub);
+
+    expect(fake.spawns).toHaveLength(1);
+  });
+
+  it("floors an earner's own wake at 30 minutes", async () => {
+    fakeButler();
+    fundWallet(5_000_000n);
+    const earner = botStub("b-earner-gate-floor");
+    await initBot(earner, { earner: true });
+    expect(await earner.setNextWake({ afterMs: 300_000 })).toEqual({
+      at: now + EARNER_MIN_WAKE_MS,
+      clamped: true,
+    });
+
+    const ordinary = botStub("b-earner-gate-floor");
+    await ordinary.destroy();
+    await initBot(ordinary);
+    expect(await ordinary.setNextWake({ afterMs: 300_000 })).toEqual({
+      at: now + 300_000,
+      clamped: false,
+    });
+  });
+
+  it("caps an earner's own wake at its 4h interval", async () => {
+    fakeButler();
+    fundWallet(5_000_000n);
+    const stub = botStub("b-earner-gate-ceiling");
+    await initBot(stub, { earner: true, defaultIntervalMs: 14_400_000 });
+
+    expect(await stub.setNextWake({ afterMs: 10 * 3_600_000 })).toEqual({
+      at: now + 14_400_000,
+      clamped: true,
+    });
+  });
+
+  it("keeps an earner alive when finish is called", async () => {
+    fakeButler();
+    fundWallet(5_000_000n);
+    const stub = botStub("b-earner-gate-finish");
+    await initBot(stub, { earner: true });
+    const scheduled = (await stub.snapshot())!.meta.nextWakeAt;
+
+    await stub.finish("done");
+
+    const meta = (await stub.snapshot())!.meta;
+    expect(meta.status).toBe("active");
+    expect(meta.nextWakeAt).toBe(scheduled);
+  });
+
+  it("does not revive an earner paused during the wallet read", async () => {
+    fakeButler();
+    const chain = fundWallet(4_000_000n);
+    const gate = deferred();
+    let started = false;
+    chain.tokenBalance = async (token: Token) => {
+      started = true;
+      await gate.promise;
+      return chain.balances[token];
+    };
+    const stub = botStub("b-earner-gate-paused-read");
+    await initBot(stub, { earner: true });
+
+    const fired = runDurableObjectAlarm(stub);
+    await waitUntil(() => started);
+    await stub.pause();
+    gate.resolve();
+    await fired;
+
+    expect((await stub.snapshot())?.meta.status).toBe("paused");
+    expect(await alarmAt(stub)).toBeNull();
   });
 });

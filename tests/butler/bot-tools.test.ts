@@ -2,7 +2,6 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { Type } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotChatInput } from "../../src/bot/bot-chat-do";
-import { RULES_LIMIT } from "../../src/bot/docs";
 import { BotStore } from "../../src/bot/bot-store";
 import { BotsRepo } from "../../src/butler/bots-repo";
 import {
@@ -12,7 +11,7 @@ import {
   type TaskControl,
 } from "../../src/butler/bot-tools";
 import { setClockOverride } from "../../src/butler/notifier";
-import { t, type Locale } from "../../src/i18n";
+import { t } from "../../src/i18n";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -86,7 +85,7 @@ async function runTool(
   botOverride?: BotControl,
   destroyChat?: (id: string) => Promise<void>,
   ask?: (id: string, input: BotChatInput) => Promise<string>,
-  deps: Pick<BotToolDeps, "walletConfigured" | "locale"> = {},
+  deps: Pick<BotToolDeps, "locale"> = {},
 ): Promise<{
   text: string;
   isError: boolean;
@@ -306,7 +305,7 @@ describe("butler bot tools", () => {
     });
   });
 
-  it("create_bot keeps the wallet-less schema and description unchanged", async () => {
+  it("create_bot has no earner parameter even with a wallet", async () => {
     await botStub("b1").destroy();
     const expected = Type.Object({
       name: Type.String(),
@@ -335,158 +334,6 @@ describe("butler bot tools", () => {
       (result.parameters as { properties: Record<string, unknown> }).properties,
     ).not.toHaveProperty("earner");
     expect(result.description).not.toContain("earner");
-  });
-
-  it("create_bot creates an earner with the default rules", async () => {
-    await botStub("b1").destroy();
-    const result = await runTool(
-      "create_bot",
-      {
-        name: "谋生机器人",
-        mission: "让钱包慢慢变多",
-        default_interval: "4h",
-        earner: true,
-      },
-      [],
-      "bot-tools-create-earner",
-      undefined,
-      undefined,
-      undefined,
-      { walletConfigured: true, locale: "zh" },
-    );
-
-    expect(result.text).toContain("已创建机器人 b1");
-    expect(
-      (result.parameters as { properties: Record<string, unknown> }).properties,
-    ).toHaveProperty("earner");
-    const snapshot = await botStub("b1").snapshot();
-    expect(snapshot?.meta.earner).toBe(true);
-    expect(snapshot?.docs).toContainEqual({
-      name: "守则",
-      content: t("zh", "wallet.earner.defaultRules"),
-    });
-  });
-
-  it("create_bot only has one earner at a time", async () => {
-    await botStub("b1").destroy();
-    await botStub("b2").destroy();
-    const deps = { walletConfigured: true, locale: "zh" as Locale };
-    await runTool(
-      "create_bot",
-      {
-        name: "谋生机器人",
-        mission: "让钱包慢慢变多",
-        default_interval: "4h",
-        earner: true,
-      },
-      [],
-      "bot-tools-earner-unique",
-      undefined,
-      undefined,
-      undefined,
-      deps,
-    );
-
-    const second = await runTool(
-      "create_bot",
-      { name: "第二个", mission: "也来谋生", default_interval: "4h", earner: true },
-      [],
-      "bot-tools-earner-unique",
-      undefined,
-      undefined,
-      undefined,
-      deps,
-    );
-
-    expect(second.text).toBe(t("zh", "wallet.earner.exists"));
-    expect(second.rows).toHaveLength(1);
-    expect(await botStub("b2").snapshot()).toBeNull();
-  });
-
-  it("create_bot can make another earner after deleting the first", async () => {
-    await botStub("b1").destroy();
-    await botStub("b2").destroy();
-    const deps = { walletConfigured: true, locale: "zh" as Locale };
-    const input = {
-      name: "谋生机器人",
-      mission: "让钱包慢慢变多",
-      default_interval: "4h",
-      earner: true,
-    };
-    await runTool(
-      "create_bot",
-      input,
-      [],
-      "bot-tools-earner-recreate",
-      undefined,
-      undefined,
-      undefined,
-      deps,
-    );
-    const deleted = await runTool(
-      "delete_bot",
-      { id: "b1" },
-      [],
-      "bot-tools-earner-recreate",
-    );
-    expect(deleted.text).toBe("已删除机器人 b1");
-
-    const again = await runTool(
-      "create_bot",
-      input,
-      [],
-      "bot-tools-earner-recreate",
-      undefined,
-      undefined,
-      undefined,
-      deps,
-    );
-
-    expect(again.text).toContain("已创建机器人 b2");
-    expect((await botStub("b2").snapshot())?.meta.earner).toBe(true);
-  });
-
-  it("create_bot refuses when an existing snapshot fails", async () => {
-    const failing = new Proxy({} as BotControl, {
-      get(_target, property) {
-        if (property === "snapshot") {
-          return async () => {
-            throw new Error("snapshot failed");
-          };
-        }
-        return async () => null;
-      },
-    });
-    const butlerName = "bot-tools-earner-snapshot-error";
-    await runInDurableObject(butler(butlerName), (_instance, state) => {
-      new BotsRepo(state.storage.sql).insert({ id: "b1", name: "旧机器人" });
-    });
-
-    const result = await runTool(
-      "create_bot",
-      { name: "谋生机器人", mission: "让钱包慢慢变多", default_interval: "4h", earner: true },
-      [],
-      butlerName,
-      failing,
-      undefined,
-      undefined,
-      { walletConfigured: true, locale: "zh" },
-    );
-
-    expect(result.text).not.toContain("已创建机器人");
-    expect(result.rows).toHaveLength(1);
-    expect(result.rows[0]).toMatchObject({ id: "b1", name: "旧机器人" });
-  });
-
-  it("keeps both default earner rulebooks within the rules limit", () => {
-    for (const locale of ["zh", "en"] as Locale[]) {
-      expect(
-        t(locale, "wallet.earner.defaultRules").length,
-      ).toBeLessThanOrEqual(RULES_LIMIT);
-      expect(t(locale, "wallet.earner.exists")).not.toBe(
-        `wallet.earner.exists`,
-      );
-    }
   });
 
   it("create_bot rejects over-limit rules before creating the bot", async () => {
@@ -702,6 +549,41 @@ describe("butler bot tools", () => {
     );
 
     expect(result.text).toBe("已安排 b1 立即唤醒");
+  });
+
+  it("delete_bot refuses the earner", async () => {
+    await botStub("b1").destroy();
+    const butlerName = "bot-tools-delete-earner";
+    await runInDurableObject(butler(butlerName), (_instance, state) => {
+      new BotsRepo(state.storage.sql).insert({ id: "b1", name: "谋生" });
+    });
+    await botStub("b1").init({
+      botId: "b1",
+      name: "谋生",
+      mission: "让钱包增长",
+      defaultIntervalMs: 2 * 60 * MINUTE,
+      firstWakeAt: now + 2 * 60 * MINUTE,
+      earner: true,
+    });
+    await setRunningTask("b1", "t1");
+    const calls: string[] = [];
+
+    try {
+      const deleted = await runTool(
+        "delete_bot",
+        { id: "b1" },
+        calls,
+        butlerName,
+      );
+
+      expect(deleted.text).toBe(t("zh", "wallet.earner.undeletable"));
+      expect(deleted.rows).toHaveLength(1);
+      expect((await botStub("b1").snapshot())?.meta.status).toBe("active");
+      expect(calls).toEqual([]);
+    } finally {
+      // Bot DO names are shared across tests in this file: leave no earner.
+      await botStub("b1").destroy();
+    }
   });
 
   it("delete_bot cancels the run and empties the bot", async () => {

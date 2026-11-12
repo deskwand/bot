@@ -7,6 +7,12 @@ export const DIET_RECHECK_MS = 3_600_000;
 export const MIN_WAKE_MS = 300_000;
 export const MAX_WAKE_MS = 2_592_000_000;
 
+/** The earner schedules its own wakes less often than an ordinary bot. */
+export const EARNER_MIN_WAKE_MS = 1_800_000;
+
+/** How long the earner's wake is deferred while the wallet cannot pay. */
+export const EARNER_IDLE_RECHECK_MS = 3_600_000;
+
 /** How many wakes a bot may start in one UTC day, manual wakes included. */
 export const DAILY_WAKE_LIMIT = 48;
 
@@ -75,9 +81,10 @@ export function clampWakeAt(
   now: number,
   at: number,
   maxMs: number = MAX_WAKE_MS,
+  minMs: number = MIN_WAKE_MS,
 ): { at: number; clamped: boolean } {
-  const min = now + MIN_WAKE_MS;
-  const max = now + Math.max(MIN_WAKE_MS, Math.min(maxMs, MAX_WAKE_MS));
+  const min = now + minMs;
+  const max = now + Math.max(minMs, Math.min(maxMs, MAX_WAKE_MS));
   if (at < min) return { at: min, clamped: true };
   if (at > max) return { at: max, clamped: true };
   return { at, clamped: false };

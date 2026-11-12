@@ -75,6 +75,14 @@ export default {
           error instanceof Error ? error.constructor.name : "Error",
         );
       }
+      try {
+        await butler(env).ensureEarner();
+      } catch (error) {
+        console.warn(
+          "earner ensure failed:",
+          error instanceof Error ? error.constructor.name : "Error",
+        );
+      }
     }
 
     const hub = channels(env);

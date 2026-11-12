@@ -945,20 +945,9 @@ export class TaskDO extends Agent<Env> {
 
     const bot = this.env.BOT.get(this.env.BOT.idFromName(botId));
     const butler = this.env.BUTLER.get(this.env.BUTLER.idFromName("owner"));
-    this.registry.install({
-      name: "bot",
-      tools: createBotTaskTools({
-        bot,
-        taskId: () => this.currentTaskId() ?? "",
-        notify: (text) => butler.notifyFromBot(botId, text),
-        approvals: this.approvals,
-        locale: ownerLocale(this.env),
-      }),
-    });
-
-    if (!walletConfigured(this.env)) return;
-    // The bot's flag decides whether it gets the trading tools at all. A failed
-    // read leaves them out; the alternative would be a bot that cannot trade.
+    // One read decides both the bot tools and the wallet tools. A failed read
+    // leaves the wallet tools out; the alternative would be a bot that cannot
+    // trade. It also means an unreadable earner is treated as ordinary.
     let snapshot: Awaited<ReturnType<typeof bot.snapshot>> = null;
     try {
       snapshot = await bot.snapshot();
@@ -968,7 +957,21 @@ export class TaskDO extends Agent<Env> {
         error instanceof Error ? error.constructor.name : "Error",
       );
     }
-    if (snapshot?.meta.earner === true) {
+    const earner = snapshot?.meta.earner === true;
+    this.registry.install({
+      name: "bot",
+      tools: createBotTaskTools({
+        bot,
+        taskId: () => this.currentTaskId() ?? "",
+        notify: (text) => butler.notifyFromBot(botId, text),
+        approvals: this.approvals,
+        earner,
+        locale: ownerLocale(this.env),
+      }),
+    });
+
+    if (!walletConfigured(this.env)) return;
+    if (earner) {
       this.registry.install({
         name: "wallet",
         tools: createEarnerTools({
