@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { BotChatInput } from "../bot/bot-chat-do";
 import type { BotInit, BotSnapshot } from "../bot/bot-do";

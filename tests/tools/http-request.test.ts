@@ -1,6 +1,6 @@
 import { readCapped } from "../../src/tools/http-body";
 import { withProgress } from "../../src/tools/wrap";
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
 import { isBlockedHost, httpRequestTool, reviewArgs, safeRequestUrl } from "../../src/tools/http-request";

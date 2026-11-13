@@ -6,8 +6,6 @@ export const TURN_STALL_MS = 300_000;
 export const TURN_CHECK_EVERY_MS = 60_000;
 /** Alarms cannot be trusted with sub-second delays; keep a floor. */
 export const TURN_EARLIEST_GAP_MS = 1_000;
-/** How long a parked turn may stay parked after one retry before it is dropped. */
-export const TURN_PARKED_GRACE_MS = 60_000;
 
 /** Backoff before the next delivery attempt, by the number of failed sends. */
 const RETRY_DELAYS_MS = [30_000, 120_000, 600_000] as const;
@@ -16,7 +14,7 @@ export function retryDelayMs(attempts: number): number {
   return RETRY_DELAYS_MS[Math.min(Math.max(attempts, 1), 3) - 1]!;
 }
 
-export type TurnPhase = "queued" | "running" | "parked";
+export type TurnPhase = "queued" | "running";
 
 export type TurnActivity =
   | { kind: "waiting_model" }

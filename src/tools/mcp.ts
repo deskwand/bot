@@ -2,7 +2,7 @@ import {
   normalizeServerId,
   type MCPClientManager,
 } from "agents/mcp/client";
-import { Type, type Static, type TSchema } from "@earendil-works/pi-ai";
+import { Type, type Static, type TSchema } from "typebox";
 import type {
   Extension,
   ToolExecutionResult,

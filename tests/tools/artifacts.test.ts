@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";

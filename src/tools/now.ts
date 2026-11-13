@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 
 const Now = Type.Object({

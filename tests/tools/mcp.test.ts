@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
 import type { McpServerConfig } from "../../src/config";
 import type { TaskEventBody } from "../../src/protocol";

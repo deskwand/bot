@@ -65,7 +65,7 @@ describe("oneShotOptions", { timeout: 30_000 }, () => {
     );
 
     expect(call.url).toBe(
-      "https://opencode.ai/inference/go/v1/chat/completions",
+      "https://opencode.ai/inference/go/openai/v1/chat/completions",
     );
     expect(call.headers.get("x-opencode-session")).toBe(SESSION_ID);
   });

@@ -1,5 +1,5 @@
-import { Type } from "@earendil-works/pi-ai";
-import type { Context } from "@earendil-works/chord";
+import { Type } from "typebox";
+import type { Context } from "@earendil-works/chord/context";
 import type {
   ToolExecutionResult,
   ToolRegistration,

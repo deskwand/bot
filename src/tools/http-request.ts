@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import { rejectionText, type ApprovalGateLike } from "../task/approvals";
 import { readCapped, truncate, withAbort } from "./http-body";

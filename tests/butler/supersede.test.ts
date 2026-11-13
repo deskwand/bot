@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { PiHarness, PiOperationResult } from "agents/harness/pi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

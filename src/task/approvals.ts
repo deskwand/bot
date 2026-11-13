@@ -1,4 +1,4 @@
-import type { TSchema, Static } from "@earendil-works/pi-ai";
+import type { TSchema } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { Locale } from "../i18n";
 import type { TaskEventBody } from "../protocol";
@@ -485,7 +485,7 @@ export function withApproval<T extends TSchema>(
 ): ToolRegistration<T> {
   return {
     ...tool,
-    async execute(args: Static<T>, api, context) {
+    async execute(args, api, context) {
       const signal = context.abortSignal;
       const decision = await gate.request(tool.name, args, signal ?? NEVER_ABORTED, {
         description: tool.description,

@@ -1,6 +1,6 @@
 import { BODY_TRUNCATION_MARKER, readCapped, truncate } from "./http-body";
 import { callAcceptsImages, classifyFile, renderFile, type DocumentConverter } from "./file-content";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 
 const Fetch = Type.Object({

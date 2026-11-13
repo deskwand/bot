@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   createRegistry,
   Harness,

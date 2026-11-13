@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { readRuntimeConfig } from "../runtime-config";
 import { braveAdapter } from "./search/brave";

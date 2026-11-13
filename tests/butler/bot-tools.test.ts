@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotChatInput } from "../../src/bot/bot-chat-do";
 import { BotStore } from "../../src/bot/bot-store";

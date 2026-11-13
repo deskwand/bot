@@ -7,4 +7,4 @@ import type { ProgressPolicy } from "@earendil-works/pi-durable";
 export const PI_PROGRESS = {
   partialIntervalMs: 30_000,
   outputIntervalMs: 30_000,
-} as const satisfies ProgressPolicy;
+} as const satisfies Partial<ProgressPolicy>;

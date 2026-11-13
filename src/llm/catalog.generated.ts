@@ -26,6 +26,7 @@ import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import { qwenTokenPlanProvider } from "@earendil-works/pi-ai/providers/qwen-token-plan";
 import { qwenTokenPlanCnProvider } from "@earendil-works/pi-ai/providers/qwen-token-plan-cn";
 import { qwenTokenPlanIndividualProvider } from "@earendil-works/pi-ai/providers/qwen-token-plan-individual";
+import { qwenTokenPlanIndividualCnProvider } from "@earendil-works/pi-ai/providers/qwen-token-plan-individual-cn";
 import { togetherProvider } from "@earendil-works/pi-ai/providers/together";
 import { vercelAIGatewayProvider } from "@earendil-works/pi-ai/providers/vercel-ai-gateway";
 import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
@@ -59,6 +60,7 @@ export const BUILTIN_PROVIDERS: readonly { id: string; create: () => Provider }[
   { id: "qwen-token-plan", create: () => qwenTokenPlanProvider() },
   { id: "qwen-token-plan-cn", create: () => qwenTokenPlanCnProvider() },
   { id: "qwen-token-plan-individual", create: () => qwenTokenPlanIndividualProvider() },
+  { id: "qwen-token-plan-individual-cn", create: () => qwenTokenPlanIndividualCnProvider() },
   { id: "together", create: () => togetherProvider() },
   { id: "vercel-ai-gateway", create: () => vercelAIGatewayProvider() },
   { id: "xai", create: () => xaiProvider() },

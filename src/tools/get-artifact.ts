@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import type { ArtifactStore } from "../artifact-store";
 import { readCapped, truncate } from "./http-body";

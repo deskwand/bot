@@ -7,6 +7,7 @@ import { setModelOverride } from "../../src/llm/models";
 import { loadMcpTools } from "../../src/tools/mcp";
 import { fakeChannel } from "../helpers/fake-channel";
 import { scriptedModel } from "../helpers/scripted-model";
+import { mapSettledFailureToRestartLimit } from "../helpers/task-recovery";
 
 declare module "cloudflare:test" { interface ProvidedEnv extends Env {} }
 
@@ -265,26 +266,28 @@ describe("TaskDO codemode",()=>{
   });
 });
 
-it("installs scripts and search again when a failed task is retried", async () => {
+it("installs scripts and search again when a settled failed task is retried", async () => {
   const id = "t-code-retry";
   const stub = task(id);
-  // Retryable failures are only produced by pi's restart-limit report, so seed
-  // the durable state a parked task would have instead of forcing a crash loop.
-  await runInDurableObject(stub, async (instance) => {
-    const target = instance as unknown as {
-      setMeta(key: string, value: string): void;
-      outboxFor(taskId: string): { emit(body: unknown): Promise<void> };
-    };
-    target.setMeta("task_id", id);
-    target.setMeta("title", id);
-    target.setMeta("state", "failed");
-    await target.outboxFor(id).emit({ type: "failed", reason: "任务反复中断，已暂停", retryable: true });
-  });
+  let recovered: ToolResultMessage | undefined;
+  const recovery = scriptedModel([
+    { toolCalls: [{ name: "codemode", args: { code: "return 17;" } }] },
+    { text: "recovered", observe: (context) => { recovered = lastResult(context); } },
+  ]);
+  await muteSpeaker();
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  setModelOverride(scriptedModel([{ error: "synthetic run failure" }]));
+  mapSettledFailureToRestartLimit(`task:${id}`);
+  await stub.start({ taskId: id, title: id, instructions: "run script after recovery" });
+  await vi.waitFor(async () => expect((await stub.status()).state).toBe("failed"));
+  expect(await runInDurableObject(stub, (instance) => instance.harness.pending())).toEqual([]);
+
+  await runInDurableObject(stub, (instance) => instance.harness.session().setModel(recovery));
   await evictDurableObject(stub);
-
-  const retried = await stub.retryTask();
-  expect(retried.ok).toBe(true);
-
+  expect((await stub.retryTask()).ok).toBe(true);
+  await complete(stub);
+  expect(recovered?.isError).not.toBe(true);
+  expect(text(recovered!)).toContain("17");
   const names = await runInDurableObject(stub, (instance) =>
     instance.registry.snapshot().tools().map(({ tool }) => tool.name),
   );

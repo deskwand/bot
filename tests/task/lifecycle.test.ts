@@ -1,9 +1,9 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { PiHarness, PiSession } from "agents/harness/pi";
-import { Type, type ToolResultMessage, type TranscriptContext } from "@earendil-works/pi-ai";
+import type { ToolResultMessage, TranscriptContext } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   Harness,
-  type ReportInfo,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { env, runInDurableObject } from "cloudflare:test";
@@ -23,6 +23,7 @@ import { scriptedModel } from "../helpers/scripted-model";
 import { fakeChannel } from "../helpers/fake-channel";
 import { seedOwnerAddress } from "../helpers/channel-ref";
 import { resetLife } from "../helpers/life";
+import { mapSettledFailureToRestartLimit, reportInterruption } from "../helpers/task-recovery";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -128,20 +129,6 @@ async function releaseSlow(stub: ReturnType<typeof task>): Promise<void> {
   await runInDurableObject(stub, (instance) => {
     const control = slowControl(instance);
     if (control) control.released = true;
-  });
-}
-
-/** Calls the DO's private report handler, as pi's `onReport` would. */
-async function reportParked(stub: ReturnType<typeof task>): Promise<void> {
-  const info = {
-    type: "task_parked",
-    task: { id: "pi-task", kind: "agent", conversationId: "1" },
-  } as unknown as ReportInfo;
-  await runInDurableObject(stub, async (instance) => {
-    const sink = instance as unknown as {
-      handleReport(error: unknown, info: ReportInfo): Promise<void>;
-    };
-    await sink.handleReport(undefined, info);
   });
 }
 
@@ -920,51 +907,45 @@ describe("TaskDO workspace", () => {
     expect((await stub.status()).state).toBe("failed");
   });
 
-  it("keeps drafts after a retryable failure and can still read them on retry", async () => {
-    setModelOverride(
-      scriptedModel([
-        { toolCalls: [{ name: "write", args: { path: "d.md", content: "草稿" } }] },
-        { toolCalls: [{ name: "slow_wait", args: {} }] },
-        { text: "after retry" },
-      ]),
-    );
-    const taskId = "t-cleanup-retry";
+  it.each(["before", "after", "absent"])("keeps drafts when a restart-limit report is %s the terminal result", async (order) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const taskId = `t-cleanup-retry-${order}`;
     const stub = task(taskId);
+    let readText = "";
+    const recovery = scriptedModel([
+      { toolCalls: [{ name: "read", args: { path: "d.md" } }] },
+      { text: "after retry", observe: (context) => { readText = lastToolText(context); } },
+    ]);
+    setModelOverride(scriptedModel([
+      { toolCalls: [{ name: "write", args: { path: "d.md", content: "草稿" } }] },
+      { toolCalls: [{ name: "slow_wait", args: {} }] },
+      { error: "synthetic run failure" },
+    ]));
+    mapSettledFailureToRestartLimit(`task:${taskId}`);
     await installSlowWait(stub);
-
     await stub.start(spec(taskId));
     await waitForSlowStart(stub);
-    await reportParked(stub);
-
-    await vi.waitFor(
-      async () => {
-        const events = await butler().debugEvents(taskId);
-        expect(events[1]?.payload).toMatchObject({
-          type: "failed",
-          retryable: true,
-        });
-      },
-      { timeout: 10_000 },
-    );
-
-    // A retry resumes the same draft area, so the non-retryable cleanup above
-    // must not run for this failure.
-    expect(await workspaceKeys(taskId)).toEqual([`work/${taskId}/d.md`]);
-    expect(await (await env.ARTIFACTS.get(`work/${taskId}/d.md`))!.text()).toBe(
-      "草稿",
-    );
-
-    await expect(stub.retryTask()).resolves.toMatchObject({ ok: true });
-    expect(await workspaceKeys(taskId)).toEqual([`work/${taskId}/d.md`]);
-
+    if (order === "before") await reportInterruption(stub);
     await releaseSlow(stub);
-    await vi.waitFor(
-      async () => {
-        expect((await stub.status()).state).toBe("completed");
-      },
-      { timeout: 10_000 },
-    );
+    await vi.waitFor(async () => expect((await stub.status()).state).toBe("failed"));
+    if (order === "after") await reportInterruption(stub);
+    const events = await butler().debugEvents(taskId);
+    expect(events.map((event) => event.type)).toEqual(["started", "failed"]);
+    expect(events[1]?.payload).toMatchObject({ retryable: true });
+    expect(await workspaceKeys(taskId)).toEqual([`work/${taskId}/d.md`]);
+    expect(await (await env.ARTIFACTS.get(`work/${taskId}/d.md`))!.text()).toBe("草稿");
+    expect(await runInDurableObject(stub, (instance) => instance.harness.pending())).toEqual([]);
+
+    await runInDurableObject(stub, (instance) => instance.harness.session().setModel(recovery));
+    expect((await stub.retryTask()).ok).toBe(true);
+    expect((await runInDurableObject(stub, (instance) =>
+      instance.harness.wait(`task:${taskId}:retry:1`),
+    )).status).toBe("done");
+    await vi.waitFor(async () => expect((await stub.status()).state).toBe("completed"));
+    expect(readText).toContain("草稿");
   });
+
 });
 
 describe("TaskDO artifacts", () => {

@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { t, type Locale, type MessageKey } from "../i18n";
 import { CHAINS, type Token } from "./chain";

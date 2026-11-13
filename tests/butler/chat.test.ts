@@ -3,11 +3,11 @@ import {
   fauxProvider,
   fauxText,
   fauxToolCall,
-  Type,
   type FauxResponseStep,
   type ToolCall,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { Provider } from "@earendil-works/pi-ai/models";
 import { Harness, type ToolRegistration } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";

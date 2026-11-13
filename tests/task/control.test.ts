@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { PiHarness } from "agents/harness/pi";
-import { Type } from "@earendil-works/pi-ai";
-import type { ReportInfo, ToolRegistration } from "@earendil-works/pi-durable";
+import { Type } from "typebox";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
@@ -9,6 +9,7 @@ import { setModelOverride } from "../../src/llm/models";
 import type { TaskSpec } from "../../src/protocol";
 import { fakeChannel } from "../helpers/fake-channel";
 import { scriptedModel } from "../helpers/scripted-model";
+import { mapSettledFailureToRestartLimit, operationIdOf, reportInterruption } from "../helpers/task-recovery";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -250,57 +251,56 @@ describe("TaskDO control", () => {
     expect(events.some((event) => event.type === "completed")).toBe(false);
   });
 
-  it("parks a task that keeps crashing and retries it", async () => {
-    setModelOverride(
-      scriptedModel([
-        { toolCalls: [{ name: "slow_wait", args: {} }] },
-        { text: "after retry" },
-      ]),
-    );
-    const taskId = "t-park";
+  it("retries a settled failure on a fresh operation id", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const taskId = "t-retry-settled";
     const stub = taskStub(taskId);
+    const recovery = scriptedModel([
+      { toolCalls: [{ name: "slow_wait", args: {} }] },
+      { text: "after retry" },
+    ]);
+    setModelOverride(scriptedModel([{ error: "synthetic run failure" }]));
+    mapSettledFailureToRestartLimit(`task:${taskId}`);
     await installSlowWait(stub);
+    await stub.start(spec(taskId));
+    await vi.waitFor(async () => {
+      expect((await stub.status()).state).toBe("failed");
+      expect((await butler().debugEvents(taskId))[1]?.payload).toMatchObject({ retryable: true });
+    });
+    expect(await runInDurableObject(stub, (instance) => instance.harness.pending())).toEqual([]);
 
+    await runInDurableObject(stub, (instance) => instance.harness.session().setModel(recovery));
+    expect((await stub.retryTask()).ok).toBe(true);
+    expect(await operationIdOf(stub)).toBe(`task:${taskId}:retry:1`);
+    await waitForSlowStart(stub);
+    expect((await butler().debugEvents(taskId)).map((event) => event.type))
+      .toEqual(["started", "failed", "started"]);
+    await releaseSlowTask(stub);
+    const result = await runInDurableObject(stub, (instance) =>
+      instance.harness.wait(`task:${taskId}:retry:1`),
+    );
+    expect(result.status).toBe("done");
+    await vi.waitFor(async () => expect((await stub.status()).state).toBe("completed"));
+  });
+
+  it.each(["pi.tool", "pi.compaction"])("keeps a run alive after a %s interruption report", async (kind) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const taskId = `t-local-${kind}`;
+    const stub = taskStub(taskId);
+    setModelOverride(scriptedModel([
+      { toolCalls: [{ name: "slow_wait", args: {} }] },
+      { text: "finished despite local failure" },
+    ]));
+    await installSlowWait(stub);
     await stub.start(spec(taskId));
     await waitForSlowStart(stub);
-    await reportParked(stub);
-
-    await vi.waitFor(
-      async () => {
-        const events = await butler().debugEvents(taskId);
-        expect(events[1]?.payload).toMatchObject({
-          type: "failed",
-          reason: "任务反复中断，已暂停",
-          retryable: true,
-        });
-      },
-      { timeout: 10_000 },
-    );
-    expect((await stub.status()).state).toBe("failed");
-
-    const result = await stub.retryTask();
-    expect(result.ok).toBe(true);
-
-    await vi.waitFor(
-      async () => {
-        const events = await butler().debugEvents(taskId);
-        expect(events.map((event) => event.type)).toEqual([
-          "started",
-          "failed",
-          "started",
-        ]);
-      },
-      { timeout: 10_000 },
-    );
+    await reportInterruption(stub, kind);
     expect((await stub.status()).state).toBe("running");
-
+    expect((await butler().debugEvents(taskId)).map((event) => event.type)).toEqual(["started"]);
     await releaseSlowTask(stub);
-    await vi.waitFor(
-      async () => {
-        expect((await stub.status()).state).toBe("completed");
-      },
-      { timeout: 10_000 },
-    );
+    await vi.waitFor(async () => expect((await stub.status()).state).toBe("completed"));
+    expect((await butler().debugEvents(taskId)).map((event) => event.type))
+      .toEqual(["started", "completed"]);
   });
 
   it("starts the session at the task role's default thinking level", async () => {
@@ -345,17 +345,3 @@ describe("TaskDO control", () => {
     expect(result.message).toContain("不可重试");
   });
 });
-
-/** Calls the DO's private report handler, as pi's `onReport` would. */
-async function reportParked(stub: TaskStub): Promise<void> {
-  const info = {
-    type: "task_parked",
-    task: { id: "pi-task", kind: "agent", conversationId: "1" },
-  } as unknown as ReportInfo;
-  await runInDurableObject(stub, async (instance) => {
-    const sink = instance as unknown as {
-      handleReport(error: unknown, info: ReportInfo): Promise<void>;
-    };
-    await sink.handleReport(undefined, info);
-  });
-}

@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { t, type Locale } from "../i18n";
 import type { ModelRef, Role } from "../llm/models";

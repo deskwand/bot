@@ -9,14 +9,15 @@ import { mailExtension } from "../mail/install";
 import { nowTool } from "../tools/now";
 import { Agent, type Schedule } from "agents";
 import { PiHarness } from "agents/harness/pi";
-import { contentText, Type } from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   createRegistry,
   GenerationTask,
   Harness,
   hook,
   ToolTask,
-  type ReportInfo,
+  type Report,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
@@ -124,6 +125,24 @@ type ControlResult = { ok: boolean; message: string };
 /** How long `cancel()` waits for pi to become idle before returning anyway. */
 const ABORT_TIMEOUT_MS = 10_000;
 
+/** Meta key holding the retry round that may still be waiting for admission. */
+const RETRY_ADMISSION_KEY = "retry_admission";
+
+/**
+ * A retry round that was claimed but whose `continue()` may not have been
+ * accepted by pi yet. Stored before any await of that round, so a restart can
+ * tell "this round never became visible" (`started: false`) apart from "this
+ * round started, admission may or may not have landed" (`started: true`).
+ */
+type RetryAdmission = {
+  operationId: string;
+  previousOperationId?: string;
+  started: boolean;
+};
+
+/** How one retry admission ended, for the RPC's own reply. */
+type AdmissionOutcome = "admitted" | "withdrawn" | { failed: string };
+
 /**
  * The follow-up as the model reads it: a new request on a finished task.
  * Drafts were cleared when the earlier round finished; artifacts were not.
@@ -224,6 +243,13 @@ export class TaskDO extends Agent<Env> {
 
   /** Runs currently attached to this instance through `watchRun`. */
   private watchers = 0;
+
+  /**
+   * The retry round this instance is admitting right now, if any. In memory
+   * only: while pi has no submission for the id yet, a liveness probe must not
+   * watch it, and a second admission must not race the first.
+   */
+  private activeAdmission: string | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -461,8 +487,8 @@ export class TaskDO extends Agent<Env> {
               const id = this.currentTaskId();
               return id ? createR2WorkspaceEnv(artifactStore(this.env), id) : undefined;
             },
-            onReport: (error, info) => {
-              this.ctx.waitUntil(this.handleReport(error, info));
+            onReport: (report) => {
+              this.handleReport(report);
             },
           },
           context,
@@ -507,13 +533,15 @@ export class TaskDO extends Agent<Env> {
       if (this.hasCompletedEvent()) {
         // Crashed after recording `completed` but before storing the state.
         this.setMeta("state", "completed");
-      } else {
+      } else if (!(await this.resumeRetryAdmission())) {
         const operationId = this.readMeta("operation_id");
         if (operationId) this.ctx.waitUntil(this.watchRun(operationId));
-        // A re-attached run must keep its stall watch; no bot run is watched.
-        if (this.spec?.botId === undefined) {
-          await this.armStallCheckFromActivity();
-        }
+      }
+      // A re-attached run must keep its stall watch; no bot run is watched.
+      // Recovery can end the round instead (a claim that never started), so
+      // only a still-running task arms it.
+      if (this.currentState() === "running" && this.spec?.botId === undefined) {
+        await this.armStallCheckFromActivity();
       }
     }
   }
@@ -730,6 +758,18 @@ export class TaskDO extends Agent<Env> {
     ) {
       return { state, reattached: false };
     }
+    // A round this instance is still admitting has no pi submission to wait
+    // on yet; watching it would record a permanent `not_found` failure. The
+    // admission itself attaches the watcher when it returns.
+    if (this.activeAdmission === operationId) {
+      return { state, reattached: false };
+    }
+    // An interrupted admission comes first: either it resumes the round or it
+    // restores the settled failure it replaced. Only then is a plain wait safe.
+    if (this.readRetryAdmission()?.operationId === operationId) {
+      this.ctx.waitUntil(this.resumeRetryAdmission());
+      return { state, reattached: true };
+    }
     this.ctx.waitUntil(this.watchRun(operationId));
     return { state, reattached: true };
   }
@@ -801,24 +841,259 @@ export class TaskDO extends Agent<Env> {
     if (!lastFailure?.retryable) {
       return { ok: false, message: retryNotRetryableText(locale, taskId) };
     }
-    // A retried run is a new turn on a possibly fresh instance: its tool
-    // declarations come from the registry, so install them first.
-    await this.ensureMcpTools();
-    await this.ensureBotTools();
-    await this.ensureMailTools();
-    await this.ensureExchangeTools();
-    // Revives the tasks pi's crash-loop guard parked. False means nothing was
-    // parked, followed by an ordinary run failure: re-attach to the run below.
-    await this.harness.session().retry();
-    this.setMeta("state", "running");
-    await this.beginStallWatch();
-    await this.outboxFor(taskId).emit({ type: "started" });
+    // Claim synchronously before tool setup: concurrent retries must not both
+    // pass the failed-state check or replace the winning operation id. The
+    // claim and its admission intent land in one transaction, so a restart
+    // either sees both or neither.
+    const intent = this.claimRetryRound(taskId);
+    // Also protects the setup below: this round has no pi submission yet, so
+    // liveness must not attach a watcher to it.
+    this.activeAdmission = intent.operationId;
+    try {
+      await this.ensureMcpTools();
+      await this.ensureBotTools();
+      await this.ensureMailTools();
+      await this.ensureExchangeTools();
+      if (!this.ownsRunningOperation(intent.operationId)) {
+        return this.retryWithdrawn(locale, taskId, intent);
+      }
+      const outcome = await this.admitRetry(intent);
+      if (outcome === "admitted") {
+        return { ok: true, message: retryOkText(locale, taskId) };
+      }
+      if (outcome === "withdrawn") {
+        return this.retryWithdrawn(locale, taskId, intent);
+      }
+      return { ok: false, message: outcome.failed };
+    } catch (error) {
+      // Only tool setup can fail here: the round never became visible, so the
+      // earlier settled failure still stands and its drafts stay.
+      const reason = error instanceof Error ? error.message : String(error);
+      this.rollBackRetryClaim(intent);
+      return { ok: false, message: reason };
+    } finally {
+      if (this.activeAdmission === intent.operationId) {
+        this.activeAdmission = undefined;
+      }
+    }
+  }
 
-    const operationId = this.readMeta("operation_id") ?? `task:${taskId}`;
-    this.setMeta("operation_id", operationId);
-    this.ctx.waitUntil(this.watchRun(operationId));
+  /** Reply for a retry whose round lost the task to a cancel or a newer round. */
+  private retryWithdrawn(
+    locale: ReturnType<typeof ownerLocale>,
+    taskId: string,
+    intent: RetryAdmission,
+  ): ControlResult {
+    this.clearRetryAdmission(intent.operationId);
+    return {
+      ok: false,
+      message: retryBlockedText(locale, taskId, this.currentState()),
+    };
+  }
 
-    return { ok: true, message: retryOkText(locale, taskId) };
+  /**
+   * Claim a retry round before the first await of `retryTask`. The round
+   * counter only grows, so an interrupted admission is resumed under the same
+   * operation id and a rolled-back claim is never reused.
+   */
+  private claimRetryRound(taskId: string): RetryAdmission {
+    const round = Number(this.readMeta("retries") ?? "0") + 1;
+    const intent: RetryAdmission = {
+      operationId: `task:${taskId}:retry:${round}`,
+      previousOperationId: this.readMeta("operation_id"),
+      started: false,
+    };
+    this.ctx.storage.transactionSync(() => {
+      this.setMeta("retries", String(round));
+      this.setMeta("operation_id", intent.operationId);
+      this.setMeta("state", "running");
+      this.writeRetryAdmission(intent);
+    });
+    return intent;
+  }
+
+  /**
+   * Persist this round's `started` row and its intent flag in one transaction.
+   * No crash may leave a visible round that recovery calls un-started, or an
+   * un-started intent whose round pi already has.
+   */
+  private recordRetryStarted(
+    intent: RetryAdmission,
+    taskId: string,
+  ): RetryAdmission {
+    const started: RetryAdmission = { ...intent, started: true };
+    const outbox = this.outboxFor(taskId);
+    this.ctx.storage.transactionSync(() => {
+      outbox.record({ type: "started" });
+      this.writeRetryAdmission(started);
+    });
+    return started;
+  }
+
+  /**
+   * Drive a claimed round to an admitted pi run. `retryTask` calls this right
+   * after the claim; startup and liveness call it for a round a crash left
+   * behind. Resuming never re-emits `started`: the intent says it exists.
+   */
+  private async admitRetry(intent: RetryAdmission): Promise<AdmissionOutcome> {
+    const taskId = this.currentTaskId();
+    if (taskId === undefined) return "withdrawn";
+    const operationId = intent.operationId;
+    let round = intent;
+    this.activeAdmission = operationId;
+    try {
+      if (!round.started) round = this.recordRetryStarted(round, taskId);
+      // Deliver `started` before pi can settle the round, as `start` does.
+      await this.outboxFor(taskId).flush();
+      if (!this.ownsRunningOperation(operationId)) {
+        this.clearRetryAdmission(operationId);
+        return "withdrawn";
+      }
+      // Same id on a resumed round: pi returns the submission it already has
+      // instead of admitting a second run, so crashing between acceptance and
+      // clearing the intent below is harmless.
+      await this.harness.session().continue({ operationId });
+      if (!this.ownsRunningOperation(operationId)) {
+        // A fast finish_task is successful admission, not a withdrawal.
+        if (this.readMeta("operation_id") === operationId && this.currentState() === "completed") {
+          this.clearRetryAdmission(operationId);
+          return "admitted";
+        }
+        // A cancel or a newer round landed during admission: withdraw only
+        // this round's submission.
+        await this.withdrawRound(operationId);
+        this.clearRetryAdmission(operationId);
+        return "withdrawn";
+      }
+      this.clearRetryAdmission(operationId);
+      try {
+        await this.beginStallWatch();
+      } catch (error) {
+        console.warn("task retry stall watch failed", error);
+      }
+      if (this.ownsRunningOperation(operationId)) {
+        this.ctx.waitUntil(this.watchRun(operationId));
+      }
+      return "admitted";
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (!round.started) {
+        // Nothing of this round reached the outbox or pi.
+        this.rollBackRetryClaim(round);
+        return { failed: reason };
+      }
+      if (this.ownsRunningOperation(operationId)) {
+        // `started` is durable, so this round failed retryably; its drafts
+        // are what a later retry resumes from.
+        await this.failWith(reason, true);
+      }
+      this.clearRetryAdmission(operationId);
+      return { failed: reason };
+    } finally {
+      if (this.activeAdmission === operationId) {
+        this.activeAdmission = undefined;
+      }
+    }
+  }
+
+  /**
+   * Finish a retry admission a crash interrupted. Returns whether an intent
+   * was found: if so, this either resumed the round (and attached its watcher)
+   * or ended it, so the caller must not attach a plain watcher as well.
+   */
+  private async resumeRetryAdmission(): Promise<boolean> {
+    const intent = this.readRetryAdmission();
+    if (intent === undefined) return false;
+    // This instance is already admitting that round: a second admission would
+    // race the first, and a watcher would wait on an id pi does not have yet.
+    if (this.activeAdmission === intent.operationId) return true;
+    // flushOutbox can defer startup without ending a liveness RPC. Recovery
+    // must honor that same fence before directly flushing or admitting work.
+    if (await this.deferStartupIfMaintenance()) return true;
+    // The lease query yielded: another RPC may have cancelled or claimed a
+    // newer round, or already begun recovery of this one.
+    const current = this.readRetryAdmission();
+    if (current === undefined) return false;
+    if (current.operationId !== intent.operationId ||
+        this.activeAdmission === intent.operationId) return true;
+    if (!this.ownsRunningOperation(intent.operationId)) {
+      // Cancelled, completed, or replaced by a newer round while we were away.
+      this.clearRetryAdmission(intent.operationId);
+      return false;
+    }
+    if (!intent.started) {
+      // The interrupted instance died before this round's `started` row
+      // existed, so pi never saw it: put back the settled failure it replaced.
+      this.rollBackRetryClaim(intent);
+      return true;
+    }
+    // `started` is durable but the submission may or may not be. Replay the
+    // same operation id: an accepted round is returned as it is, so this can
+    // never produce a second run.
+    await this.admitRetry(intent);
+    return true;
+  }
+
+  /**
+   * Undo a claim whose round never became visible. Only this round's own claim
+   * is touched; a cancel, a completion or a newer round always wins.
+   */
+  private rollBackRetryClaim(intent: RetryAdmission): void {
+    this.ctx.storage.transactionSync(() => {
+      if (this.readRetryAdmission()?.operationId !== intent.operationId) return;
+      if (this.readMeta("operation_id") !== intent.operationId) return;
+      if (this.readMeta("state") !== "running") {
+        // The round ended some other way; only the intent is stale.
+        this.deleteMeta(RETRY_ADMISSION_KEY);
+        return;
+      }
+      if (intent.previousOperationId === undefined) {
+        this.deleteMeta("operation_id");
+      } else {
+        this.setMeta("operation_id", intent.previousOperationId);
+      }
+      this.setMeta("state", "failed");
+      this.deleteMeta(RETRY_ADMISSION_KEY);
+    });
+    if (this.activeAdmission === intent.operationId) {
+      this.activeAdmission = undefined;
+    }
+  }
+
+  /** Withdraw one round's submission without touching a newer operation. */
+  private async withdrawRound(operationId: string): Promise<void> {
+    try {
+      await this.harness.abort({ operationId });
+    } catch (error) {
+      console.warn(
+        `task ${this.currentTaskId() ?? "unknown"} retry withdrawal failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private readRetryAdmission(): RetryAdmission | undefined {
+    const raw = this.readMeta(RETRY_ADMISSION_KEY);
+    if (raw === undefined) return undefined;
+    try {
+      return JSON.parse(raw) as RetryAdmission;
+    } catch (error) {
+      // A corrupt row must not wedge every retry and restart.
+      console.warn("Stored retry admission is unreadable", error);
+      this.deleteMeta(RETRY_ADMISSION_KEY);
+      return undefined;
+    }
+  }
+
+  private writeRetryAdmission(intent: RetryAdmission): void {
+    this.setMeta(RETRY_ADMISSION_KEY, JSON.stringify(intent));
+  }
+
+  /** Drop the intent, unless a newer round already replaced it. */
+  private clearRetryAdmission(operationId: string): void {
+    if (this.readRetryAdmission()?.operationId !== operationId) return;
+    this.deleteMeta(RETRY_ADMISSION_KEY);
   }
 
   /**
@@ -1069,22 +1344,20 @@ export class TaskDO extends Agent<Env> {
     }
   }
 
-  /**
-   * Pi's `onReport` sink. A parked task means pi gave up restarting it after
-   * `settings.restartLimit` crashes; report it retryable so the user can
-   * resume it with `retryTask()`.
-   */
-  private async handleReport(
-    _error: unknown,
-    info: ReportInfo,
-  ): Promise<void> {
-    if (info.type === "task_parked") {
-      await this.failWith(parkedTaskText(ownerLocale(this.env)), true);
-      return;
+  /** Reports describe individual Pi tasks; only an operation settles our task. */
+  private handleReport(report: Report): void {
+    if (
+      (report.kind === "task_interrupted" || report.kind === "task_faulted") &&
+      report.reason === "restart_limit"
+    ) {
+      console.warn("pi task reached restart limit", report.task, report.error);
     }
-    if (info.type === "task_faulted" && info.reason === "restart_limit") {
-      await this.failWith(parkedTaskText(ownerLocale(this.env)), true);
-    }
+  }
+
+  private ownsRunningOperation(operationId: string): boolean {
+    return this.readMeta("operation_id") === operationId &&
+      this.readMeta("state") === "running" &&
+      !this.hasCompletedEvent();
   }
 
   private async abortWithTimeout(): Promise<void> {
@@ -1121,9 +1394,15 @@ export class TaskDO extends Agent<Env> {
       // Re-attaching resumes Pi work, so it must wait out the lease. Startup
       // will re-attach from the persisted operation id on the next alarm.
       if (await this.deferStartupIfMaintenance()) return;
+      if (!this.ownsRunningOperation(operationId)) return;
       let summary = "";
       try {
         const result = await this.harness.wait(operationId);
+        if (!this.ownsRunningOperation(operationId)) return;
+        if (result.status === "unanswered" && result.reason === "restart_limit") {
+          await this.failWith(parkedTaskText(ownerLocale(this.env)), true);
+          return;
+        }
         if (result.status === "unanswered") {
           // Pi resolves `wait` for failed/aborted/withdrawn runs; they are not
           // completions, even when they carry no text.
@@ -1141,6 +1420,7 @@ export class TaskDO extends Agent<Env> {
               );
             }
           }
+          if (!this.ownsRunningOperation(operationId)) return;
           await this.fail(
             userTextForModelError(modelError, ownerLocale(this.env)) ??
               result.reason ??
@@ -1150,12 +1430,12 @@ export class TaskDO extends Agent<Env> {
         }
         summary = result.text ?? "";
       } catch (error) {
-        await this.fail(error);
+        if (this.ownsRunningOperation(operationId)) await this.fail(error);
         return;
       }
 
-      // `finish_task` may already have completed the task.
-      if (this.readMeta("state") !== "running" || this.hasCompletedEvent()) {
+      // `finish_task` or a newer round may have settled while we waited.
+      if (!this.ownsRunningOperation(operationId)) {
         return;
       }
       await this.finish(summary, []);
@@ -1249,11 +1529,7 @@ export class TaskDO extends Agent<Env> {
 
     // One failure per run: a second failure of the same run (after a retry
     // emitted a newer `started`) is still reported.
-    if (this.hasFailedSinceLastStart()) {
-      this.setMeta("state", "failed");
-      if (!retryable) this.clearDrafts(taskId);
-      return;
-    }
+    if (this.hasFailedSinceLastStart()) return;
 
     // Same crash-safe order as `finish`: the event row exists before state.
     const delivery = this.outboxFor(taskId).emit({
@@ -1632,5 +1908,9 @@ export class TaskDO extends Agent<Env> {
       key,
       value,
     );
+  }
+
+  private deleteMeta(key: string): void {
+    this.db.exec(`DELETE FROM meta WHERE key = ?`, key);
   }
 }

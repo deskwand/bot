@@ -1,4 +1,4 @@
-import type { Static, TSchema } from "@earendil-works/pi-ai";
+import type { TSchema } from "typebox";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import type { TaskEventBody } from "../protocol";
 
@@ -32,7 +32,7 @@ export function toolErrorResult(error: unknown): ToolExecutionResult {
 export function withProgress<T extends TSchema>(
   tool: ToolRegistration<T>,
   emit: (body: TaskEventBody) => Promise<void>,
-  describe: (args: Static<T>) => string,
+  describe: (args: Parameters<ToolRegistration<T>["execute"]>[0]) => string,
 ): ToolRegistration<T> {
   return {
     ...tool,

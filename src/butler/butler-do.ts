@@ -95,7 +95,6 @@ import {
   retryDelayMs,
   signatureOf,
   TURN_CHECK_EVERY_MS,
-  TURN_PARKED_GRACE_MS,
 } from "./turn";
 import { TurnStore, type TurnRow } from "./turn-store";
 import {
@@ -1844,28 +1843,6 @@ export class ButlerDO extends Agent<Env> {
           row.operationId,
           await this.harness.wait(row.operationId),
         );
-        continue;
-      }
-      if (operation.status === "parked") {
-        if (row.retriedAt === null) {
-          store.retried(row.operationId, now);
-          await this.harness.retry();
-          nextAt ??= now + 60_000;
-          continue;
-        }
-        if (now - row.retriedAt >= TURN_PARKED_GRACE_MS) {
-          // pi's crash-loop guard already stopped it and retry did not revive
-          // it. Withdraw so it leaves `pending()`, then tell the owner.
-          await this.abortTurn(row.operationId);
-          await this.sendTerminal(
-            row.operationId,
-            turnInterruptedText(ownerLocale(this.env)),
-            true,
-          );
-          continue;
-        }
-        store.start(row.operationId, now, true);
-        nextAt ??= now + 60_000;
         continue;
       }
       if (operation.status !== "running") {

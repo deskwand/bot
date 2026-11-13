@@ -1,9 +1,10 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setClockOverride } from "../../src/butler/notifier";
-import { TURN_PARKED_GRACE_MS } from "../../src/butler/turn";
+import { turnInterruptedText } from "../../src/butler/owner-copy";
+import { mapSettledFailureToRestartLimit } from "../helpers/task-recovery";
 import { setModelOverride } from "../../src/llm/models";
 import { setChannelOverride } from "../../src/channels/override";
 import type { AdmittedMessage, OutboundMessage } from "../../src/protocol";
@@ -24,7 +25,7 @@ type TurnInternals = {
   lease: { acquire(op: "export", opId: string): unknown };
   harness: {
     pending(): Promise<unknown[]>;
-    retry(): Promise<boolean>;
+    wait(operationId: string): Promise<import("agents/harness/pi").PiOperationResult>;
     abort(options?: { operationId?: string }): Promise<boolean>;
   };
 };
@@ -325,58 +326,42 @@ describe("turn alerts", () => {
     expect(before).toMatchObject({ ackAt: null, signature: null });
   });
 
-  it("retries a parked turn once before reporting it", async () => {
-    const stub = butler("turn-parked");
-    await captureSends(stub);
-    const retries = await runInDurableObject(stub, async (instance) => {
-      const target = instance as unknown as TurnInternals;
-      target.turns().insertIfAbsent({
-        operationId: "tg:parked",
-        submittedAt: now,
-      });
-      let calls = 0;
-      target.harness.pending = async () => [
-        { operationId: "tg:parked", session: "1", status: "parked" },
-      ];
-      target.harness.retry = async () => {
-        calls += 1;
-        return true;
-      };
-      await target.checkTurn();
-      await target.checkTurn();
-      return calls;
-    });
-
-    expect(retries).toBe(1);
-  });
-
-  it("withdraws a parked turn that retry did not revive", async () => {
-    const stub = butler("turn-parked-giveup");
+  it("reports an already-settled interrupted turn once", async () => {
+    const stub = butler("turn-cut-off");
     const sent = await captureSends(stub);
-    const aborts = await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance) => {
       const target = instance as unknown as TurnInternals;
-      target.turns().insertIfAbsent({
-        operationId: "tg:parked2",
-        submittedAt: now,
+      target.turns().insertIfAbsent({ operationId: "tg:cut-off", submittedAt: now });
+      target.harness.pending = async () => [];
+      target.harness.wait = async () => ({
+        operationId: "tg:cut-off", session: "1", status: "unanswered", reason: "restart_limit",
       });
-      let calls = 0;
-      target.harness.pending = async () => [
-        { operationId: "tg:parked2", session: "1", status: "parked" },
-      ];
-      target.harness.retry = async () => true;
-      target.harness.abort = async () => {
-        calls += 1;
-        return true;
-      };
       await target.checkTurn();
-      now += TURN_PARKED_GRACE_MS + 1;
       await target.checkTurn();
-      return calls;
     });
-
-    expect(aborts).toBe(1);
-    expect(sent.map((msg) => msg.text)).toEqual([
-      "刚才那条没能答完，再发一次就行",
-    ]);
+    expect(sent.map((msg) => msg.text)).toEqual([turnInterruptedText("zh")]);
+    expect(await runInDurableObject(stub, (instance) =>
+      (instance as unknown as TurnInternals).turns().get("tg:cut-off"),
+    )).toBeUndefined();
   });
+
+  it("delivers an interrupted result after a real operation leaves pending", async () => {
+    const stub = butler("turn-cut-off-real");
+    const sent = await captureSends(stub);
+    const operationId = "tg:cut-off-real";
+    setModelOverride(scriptedModel([{ error: "synthetic run failure" }]));
+    mapSettledFailureToRestartLimit(operationId);
+    await stub.handleMessage(message(operationId));
+    await runInDurableObject(stub, async (instance) => {
+      const target = instance as unknown as TurnInternals;
+      expect(await target.harness.pending()).toEqual([]);
+      await target.checkTurn();
+      await target.checkTurn();
+    });
+    expect(sent.filter((msg) => msg.text === turnInterruptedText("zh"))).toHaveLength(1);
+    expect(await runInDurableObject(stub, (instance) =>
+      (instance as unknown as TurnInternals).turns().get(operationId),
+    )).toBeUndefined();
+  });
+
 });

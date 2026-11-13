@@ -27,12 +27,21 @@ export class Outbox {
     );
   }
 
-  async emit(body: TaskEventBody): Promise<void> {
+  /**
+   * Write the event row synchronously. Callers that must also store a marker
+   * in the same transaction use this and flush afterwards, so a crash cannot
+   * leave one without the other.
+   */
+  record(body: TaskEventBody): void {
     this.sql.exec(
       `INSERT INTO events (type, payload_json, delivered) VALUES (?, ?, 0)`,
       body.type,
       JSON.stringify(body),
     );
+  }
+
+  async emit(body: TaskEventBody): Promise<void> {
+    this.record(body);
     await this.flush();
   }
 
