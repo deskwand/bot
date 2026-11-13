@@ -3,6 +3,7 @@
  * under `inbox/<eventId>/<name>` and the task only ever sees their references.
  */
 import { artifactKeySegments, sanitizeFilename } from "../artifact";
+import type { ArtifactStore } from "../artifact-store";
 import type { InboundFile } from "../protocol";
 
 export const INBOX_PREFIX = "inbox/";
@@ -26,7 +27,7 @@ export type StoreInboundFile = (
   mimeType: string,
 ) => Promise<InboundFile>;
 
-export function inboxStore(bucket: R2Bucket): StoreInboundFile {
+export function inboxStore(bucket: ArtifactStore): StoreInboundFile {
   return async (eventId, name, bytes, mimeType) => {
     const fileName = sanitizeFilename(name);
     const key = inboxKey(eventId, fileName);

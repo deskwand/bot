@@ -8,6 +8,7 @@ import type {
   TableSchema,
 } from "../admin/sql-dump";
 import { MAX_ARTIFACT_BYTES, artifactKeySegments, artifactNameFromKey } from "../artifact";
+import { artifactStore } from "../artifact-store";
 import { actionHint } from "../butler/owner-copy";
 import { isOwner } from "../config";
 import { ownerLocale, t, type Locale } from "../i18n";
@@ -463,7 +464,7 @@ export class ChannelDO extends Agent<Env> {
       throw new ChannelError("invalid artifact key", 400);
     }
 
-    const object = await this.env.ARTIFACTS.get(key);
+    const object = await artifactStore(this.env).get(key);
     if (!object) throw new ChannelError("artifact missing", 404);
     if (object.size > MAX_ARTIFACT_BYTES) {
       throw new ChannelError("artifact too large", 413);
@@ -1300,7 +1301,7 @@ export class ChannelDO extends Agent<Env> {
         const mimeType = sniffImageType(bytes) ?? prepared.image.mimeType;
         const extension = extensionForMime(mimeType) ?? "jpg";
         files.push(
-          await inboxStore(this.env.ARTIFACTS)(
+          await inboxStore(artifactStore(this.env))(
             event.eventId,
             `image.${extension}`,
             bytes,
@@ -1352,7 +1353,7 @@ export class ChannelDO extends Agent<Env> {
 
     const { mimeType } = classifyFile(bytes, "", file.name);
     try {
-      const stored = await inboxStore(this.env.ARTIFACTS)(
+      const stored = await inboxStore(artifactStore(this.env))(
         event.eventId,
         file.name,
         bytes,
@@ -1677,7 +1678,7 @@ export class ChannelDO extends Agent<Env> {
     this.telegramInstance ??= createTelegramAdapter({
       token: this.env.TELEGRAM_BOT_TOKEN,
       ai: this.env.AI,
-      storeFile: inboxStore(this.env.ARTIFACTS),
+      storeFile: inboxStore(artifactStore(this.env)),
     });
     return this.telegramInstance;
   }

@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
 import { artifactNameFromKey } from "../artifact";
+import { artifactStore } from "../artifact-store";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
 import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
 import type { BotChatInput } from "../bot/bot-chat-do";
@@ -770,7 +771,7 @@ export class ButlerDO extends Agent<Env> {
    */
   async resolveAttachment(key: string): Promise<InboundFile | null> {
     if (!isInboxKey(key)) return null;
-    const object = await this.env.ARTIFACTS.head(key);
+    const object = await artifactStore(this.env).head(key);
     if (object === null) return null;
     return {
       name: artifactNameFromKey(key),

@@ -6,6 +6,8 @@
  * Object keys travel as query parameters so they never need path escaping.
  */
 
+import type { ArtifactStore } from "../artifact-store";
+
 const LIST_PATH = "/admin/r2/list";
 const OBJECT_PATH = "/admin/r2/object";
 
@@ -51,7 +53,7 @@ function objectKey(url: URL): string | Response {
 }
 
 export function createR2Routes(
-  bucket: R2Bucket,
+  bucket: ArtifactStore,
   listLimit = 1000,
 ): { fetch(req: Request): Promise<Response> } {
   async function list(url: URL): Promise<Response> {

@@ -6,5 +6,8 @@ declare namespace Cloudflare {
     TEST_HARNESS: DurableObjectNamespace<
       import("./test-harness-do").TestHarnessDO
     >;
+    STORE_TEST: DurableObjectNamespace<
+      import("../container/store/store-do").StoreDO
+    >;
   }
 }

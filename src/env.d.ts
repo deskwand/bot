@@ -14,6 +14,10 @@ declare namespace Cloudflare {
     DESKWAND_CONFIG?: unknown;
     /** Selected business channel; absent keeps the Telegram default. */
     ACTIVE_CHANNEL?: string;
+    /** Local artifact store (container deployments only); absent on Cloudflare. */
+    ARTIFACT_STORE?: DurableObjectNamespace<
+      import("../container/store/store-do").StoreDO
+    >;
   }
 }
 

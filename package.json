@@ -8,6 +8,7 @@
     "deploy": "bash scripts/deploy-worker.sh",
     "predeploy": "node --use-env-proxy --experimental-strip-types scripts/check-remote-config.ts",
     "build:desktop": "bash scripts/build-desktop.sh",
+    "build:container": "node --experimental-strip-types scripts/build-container.ts",
     "release:desktop": "bash scripts/release-desktop.sh",
     "check:i18n": "node --experimental-strip-types scripts/check-i18n.ts --enforce 'desktop/frontend/src/**' --enforce 'desktop/internal/**' --enforce 'src/**'",
     "test": "npm run check:i18n && vitest run && vitest run --config vitest.node.config.ts",

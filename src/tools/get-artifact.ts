@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
+import type { ArtifactStore } from "../artifact-store";
 import { readCapped, truncate } from "./http-body";
 import { MAX_ARTIFACT_BYTES, artifactKeySegments, artifactNameFromKey } from "../artifact";
 import {
@@ -77,7 +78,7 @@ export function artifactKeyFromRef(ref: string, baseUrl: string): string | null 
  * extractor, which rewrites markdown and cannot carry binary.
  */
 export function getArtifactTool(
-  bucket: R2Bucket,
+  bucket: ArtifactStore,
   baseUrl: string,
   options: {
     taskId: () => string;

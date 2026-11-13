@@ -20,6 +20,7 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
+import { artifactStore } from "../artifact-store";
 import { DEFER_MS } from "../admin/maintenance";
 import { parseActiveChannel } from "../channels/route-identity";
 import type {
@@ -379,7 +380,7 @@ export class TaskDO extends Agent<Env> {
           (args) => progressSearchText(ownerLocale(this.env), args.query),
         ),
         withProgress(
-          getArtifactTool(this.env.ARTIFACTS, this.env.PUBLIC_BASE_URL, {
+          getArtifactTool(artifactStore(this.env), this.env.PUBLIC_BASE_URL, {
             taskId: () => this.currentTaskId() ?? "",
             attachments: () => (this.spec?.attachments ?? []).map((file) => file.key),
             convert,
@@ -416,7 +417,7 @@ export class TaskDO extends Agent<Env> {
         ),
         withProgress(
           saveArtifactTool(
-            this.env.ARTIFACTS,
+            artifactStore(this.env),
             () => this.currentTaskId() ?? "",
             () => this.assertNoMaintenance(),
           ),
@@ -439,7 +440,7 @@ export class TaskDO extends Agent<Env> {
     this.registry.install({
       name: "workspace",
       tools: workspaceTools(
-        this.env.ARTIFACTS,
+        artifactStore(this.env),
         () => this.currentTaskId() ?? "",
       ),
     });
@@ -458,7 +459,7 @@ export class TaskDO extends Agent<Env> {
             settings: { progress: PI_PROGRESS },
             env: () => {
               const id = this.currentTaskId();
-              return id ? createR2WorkspaceEnv(this.env.ARTIFACTS, id) : undefined;
+              return id ? createR2WorkspaceEnv(artifactStore(this.env), id) : undefined;
             },
             onReport: (error, info) => {
               this.ctx.waitUntil(this.handleReport(error, info));
@@ -661,7 +662,7 @@ export class TaskDO extends Agent<Env> {
     // here, while each entry body is read live when the model opens it.
     if (this.readMeta("skills_catalog") === "pending") {
       try {
-        const catalog = await discoverSkills(this.env.ARTIFACTS);
+        const catalog = await discoverSkills(artifactStore(this.env));
         if (this.readMeta("state") === "cancelled") return;
         this.setMeta("skills_catalog", JSON.stringify(catalog));
       } catch (error) {
@@ -1179,7 +1180,7 @@ export class TaskDO extends Agent<Env> {
       if (segments === null || segments[0] !== taskId) {
         return { error: `产物 key 不合法：${key}` }; // i18n-ignore: model-facing
       }
-      const object = await this.env.ARTIFACTS.head(key);
+      const object = await artifactStore(this.env).head(key);
       if (!object) return { error: `产物不存在：${key}` }; // i18n-ignore: model-facing
       if (object.size > MAX_ARTIFACT_BYTES) {
         return { error: `产物超过 15 MB：${key}` }; // i18n-ignore: model-facing
@@ -1219,7 +1220,7 @@ export class TaskDO extends Agent<Env> {
   /** Drop a terminal task's private drafts without holding up its report. */
   private clearDrafts(taskId: string): void {
     this.ctx.waitUntil(
-      clearWorkspace(this.env.ARTIFACTS, taskId).catch((error) => {
+      clearWorkspace(artifactStore(this.env), taskId).catch((error) => {
         console.warn(
           `task ${taskId} draft cleanup failed: ${
             error instanceof Error ? error.message : String(error)

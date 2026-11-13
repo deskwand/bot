@@ -21,6 +21,7 @@
     "vitest.config.ts",
     "vitest.node.config.ts",
     "worker-configuration.d.ts",
-    "scripts/**/*.ts"
+    "scripts/**/*.ts",
+    "container/**/*.ts"
   ]
 }

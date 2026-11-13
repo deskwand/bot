@@ -44,4 +44,20 @@ describe("repository hygiene", () => {
   it("ships the preset skill package", () => {
     expect(tracked("skills/*/*")).toContain("skills/brainstorming/SKILL.md");
   });
+
+  it("reads the artifact binding only through artifactStore", () => {
+    let output = "";
+    try {
+      output = execFileSync(
+        "git",
+        ["grep", "-l", "-P", "env\\.ARTIFACTS\\b|: R2Bucket\\b", "--", "src"],
+        { encoding: "utf8" },
+      );
+    } catch (error) {
+      const code = (error as { status?: number }).status;
+      if (code !== 1) throw error;
+    }
+    const hits = output.split("\n").filter(Boolean);
+    expect(hits).toEqual(["src/artifact-store.ts"]);
+  });
 });

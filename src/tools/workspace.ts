@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
+import type { ArtifactStore } from "../artifact-store";
 import { createCloudflarePhotonImages } from "@earendil-works/pi-durable/images/cloudflare";
 import {
   createEditTool,
@@ -120,7 +121,7 @@ function boundedImages(inner: ImageProcessor): ImageProcessor {
 }
 
 export function createListTool(
-  bucket: R2Bucket,
+  bucket: ArtifactStore,
   taskId: () => string,
   limit: number = LIST_PAGE_LIMIT,
 ): ToolRegistration<typeof List> {
@@ -193,7 +194,7 @@ export function createListTool(
  * listing of just this task's files.
  */
 export function workspaceTools(
-  bucket: R2Bucket,
+  bucket: ArtifactStore,
   taskId: () => string,
   /** Decoder for images `read` returns; tests inject one, production uses Photon. */
   images?: ImageProcessor,
@@ -215,7 +216,7 @@ export function workspaceTools(
 }
 
 /** Delete every draft under `work/<taskId>/`; returns how many objects went. */
-export async function clearWorkspace(bucket: R2Bucket, taskId: string): Promise<number> {
+export async function clearWorkspace(bucket: ArtifactStore, taskId: string): Promise<number> {
   const prefix = workspacePrefix(taskId);
   let deleted = 0;
   let cursor: string | undefined;

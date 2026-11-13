@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
+import type { ArtifactStore } from "../artifact-store";
 import { MAX_ARTIFACT_BYTES, sanitizeFilename } from "../artifact";
 import { normalizePath, workspacePrefix } from "../env/r2-env";
 import { classifyFile, extensionForMime } from "./file-content";
@@ -103,7 +104,7 @@ async function readBody(
  * tools are installed before the DO knows which task it will run.
  */
 export function saveArtifactTool(
-  bucket: R2Bucket,
+  bucket: ArtifactStore,
   taskId: () => string,
   guard?: () => Promise<void>,
   fetchImpl: typeof fetch = fetch,

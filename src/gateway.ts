@@ -1,9 +1,10 @@
 import { createMcpAdminRoutes } from "./admin/mcp-routes";
+import type { ArtifactStore } from "./artifact-store";
 import type { Locale } from "./i18n";
 import type { McpAuthDO } from "./mcp/mcp-auth-do";
 
 export type GatewayDeps = {
-  artifacts: R2Bucket;
+  artifacts: ArtifactStore;
   admin: { fetch(req: Request): Promise<Response> };
   mcpAuth(): DurableObjectStub<McpAuthDO>;
   locale?: () => Locale;

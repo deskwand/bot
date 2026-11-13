@@ -7,6 +7,7 @@
  * lease on both the Butler and the Channel hub before touching data.
  */
 
+import type { ArtifactStore } from "../artifact-store";
 import type { BotDO } from "../bot/bot-do";
 import type { ButlerDO } from "../butler/butler-do";
 import type { ChannelDO } from "../channels/channel-do";
@@ -39,7 +40,7 @@ export type AdminDeps = {
   bot(id: string): DurableObjectStub<BotDO>;
   life(): DurableObjectStub<LifeDO>;
   wallet(): DurableObjectStub<WalletDO>;
-  artifacts: R2Bucket;
+  artifacts: ArtifactStore;
   mcpAuth(): DurableObjectStub<McpAuthDO>;
   locale?: () => Locale;
   /** Present only when the deployment wires the exchange probe. */

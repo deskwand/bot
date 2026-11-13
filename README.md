@@ -18,6 +18,12 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 
 命令行部署、secrets、`DESKWAND_CONFIG` 怎么写，看下面的章节。
 
+## 用 Docker 自己跑
+
+没有 Cloudflare 账号也可以：用 Docker Compose 在本机跑同一份 Worker，数据存在本地卷里。步骤见 [docs/container-deploy.md](docs/container-deploy.md)。
+
+容器里没有 Workers AI，至少需要一个 `MODEL_KEY_*`；同一个 Telegram bot token 不要同时在两处运行。
+
 ## 它跟一般 agent 不一样的地方
 
 - **跑在你自己的账号里。** Worker、Durable Objects、R2 都是你的，控制台里看得见，也能自己删。消息和任务不经过我们的服务器。

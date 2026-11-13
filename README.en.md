@@ -18,6 +18,12 @@ Then talk to it in the channel you picked. Something like *"read the tech news e
 
 Command-line deployment, secrets and the `DESKWAND_CONFIG` format are documented further down.
 
+## Run it yourself with Docker
+
+If you do not want a Cloudflare account, you can run the same Worker locally with Docker Compose and keep the data in a local volume. See [docs/container-deploy.md](docs/container-deploy.md).
+
+The container has no Workers AI, so at least one `MODEL_KEY_*` is required. Do not run the same Telegram bot token in both places.
+
 ## Why it is not just another agent
 
 - **It runs in your account.** The Worker, the Durable Objects and the R2 bucket are yours. You can see them in the Cloudflare dashboard and delete them yourself. Messages and tasks never pass through our servers.

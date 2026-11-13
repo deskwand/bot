@@ -1,4 +1,5 @@
 import type { Context } from "@earendil-works/chord";
+import type { ArtifactMeta, ArtifactStore } from "../artifact-store";
 import {
   ExecutionError,
   FileError,
@@ -88,7 +89,7 @@ function skillPathError(path: string): FileError {
   );
 }
 
-function fileInfoOf(object: R2Object, virtualPath: string): FileInfo {
+function fileInfoOf(object: ArtifactMeta, virtualPath: string): FileInfo {
   return {
     name: virtualPath.slice(virtualPath.lastIndexOf("/") + 1),
     path: virtualPath,
@@ -128,7 +129,7 @@ function tempNotSaved(): FileError {
  * `work/<taskId>/`; artifacts and attachments stay readable only through
  * get_artifact, and nothing here can run a shell.
  */
-export function createR2WorkspaceEnv(bucket: R2Bucket, taskId: string): ExecutionEnv {
+export function createR2WorkspaceEnv(bucket: ArtifactStore, taskId: string): ExecutionEnv {
   const resolve = (path: string): Result<string, FileError> => {
     const resolved = normalizePath(path);
     if (!resolved.ok) return resolved;
@@ -193,7 +194,7 @@ export function createR2WorkspaceEnv(bucket: R2Bucket, taskId: string): Executio
 
       const virtualPath = resolved.value;
       const key = workspaceObjectKey(taskId, virtualPath);
-      let opened: R2Object | null;
+      let opened: ArtifactMeta | null;
       try {
         opened = await bucket.head(key);
       } catch (error) {

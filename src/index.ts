@@ -1,5 +1,6 @@
 import { createAdminGateway } from "./admin/admin-gateway";
 import { liveWalletReads } from "./admin/wallet-routes";
+import { artifactStore } from "./artifact-store";
 import { ingestSnapshot } from "./exchange/ingest";
 import { probeExchange } from "./exchange/probe";
 import { ChannelDO } from "./channels/channel-do";
@@ -40,7 +41,7 @@ function admin(env: Env) {
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     life: () => lifeStub(env),
     wallet: () => walletStub(env),
-    artifacts: env.ARTIFACTS,
+    artifacts: artifactStore(env),
     mcpAuth: () => mcpAuth(env),
     locale: () => ownerLocale(env),
     probeExchange: (account) => probeExchange(env, account),
@@ -52,7 +53,7 @@ function admin(env: Env) {
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const gateway = createGateway({
-      artifacts: env.ARTIFACTS,
+      artifacts: artifactStore(env),
       admin: admin(env),
       mcpAuth: () => mcpAuth(env),
       locale: () => ownerLocale(env),

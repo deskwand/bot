@@ -1,5 +1,6 @@
 import { parseDocument } from "yaml";
 import { MAX_DRAFT_BYTES, SKILL_NAME } from "../env/r2-env";
+import type { ArtifactStore } from "../artifact-store";
 
 /** One installed skill, as the model sees it before opening the entry. */
 export type SkillEntry = {
@@ -62,7 +63,7 @@ export function parseSkill(name: string, content: string): SkillEntry | string {
  * Walks `skills/` and reads every entry header. A broken entry is skipped with
  * a diagnostic; an R2 failure rejects, so a partial catalog is never stored.
  */
-export async function discoverSkills(bucket: R2Bucket): Promise<SkillCatalog> {
+export async function discoverSkills(bucket: ArtifactStore): Promise<SkillCatalog> {
   const catalog: SkillCatalog = { skills: [], diagnostics: [] };
   const tooLarge = (key: string) =>
     catalog.diagnostics.push(`/${key}: file exceeds 1 MiB`);

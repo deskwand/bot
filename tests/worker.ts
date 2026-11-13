@@ -10,4 +10,5 @@ export { McpAuthDO } from "../src/mcp/mcp-auth-do";
 export { LifeDO } from "../src/life/life-do";
 export { WalletDO } from "../src/wallet/wallet-do";
 export { ExchangeDO } from "../src/exchange/exchange-do";
+export { StoreDO } from "../container/store/store-do";
 export { TestHarnessDO } from "./test-harness-do";
