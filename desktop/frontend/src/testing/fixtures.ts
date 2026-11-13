@@ -13,6 +13,9 @@ import type {
   CloudflareLoginDTO,
   ConfigDTO,
   ConfigEditDTO,
+  ContainerInstallInputDTO,
+  ContainerPreflightDTO,
+  ContainerStatusDTO,
   CustomProviderDTO,
   ExchangeAccountDTO,
   ExchangeProbeDTO,
@@ -38,6 +41,8 @@ import type {
   PendingRestoreDTO,
   Progress,
   ResultDTO,
+  SSHHostInputDTO,
+  SSHProbeDTO,
   StatusItemDTO,
   StepDTO,
   ThemeSource,
@@ -119,7 +124,26 @@ type Scenario =
   | "cloud-updated"
   | "publish-refetch-fail"
   | "target-other-account"
-  | "boot-failed";
+  | "boot-failed"
+  | "container"
+  | "container-ready"
+  | "container-existing"
+  | "container-docker-missing"
+  | "container-auth-failed"
+  | "container-unhealthy"
+  | "container-unreachable"
+  | "container-stopped";
+
+type ContainerScenario =
+  | "fresh"
+  | "existing"
+  | "docker-missing"
+  | "auth-failed"
+  | "unhealthy";
+
+const CONTAINER_ADDRESS = "203.0.113.7";
+const CONTAINER_FINGERPRINT =
+  "SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
 
 interface MockState {
   scenario: Scenario;
@@ -140,6 +164,9 @@ interface MockState {
   telemetry: boolean;
   connected: boolean;
   accountId: string;
+  targetKind: string;
+  containerScenario: ContainerScenario;
+  containerStatus: ContainerStatusDTO;
   target: string | null;
   targetAccountId: string;
   fingerprint: string;
@@ -420,6 +447,14 @@ function scenarioFromLocation(): Scenario {
     case "target-other-account":
     case "boot-failed":
     case "publish-refetch-fail":
+    case "container":
+    case "container-ready":
+    case "container-existing":
+    case "container-docker-missing":
+    case "container-auth-failed":
+    case "container-unhealthy":
+    case "container-unreachable":
+    case "container-stopped":
       return value;
     default:
       return "default";
@@ -461,6 +496,21 @@ function initialState(): MockState {
   const query = new URLSearchParams(window.location.search);
   const systemLocale: Locale = query.get("locale") === "en" ? "en" : "zh";
   const configured = scenario === "configured" || scenario === "publish-refetch-fail";
+  const containerScenario: ContainerScenario =
+    scenario === "container-existing"
+      ? "existing"
+      : scenario === "container-docker-missing"
+        ? "docker-missing"
+        : scenario === "container-auth-failed"
+          ? "auth-failed"
+          : scenario === "container-unhealthy"
+            ? "unhealthy"
+            : "fresh";
+  const containerReady =
+    scenario === "container-ready" ||
+    scenario === "container-unhealthy" ||
+    scenario === "container-unreachable" ||
+    scenario === "container-stopped";
   const shellScenario = [
     "unknown-long-error",
     "config-conflict",
@@ -599,24 +649,54 @@ function initialState(): MockState {
                 },
     localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
-    connected: shellScenario,
+    connected: shellScenario || containerReady,
     accountId: "a".repeat(32),
-    target: scenario === "layout-long-content" ? "long-name-".repeat(18) : shellScenario ? "deskwand-bot" : null,
+    targetKind: containerReady ? "container" : "",
+    containerScenario,
+    containerStatus: {
+      address: CONTAINER_ADDRESS,
+      user: "root",
+      dir: "~/deskwand",
+      reachable: scenario !== "container-unreachable",
+      running:
+        scenario !== "container-unreachable" &&
+        scenario !== "container-stopped",
+      health: containerScenario === "unhealthy" ? "unhealthy" : "healthy",
+      image: "ghcr.io/deskwand/bot:1.2.3",
+      startedAt: NOW,
+      canRestore: containerScenario === "unhealthy",
+    },
+    target:
+      containerReady
+        ? CONTAINER_ADDRESS
+        : scenario === "layout-long-content"
+          ? "long-name-".repeat(18)
+          : shellScenario
+            ? "deskwand-bot"
+            : null,
     targetAccountId:
       scenario === "target-other-account" ? "b".repeat(32) : "a".repeat(32),
     fingerprint: scenario === "cloud-updated" ? "fp-1" : "fp-current",
-    configPresent: shellScenario,
-    activeChannel: scenario === "user-evidence" ? "wechat" : ["entry-unknown", "entry-unchanged", "entry-failed"].includes(scenario) ? "telegram" : "",
-    ownerUserIds: configured ? [100000001] : [],
-    butlerModel: shellScenario
-      ? { provider: "opencode-go", id: "deepseek-v4.1-flash" }
-      : null,
-    taskModel: shellScenario
-      ? { provider: "opencode-go", id: "deepseek-v4.1-flash" }
-      : null,
+    configPresent: shellScenario || containerReady,
+    activeChannel: containerReady
+      ? "telegram"
+      : scenario === "user-evidence"
+        ? "wechat"
+        : ["entry-unknown", "entry-unchanged", "entry-failed"].includes(scenario)
+          ? "telegram"
+          : "",
+    ownerUserIds: configured || containerReady ? [100000001] : [],
+    butlerModel:
+      shellScenario || containerReady
+        ? { provider: "opencode-go", id: "deepseek-v4.1-flash" }
+        : null,
+    taskModel:
+      shellScenario || containerReady
+        ? { provider: "opencode-go", id: "deepseek-v4.1-flash" }
+        : null,
     customProviders: [],
     secrets: {
-      MODEL_KEY_OPENCODE_GO: shellScenario,
+      MODEL_KEY_OPENCODE_GO: shellScenario || containerReady,
       MODEL_KEY_ANTHROPIC: false,
       TELEGRAM_BOT_TOKEN: scenario === "telegram-configured",
       MODEL_KEY_DEEPSEEK: scenario === "search-deepseek",
@@ -725,6 +805,15 @@ export function createMockClient(): ClientService {
   const listeners = new Set<(status: LoginStatusDTO) => void>();
   const cfListeners = new Set<(status: CloudflareLoginDTO) => void>();
   const backupListeners = new Set<(progress: Progress) => void>();
+  const containerListeners = new Set<(step: StepDTO) => void>();
+  let pendingHost: SSHHostInputDTO | null = null;
+  (
+    window as unknown as {
+      __setContainerScenario?: (scenario: ContainerScenario) => void;
+    }
+  ).__setContainerScenario = (scenario) => {
+    state.containerScenario = scenario;
+  };
   // Lets a test push a progress event the page did not trigger itself, the way
   // a background auto backup does.
   (
@@ -805,9 +894,83 @@ export function createMockClient(): ClientService {
     for (const listener of listeners) listener(status);
   };
 
+  const emitContainerStep = (step: StepDTO) => {
+    for (const listener of containerListeners) listener(step);
+  };
+
+  const containerSteps: StepDTO[] = [
+    { id: "write-compose", state: "completed", message: "写入 compose 文件" },
+    { id: "write-env", state: "completed", message: "写入 .env" },
+    { id: "pull", state: "completed", message: "拉取镜像" },
+    { id: "up", state: "completed", message: "启动容器" },
+    { id: "healthy", state: "completed", message: "等待容器就绪" },
+  ];
+
+  const preflightFor = (scenario: ContainerScenario): ContainerPreflightDTO => {
+    const checks: ContainerPreflightDTO["checks"] = [
+      { id: "docker", ok: true, detail: "Docker 可用" },
+      { id: "compose", ok: true, detail: "compose 插件可用" },
+      { id: "permission", ok: true, detail: "当前用户可以运行 Docker" },
+      { id: "arch", ok: true, detail: "x86_64" },
+      { id: "port", ok: true, detail: "端口空闲" },
+      { id: "dir", ok: true, detail: "远程目录可写" },
+    ];
+    if (scenario === "docker-missing") {
+      checks[0] = {
+        id: "docker",
+        ok: false,
+        detail: "没有找到 docker 命令",
+        fix: "curl -fsSL https://get.docker.com | sh",
+      };
+      checks[1] = {
+        id: "compose",
+        ok: false,
+        detail: "需要先安装 Docker",
+      };
+    }
+    const report: ContainerPreflightDTO = {
+      checks,
+      passed: checks.every((check) => check.ok),
+    };
+    if (scenario === "existing") {
+      report.existing = {
+        ownerUserIds: [100000001],
+        butlerModel: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+        taskModel: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+        activeChannel: "telegram",
+        releaseVersion: "1.2.3",
+      };
+    }
+    return report;
+  };
+
   const config = (): ConfigDTO => {
     if (state.scenario === "unknown-long-error") throw new Error(`网络请求失败 https://example.com/${"x".repeat(220)}`);
     if (!state.target) fail("TARGET_NOT_SELECTED", "请先选择一个 Worker 部署");
+    if (state.targetKind === "container") {
+      return {
+        targetKind: "container",
+        accountId: "",
+        workerName: state.target,
+        fingerprint: state.fingerprint,
+        releaseVersion: "1.2.3",
+        activeVersionCount: 1,
+        configPresent: state.configPresent,
+        activeChannel: state.activeChannel,
+        ownerUserIds: [...state.ownerUserIds],
+        butlerModel: state.butlerModel,
+        taskModel: state.taskModel,
+        customProviders: state.customProviders,
+        mcpServers: state.mcpServers,
+        locale: state.publishedLocale,
+        approvalMode: state.approvalMode,
+        searchProvider: state.searchProvider,
+        exchangeAccounts: [...state.exchangeAccounts],
+        secrets: Object.keys(state.secrets)
+          .sort()
+          .map((name) => ({ name, configured: state.secrets[name] === true })),
+      };
+    }
     if (state.targetAccountId !== state.accountId) {
       fail("TARGET_ACCOUNT_MISMATCH", "该部署属于另一个账号");
     }
@@ -818,6 +981,7 @@ export function createMockClient(): ClientService {
       );
     }
     return {
+      targetKind: "cloudflare",
       accountId: state.accountId,
       workerName: state.target,
       fingerprint: state.fingerprint,
@@ -1172,6 +1336,127 @@ export function createMockClient(): ClientService {
       return published("op-install-1");
     },
 
+    async probeSSHHost(input: SSHHostInputDTO): Promise<SSHProbeDTO> {
+      record("probeSSHHost", input);
+      return {
+        fingerprint: CONTAINER_FINGERPRINT,
+        known:
+          state.containerScenario !== "fresh" &&
+          state.containerScenario !== "existing",
+      };
+    },
+
+    async connectSSHHost(
+      input: SSHHostInputDTO,
+      fingerprint: string,
+    ): Promise<ContainerPreflightDTO> {
+      record("connectSSHHost", input, fingerprint);
+      if (state.containerScenario === "auth-failed") {
+        fail("SSH_AUTH_FAILED", "密码不正确");
+      }
+      if (
+        fingerprint !== "" &&
+        fingerprint !== CONTAINER_FINGERPRINT
+      ) {
+        fail("SSH_HOST_KEY_CHANGED", "服务器指纹已变化");
+      }
+      pendingHost = input;
+      return preflightFor(state.containerScenario);
+    },
+
+    async containerPreflight(): Promise<ContainerPreflightDTO> {
+      record("containerPreflight");
+      if (!pendingHost) fail("SSH_HOST_KEY_UNKNOWN", "请先连接服务器");
+      return preflightFor(state.containerScenario);
+    },
+
+    async installContainer(input: ContainerInstallInputDTO): Promise<ResultDTO> {
+      record("installContainer", input);
+      if (state.containerScenario === "unhealthy") {
+        for (const step of containerSteps.slice(0, 4)) {
+          emitContainerStep(step);
+          await pause(80);
+        }
+        fail("CONTAINER_UNHEALTHY", "容器启动后没有变为 healthy");
+      }
+      for (const step of containerSteps) {
+        emitContainerStep(step);
+        await pause(120);
+      }
+      state.targetKind = "container";
+      state.target = CONTAINER_ADDRESS;
+      state.configPresent = true;
+      state.ownerUserIds = [...input.telegramUserIds];
+      state.butlerModel = { ...input.butlerModel };
+      state.taskModel = { ...input.taskModel };
+      state.activeChannel = input.activeChannel;
+      for (const secret of input.secrets ?? []) {
+        state.secrets[secret.name] = true;
+      }
+      state.containerStatus.health = "healthy";
+      return {
+        operationId: "",
+        versionId: "container:1.2.3",
+        state: "published",
+        workerName: CONTAINER_ADDRESS,
+        releaseVersion: "1.2.3",
+        steps: containerSteps,
+      };
+    },
+
+    async adoptContainer(): Promise<ResultDTO> {
+      record("adoptContainer");
+      if (state.containerScenario !== "existing") {
+        fail("INVALID_REQUEST", "这个目录里没有可接管的实例");
+      }
+      state.targetKind = "container";
+      state.target = CONTAINER_ADDRESS;
+      state.configPresent = true;
+      state.ownerUserIds = [100000001];
+      state.butlerModel = { provider: "opencode-go", id: "deepseek-v4.1-flash" };
+      state.taskModel = { provider: "opencode-go", id: "deepseek-v4.1-flash" };
+      state.activeChannel = "telegram";
+      return {
+        operationId: "",
+        versionId: "container:1.2.3",
+        state: "published",
+        workerName: CONTAINER_ADDRESS,
+        releaseVersion: "1.2.3",
+        steps: [],
+      };
+    },
+
+    async containerStatus(): Promise<ContainerStatusDTO> {
+      record("containerStatus");
+      return { ...state.containerStatus };
+    },
+
+    async restoreContainerConfig(): Promise<ResultDTO> {
+      record("restoreContainerConfig");
+      state.containerStatus.health = "healthy";
+      return {
+        operationId: "",
+        versionId: "container:1.2.3",
+        state: "published",
+        workerName: CONTAINER_ADDRESS,
+        releaseVersion: "1.2.3",
+        steps: [],
+      };
+    },
+
+    async disconnectContainer() {
+      record("disconnectContainer");
+      state.targetKind = "";
+      state.target = null;
+    },
+
+    onContainerProgress(listener) {
+      containerListeners.add(listener);
+      return () => {
+        containerListeners.delete(listener);
+      };
+    },
+
     async upgradeAvailable() {
       if (state.scenario === "version-unknown") {
         return {
@@ -1245,19 +1530,29 @@ export function createMockClient(): ClientService {
       ) {
         await pause(600);
       }
-      const connection =
-        state.scenario === "store-unavailable" ||
-        state.scenario === "cf-slow-apply-fail"
+      const containerSelected = state.targetKind === "container" && state.target !== null;
+      const connection = containerSelected
+        ? { state: "disconnected" }
+        : state.scenario === "store-unavailable" ||
+            state.scenario === "cf-slow-apply-fail"
           ? { state: "unavailable" }
           : state.connected
             ? { state: "connected", accountId: state.accountId, accountName: "测试账户" }
             : { state: "disconnected" };
       const connected = connection.state === "connected";
-      const targetMismatch =
-        connected && state.target !== null && state.targetAccountId !== state.accountId;
-      const targetSelected = connected && state.target !== null && !targetMismatch;
+      const targetMismatch = containerSelected
+        ? false
+        : connected && state.target !== null && state.targetAccountId !== state.accountId;
+      const targetSelected = containerSelected
+        ? true
+        : connected && state.target !== null && !targetMismatch;
       return {
         connection,
+        targetKind: containerSelected
+          ? "container"
+          : targetSelected
+            ? "cloudflare"
+            : "",
         targetSelected,
         targetMismatch,
         targetName: targetSelected ? (state.target ?? "") : "",

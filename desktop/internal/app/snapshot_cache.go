@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,8 +41,10 @@ type FileSnapshotCache struct {
 
 type snapshotCacheFile struct {
 	Version    int                  `json:"version"`
+	Kind       string               `json:"kind,omitempty"`
 	AccountID  string               `json:"accountId"`
 	ScriptName string               `json:"scriptName"`
+	Host       *hostSettings        `json:"host,omitempty"`
 	Config     *snapshotCacheConfig `json:"config,omitempty"`
 	Status     *snapshotCacheStatus `json:"status,omitempty"`
 }
@@ -70,8 +73,40 @@ func NewFileSnapshotCache(dataDir string) (*FileSnapshotCache, error) {
 }
 
 func (c *FileSnapshotCache) pathFor(target domain.Target) string {
-	sum := sha256.Sum256([]byte(target.AccountID + "/" + target.ScriptName))
+	sum := sha256.Sum256([]byte(cacheIdentity(target)))
 	return filepath.Join(c.dir, hex.EncodeToString(sum[:])[:16]+".json")
+}
+
+// cacheIdentity names one cached target. Cloudflare targets keep the account
+// and script key, while a container is identified by its host and directory so
+// two hosts never share a file.
+func cacheIdentity(target domain.Target) string {
+	if target.IsContainer() {
+		host := target.Host
+		return domain.TargetContainer + "\x00" + host.Address + "\x00" + strconv.Itoa(host.Port) + "\x00" + host.User + "\x00" + host.Dir
+	}
+	return target.AccountID + "/" + target.ScriptName
+}
+
+func cacheKind(target domain.Target) string {
+	if target.IsContainer() {
+		return domain.TargetContainer
+	}
+	return ""
+}
+
+func cacheHost(target domain.Target) *hostSettings {
+	if !target.IsContainer() {
+		return nil
+	}
+	return &hostSettings{
+		Address: target.Host.Address,
+		Port:    target.Host.Port,
+		User:    target.Host.User,
+		Auth:    target.Host.Auth,
+		KeyPath: target.Host.KeyPath,
+		Dir:     target.Host.Dir,
+	}
 }
 
 // LoadConfig returns the cached config for target, or ok=false when there is
@@ -92,8 +127,10 @@ func (c *FileSnapshotCache) SaveConfig(target domain.Target, config ConfigDTO, a
 	defer c.mu.Unlock()
 	file, _ := c.read(target)
 	file.Version = snapshotCacheVersion
+	file.Kind = cacheKind(target)
 	file.AccountID = target.AccountID
 	file.ScriptName = target.ScriptName
+	file.Host = cacheHost(target)
 	file.Config = &snapshotCacheConfig{Data: config, SavedAt: at}
 	return c.write(target, file)
 }
@@ -116,8 +153,10 @@ func (c *FileSnapshotCache) SaveStatus(target domain.Target, items []StatusItemD
 	defer c.mu.Unlock()
 	file, _ := c.read(target)
 	file.Version = snapshotCacheVersion
+	file.Kind = cacheKind(target)
 	file.AccountID = target.AccountID
 	file.ScriptName = target.ScriptName
+	file.Host = cacheHost(target)
 	file.Status = &snapshotCacheStatus{Data: items, SavedAt: at}
 	return c.write(target, file)
 }
@@ -149,13 +188,24 @@ func (c *FileSnapshotCache) read(target domain.Target) (snapshotCacheFile, bool)
 		_ = os.Remove(path)
 		return snapshotCacheFile{}, false
 	}
-	if file.Version != snapshotCacheVersion ||
-		file.AccountID != target.AccountID ||
-		file.ScriptName != target.ScriptName {
+	if file.Version != snapshotCacheVersion || !cacheBelongsTo(file, target) {
 		_ = os.Remove(path)
 		return snapshotCacheFile{}, false
 	}
 	return file, true
+}
+
+// cacheBelongsTo reports whether the decoded file was written for target. It
+// checks the kind and the full host, so a stale Cloudflare file can never be
+// read for a container target and two hosts cannot collide.
+func cacheBelongsTo(file snapshotCacheFile, target domain.Target) bool {
+	if file.Kind != cacheKind(target) {
+		return false
+	}
+	if target.IsContainer() {
+		return file.Host != nil && file.Host.target() == target.Host
+	}
+	return file.AccountID == target.AccountID && file.ScriptName == target.ScriptName
 }
 
 func (c *FileSnapshotCache) write(target domain.Target, file snapshotCacheFile) error {

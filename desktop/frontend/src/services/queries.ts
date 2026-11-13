@@ -12,6 +12,7 @@ import { toClientError } from "@/services/errors";
 import type {
   ClientService,
   ConfigDTO,
+  ContainerStatusDTO,
   LifeVitalsDTO,
   StatusItemDTO,
 } from "@/services/types";
@@ -27,6 +28,7 @@ export const queryKeys = {
   exchangeSyncStatus: ["exchangeSyncStatus"],
   lifeVitals: ["lifeVitals"],
   walletStatus: ["walletStatus"],
+  containerStatus: ["containerStatus"],
 } as const;
 
 function isAuthLost(error: unknown): boolean {
@@ -142,12 +144,26 @@ export function useMcpStatusQuery(): UseQueryResult<Awaited<ReturnType<ClientSer
   });
 }
 
-export function useLifeVitalsQuery(): UseQueryResult<LifeVitalsDTO> {
+export function useLifeVitalsQuery(enabled = true): UseQueryResult<LifeVitalsDTO> {
   const { client } = useApp();
   return useQuery({
     queryKey: queryKeys.lifeVitals,
     queryFn: () => client.lifeVitals(),
+    enabled,
     retry: false,
+  });
+}
+
+export function useContainerStatusQuery(
+  enabled = true,
+): UseQueryResult<ContainerStatusDTO> {
+  const { client } = useApp();
+  return useQuery({
+    queryKey: queryKeys.containerStatus,
+    queryFn: () => client.containerStatus(),
+    enabled,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
 }
 

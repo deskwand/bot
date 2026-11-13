@@ -25,20 +25,25 @@ import { isCode } from "@/services/errors";
 import {
   queryKeys,
   useConfigQuery,
+  useContainerStatusQuery,
   useInvalidate,
   useLifeVitalsQuery,
   useStatusQuery,
 } from "@/services/queries";
 import type { ConnectionDTO, PendingRestoreDTO } from "@/services/types";
+import { containerStatusKey } from "@/features/server/Server";
 import { VitalsCard } from "./VitalsCard";
 import { WalletCard } from "./WalletCard";
 
 export function Overview() {
-  const { client, navigate } = useApp();
+  const { client, navigate, targetKind } = useApp();
   const t = useT();
+  const isContainer = targetKind === "container";
   const configQuery = useConfigQuery();
   const statusQuery = useStatusQuery();
-  const vitalsQuery = useLifeVitalsQuery();
+  const vitalsQuery = useLifeVitalsQuery(!isContainer);
+  const containerQuery = useContainerStatusQuery(isContainer);
+  const container = containerQuery.data;
   const refetchVitals = vitalsQuery.refetch;
   const queryClient = useQueryClient();
   const invalidate = useInvalidate();
@@ -86,10 +91,10 @@ export function Overview() {
   const refresh = useCallback(() => {
     void configQuery.refetch();
     void statusQuery.refetch();
-    void refetchVitals();
+    if (!isContainer) void refetchVitals();
     void queryClient.invalidateQueries({ queryKey: queryKeys.walletStatus });
     void loadLocal();
-  }, [configQuery, loadLocal, queryClient, refetchVitals, statusQuery]);
+  }, [configQuery, isContainer, loadLocal, queryClient, refetchVitals, statusQuery]);
 
   const error = configQuery.data
     ? localError
@@ -200,9 +205,19 @@ export function Overview() {
           : t("overview.mcpNone"),
     },
     {
-      page: "cloudflare",
-      testId: "health-cloudflare",
-      description: config?.workerName ? (
+      page: isContainer ? "server" : "cloudflare",
+      testId: isContainer ? "health-server" : "health-cloudflare",
+      description: isContainer ? (
+        <>
+          {container ? t(containerStatusKey(container)) : t("overview.notRead")}
+          {container?.image ? (
+            <>
+              {" · "}
+              <span data-i18n-ignore>{container.image}</span>
+            </>
+          ) : null}
+        </>
+      ) : config?.workerName ? (
         <span data-i18n-ignore>{config.workerName}</span>
       ) : (
         t("overview.notRead")
@@ -351,9 +366,9 @@ export function Overview() {
         </Alert>
       ) : null}
 
-      <VitalsCard />
+      {!isContainer ? <VitalsCard /> : null}
 
-      <WalletCard />
+      {!isContainer ? <WalletCard /> : null}
 
       <section className="mt-6" aria-labelledby="overview-health-title">
         <h2 id="overview-health-title" className="text-base font-medium">{t("overview.health")}</h2>

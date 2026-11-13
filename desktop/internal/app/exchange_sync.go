@@ -82,7 +82,7 @@ func (s *Service) syncAllExchanges(ctx context.Context) {
 	if len(keys) == 0 {
 		return
 	}
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return
 	}
@@ -132,7 +132,7 @@ func (s *Service) syncOne(ctx context.Context, id string, credentials exchangesy
 		return s.failedExchangeSync(id, safeAppError(err))
 	}
 
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return s.failedExchangeSync(id, safeAppError(err))
 	}

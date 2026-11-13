@@ -14,6 +14,11 @@ import type {
   ConfigDTO,
   ConfigEditDTO as GeneratedConfigEditDTO,
   ConnectionDTO,
+  ContainerCheckDTO,
+  ContainerExistingDTO,
+  ContainerInstallInputDTO as GeneratedContainerInstallInputDTO,
+  ContainerPreflightDTO,
+  ContainerStatusDTO,
   CustomModelDTO,
   CustomProviderDTO,
   EntryResultDTO,
@@ -44,6 +49,8 @@ import type {
   Progress,
   ResultDTO,
   SecretNameDTO,
+  SSHHostInputDTO,
+  SSHProbeDTO,
   StatusItemDTO,
   StepDTO,
   UpgradeDTO,
@@ -64,6 +71,10 @@ export type {
   CloudflareLoginDTO,
   ConfigDTO,
   ConnectionDTO,
+  ContainerCheckDTO,
+  ContainerExistingDTO,
+  ContainerPreflightDTO,
+  ContainerStatusDTO,
   CustomModelDTO,
   CustomProviderDTO,
   EntryResultDTO,
@@ -93,6 +104,8 @@ export type {
   Progress,
   ResultDTO,
   SecretNameDTO,
+  SSHHostInputDTO,
+  SSHProbeDTO,
   StatusItemDTO,
   StepDTO,
   UpgradeDTO,
@@ -128,6 +141,13 @@ export interface ImportSecretDTO {
 
 export type ConfigEditDTO = Omit<GeneratedConfigEditDTO, "secrets"> & {
   secrets?: SecretEditDTO[];
+};
+
+export type ContainerInstallInputDTO = Omit<
+  GeneratedContainerInstallInputDTO,
+  "secrets"
+> & {
+  secrets: SecretEditDTO[];
 };
 
 export type ImportInputDTO = Omit<GeneratedImportInputDTO, "secrets"> & {
@@ -173,6 +193,18 @@ export interface ClientService {
   inspectImport(): Promise<ImportPreviewDTO>;
   confirmImport(input: ImportInputDTO): Promise<ResultDTO>;
   install(input: InstallInputDTO): Promise<ResultDTO>;
+  probeSSHHost(input: SSHHostInputDTO): Promise<SSHProbeDTO>;
+  connectSSHHost(
+    input: SSHHostInputDTO,
+    fingerprint: string,
+  ): Promise<ContainerPreflightDTO>;
+  containerPreflight(): Promise<ContainerPreflightDTO>;
+  installContainer(input: ContainerInstallInputDTO): Promise<ResultDTO>;
+  adoptContainer(): Promise<ResultDTO>;
+  containerStatus(): Promise<ContainerStatusDTO>;
+  restoreContainerConfig(): Promise<ResultDTO>;
+  disconnectContainer(): Promise<void>;
+  onContainerProgress(listener: (step: StepDTO) => void): () => void;
   upgradeAvailable(): Promise<UpgradeDTO>;
   upgrade(): Promise<ResultDTO>;
   checkClientUpdates(): Promise<void>;

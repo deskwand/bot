@@ -1,0 +1,11 @@
+services:
+  bot:
+    image: ghcr.io/deskwand/bot:{{VERSION}}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - deskwand-data:/data
+volumes:
+  deskwand-data:

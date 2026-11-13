@@ -137,6 +137,9 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 		return nil, err
 	}
 	defer s.endBackupOperation()
+	if err := s.rejectContainerTarget(); err != nil {
+		return nil, err
+	}
 	if s.backup == nil || s.settings == nil {
 		return nil, s.serviceUnavailable()
 	}
@@ -146,7 +149,7 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 	}
 	ctx, cancel := s.backupContext()
 	defer cancel()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +273,7 @@ func (s *Service) ChooseBackup() (*BackupPreviewDTO, error) {
 	defer s.endBackupOperation()
 	ctx, cancel := s.backupContext()
 	defer cancel()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -296,6 +299,9 @@ func (s *Service) ChooseBackupAt(path string) (*BackupPreviewDTO, error) {
 		return nil, err
 	}
 	defer s.endBackupOperation()
+	if err := s.rejectContainerTarget(); err != nil {
+		return nil, err
+	}
 	if s.backup == nil || s.settings == nil || s.snapshots == nil {
 		return nil, s.serviceUnavailable()
 	}
@@ -313,7 +319,7 @@ func (s *Service) ChooseBackupAt(path string) (*BackupPreviewDTO, error) {
 	}
 	ctx, cancel := s.backupContext()
 	defer cancel()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +423,7 @@ func (s *Service) RestoreData() error {
 	defer s.endBackupOperation()
 	ctx, cancel := s.backupContext()
 	defer cancel()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return err
 	}

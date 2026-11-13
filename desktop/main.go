@@ -14,12 +14,15 @@ import (
 	"github.com/deskwand/bot/desktop/internal/auth"
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
+	"github.com/deskwand/bot/desktop/internal/container"
 	"github.com/deskwand/bot/desktop/internal/deployment"
+	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/navigation"
 	"github.com/deskwand/bot/desktop/internal/netproxy"
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/release"
+	"github.com/deskwand/bot/desktop/internal/sshhost"
 	"github.com/deskwand/bot/desktop/internal/telemetry"
 )
 
@@ -131,27 +134,45 @@ func main() {
 	publish := deployment.NewServiceWithLocker(api, journal, credentials, pkg, nil, locker)
 	lifecycle.Locale = locale.Current
 	publish.Locale = locale.Current
+
+	knownHosts := filepath.Join(dataDir, "known_hosts")
+	containers := container.New(container.Options{
+		Dial: func(target domain.Target) (container.Host, error) {
+			return sshhost.New(target.Host, credentials, knownHosts), nil
+		},
+		Version: pkg.Version(),
+		Locale:  locale.Current,
+	})
+	publishRouter := &app.PublishRouter{Cloudflare: publish, Container: containers}
+	snapshotRouter := &app.SnapshotRouter{Cloudflare: api, Container: containers}
+	statusRouter := &app.StatusRouter{
+		Cloudflare: app.NewDiagnosticsServiceWithOptions(api, api, app.DiagnosticsOptions{Locale: locale.Current}),
+		Container:  &app.ContainerDiagnostics{Runtime: containers, Locale: locale.Current},
+	}
+
 	entries := app.NewEntryService(app.EntryOptions{
-		Publisher:   publish,
-		Snapshots:   api,
-		Selector:    app.NewActiveChannelSelector(publish, api),
+		Publisher:   publishRouter,
+		Snapshots:   snapshotRouter,
+		Selector:    app.NewActiveChannelSelector(publishRouter, snapshotRouter),
 		Credentials: credentials,
 		Locale:      locale.Current,
 	})
 
 	options := app.ServiceOptions{
 		Auth:        tokens,
-		Publish:     publish,
+		Publish:     publishRouter,
 		Lifecycle:   lifecycle,
 		Entries:     entries,
-		Diagnostics: app.NewDiagnosticsServiceWithOptions(api, api, app.DiagnosticsOptions{Locale: locale.Current}),
-		Snapshots:   api,
+		Diagnostics: statusRouter,
+		Snapshots:   snapshotRouter,
 		Scripts:     api,
 		Journal:     journal,
 		Store:       targets,
 		Theme:       themes,
 		Locale:      locale,
 		Cache:       cache,
+		Container:   containers,
+		SSH:         sshProber{credentials: credentials, knownHosts: knownHosts},
 		ApplyTheme:  func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) },
 		Browser:     platform.NewSystemBrowserOpener(),
 		McpBrowser:  platform.NewMcpOAuthBrowserOpener(),
@@ -331,6 +352,34 @@ func credentialServiceName(dev bool) string {
 // backupFilters limits the backup dialogs to the archive format this client
 // writes.
 var backupFilters = []mygo.FileFilter{{Name: "DeskWand 备份", Extensions: []string{"zip"}}}
+
+// sshProber adapts the sshhost package functions to app.SSHProber. Trust
+// probes on the same Client first because a Client trusts only the key its own
+// most recent probe saw.
+type sshProber struct {
+	credentials platform.CredentialStore
+	knownHosts  string
+}
+
+func (p sshProber) Probe(ctx context.Context, host domain.HostRef) (string, bool, error) {
+	return sshhost.New(host, p.credentials, p.knownHosts).Probe(ctx)
+}
+
+func (p sshProber) Trust(ctx context.Context, host domain.HostRef, fingerprint string) error {
+	client := sshhost.New(host, p.credentials, p.knownHosts)
+	if _, _, err := client.Probe(ctx); err != nil {
+		return err
+	}
+	return client.Trust(fingerprint)
+}
+
+func (p sshProber) StoreSecret(ctx context.Context, host domain.HostRef, secret string) error {
+	return sshhost.StoreSecret(ctx, p.credentials, host, secret)
+}
+
+func (p sshProber) Forget(ctx context.Context, host domain.HostRef) error {
+	return sshhost.Forget(ctx, p.credentials, p.knownHosts, host)
+}
 
 // mygoFileDialogs implements app.FileDialogs with the native dialogs.
 type mygoFileDialogs struct{}

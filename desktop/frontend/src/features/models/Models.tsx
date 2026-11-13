@@ -188,7 +188,7 @@ function customDraftError(
 }
 
 export function Models() {
-  const { client } = useApp();
+  const { client, targetKind } = useApp();
   const t = useT();
   const configQuery = useConfigQuery();
   const catalogQuery = useModelCatalogQuery();
@@ -268,8 +268,11 @@ export function Models() {
   };
 
   const options = useMemo(
-    () => providerOptions(catalog ?? { providers: [] }, customProviders),
-    [catalog, customProviders],
+    () =>
+      providerOptions(catalog ?? { providers: [] }, customProviders).filter(
+        (option) => targetKind !== "container" || !option.keyless,
+      ),
+    [catalog, customProviders, targetKind],
   );
 
   // An unconfigured role uses the middle of what its model offers. The select

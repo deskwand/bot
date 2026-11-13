@@ -109,7 +109,7 @@ func (s *Service) exchangeClient(ctx context.Context, target domain.Target) (*ex
 // MCP probe applies.
 func (s *Service) TestExchange(accountID string) (ExchangeProbeDTO, error) {
 	ctx := context.Background()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return ExchangeProbeDTO{}, err
 	}

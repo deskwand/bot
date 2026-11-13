@@ -28,6 +28,7 @@ type ConnectionDTO struct {
 // screen. It is computed without any Cloudflare request.
 type BootStateDTO struct {
 	Connection     ConnectionDTO  `json:"connection"`
+	TargetKind     string         `json:"targetKind"`
 	TargetSelected bool           `json:"targetSelected"`
 	TargetMismatch bool           `json:"targetMismatch"`
 	TargetName     string         `json:"targetName"`
@@ -113,6 +114,7 @@ type SecretNameDTO struct {
 
 // ConfigDTO is the editable configuration summary.
 type ConfigDTO struct {
+	TargetKind         string               `json:"targetKind"`
 	AccountID          string               `json:"accountId"`
 	WorkerName         string               `json:"workerName"`
 	Fingerprint        string               `json:"fingerprint"`

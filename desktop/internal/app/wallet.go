@@ -101,7 +101,7 @@ func (s *Service) walletClient(ctx context.Context, target domain.Target) (*wall
 // WalletStatus reads the deployed wallet's public state.
 func (s *Service) WalletStatus() (WalletStatusDTO, error) {
 	ctx := context.Background()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return WalletStatusDTO{}, err
 	}

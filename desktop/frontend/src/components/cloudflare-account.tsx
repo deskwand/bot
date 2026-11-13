@@ -12,6 +12,7 @@ import {
 import { ErrorAlert } from "@/components/feedback";
 import { useApp } from "@/components/app-context";
 import { useT } from "@/i18n";
+import { useContainerStatusQuery } from "@/services/queries";
 
 /**
  * Signing out revokes this client's authorization and deletes its local
@@ -102,8 +103,17 @@ export function CloudflareSignOut() {
  * stay separate because they belong to this computer, not to the deployment.
  */
 export function ContainerFooter() {
-  const { navigate } = useApp();
+  const { navigate, targetKind } = useApp();
   const t = useT();
+  const isContainer = targetKind === "container";
+  const { data: status } = useContainerStatusQuery(isContainer);
+  const dot = !isContainer || !status
+    ? "bg-emerald-600"
+    : !status.reachable || !status.running
+      ? "bg-red-600"
+      : status.health === "healthy"
+        ? "bg-emerald-600"
+        : "bg-amber-500";
 
   return (
     <div className="mt-2 border-t border-border pt-3">
@@ -112,10 +122,10 @@ export function ContainerFooter() {
         variant="ghost"
         size="xs"
         className="w-full justify-start px-1 text-xs text-muted-foreground"
-        onClick={() => navigate("cloudflare")}
+        onClick={() => navigate(isContainer ? "server" : "cloudflare")}
       >
-        <span className="size-1.5 rounded-full bg-emerald-600" aria-hidden />
-        {t("shell.containerFooter")}
+        <span className={`size-1.5 rounded-full ${dot}`} aria-hidden />
+        {t(isContainer ? "shell.containerFooterServer" : "shell.containerFooter")}
       </Button>
     </div>
   );

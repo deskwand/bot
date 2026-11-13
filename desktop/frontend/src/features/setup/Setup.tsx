@@ -7,6 +7,7 @@ import {
   Cloud,
   Loader2,
   RefreshCw,
+  Server,
   ShieldCheck,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -48,11 +49,12 @@ import {
   type ProviderOption,
 } from "@/features/models/catalog";
 import { ModelSelect } from "@/features/models/ModelSelect";
+import { ContainerFlow } from "./ContainerFlow";
 
 export type SetupPhase = "disconnected" | "choose";
 
 
-function useCatalogModelOptions(): {
+export function useCatalogModelOptions(): {
   options: ProviderOption[];
   error: unknown;
   reload: () => void;
@@ -98,7 +100,11 @@ export function Setup({
   onReady: () => void;
   initialStep?: "welcome" | "deploy" | "import";
 }) {
-  const [step, setStep] = useState<"welcome" | "deploy" | "import">(initialStep);
+  const [step, setStep] = useState<"welcome" | "deploy" | "import" | "container">(initialStep);
+
+  if (step === "container") {
+    return <ContainerFlow onBack={() => setStep("welcome")} onReady={onReady} />;
+  }
 
   if (phase === "disconnected") {
     return (
@@ -108,6 +114,7 @@ export function Setup({
         onConnected={onSessionChange}
         onShowDeploy={() => setStep("deploy")}
         onShowImport={() => setStep("import")}
+        onShowContainer={() => setStep("container")}
       />
     );
   }
@@ -125,6 +132,7 @@ export function Setup({
       onConnected={onSessionChange}
       onShowDeploy={() => setStep("deploy")}
       onShowImport={() => setStep("import")}
+      onShowContainer={() => setStep("container")}
     />
   );
 }
@@ -136,6 +144,7 @@ function Welcome({
   onConnected,
   onShowDeploy,
   onShowImport,
+  onShowContainer,
 }: {
   connected?: boolean;
   connectionError?: unknown;
@@ -143,6 +152,7 @@ function Welcome({
   onConnected: () => void;
   onShowDeploy: () => void;
   onShowImport: () => void;
+  onShowContainer: () => void;
 }) {
   const { client } = useApp();
   const t = useT();
@@ -173,11 +183,31 @@ function Welcome({
       </p>
 
       {!connected ? (
-        <ConnectCard
-          connectionError={connectionError}
-          connectionAccount={connectionAccount}
-          onConnected={onConnected}
-        />
+        <>
+          <ConnectCard
+            connectionError={connectionError}
+            connectionAccount={connectionAccount}
+            onConnected={onConnected}
+          />
+          <div className="mt-4">
+            <button
+              type="button"
+              className="w-full text-left"
+              onClick={onShowContainer}
+              aria-label={t("setup.containerTitle")}
+            >
+              <Card className="h-full transition-colors hover:border-primary/60">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Server className="size-4" aria-hidden />
+                    {t("setup.containerTitle")}
+                  </CardTitle>
+                  <CardDescription>{t("setup.containerDescription")}</CardDescription>
+                </CardHeader>
+              </Card>
+            </button>
+          </div>
+        </>
       ) : (
         <>
           <div className="mt-7 grid gap-4 sm:grid-cols-2">
@@ -210,6 +240,22 @@ function Welcome({
                     {t("setup.importTitle")}
                   </CardTitle>
                   <CardDescription>{t("setup.importDescription")}</CardDescription>
+                </CardHeader>
+              </Card>
+            </button>
+            <button
+              type="button"
+              className="text-left"
+              onClick={onShowContainer}
+              aria-label={t("setup.containerTitle")}
+            >
+              <Card className="h-full transition-colors hover:border-primary/60">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Server className="size-4" aria-hidden />
+                    {t("setup.containerTitle")}
+                  </CardTitle>
+                  <CardDescription>{t("setup.containerDescription")}</CardDescription>
                 </CardHeader>
               </Card>
             </button>

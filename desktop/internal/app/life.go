@@ -35,7 +35,7 @@ func (s *Service) lifeClient(ctx context.Context, target domain.Target) (*lifead
 // LifeVitals reads the deployed life ledger's vitals.
 func (s *Service) LifeVitals() (LifeVitalsDTO, error) {
 	ctx := context.Background()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return LifeVitalsDTO{}, err
 	}

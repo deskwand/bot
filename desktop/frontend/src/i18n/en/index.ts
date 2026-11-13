@@ -10,6 +10,7 @@ import { mcp } from "./mcp";
 import { models } from "./models";
 import { overview } from "./overview";
 import { search } from "./search";
+import { server } from "./server";
 import { setup } from "./setup";
 import { shell } from "./shell";
 import { states } from "./states";
@@ -33,4 +34,5 @@ export const en: Messages = {
   entries,
   backup,
   setup,
+  server,
 };

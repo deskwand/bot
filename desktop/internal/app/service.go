@@ -125,6 +125,7 @@ type OperationJournal interface {
 type TargetStore interface {
 	Load() (domain.Target, bool, error)
 	Save(target domain.Target) error
+	Clear() error
 }
 
 // ReleaseSource supplies the verified embedded Worker release. Package returns
@@ -202,8 +203,15 @@ type ServiceOptions struct {
 	EmitLoginStatus func(LoginStatusDTO)
 	// EmitCloudflareLogin defaults to CloudflareLoginEvent.Broadcast.
 	EmitCloudflareLogin func(CloudflareLoginDTO)
-	NewOperationID      func() (string, error)
-	Now                 func() time.Time
+	// Container is the SSH-hosted container runtime. Nil makes every container
+	// operation report SERVICE_UNAVAILABLE.
+	Container ContainerRuntime
+	// SSH probes and pins SSH host keys and keeps host credentials.
+	SSH SSHProber
+	// EmitContainerProgress defaults to ContainerProgressEvent.Broadcast.
+	EmitContainerProgress func(StepDTO)
+	NewOperationID        func() (string, error)
+	Now                   func() time.Time
 }
 
 // Service is the single service bound to MyGo. Every exported method is a
@@ -237,8 +245,14 @@ type Service struct {
 	applyTheme         func(string)
 	emitLogin          func(LoginStatusDTO)
 	emitCloudflare     func(CloudflareLoginDTO)
+	container          ContainerRuntime
+	ssh                SSHProber
+	emitContainer      func(StepDTO)
 	newOpID            func() (string, error)
 	now                func() time.Time
+
+	pendingMu   sync.Mutex
+	pendingHost *domain.HostRef
 
 	cfMu          sync.Mutex
 	cfSession     auth.LoginSession
@@ -286,6 +300,10 @@ func NewService(options ServiceOptions) *Service {
 	now := options.Now
 	if now == nil {
 		now = time.Now
+	}
+	emitContainer := options.EmitContainerProgress
+	if emitContainer == nil {
+		emitContainer = func(step StepDTO) { _ = ContainerProgressEvent.Broadcast(step) }
 	}
 	mcpBrowser := options.McpBrowser
 	if mcpBrowser == nil {
@@ -335,6 +353,9 @@ func NewService(options ServiceOptions) *Service {
 		applyTheme:         applyTheme,
 		emitLogin:          emit,
 		emitCloudflare:     emitCloudflare,
+		container:          options.Container,
+		ssh:                options.SSH,
+		emitContainer:      emitContainer,
 		newOpID:            newOpID,
 		now:                now,
 		logins:             map[string]context.CancelFunc{},
@@ -577,20 +598,34 @@ func (s *Service) CloudflareStatus() ConnectionDTO {
 func (s *Service) BootState() (BootStateDTO, error) {
 	connection := s.CloudflareStatus()
 	state := BootStateDTO{Connection: connection, Pending: []OperationDTO{}}
+	var stored domain.Target
+	var storedOK bool
+	if s.store != nil {
+		target, ok, err := s.store.Load()
+		if err != nil {
+			return BootStateDTO{}, safeAppError(err)
+		}
+		stored, storedOK = target, ok
+		if ok && target.IsContainer() {
+			state.TargetKind = domain.TargetContainer
+			state.TargetSelected = true
+			state.TargetName = target.Host.Address
+			return state, nil
+		}
+		if ok {
+			state.TargetKind = domain.TargetCloudflare
+		}
+	}
 	if connection.State != auth.StateConnected {
 		return state, nil
 	}
 	if s.store == nil {
 		return BootStateDTO{}, s.serviceUnavailable()
 	}
-	target, ok, err := s.store.Load()
-	if err != nil {
-		return BootStateDTO{}, safeAppError(err)
-	}
-	if ok {
-		if target.AccountID == connection.AccountID {
+	if storedOK {
+		if stored.AccountID == connection.AccountID {
 			state.TargetSelected = true
-			state.TargetName = target.ScriptName
+			state.TargetName = stored.ScriptName
 		} else {
 			state.TargetMismatch = true
 		}
@@ -623,6 +658,9 @@ func (s *Service) DisconnectCloudflare() error {
 
 // ListWorkers lists Worker scripts in the connected account.
 func (s *Service) ListWorkers() ([]WorkerDTO, error) {
+	if err := s.rejectContainerTarget(); err != nil {
+		return []WorkerDTO{}, err
+	}
 	accountID, err := s.connectedAccount(context.Background())
 	if err != nil {
 		return []WorkerDTO{}, err
@@ -650,6 +688,9 @@ func (s *Service) ListWorkers() ([]WorkerDTO, error) {
 // is not a secret and never includes a token.
 func (s *Service) SelectDeployment(scriptName string) error {
 	ctx := context.Background()
+	if err := s.rejectContainerTarget(); err != nil {
+		return err
+	}
 	accountID, err := s.connectedAccount(ctx)
 	if err != nil {
 		return err
@@ -667,7 +708,7 @@ func (s *Service) SelectDeployment(scriptName string) error {
 // InspectImport reads an existing deployment without writing anything.
 func (s *Service) InspectImport() (ImportPreviewDTO, error) {
 	ctx := context.Background()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return ImportPreviewDTO{}, err
 	}
@@ -708,11 +749,11 @@ func (s *Service) InspectImport() (ImportPreviewDTO, error) {
 // path.
 func (s *Service) ConfirmImport(input ImportInputDTO) (ResultDTO, error) {
 	ctx := context.Background()
-	if _, err := s.releasePackage(); err != nil {
+	target, err := s.cloudflareTarget(ctx)
+	if err != nil {
 		return ResultDTO{}, err
 	}
-	target, err := s.managedTarget(ctx)
-	if err != nil {
+	if _, err := s.releasePackage(); err != nil {
 		return ResultDTO{}, err
 	}
 	if s.lifecycle == nil {
@@ -745,6 +786,9 @@ func (s *Service) ConfirmImport(input ImportInputDTO) (ResultDTO, error) {
 // Install creates a new deployment.
 func (s *Service) Install(input InstallInputDTO) (ResultDTO, error) {
 	ctx := context.Background()
+	if err := s.rejectContainerTarget(); err != nil {
+		return ResultDTO{}, err
+	}
 	if _, err := s.releasePackage(); err != nil {
 		return ResultDTO{}, err
 	}
@@ -800,7 +844,7 @@ func (s *Service) Install(input InstallInputDTO) (ResultDTO, error) {
 // UpgradeAvailable compares the embedded release with the active deployment.
 func (s *Service) UpgradeAvailable() (UpgradeDTO, error) {
 	ctx := context.Background()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return UpgradeDTO{}, err
 	}
@@ -869,11 +913,11 @@ func missingModelKeys(snapshot domain.Snapshot) []string {
 // Upgrade applies the embedded release to the managed deployment.
 func (s *Service) Upgrade() (ResultDTO, error) {
 	ctx := context.Background()
-	pkg, err := s.releasePackage()
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return ResultDTO{}, err
 	}
-	target, err := s.managedTarget(ctx)
+	pkg, err := s.releasePackage()
 	if err != nil {
 		return ResultDTO{}, err
 	}
@@ -901,6 +945,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		return ConfigDTO{}, safeAppError(err)
 	}
 	dto := ConfigDTO{
+		TargetKind:         target.Kind,
 		AccountID:          target.AccountID,
 		WorkerName:         target.ScriptName,
 		Fingerprint:        snapshot.Fingerprint,
@@ -916,6 +961,10 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		SearchProvider:     "exa",
 		ExchangeAccounts:   []ExchangeAccountDTO{},
 		Secrets:            s.secretStatuses(snapshot),
+	}
+	if target.IsContainer() {
+		dto.AccountID = ""
+		dto.WorkerName = target.Host.Address
 	}
 	if len(snapshot.ConfigJSON) > 0 {
 		var document struct {
@@ -1033,12 +1082,14 @@ func (s *Service) PreviewConfig(input ConfigEditDTO) ([]StepDTO, error) {
 // PublishConfig merges and publishes the editable configuration (保存并发布).
 func (s *Service) PublishConfig(input ConfigEditDTO) (ResultDTO, error) {
 	ctx := context.Background()
-	if _, err := s.releasePackage(); err != nil {
-		return ResultDTO{}, err
-	}
 	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return ResultDTO{}, err
+	}
+	if !target.IsContainer() {
+		if _, err := s.releasePackage(); err != nil {
+			return ResultDTO{}, err
+		}
 	}
 	if s.publish == nil {
 		return ResultDTO{}, s.serviceUnavailable()
@@ -1067,10 +1118,13 @@ func (s *Service) PublishConfig(input ConfigEditDTO) (ResultDTO, error) {
 // configuration publish and could delete the wrong pending secrets.
 func (s *Service) ResumeOperation(id string) (ResultDTO, error) {
 	ctx := context.Background()
+	target, err := s.cloudflareTarget(ctx)
+	if err != nil {
+		return ResultDTO{}, err
+	}
 	if _, err := s.releasePackage(); err != nil {
 		return ResultDTO{}, err
 	}
-	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return ResultDTO{}, err
 	}
@@ -1196,7 +1250,7 @@ func (s *Service) resumeUpgrade(ctx context.Context, record deployment.Operation
 // install and upgrade abandons never touch those references.
 func (s *Service) AbandonOperation(id string) (ResultDTO, error) {
 	ctx := context.Background()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return ResultDTO{}, err
 	}
@@ -1755,6 +1809,18 @@ func (s *Service) connectedAccount(ctx context.Context) (string, error) {
 }
 
 func (s *Service) managedTarget(ctx context.Context) (domain.Target, error) {
+	var stored domain.Target
+	var ok bool
+	if s.store != nil {
+		var err error
+		stored, ok, err = s.store.Load()
+		if err != nil {
+			return domain.Target{}, safeAppError(err)
+		}
+		if ok && stored.IsContainer() {
+			return stored, nil
+		}
+	}
 	accountID, err := s.connectedAccount(ctx)
 	if err != nil {
 		return domain.Target{}, err
@@ -1762,17 +1828,49 @@ func (s *Service) managedTarget(ctx context.Context) (domain.Target, error) {
 	if s.store == nil {
 		return domain.Target{}, s.serviceUnavailable()
 	}
-	target, ok, err := s.store.Load()
-	if err != nil {
-		return domain.Target{}, safeAppError(err)
-	}
 	if !ok {
 		return domain.Target{}, domain.Error{Code: CodeTargetNotSelected, Message: s.t("app.targetNotSelected")}
 	}
-	if target.AccountID != accountID {
+	if stored.AccountID != accountID {
 		return domain.Target{}, domain.Error{Code: CodeAccountMismatch, Message: s.t("app.targetAccountMismatch")}
 	}
+	return stored, nil
+}
+
+// cloudflareTarget is managedTarget for operations that exist only on
+// Cloudflare. A container target reports TARGET_UNSUPPORTED instead of the
+// AUTH_REQUIRED a missing Cloudflare login would produce, so the UI does not
+// send the user back to the login page.
+func (s *Service) cloudflareTarget(ctx context.Context) (domain.Target, error) {
+	target, err := s.managedTarget(ctx)
+	if err != nil {
+		return domain.Target{}, err
+	}
+	if target.IsContainer() {
+		return domain.Target{}, s.targetUnsupported()
+	}
 	return target, nil
+}
+
+// rejectContainerTarget reports TARGET_UNSUPPORTED when the stored target is a
+// container. It leaves the Cloudflare flow untouched for callers that do not
+// need a selected target.
+func (s *Service) rejectContainerTarget() error {
+	if s.store == nil {
+		return nil
+	}
+	target, ok, err := s.store.Load()
+	if err != nil {
+		return safeAppError(err)
+	}
+	if ok && target.IsContainer() {
+		return s.targetUnsupported()
+	}
+	return nil
+}
+
+func (s *Service) targetUnsupported() error {
+	return domain.Error{Code: domain.TARGET_UNSUPPORTED, Message: s.t("app.targetUnsupported")}
 }
 
 func (s *Service) releasePackage() (release.Package, error) {
@@ -2016,8 +2114,30 @@ func (s *FileTargetStore) lang() string {
 }
 
 type targetSettings struct {
-	AccountID  string `json:"accountId"`
-	ScriptName string `json:"scriptName"`
+	Kind       string        `json:"kind,omitempty"`
+	AccountID  string        `json:"accountId,omitempty"`
+	ScriptName string        `json:"scriptName,omitempty"`
+	Host       *hostSettings `json:"host,omitempty"`
+}
+
+type hostSettings struct {
+	Address string `json:"address"`
+	Port    int    `json:"port"`
+	User    string `json:"user"`
+	Auth    string `json:"auth"`
+	KeyPath string `json:"keyPath,omitempty"`
+	Dir     string `json:"dir"`
+}
+
+func (h hostSettings) target() domain.HostRef {
+	return domain.HostRef{
+		Address: h.Address,
+		Port:    h.Port,
+		User:    h.User,
+		Auth:    h.Auth,
+		KeyPath: h.KeyPath,
+		Dir:     h.Dir,
+	}
 }
 
 // NewFileTargetStore creates the app data directory if needed and returns a
@@ -2047,30 +2167,64 @@ func (s *FileTargetStore) Load() (domain.Target, bool, error) {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return domain.Target{}, false, fmt.Errorf("app: decode settings: %w", err)
 	}
-	if settings.AccountID == "" && settings.ScriptName == "" {
-		return domain.Target{}, false, nil
+	switch settings.Kind {
+	case "", domain.TargetCloudflare:
+		if settings.AccountID == "" && settings.ScriptName == "" {
+			return domain.Target{}, false, nil
+		}
+		if err := cloudflare.ValidateAccountID(settings.AccountID); err != nil {
+			return domain.Target{}, false, fmt.Errorf("app: settings contain an invalid account id")
+		}
+		if err := cloudflare.ValidateWorkerName(settings.ScriptName); err != nil {
+			return domain.Target{}, false, fmt.Errorf("app: settings contain an invalid Worker name")
+		}
+		// Kind stays empty for Cloudflare so the value equals the targets the
+		// rest of the client builds from an account id and a script name.
+		return domain.Target{AccountID: settings.AccountID, ScriptName: settings.ScriptName}, true, nil
+	case domain.TargetContainer:
+		if settings.Host == nil {
+			return domain.Target{}, false, fmt.Errorf("app: settings contain no SSH host")
+		}
+		host := settings.Host.target()
+		if err := host.Validate(); err != nil {
+			return domain.Target{}, false, fmt.Errorf("app: settings contain an invalid SSH host: %w", err)
+		}
+		return domain.Target{Kind: domain.TargetContainer, Host: host}, true, nil
+	default:
+		return domain.Target{}, false, fmt.Errorf("app: settings contain an unknown target kind")
 	}
-	if err := cloudflare.ValidateAccountID(settings.AccountID); err != nil {
-		return domain.Target{}, false, fmt.Errorf("app: settings contain an invalid account id")
-	}
-	if err := cloudflare.ValidateWorkerName(settings.ScriptName); err != nil {
-		return domain.Target{}, false, fmt.Errorf("app: settings contain an invalid Worker name")
-	}
-	return domain.Target{AccountID: settings.AccountID, ScriptName: settings.ScriptName}, true, nil
 }
 
 // Save writes the target atomically with owner-only permissions.
 func (s *FileTargetStore) Save(target domain.Target) error {
-	if err := cloudflare.ValidateAccountID(target.AccountID); err != nil {
-		return domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.accountIDInvalid")}
+	settings := targetSettings{}
+	switch target.Kind {
+	case "", domain.TargetCloudflare:
+		if err := cloudflare.ValidateAccountID(target.AccountID); err != nil {
+			return domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.accountIDInvalid")}
+		}
+		if err := cloudflare.ValidateWorkerName(target.ScriptName); err != nil {
+			return domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.workerNameInvalid")}
+		}
+		settings.AccountID = target.AccountID
+		settings.ScriptName = target.ScriptName
+	case domain.TargetContainer:
+		if err := target.Host.Validate(); err != nil {
+			return err
+		}
+		settings.Kind = domain.TargetContainer
+		settings.Host = &hostSettings{
+			Address: target.Host.Address,
+			Port:    target.Host.Port,
+			User:    target.Host.User,
+			Auth:    target.Host.Auth,
+			KeyPath: target.Host.KeyPath,
+			Dir:     target.Host.Dir,
+		}
+	default:
+		return domain.Error{Code: deployment.CodeInvalidRequest, Message: "unknown target kind"}
 	}
-	if err := cloudflare.ValidateWorkerName(target.ScriptName); err != nil {
-		return domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.workerNameInvalid")}
-	}
-	data, err := json.MarshalIndent(targetSettings{
-		AccountID:  target.AccountID,
-		ScriptName: target.ScriptName,
-	}, "", "  ")
+	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return fmt.Errorf("app: encode settings: %w", err)
 	}
@@ -2079,4 +2233,11 @@ func (s *FileTargetStore) Save(target domain.Target) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return writeFileAtomic(s.path, data)
+}
+
+// Clear removes the persisted target.
+func (s *FileTargetStore) Clear() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return writeFileAtomic(s.path, []byte("{}\n"))
 }

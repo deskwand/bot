@@ -244,7 +244,7 @@ func (s *Service) UpdateMcpServer(name string, server json.RawMessage, secrets [
 // and asks the Worker to forget its OAuth client and tokens.
 func (s *Service) RemoveMcpServer(name string) (ResultDTO, error) {
 	ctx := context.Background()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return ResultDTO{}, err
 	}
@@ -305,7 +305,7 @@ func (s *Service) RemoveMcpServer(name string) (ResultDTO, error) {
 // ProbeMcp connects to one server through the Worker and returns its tools.
 func (s *Service) ProbeMcp(name string) (McpProbeDTO, error) {
 	ctx := context.Background()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return McpProbeDTO{}, err
 	}
@@ -336,7 +336,7 @@ func (s *Service) ProbeMcp(name string) (McpProbeDTO, error) {
 // McpStatus lists every configured server's authorization state.
 func (s *Service) McpStatus() ([]McpAuthDTO, error) {
 	ctx := context.Background()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return []McpAuthDTO{}, err
 	}
@@ -359,7 +359,7 @@ func (s *Service) McpStatus() ([]McpAuthDTO, error) {
 // system browser. The token never leaves the Worker.
 func (s *Service) StartMcpOAuth(name string) error {
 	ctx := context.Background()
-	target, err := s.managedTarget(ctx)
+	target, err := s.cloudflareTarget(ctx)
 	if err != nil {
 		return err
 	}

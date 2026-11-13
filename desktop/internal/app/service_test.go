@@ -393,6 +393,15 @@ func (f *fakeStore) Save(target domain.Target) error {
 	return nil
 }
 
+func (f *fakeStore) Clear() error {
+	if f.err != nil {
+		return f.err
+	}
+	f.target = domain.Target{}
+	f.ok = false
+	return nil
+}
+
 type serviceFixture struct {
 	auth        *fakeAuth
 	publish     *fakePublish
@@ -2376,5 +2385,94 @@ func TestServiceGetConfigDefaultsSearchProviderToExa(t *testing.T) {
 	}
 	if config.SearchProvider != "exa" {
 		t.Fatalf("searchProvider = %q, want exa", config.SearchProvider)
+	}
+}
+
+func TestFileTargetStoreReadsLegacyFileAsCloudflare(t *testing.T) {
+	dir := t.TempDir()
+	legacy := `{"accountId":"` + serviceAccountID + `","scriptName":"bot"}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewFileTargetStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.Load()
+	if err != nil || !ok {
+		t.Fatalf("loaded ok=%v err=%v", ok, err)
+	}
+	if got.Kind != "" {
+		t.Fatalf("kind = %q, want %q", got.Kind, "")
+	}
+	if got.AccountID != serviceAccountID || got.ScriptName != "bot" {
+		t.Fatalf("target = %#v", got)
+	}
+}
+
+func TestFileTargetStoreRoundTripsContainerTarget(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileTargetStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := domain.Target{
+		Kind: domain.TargetContainer,
+		Host: domain.HostRef{
+			Address: "host.example",
+			Port:    2222,
+			User:    "deploy",
+			Auth:    domain.SSHAuthKey,
+			KeyPath: "/k",
+			Dir:     "/srv/bot",
+		},
+	}
+	if err := store.Save(target); err != nil {
+		t.Fatal(err)
+	}
+	loaded, ok, err := store.Load()
+	if err != nil || !ok {
+		t.Fatalf("loaded ok=%v err=%v", ok, err)
+	}
+	if loaded != target {
+		t.Fatalf("loaded = %#v, want %#v", loaded, target)
+	}
+	path := filepath.Join(dir, "settings.json")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("settings permissions = %o, want 600", perm)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if account, ok := raw["accountId"]; ok && account != "" {
+		t.Fatalf("container settings wrote an account id: %s", data)
+	}
+}
+
+func TestFileTargetStoreRejectsInvalidContainerTarget(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileTargetStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.Save(domain.Target{
+		Kind: domain.TargetContainer,
+		Host: domain.HostRef{Address: "a b"},
+	})
+	var domainErr domain.Error
+	if !errors.As(err, &domainErr) {
+		t.Fatalf("error = %v, want a domain error", err)
+	}
+	if domainErr.Code != "INVALID_REQUEST" {
+		t.Fatalf("code = %q, want INVALID_REQUEST", domainErr.Code)
 	}
 }

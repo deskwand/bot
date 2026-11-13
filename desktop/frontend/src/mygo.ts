@@ -73,6 +73,7 @@ export interface BackupSummaryDTO {
  */
 export interface BootStateDTO {
   connection: ConnectionDTO;
+  targetKind: string;
   targetSelected: boolean;
   targetMismatch: boolean;
   targetName: string;
@@ -110,6 +111,7 @@ export interface CloudflareLoginDTO {
 
 /** ConfigDTO is the editable configuration summary. */
 export interface ConfigDTO {
+  targetKind: string;
   accountId: string;
   workerName: string;
   fingerprint: string;
@@ -155,6 +157,61 @@ export interface ConnectionDTO {
   state: string;
   accountId?: string;
   accountName?: string;
+}
+
+/** ContainerCheckDTO is one preflight result. */
+export interface ContainerCheckDTO {
+  id: string;
+  ok: boolean;
+  detail: string;
+  fix?: string;
+}
+
+/**
+ * ContainerExistingDTO describes an instance the remote directory already
+ * holds, so the user can take it over instead of installing again.
+ */
+export interface ContainerExistingDTO {
+  ownerUserIds: number[];
+  butlerModel: ModelDTO | null;
+  taskModel: ModelDTO | null;
+  activeChannel?: string;
+  releaseVersion?: string;
+}
+
+/**
+ * ContainerInstallInputDTO is a from-scratch container install request. Secrets
+ * are write-only.
+ */
+export interface ContainerInstallInputDTO {
+  telegramUserIds: number[];
+  butlerModel: ModelDTO;
+  taskModel: ModelDTO;
+  activeChannel: string;
+  secrets: unknown[];
+}
+
+/**
+ * ContainerPreflightDTO is the preflight result. Existing is set only when the
+ * remote directory already holds this project's container.
+ */
+export interface ContainerPreflightDTO {
+  checks: ContainerCheckDTO[];
+  passed: boolean;
+  existing?: ContainerExistingDTO;
+}
+
+/** ContainerStatusDTO is the server page's runtime view. */
+export interface ContainerStatusDTO {
+  address: string;
+  user: string;
+  dir: string;
+  reachable: boolean;
+  running: boolean;
+  health: string;
+  image: string;
+  startedAt: string;
+  canRestore: boolean;
 }
 
 /** CustomModelDTO is one model declared by a custom provider. */
@@ -466,6 +523,30 @@ export interface ResultDTO {
   warnings?: string[];
 }
 
+/**
+ * SSHHostInputDTO is one SSH host submitted by the setup flow. Secret is a
+ * password or private-key passphrase and is write-only: it is never returned,
+ * logged or persisted locally.
+ */
+export interface SSHHostInputDTO {
+  address: string;
+  port: number;
+  user: string;
+  auth: string;
+  keyPath?: string;
+  secret?: string;
+  dir?: string;
+}
+
+/**
+ * SSHProbeDTO is the host key first seen during a probe. Known reports that
+ * the key already matches the recorded one.
+ */
+export interface SSHProbeDTO {
+  fingerprint: string;
+  known: boolean;
+}
+
 /** SecretNameDTO reports whether a named secret exists. Values never leave Go. */
 export interface SecretNameDTO {
   name: string;
@@ -550,6 +631,13 @@ export const Service = {
    */
   addMcpServer(input: McpAddInput): Promise<ResultDTO> {
     return call("Service.AddMcpServer", input);
+  },
+  /**
+   * AdoptContainer takes over an existing instance without writing anything
+   * remote.
+   */
+  adoptContainer(): Promise<ResultDTO> {
+    return call("Service.AdoptContainer");
   },
   /**
    * BackupSettings returns the stored folder and schedule. It returns the DTO by
@@ -638,15 +726,38 @@ export const Service = {
     return call("Service.ConfirmImport", input);
   },
   /**
+   * ConnectSSHHost pins a first-seen host key, stores the password or passphrase
+   * and runs the preflight, which authenticates for real. A failed
+   * authentication forgets the credential and trust it just wrote.
+   */
+  connectSSHHost(input: SSHHostInputDTO, fingerprint: string): Promise<ContainerPreflightDTO> {
+    return call("Service.ConnectSSHHost", input, fingerprint);
+  },
+  /**
    * ConnectTelegram validates the bot token, publishes it and removes any
    * registered webhook so the Worker can poll for updates.
    */
   connectTelegram(token: string): Promise<ResultDTO> {
     return call("Service.ConnectTelegram", token);
   },
+  /** ContainerPreflight re-runs the preflight for the host being set up. */
+  containerPreflight(): Promise<ContainerPreflightDTO> {
+    return call("Service.ContainerPreflight");
+  },
+  /** ContainerStatus reports the host and container state for the server page. */
+  containerStatus(): Promise<ContainerStatusDTO> {
+    return call("Service.ContainerStatus");
+  },
   /** DisconnectCloudflare revokes the authorization and removes local credentials. */
   disconnectCloudflare(): Promise<void> {
     return call("Service.DisconnectCloudflare");
+  },
+  /**
+   * DisconnectContainer forgets the host credential and the pinned key and
+   * clears the local target. It runs no remote command.
+   */
+  disconnectContainer(): Promise<void> {
+    return call("Service.DisconnectContainer");
   },
   /**
    * ExchangeSyncStatus lists every locally stored account, sorted by id. An
@@ -679,6 +790,14 @@ export const Service = {
   /** Install creates a new deployment. */
   install(input: InstallInputDTO): Promise<ResultDTO> {
     return call("Service.Install", input);
+  },
+  /**
+   * InstallContainer writes the compose file and .env, starts the container and
+   * waits until it is healthy. The target is saved only after the install
+   * succeeds.
+   */
+  installContainer(input: ContainerInstallInputDTO): Promise<ResultDTO> {
+    return call("Service.InstallContainer", input);
   },
   /** LifeVitals reads the deployed life ledger's vitals. */
   lifeVitals(): Promise<LifeVitalsDTO> {
@@ -748,6 +867,13 @@ export const Service = {
   probeModel(provider: string, model: string, key: string, api: string, baseURL: string): Promise<StatusItemDTO> {
     return call("Service.ProbeModel", provider, model, key, api, baseURL);
   },
+  /**
+   * ProbeSSHHost reports the host key without connecting as a user. Nothing is
+   * stored.
+   */
+  probeSSHHost(input: SSHHostInputDTO): Promise<SSHProbeDTO> {
+    return call("Service.ProbeSSHHost", input);
+  },
   /** PublishConfig merges and publishes the editable configuration (保存并发布). */
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO> {
     return call("Service.PublishConfig", input);
@@ -758,6 +884,13 @@ export const Service = {
    */
   removeMcpServer(name: string): Promise<ResultDTO> {
     return call("Service.RemoveMcpServer", name);
+  },
+  /**
+   * RestoreContainerConfig puts the previous .env back and restarts the
+   * container.
+   */
+  restoreContainerConfig(): Promise<ResultDTO> {
+    return call("Service.RestoreContainerConfig");
   },
   /** RestoreData overwrites the deployment with the backup chosen by ChooseBackup. */
   restoreData(): Promise<void> {
@@ -917,6 +1050,11 @@ export const events = {
    * `mygo generate` turns it into `events.backupProgress`.
    */
   backupProgress: event<Progress>("backup-progress"),
+  /**
+   * ContainerProgressEvent carries install step updates to the frontend.
+   * `mygo generate` turns it into `events.containerProgress`.
+   */
+  containerProgress: event<StepDTO>("container-progress"),
   /**
    * LoginStatusEvent carries sanitized QR login progress to the frontend.
    * `mygo generate` turns it into `events.loginStatus`.

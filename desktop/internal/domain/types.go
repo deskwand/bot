@@ -69,10 +69,13 @@ func (e Error) As(target any) bool {
 	}
 }
 
-// Target identifies one Worker script in one account.
+// Target identifies one deployment: a Worker script in one account, or a
+// container on an SSH host. Kind is empty for legacy Cloudflare targets.
 type Target struct {
+	Kind       string // empty means TargetCloudflare
 	AccountID  string
 	ScriptName string
+	Host       HostRef
 }
 
 // Snapshot is the read-only state Merge starts from. SettingsJSON keeps the

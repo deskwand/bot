@@ -11,6 +11,7 @@ import {
   Loader2,
   Menu,
   MessageSquare,
+  Server as ServerIcon,
   Sprout,
   Stethoscope,
   Wallet,
@@ -48,6 +49,8 @@ import { Agent } from "@/features/agent/Agent";
 import { Cloudflare } from "@/features/cloudflare/Cloudflare";
 import { Search } from "@/features/search/Search";
 import { Setup } from "@/features/setup/Setup";
+import { Server } from "@/features/server/Server";
+import { Unsupported } from "@/components/unsupported";
 import { Updates } from "@/features/updates/Updates";
 
 const Entries = lazy(() =>
@@ -66,7 +69,7 @@ type Session =
 
 type NavGroup = "mind" | "senses" | "action" | "livelihood" | "containers";
 
-const NAV: { group?: NavGroup; items: { page: Page; icon: LucideIcon }[] }[] = [
+const NAV_GROUPS: { group?: NavGroup; items: { page: Page; icon: LucideIcon }[] }[] = [
   { items: [{ page: "overview", icon: HeartPulse }] },
   { group: "mind", items: [{ page: "models", icon: Brain }] },
   {
@@ -87,13 +90,14 @@ const NAV: { group?: NavGroup; items: { page: Page; icon: LucideIcon }[] }[] = [
   {
     group: "containers",
     items: [
-      { page: "cloudflare", icon: Cloud },
       { page: "diagnostics", icon: Stethoscope },
       { page: "backup", icon: Archive },
       { page: "updates", icon: Sprout },
     ],
   },
 ];
+
+const CONTAINER_UNSUPPORTED: Page[] = ["mcp", "agent", "exchange", "backup", "updates"];
 
 export function App({ client }: { client: ClientService }) {
   const t = useT();
@@ -103,6 +107,7 @@ export function App({ client }: { client: ClientService }) {
   const scopeRef = useRef<string | null>(null);
   const [session, setSession] = useState<Session>({ kind: "loading" });
   const [productName, setProductName] = useState("DeskWand Bot");
+  const [targetKind, setTargetKind] = useState("");
   const [pending, setPending] = useState<OperationDTO[]>([]);
   const [dirty, setDirtyState] = useState(false);
   const [pendingNav, setPendingNav] = useState<Page | null>(null);
@@ -117,10 +122,7 @@ export function App({ client }: { client: ClientService }) {
         client.name().then(setProductName).catch(() => undefined);
         const boot = await client.bootState();
         const connection = boot.connection;
-        const scope =
-          connection.state === "connected"
-            ? `${connection.accountId ?? ""}:${boot.targetName}`
-            : "disconnected";
+        const scope = `${boot.targetKind}:${connection.accountId ?? ""}:${boot.targetName}`;
         if (scopeRef.current !== null && scopeRef.current !== scope) {
           // Cached queries are keyed only by resource, so a different account
           // or deployment must not inherit the previous one's data. Unmount the
@@ -130,7 +132,14 @@ export function App({ client }: { client: ClientService }) {
           queryClient.clear();
         }
         scopeRef.current = scope;
+        setTargetKind(boot.targetKind);
         setPending(boot.pending);
+        if (boot.targetKind === "container") {
+          // A container target is local to this app: it needs no Cloudflare
+          // login, only the host recorded in the target file.
+          setSession({ kind: "ready" });
+          return;
+        }
         if (connection.state !== "connected") {
           // An expired authorization is not the same as never having
           // connected: say so, and keep the account name so the welcome page
@@ -244,9 +253,24 @@ export function App({ client }: { client: ClientService }) {
   }, [refresh, setPage]);
 
   const appValue = useMemo(
-    () => ({ client, navigate, navigateImport, setDirty: setDirtyState, signedOut }),
-    [client, navigate, navigateImport, signedOut],
+    () => ({ client, targetKind, refresh, navigate, navigateImport, setDirty: setDirtyState, signedOut }),
+    [client, targetKind, refresh, navigate, navigateImport, signedOut],
   );
+
+  const isContainer = targetKind === "container";
+  const nav = useMemo(() => {
+    const containerItem = isContainer
+      ? { page: "server" as Page, icon: ServerIcon }
+      : { page: "cloudflare" as Page, icon: Cloud };
+    return NAV_GROUPS.map(({ group, items }) => ({
+      group,
+      items:
+        group === "containers"
+          ? [containerItem, ...items]
+          : items,
+    }));
+  }, [isContainer]);
+  const unsupported = isContainer && CONTAINER_UNSUPPORTED.includes(page);
 
   const shell = session.kind === "ready";
   const connectionFailure =
@@ -292,7 +316,7 @@ export function App({ client }: { client: ClientService }) {
                 className={`${navOpen ? "flex" : "hidden"} flex-col gap-1 md:flex`}
                 aria-label={t("shell.nav")}
               >
-                {NAV.map(({ group, items }) => {
+                {nav.map(({ group, items }) => {
                   const buttons = items.map(({ page: target, icon: Icon }) => (
                     <Button
                       key={target}
@@ -376,21 +400,23 @@ export function App({ client }: { client: ClientService }) {
                   key={page}
                   className="animate-in fade-in-0 slide-in-from-bottom-1 duration-150 motion-reduce:animate-none"
                 >
-                  {page === "overview" ? <Overview /> : null}
+                  {unsupported ? <Unsupported /> : null}
+                  {!unsupported && page === "overview" ? <Overview /> : null}
                   {page === "models" ? <Models /> : null}
                   {page === "search" ? <Search /> : null}
-                  {page === "exchange" ? <Exchanges /> : null}
-                  {page === "agent" ? <Agent /> : null}
-                  {page === "mcp" ? <Mcp /> : null}
+                  {page === "exchange" && !isContainer ? <Exchanges /> : null}
+                  {page === "agent" && !isContainer ? <Agent /> : null}
+                  {page === "mcp" && !isContainer ? <Mcp /> : null}
                   {page === "entries" ? (
                     <Suspense fallback={<PageLoading label={t("shell.pageLoading")} />}>
                       <Entries />
                     </Suspense>
                   ) : null}
                   {page === "diagnostics" ? <Diagnostics /> : null}
-                  {page === "backup" ? <Backup /> : null}
-                  {page === "updates" ? <Updates /> : null}
-                  {page === "cloudflare" ? <Cloudflare /> : null}
+                  {page === "backup" && !isContainer ? <Backup /> : null}
+                  {page === "updates" && !isContainer ? <Updates /> : null}
+                  {page === "cloudflare" && !isContainer ? <Cloudflare /> : null}
+                  {page === "server" && isContainer ? <Server /> : null}
                 </div>
               </>
             ) : (
