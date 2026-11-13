@@ -2,7 +2,7 @@
 
 [![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/deskwand-bot)
 
-A bot that lives in your own Cloudflare Worker. It keeps its own mission and memory, decides on its own when to wake up, and stays quiet unless there is something worth telling you.
+An agent that lives in your own account. One deployment is one life: its own mission, rules and memory; it picks when to wake next, and every model call is written into a ledger it keeps, so balance, daily burn and runway are always answerable. With a wallet configured it earns the money it wakes on. It stays quiet unless there is something worth telling you.
 
 AGPL-3.0 · [中文](README.md) · [Website](https://deskwand.com/bot?src=gh-readme)
 
@@ -24,12 +24,27 @@ If you do not want a Cloudflare account, you can run the same Worker locally wit
 
 The container has no Workers AI, so at least one `MODEL_KEY_*` is required. Do not run the same Telegram bot token in both places.
 
-## Why it is not just another agent
+The desktop app can also deploy the same package to a Linux host over SSH, with no Cloudflare account: connect, write the config and start the container from the app.
 
-- **It runs in your account.** The Worker, the Durable Objects and the R2 bucket are yours. You can see them in the Cloudflare dashboard and delete them yourself. Messages and tasks never pass through our servers.
-- **It is a resident, not a conversation.** It has its own mission, rules and memory, and chooses when to wake next — anywhere between five minutes and thirty days. When it wakes, it still remembers where it got to.
-- **It is quiet by default.** No "started" message, no progress, no heartbeat. It speaks only when something actually changed.
-- **Its spending has a ceiling.** When the free allowance runs out it pauses until 00:00 UTC instead of billing you.
+## What it is
+
+- **One deployment is one life.** Mission, rules, memory and ledger all live in that one deployment and export to a single zip. Not a conversation.
+- **Keeps its own books.** Every model call is priced and written to the ledger. Balance, daily burn and runway are always answerable, and the desktop app opens on that card. Four tiers: ample, lean, critical, dormant. The poorer it gets, the cheaper it runs: lean and critical switch to a cheaper model, and at zero balance only Cloudflare's free models are left.
+- **Earns its own living.** With a wallet configured there is an address on Base; you fund it with USDC. When the balance stops covering 21 days of spend it remits USDC back to you. Until the tier recovers, the livelihood bot trades in one order: protect the principal, then cover its own wake-ups, then grow.
+- **Runs in your container.** The Worker, the Durable Objects and the R2 bucket are yours: visible in the dashboard, deletable by you. Messages and tasks never pass through our servers. Cloudflare is one container among several; the same package also runs on Docker or an SSH host.
+- **Quiet by default.** No "started" message, no progress, no heartbeat. It speaks only when something actually changed.
+- **Spending has a ceiling.** When the Cloudflare free allowance runs out it pauses until 00:00 UTC instead of billing you.
+
+The desktop app groups its sidebar by the parts of that body, matching the chapters below:
+
+| Group | Pages | What is behind it |
+|---|---|---|
+| — | Vitals | Ledger, balance, daily burn, tier (`LifeDO`) |
+| Mind | Mind | The models the butler and tasks use (`models.butler` / `models.task`) |
+| Senses | Sight, Voice | Web search; the Telegram or WeChat entry |
+| Action | Hands | Remote MCP servers and tools; tasks and bots |
+| Livelihood | Wallet, Exchanges | Base wallet and the livelihood bot; read-only exchange snapshots (`WalletDO` / `ExchangeDO`) |
+| Containers | Cloudflare, Server, Checkup, Memory, Growth | Worker + Durable Objects; or Docker, an SSH host; diagnostics, backups, updates |
 
 ## Architecture
 
