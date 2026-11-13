@@ -18,6 +18,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/i18n"
+	"github.com/deskwand/bot/desktop/internal/localhost"
 	"github.com/deskwand/bot/desktop/internal/navigation"
 	"github.com/deskwand/bot/desktop/internal/netproxy"
 	"github.com/deskwand/bot/desktop/internal/platform"
@@ -138,6 +139,9 @@ func main() {
 	knownHosts := filepath.Join(dataDir, "known_hosts")
 	containers := container.New(container.Options{
 		Dial: func(target domain.Target) (container.Host, error) {
+			if target.Host.IsLocal() {
+				return localhost.New(), nil
+			}
 			return sshhost.New(target.Host, credentials, knownHosts), nil
 		},
 		Version: pkg.Version(),

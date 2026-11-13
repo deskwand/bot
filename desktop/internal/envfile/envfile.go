@@ -11,6 +11,16 @@ import (
 	"strings"
 )
 
+// Dialect selects how values are parsed and written. Compose follows the
+// docker compose env_file quoting rules; Plain writes the value verbatim, as
+// Apple container reads it.
+type Dialect int
+
+const (
+	Compose Dialect = iota
+	Plain
+)
+
 var ErrUnrepresentable = errors.New("envfile: value cannot be written safely")
 var ErrInvalidKey = errors.New("envfile: invalid key")
 
@@ -32,12 +42,20 @@ type line struct {
 
 // File is a parsed env file. Untouched lines are kept as raw bytes.
 type File struct {
-	lines []line
+	lines   []line
+	dialect Dialect
 }
 
-// Parse reads an env file. Lines it does not understand are kept verbatim.
+// Parse reads a compose env file. Lines it does not understand are kept
+// verbatim.
 func Parse(data []byte) (*File, error) {
-	f := &File{}
+	return ParseDialect(data, Compose)
+}
+
+// ParseDialect reads an env file in the given dialect. Lines it does not
+// understand are kept verbatim.
+func ParseDialect(data []byte, d Dialect) (*File, error) {
+	f := &File{dialect: d}
 	for len(data) > 0 {
 		i := bytes.IndexByte(data, '\n')
 		var raw []byte
@@ -48,12 +66,12 @@ func Parse(data []byte) (*File, error) {
 			raw = data[:i+1]
 			data = data[i+1:]
 		}
-		f.lines = append(f.lines, parseLine(raw))
+		f.lines = append(f.lines, parseLine(raw, d))
 	}
 	return f, nil
 }
 
-func parseLine(raw []byte) line {
+func parseLine(raw []byte, d Dialect) line {
 	l := line{raw: raw}
 	body := raw
 	if n := len(body); n > 0 && body[n-1] == '\n' {
@@ -64,6 +82,10 @@ func parseLine(raw []byte) line {
 			l.terminator = "\n"
 			body = body[:n-1]
 		}
+	}
+
+	if d == Plain {
+		return parsePlainLine(l, body)
 	}
 
 	trimmed := strings.TrimSpace(string(body))
@@ -78,6 +100,27 @@ func parseLine(raw []byte) line {
 	l.prefix = match[1]
 	l.key = match[2]
 	l.value = parseValue(match[3])
+	l.isKeyValue = true
+	return l
+}
+
+// parsePlainLine reads KEY=value as-is: no quote removal, no inline comments,
+// no trimming. Empty lines, comments and anything whose left side is not a
+// valid key stay verbatim.
+func parsePlainLine(l line, body []byte) line {
+	if len(body) == 0 || body[0] == '#' {
+		return l
+	}
+	i := bytes.IndexByte(body, '=')
+	if i < 0 {
+		return l
+	}
+	key := string(body[:i])
+	if !keyPattern.MatchString(key) {
+		return l
+	}
+	l.key = key
+	l.value = string(body[i+1:])
 	l.isKeyValue = true
 	return l
 }
@@ -170,7 +213,11 @@ func (f *File) Set(key, value string) error {
 	if !keyPattern.MatchString(key) {
 		return ErrInvalidKey
 	}
-	if strings.ContainsAny(value, "'\n\r\x00") {
+	if f.dialect == Plain {
+		if strings.ContainsAny(value, "\n\r\x00") {
+			return ErrUnrepresentable
+		}
+	} else if strings.ContainsAny(value, "'\n\r\x00") {
 		return ErrUnrepresentable
 	}
 
@@ -196,7 +243,7 @@ func (f *File) Set(key, value string) error {
 		}
 	}
 
-	raw := []byte(key + "=" + encodeValue(key, value))
+	raw := []byte(key + "=" + encodeValue(key, value, f.dialect))
 	raw = append(raw, newline...)
 	f.lines = append(f.lines, line{
 		raw:        raw,
@@ -231,7 +278,7 @@ func (f *File) Bytes() []byte {
 		out = append(out, l.prefix...)
 		out = append(out, l.key...)
 		out = append(out, '=')
-		out = append(out, encodeValue(l.key, l.value)...)
+		out = append(out, encodeValue(l.key, l.value, f.dialect)...)
 		out = append(out, l.terminator...)
 	}
 	return out
@@ -249,7 +296,10 @@ func (f *File) newlineStyle() []byte {
 	return []byte("\n")
 }
 
-func encodeValue(key, value string) string {
+func encodeValue(key, value string, d Dialect) string {
+	if d == Plain {
+		return value
+	}
 	if key == "DESKWAND_CONFIG" || !bareValue.MatchString(value) {
 		return "'" + value + "'"
 	}

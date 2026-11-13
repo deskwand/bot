@@ -1,0 +1,50 @@
+[
+  {
+    "id": "buildkit",
+    "configuration": {
+      "id": "buildkit",
+      "publishedPorts": []
+    },
+    "status": {
+      "state": "running",
+      "networks": [
+        {
+          "hostname": "buildkit",
+          "ipv4Address": "192.0.2.3/24",
+          "ipv4Gateway": "192.0.2.1",
+          "macAddress": "02:00:00:00:00:01",
+          "mtu": 1500,
+          "network": "default"
+        }
+      ]
+    }
+  },
+  {
+    "id": "bot",
+    "configuration": {
+      "id": "bot",
+      "publishedPorts": [
+        {
+          "containerPort": 8787,
+          "count": 1,
+          "hostAddress": "127.0.0.1",
+          "hostPort": 8787,
+          "proto": "tcp"
+        }
+      ]
+    },
+    "status": {
+      "state": "running",
+      "networks": [
+        {
+          "hostname": "bot",
+          "ipv4Address": "192.0.2.2/24",
+          "ipv4Gateway": "192.0.2.1",
+          "macAddress": "02:00:00:00:00:01",
+          "mtu": 1500,
+          "network": "default"
+        }
+      ]
+    }
+  }
+]

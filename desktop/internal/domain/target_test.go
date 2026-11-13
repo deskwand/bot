@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestHostRefValidate(t *testing.T) {
 	passwordHost := HostRef{
@@ -65,5 +68,54 @@ func TestTargetKindHelpers(t *testing.T) {
 	}
 	if got := (Target{ScriptName: "w"}).DisplayName(); got != "w" {
 		t.Fatalf("DisplayName() = %q, want script name", got)
+	}
+}
+
+func TestLocalHostRefValidates(t *testing.T) {
+	host := HostRef{Transport: TransportLocal, Engine: EngineApple, Dir: DefaultLocalDir}
+	if err := host.Validate(); err != nil {
+		t.Fatalf("local host is invalid: %v", err)
+	}
+}
+
+func TestLocalHostRefRejectsBadDir(t *testing.T) {
+	for _, dir := range []string{"relative/x", "/a/~b", "/a;b"} {
+		host := HostRef{Transport: TransportLocal, Engine: EngineApple, Dir: dir}
+		err := host.Validate()
+		var coded Error
+		if !errors.As(err, &coded) || coded.Code != codeInvalidRequest {
+			t.Errorf("local dir %q error = %v, want INVALID_REQUEST", dir, err)
+		}
+	}
+}
+
+func TestSSHHostRefRejectsAppleEngine(t *testing.T) {
+	host := HostRef{
+		Address: "203.0.113.7",
+		Port:    22,
+		User:    "root",
+		Auth:    SSHAuthPassword,
+		Dir:     "~/deskwand",
+		Engine:  EngineApple,
+	}
+	err := host.Validate()
+	var coded Error
+	if !errors.As(err, &coded) || coded.Code != codeInvalidRequest {
+		t.Fatalf("error = %v, want INVALID_REQUEST", err)
+	}
+}
+
+func TestSSHHostRefRejectsSpaceInDir(t *testing.T) {
+	host := HostRef{
+		Address: "203.0.113.7",
+		Port:    22,
+		User:    "root",
+		Auth:    SSHAuthPassword,
+		Dir:     "/a b",
+	}
+	err := host.Validate()
+	var coded Error
+	if !errors.As(err, &coded) || coded.Code != codeInvalidRequest {
+		t.Fatalf("error = %v, want INVALID_REQUEST", err)
 	}
 }

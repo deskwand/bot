@@ -12,7 +12,7 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/envfile"
-	"github.com/deskwand/bot/desktop/internal/sshhost"
+	"github.com/deskwand/bot/desktop/internal/hostexec"
 )
 
 func TestAllowlistMatchesContainerEntrypoint(t *testing.T) {
@@ -121,11 +121,11 @@ func TestStatus(t *testing.T) {
 	const healthy = "running|healthy|2026-11-13T02:00:00Z|ghcr.io/deskwand/bot:1.2.0\n"
 
 	t.Run("healthy", func(t *testing.T) {
-		host := &fakeHost{respond: func(command string) (sshhost.Result, error) {
+		host := &fakeHost{respond: func(command string) (hostexec.Result, error) {
 			if strings.Contains(command, "docker inspect") {
-				return sshhost.Result{Stdout: []byte(healthy)}, nil
+				return hostexec.Result{Stdout: []byte(healthy)}, nil
 			}
-			return sshhost.Result{ExitCode: 1}, nil
+			return hostexec.Result{ExitCode: 1}, nil
 		}}
 		status, err := newService(host).Status(context.Background(), containerTarget())
 		if err != nil {
@@ -144,8 +144,8 @@ func TestStatus(t *testing.T) {
 	})
 
 	t.Run("not running", func(t *testing.T) {
-		host := &fakeHost{respond: func(string) (sshhost.Result, error) {
-			return sshhost.Result{ExitCode: 1}, nil
+		host := &fakeHost{respond: func(string) (hostexec.Result, error) {
+			return hostexec.Result{ExitCode: 1}, nil
 		}}
 		status, err := newService(host).Status(context.Background(), containerTarget())
 		if err != nil {
@@ -173,14 +173,14 @@ func TestStatus(t *testing.T) {
 		host := &fakeHost{files: map[string][]byte{
 			"~/deskwand/.env.bak": []byte("ADMIN_TOKEN=t\n"),
 		}}
-		host.respond = func(command string) (sshhost.Result, error) {
+		host.respond = func(command string) (hostexec.Result, error) {
 			if strings.Contains(command, "docker inspect") {
-				return sshhost.Result{Stdout: []byte(healthy)}, nil
+				return hostexec.Result{Stdout: []byte(healthy)}, nil
 			}
 			if _, ok := host.files["~/deskwand/.env.bak"]; ok && strings.Contains(command, ".env.bak") {
-				return sshhost.Result{}, nil
+				return hostexec.Result{}, nil
 			}
-			return sshhost.Result{ExitCode: 1}, nil
+			return hostexec.Result{ExitCode: 1}, nil
 		}
 		status, err := newService(host).Status(context.Background(), containerTarget())
 		if err != nil {
@@ -190,6 +190,15 @@ func TestStatus(t *testing.T) {
 			t.Errorf("Status = %+v, want CanRestore", status)
 		}
 	})
+}
+
+func TestUnreachableRecognizesLocalRuntimeCodes(t *testing.T) {
+	if !isUnreachable(domain.Error{Code: "LOCAL_RUNTIME_STOPPED"}) {
+		t.Errorf("isUnreachable(LOCAL_RUNTIME_STOPPED) = false, want true")
+	}
+	if isUnreachable(domain.Error{Code: domain.CONFIG_CONFLICT}) {
+		t.Errorf("isUnreachable(CONFIG_CONFLICT) = true, want false")
+	}
 }
 
 func assertCode(t *testing.T, err error, code string) {

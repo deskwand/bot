@@ -71,6 +71,40 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。客户端启
 
 客户端不会执行下载的 Worker 代码来猜测配置。遇到未知 bindings、多个同时接收流量的版本或无法安全保留的设置时，会停止编辑并说明原因。
 
+### 在这台 Mac 上运行
+
+欢迎页的第三项「这台 Mac」不经过 Cloudflare，也不经过 SSH，直接在本机的容器里跑同一份镜像。它只在 macOS 上出现，其中 Apple `container` 那条路还要求 Apple 芯片。
+
+支持两种容器运行时：
+
+- **Docker 兼容**：OrbStack、Docker Desktop 等提供的 `docker` 与 compose 插件；
+- **Apple `container`**：Apple 官方的容器工具。
+
+只装了一个就直接用它；两个都装了，才会在向导的「选择容器运行时」里问你要用哪个，默认选中 Apple `container`。客户端不会替你安装任何运行时，一个都没有时只给一句装法和官方下载链接。
+
+两种运行时的保活方式不同：
+
+- Apple `container`：客户端写一个 launchd 用户代理，登录后自动把机器人启动起来，容器退出或崩溃就重新拉起，不需要打开客户端。
+- Docker 兼容运行时：靠 compose 文件里的 `restart: unless-stopped`。容器应用本身要不要开机自启（OrbStack、Docker Desktop 里的登录项设置）由你自己决定，客户端不替你改。
+
+本机的东西放在固定位置：
+
+- 实例目录默认 `~/Library/Application Support/DeskWand/local`，可以在向导里改。里面是 `.env` 和上一份配置 `.env.bak`；用 Apple `container` 时还有启动脚本 `run.sh`，以及 launchd 写的日志 `logs/launchd.log`。
+- 用 Apple `container` 时的开机启动项是 `~/Library/LaunchAgents/com.deskwand.bot.plist`。
+- 容器固定叫 `deskwand-bot`，数据卷固定叫 `deskwand-data`；别的名字的容器客户端一律不碰。
+
+`.env` 是本机实例配置和密钥的唯一来源：模型 key、入口凭据、钱包私钥都在里面，就在这台 Mac 的磁盘上，**不加密**，权限 600（两种运行时都一样）。不要把它贴进 issue、聊天记录或诊断报告；要贴日志时用「服务器」页里的日志。在客户端里改配置走「保存并发布」，它会重写 `.env` 并重启容器，约半分钟不可用；如果发现 `.env` 已经被手改过，发布会以 `CONFIG_CONFLICT` 被拒绝，不会覆盖你手写的值。每次发布会先把当前 `.env` 存成 `.env.bak`，需要时可以用「服务器」页的「恢复上一份配置」换回去。
+
+用 Apple `container` 时，保活靠的是登录用户的 launchd 代理，所以它只在你登录之后才运行：Mac 开着但停在登录窗口时，机器人不在线；重启后也要先登录一次，它才会回来。
+
+「服务器」页的「断开」会停掉机器人并删掉开机启动项，配置（`.env`、`.env.bak`）和数据卷 `deskwand-data` 都保留，以后在欢迎页再选一次「这台 Mac」就能接管回来。
+
+这一版不支持同一份配置在两种运行时之间切换：两者的 `.env` 写法不同，客户端不做转换。目录里已经有另一种运行时的启动文件时，预检不通过，并提示你选回原来那个。
+
+同一个 Telegram bot token 不能同时跑在两处：Cloudflare、SSH 主机和这台 Mac 互斥。两边一起跑会互抢 update，消息时有时无；换地方之前先停掉一边。
+
+还有一处例外要说明白：目标是在 Mac 上保存的，把这个目标文件拿到 Windows 或 Linux 上打开时，客户端只报「此运行方式暂不支持」，不会尝试运行；在那里点断开只会清掉本机保存的目标，不会碰任何容器。
+
 ## 4. 消息入口：同一时间只启用一个
 
 设置页叫 **消息入口**。`ACTIVE_CHANNEL` 是唯一权威，只能是：

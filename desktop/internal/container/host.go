@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
-	"github.com/deskwand/bot/desktop/internal/sshhost"
+	"github.com/deskwand/bot/desktop/internal/hostexec"
 )
 
-// Host is the subset of sshhost.Client the container service needs. Tests
+// Host is the subset of the host clients the container service needs. Tests
 // inject a fake so no network is required.
 type Host interface {
-	Run(ctx context.Context, command string, stdin []byte) (sshhost.Result, error)
+	Run(ctx context.Context, command string, stdin []byte) (hostexec.Result, error)
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 	WriteFileAtomic(ctx context.Context, path string, data []byte, mode os.FileMode) error
 }

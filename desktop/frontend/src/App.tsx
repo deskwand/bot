@@ -112,6 +112,9 @@ export function App({ client }: { client: ClientService }) {
   const [dirty, setDirtyState] = useState(false);
   const [pendingNav, setPendingNav] = useState<Page | null>(null);
   const [setupImport, setSetupImport] = useState(false);
+  // Whether this Mac can host the bot itself. A boot state that has not been
+  // read yet offers no local option rather than one that would fail.
+  const [localSupported, setLocalSupported] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const { page, setPage } = useUiStore();
 
@@ -133,6 +136,7 @@ export function App({ client }: { client: ClientService }) {
         }
         scopeRef.current = scope;
         setTargetKind(boot.targetKind);
+        setLocalSupported(boot.localSupported);
         setPending(boot.pending);
         if (boot.targetKind === "container") {
           // A container target is local to this app: it needs no Cloudflare
@@ -378,6 +382,7 @@ export function App({ client }: { client: ClientService }) {
             ) : shell && setupImport ? (
               <Setup
                 phase="choose"
+                localSupported={localSupported}
                 initialStep="import"
                 onSessionChange={() => refresh(false)}
                 onReady={() => {
@@ -422,6 +427,7 @@ export function App({ client }: { client: ClientService }) {
             ) : (
               <Setup
                 phase={session.kind === "disconnected" ? "disconnected" : "choose"}
+                localSupported={localSupported}
                 connectionError={connectionError}
                 connectionAccount={connectionAccount}
                 onSessionChange={() => refresh(false)}

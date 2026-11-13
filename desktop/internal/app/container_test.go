@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +44,20 @@ type fakeContainer struct {
 	snapshot      domain.Snapshot
 	snapshotErr   error
 	snapshotCalls int
+
+	localRuntimes    container.LocalRuntimes
+	localRuntimesErr error
+	detectLocalCalls int
+
+	adoptLocalTarget domain.Target
+	adoptLocalSteps  []domain.Step
+	adoptLocalResult domain.Result
+	adoptLocalErr    error
+	adoptLocalCalls  int
+
+	removeTarget domain.Target
+	removeErr    error
+	removeCalls  int
 
 	previewSteps []domain.Step
 	previewErr   error
@@ -99,6 +115,35 @@ func (f *fakeContainer) ReadSnapshot(context.Context, domain.Target) (domain.Sna
 	f.snapshotCalls++
 	f.totalCalls++
 	return f.snapshot, f.snapshotErr
+}
+
+func (f *fakeContainer) DetectLocal(context.Context) (container.LocalRuntimes, error) {
+	f.detectLocalCalls++
+	f.totalCalls++
+	return f.localRuntimes, f.localRuntimesErr
+}
+
+func (f *fakeContainer) AdoptLocal(_ context.Context, target domain.Target, onStep func(domain.Step)) (domain.Result, error) {
+	f.adoptLocalCalls++
+	f.totalCalls++
+	f.adoptLocalTarget = target
+	for _, step := range f.adoptLocalSteps {
+		if onStep != nil {
+			onStep(step)
+		}
+	}
+	result := f.adoptLocalResult
+	if result.State == "" && f.adoptLocalErr == nil {
+		result = domain.Result{State: deployment.StatePublished}
+	}
+	return result, f.adoptLocalErr
+}
+
+func (f *fakeContainer) Remove(_ context.Context, target domain.Target) error {
+	f.removeCalls++
+	f.totalCalls++
+	f.removeTarget = target
+	return f.removeErr
 }
 
 func (f *fakeContainer) Preview(_ context.Context, _ domain.Target, _ domain.Change) ([]domain.Step, error) {
@@ -174,6 +219,9 @@ type containerFixture struct {
 	cache     *FileSnapshotCache
 	steps     []StepDTO
 	service   *Service
+	// goos is the OS the service believes it runs on; darwin unless a test
+	// says otherwise, so local container support is deterministic.
+	goos string
 }
 
 func newContainerFixture(t *testing.T) *containerFixture {
@@ -186,6 +234,7 @@ func newContainerFixture(t *testing.T) *containerFixture {
 		snapshots: &fakeSnapshots{},
 		store:     &fakeStore{},
 		release:   &fakeRelease{version: "2.0.0"},
+		goos:      "darwin",
 	}
 	dataDir := t.TempDir()
 	cache, err := NewFileSnapshotCache(dataDir)
@@ -211,6 +260,7 @@ func (f *containerFixture) build() {
 		Release:     f.release,
 		Container:   f.container,
 		SSH:         f.ssh,
+		GOOS:        f.goos,
 		EmitContainerProgress: func(step StepDTO) {
 			f.steps = append(f.steps, step)
 		},
@@ -607,5 +657,443 @@ func TestCacheDoesNotCrossTargets(t *testing.T) {
 	}
 	if cached.Data != nil {
 		t.Fatalf("container target read the cloudflare cache: %#v", cached.Data)
+	}
+}
+
+func TestTargetStoreRoundTripsLocalTarget(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileTargetStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := domain.Target{
+		Kind: domain.TargetContainer,
+		Host: domain.HostRef{
+			Transport: domain.TransportLocal,
+			Engine:    domain.EngineApple,
+			Dir:       domain.DefaultLocalDir,
+		},
+	}
+	if err := store.Save(target); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	loaded, ok, err := store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !ok || loaded != target {
+		t.Fatalf("loaded = %#v, want %#v", loaded, target)
+	}
+}
+
+func TestTargetStoreReadsOldContainerFileAsSSH(t *testing.T) {
+	dir := t.TempDir()
+	const old = `{"kind":"container","host":{"address":"192.0.2.10","port":22,"user":"root","auth":"password","dir":"~/deskwand"}}
+`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewFileTargetStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, ok, err := store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !ok {
+		t.Fatal("old target file was not read")
+	}
+	if target.Host.IsLocal() {
+		t.Fatal("old target was read as a local target")
+	}
+	if got := target.Host.EngineName(); got != domain.EngineCompose {
+		t.Fatalf("EngineName() = %q, want compose", got)
+	}
+}
+
+func TestBootStateNamesLocalTarget(t *testing.T) {
+	f := newContainerFixture(t)
+	f.service.locale = NewLocaleState(&fakeLocaleStore{source: i18n.ZH}, nil)
+	f.store.target = domain.Target{
+		Kind: domain.TargetContainer,
+		Host: domain.HostRef{
+			Transport: domain.TransportLocal,
+			Engine:    domain.EngineApple,
+			Dir:       domain.DefaultLocalDir,
+		},
+	}
+	f.store.ok = true
+
+	state, err := f.service.BootState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.TargetName != "这台 Mac" {
+		t.Fatalf("target name = %q, want 这台 Mac", state.TargetName)
+	}
+}
+
+func localHost() domain.HostRef {
+	return domain.HostRef{
+		Transport: domain.TransportLocal,
+		Engine:    domain.EngineApple,
+		Dir:       domain.DefaultLocalDir,
+	}
+}
+
+func localTarget() domain.Target {
+	return domain.Target{Kind: domain.TargetContainer, Host: localHost()}
+}
+
+// testInstallInput is a minimal valid install request.
+func testInstallInput() ContainerInstallInputDTO {
+	return ContainerInstallInputDTO{
+		TelegramUserIDs: []int64{7},
+		ButlerModel:     ModelDTO{Provider: "anthropic", ID: "claude-sonnet-5-5"},
+		TaskModel:       ModelDTO{Provider: "opencode-go", ID: "kimi-k3"},
+		ActiveChannel:   "telegram",
+	}
+}
+
+func TestBootStateReportsLocalSupport(t *testing.T) {
+	f := newContainerFixture(t)
+
+	state, err := f.service.BootState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.LocalSupported {
+		t.Fatalf("darwin reported localSupported = false")
+	}
+
+	f.goos = "windows"
+	f.build()
+	state, err = f.service.BootState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LocalSupported {
+		t.Fatalf("windows reported localSupported = true")
+	}
+}
+
+func TestConnectLocalUnsupportedOffMac(t *testing.T) {
+	f := newContainerFixture(t)
+	f.goos = "windows"
+	f.build()
+
+	if _, err := f.service.ConnectLocal(domain.EngineApple); !hasCode(err, domain.TARGET_UNSUPPORTED) {
+		t.Fatalf("ConnectLocal error = %v, want %s", err, domain.TARGET_UNSUPPORTED)
+	}
+	if _, err := f.service.DetectLocalRuntimes(); !hasCode(err, domain.TARGET_UNSUPPORTED) {
+		t.Fatalf("DetectLocalRuntimes error = %v, want %s", err, domain.TARGET_UNSUPPORTED)
+	}
+	if f.container.totalCalls != 0 {
+		t.Fatalf("container calls = %d", f.container.totalCalls)
+	}
+	// Nothing became the pending host, so no later step can install locally.
+	if _, err := f.service.ContainerPreflight(); !hasCode(err, deployment.CodeInvalidRequest) {
+		t.Fatalf("preflight error = %v, want invalid request", err)
+	}
+}
+
+func TestConnectLocalSetsPendingLocalHost(t *testing.T) {
+	f := newContainerFixture(t)
+	f.container.preflight = container.PreflightReport{
+		Checks:   []container.Check{{ID: "container", OK: true, Detail: "ok"}},
+		Existing: true,
+	}
+	f.container.snapshot = domain.Snapshot{ReleaseVersion: "1.2.3"}
+
+	report, err := f.service.ConnectLocal(domain.EngineApple)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Passed || len(report.Checks) != 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	if report.Existing == nil || report.Existing.ReleaseVersion != "1.2.3" {
+		t.Fatalf("existing = %#v", report.Existing)
+	}
+
+	if _, err := f.service.InstallContainer(testInstallInput()); err != nil {
+		t.Fatal(err)
+	}
+	if f.container.installTarget.Host != localHost() {
+		t.Fatalf("install host = %#v, want %#v", f.container.installTarget.Host, localHost())
+	}
+	if f.container.installTarget.Kind != domain.TargetContainer {
+		t.Fatalf("install kind = %q", f.container.installTarget.Kind)
+	}
+
+	// An engine the UI cannot ask for is refused before any command runs.
+	_, err = f.service.ConnectLocal("docker")
+	if !hasCode(err, deployment.CodeInvalidRequest) {
+		t.Fatalf("invalid engine error = %v, want invalid request", err)
+	}
+	if domainMessage(t, err) != i18n.T(f.service.locale.Current(), "app.containerEngineInvalid") {
+		t.Fatal("invalid engine message is not localized")
+	}
+}
+
+func TestAdoptLocalSavesTargetOnlyOnSuccess(t *testing.T) {
+	f := newContainerFixture(t)
+	f.service.setPendingHost(localHost())
+
+	f.container.adoptLocalErr = errors.New("boom")
+	if _, err := f.service.AdoptContainer(); err == nil {
+		t.Fatal("local adopt failure was reported as success")
+	}
+	if _, ok, err := f.store.Load(); err != nil || ok {
+		t.Fatalf("store after failure = %v, %v", ok, err)
+	}
+	if f.container.adoptLocalCalls != 1 {
+		t.Fatalf("adopt calls = %d", f.container.adoptLocalCalls)
+	}
+	if f.container.preflightCalls != 0 || f.container.snapshotCalls != 0 {
+		t.Fatalf("local adopt used the SSH path: preflight=%d snapshot=%d", f.container.preflightCalls, f.container.snapshotCalls)
+	}
+
+	f.container.adoptLocalErr = nil
+	f.container.adoptLocalSteps = []domain.Step{{ID: "manifest", State: "completed", Message: "done"}}
+	f.steps = nil
+	summary, err := f.service.AdoptContainer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, ok, err := f.store.Load()
+	if err != nil || !ok {
+		t.Fatalf("store = %v, %v", ok, err)
+	}
+	if stored != localTarget() {
+		t.Fatalf("stored target = %#v, want %#v", stored, localTarget())
+	}
+	if f.container.adoptLocalTarget != localTarget() {
+		t.Fatalf("adopt target = %#v", f.container.adoptLocalTarget)
+	}
+	if len(f.steps) != 1 || f.steps[0].ID != "manifest" || f.steps[0].State != "completed" {
+		t.Fatalf("steps = %#v", f.steps)
+	}
+	if summary.State != deployment.StatePublished || summary.WorkerName != i18n.T(f.service.locale.Current(), "app.localTargetName") {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if _, err := f.service.ContainerPreflight(); !hasCode(err, deployment.CodeInvalidRequest) {
+		t.Fatalf("pending host was not cleared: %v", err)
+	}
+}
+
+func TestDisconnectLocalRemovesThenClears(t *testing.T) {
+	f := newContainerFixture(t)
+	f.store.target = localTarget()
+	f.store.ok = true
+
+	if err := f.service.DisconnectContainer(); err != nil {
+		t.Fatal(err)
+	}
+	if f.container.removeCalls != 1 || f.container.removeTarget != localTarget() {
+		t.Fatalf("remove = %d / %#v", f.container.removeCalls, f.container.removeTarget)
+	}
+	if _, ok, _ := f.store.Load(); ok {
+		t.Fatal("target survived disconnect")
+	}
+	if len(f.ssh.forgets) != 0 {
+		t.Fatalf("local disconnect touched SSH: %#v", f.ssh.forgets)
+	}
+}
+
+func TestDisconnectLocalToleratesMissingRuntime(t *testing.T) {
+	f := newContainerFixture(t)
+	f.store.target = localTarget()
+	f.store.ok = true
+
+	f.container.removeErr = domain.Error{Code: domain.LOCAL_RUNTIME_MISSING, Message: "gone"}
+	if err := f.service.DisconnectContainer(); err != nil {
+		t.Fatalf("a missing runtime failed disconnect: %v", err)
+	}
+	if _, ok, _ := f.store.Load(); ok {
+		t.Fatal("target survived a missing runtime")
+	}
+
+	// Any other failure keeps the target so the user can try again.
+	f.store.target = localTarget()
+	f.store.ok = true
+	f.container.removeErr = domain.Error{Code: domain.LOCAL_AGENT_FAILED, Message: "agent failed"}
+	err := f.service.DisconnectContainer()
+	if !hasCode(err, domain.LOCAL_AGENT_FAILED) {
+		t.Fatalf("error = %v, want %s", err, domain.LOCAL_AGENT_FAILED)
+	}
+	stored, ok, loadErr := f.store.Load()
+	if loadErr != nil || !ok || stored != localTarget() {
+		t.Fatalf("store = %#v, %v, %v", stored, ok, loadErr)
+	}
+}
+
+func TestContainerStatusCarriesEngine(t *testing.T) {
+	f := newContainerFixture(t)
+	f.store.target = localTarget()
+	f.store.ok = true
+	f.container.status = container.RuntimeStatus{Reachable: true, Running: true, Health: "healthy"}
+
+	status, err := f.service.ContainerStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Transport != domain.TransportLocal {
+		t.Fatalf("transport = %q, want %q", status.Transport, domain.TransportLocal)
+	}
+	if status.Engine != domain.EngineApple {
+		t.Fatalf("engine = %q, want %q", status.Engine, domain.EngineApple)
+	}
+	if status.Dir != domain.DefaultLocalDir || !status.Reachable || !status.Running {
+		t.Fatalf("status = %#v", status)
+	}
+
+	// A saved SSH target reports the SSH transport and the engine it defaults to.
+	f.store.target = routerContainerTarget()
+	f.store.ok = true
+	status, err = f.service.ContainerStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Transport != domain.TransportSSH || status.Engine != domain.EngineCompose {
+		t.Fatalf("ssh status = %#v", status)
+	}
+}
+
+func TestRestoreContainerConfigNamesLocalTarget(t *testing.T) {
+	f := newContainerFixture(t)
+	f.service.locale = NewLocaleState(&fakeLocaleStore{source: i18n.ZH}, nil)
+	f.store.target = localTarget()
+	f.store.ok = true
+
+	summary, err := f.service.RestoreContainerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.container.restoreCalls != 1 {
+		t.Fatalf("restore calls = %d", f.container.restoreCalls)
+	}
+	if want := i18n.T(i18n.ZH, "app.localTargetName"); summary.WorkerName != want {
+		t.Fatalf("local worker name = %q, want %q", summary.WorkerName, want)
+	}
+
+	// An SSH target keeps its host address as the name.
+	f.store.target = routerContainerTarget()
+	f.store.ok = true
+	summary, err = f.service.RestoreContainerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := routerContainerTarget().DisplayName(); summary.WorkerName != want {
+		t.Fatalf("ssh worker name = %q, want %q", summary.WorkerName, want)
+	}
+}
+
+func TestContainerDiagnosticsNamesLocalTarget(t *testing.T) {
+	f := newContainerFixture(t)
+	reports := &ContainerDiagnostics{Runtime: f.container, Locale: func() string { return i18n.ZH }}
+	f.container.status = container.RuntimeStatus{Reachable: true, Running: true, Health: "healthy"}
+
+	report, err := reports.Status(context.Background(), localTarget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := i18n.T(i18n.ZH, "app.localTargetName"); report.WorkerName != want {
+		t.Fatalf("local worker name = %q, want %q", report.WorkerName, want)
+	}
+
+	report, err = reports.Status(context.Background(), routerContainerTarget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := routerContainerTarget().DisplayName(); report.WorkerName != want {
+		t.Fatalf("ssh worker name = %q, want %q", report.WorkerName, want)
+	}
+}
+
+func TestConnectLocalFailureClearsStalePendingHost(t *testing.T) {
+	f := newContainerFixture(t)
+	f.container.preflight = container.PreflightReport{
+		Checks: []container.Check{{ID: "container", OK: true, Detail: "ok"}},
+	}
+	if _, err := f.service.ConnectLocal(domain.EngineApple); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next connect fails, so the host from the first one must not stay
+	// usable: an install would otherwise run against it.
+	f.container.preflightErr = domain.Error{Code: domain.DOCKER_UNAVAILABLE, Message: "boom"}
+	if _, err := f.service.ConnectLocal(domain.EngineCompose); err == nil {
+		t.Fatal("failed connect reported success")
+	}
+	if _, err := f.service.InstallContainer(testInstallInput()); !hasCode(err, deployment.CodeInvalidRequest) {
+		t.Fatalf("install error = %v, want invalid request after a failed connect", err)
+	}
+	if f.container.installCalls != 0 {
+		t.Fatalf("install calls = %d, want none", f.container.installCalls)
+	}
+}
+
+func TestSavedLocalTargetIsUnsupportedOffMac(t *testing.T) {
+	f := newContainerFixture(t)
+	f.goos = "windows"
+	f.build()
+	f.store.target = localTarget()
+	f.store.ok = true
+
+	// The settings page refuses it.
+	if _, err := f.service.ContainerStatus(); !hasCode(err, domain.TARGET_UNSUPPORTED) {
+		t.Fatalf("ContainerStatus error = %v, want %s", err, domain.TARGET_UNSUPPORTED)
+	}
+	// Every flow that resolves the managed target refuses it as well.
+	if _, err := f.service.CachedConfig(); !hasCode(err, domain.TARGET_UNSUPPORTED) {
+		t.Fatalf("CachedConfig error = %v, want %s", err, domain.TARGET_UNSUPPORTED)
+	}
+	if f.container.totalCalls != 0 {
+		t.Fatalf("container calls = %d, want none", f.container.totalCalls)
+	}
+}
+
+func TestDetectLocalRuntimesMapsBothRuntimes(t *testing.T) {
+	f := newContainerFixture(t)
+
+	f.container.localRuntimes = container.LocalRuntimes{Apple: true, Compose: false}
+	runtimes, err := f.service.DetectLocalRuntimes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runtimes.Apple || runtimes.Compose {
+		t.Fatalf("runtimes = %+v, want apple only", runtimes)
+	}
+
+	f.container.localRuntimes = container.LocalRuntimes{Apple: false, Compose: true}
+	runtimes, err = f.service.DetectLocalRuntimes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimes.Apple || !runtimes.Compose {
+		t.Fatalf("runtimes = %+v, want compose only", runtimes)
+	}
+	if f.container.detectLocalCalls != 2 {
+		t.Fatalf("detect calls = %d, want 2", f.container.detectLocalCalls)
+	}
+}
+
+func TestTargetStoreLoadDoesNotCallEveryHostSSH(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"kind":"container"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewFileTargetStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = store.Load()
+	if err == nil {
+		t.Fatal("settings without a host were accepted")
+	}
+	if strings.Contains(err.Error(), "SSH") {
+		t.Fatalf("error = %q, want wording that fits a local target too", err)
 	}
 }

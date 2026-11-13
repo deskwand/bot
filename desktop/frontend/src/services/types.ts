@@ -30,6 +30,7 @@ import type {
   InstallInputDTO,
   LifeSourceDTO,
   LifeVitalsDTO,
+  LocalRuntimesDTO,
   LoginStatusDTO,
   McpAddInput,
   McpAuthDTO,
@@ -85,6 +86,7 @@ export type {
   InstallInputDTO,
   LifeSourceDTO,
   LifeVitalsDTO,
+  LocalRuntimesDTO,
   LoginStatusDTO,
   McpAddInput,
   McpAuthDTO,
@@ -154,6 +156,9 @@ export type ImportInputDTO = Omit<GeneratedImportInputDTO, "secrets"> & {
   secrets?: ImportSecretDTO[];
 };
 
+/** The container runtime this Mac runs the bot with. Go rejects anything else. */
+export type LocalEngine = "apple" | "compose";
+
 /** The appearance the client stores. Go rejects anything else. */
 export type ThemeSource = "system" | "light" | "dark";
 
@@ -198,6 +203,8 @@ export interface ClientService {
     input: SSHHostInputDTO,
     fingerprint: string,
   ): Promise<ContainerPreflightDTO>;
+  detectLocalRuntimes(): Promise<LocalRuntimesDTO>;
+  connectLocal(engine: LocalEngine): Promise<ContainerPreflightDTO>;
   containerPreflight(): Promise<ContainerPreflightDTO>;
   installContainer(input: ContainerInstallInputDTO): Promise<ResultDTO>;
   adoptContainer(): Promise<ResultDTO>;

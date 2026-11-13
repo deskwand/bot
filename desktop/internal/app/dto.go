@@ -33,6 +33,9 @@ type BootStateDTO struct {
 	TargetMismatch bool           `json:"targetMismatch"`
 	TargetName     string         `json:"targetName"`
 	Pending        []OperationDTO `json:"pending"`
+	// LocalSupported reports whether this OS can host the container on this
+	// Mac, so the setup page can offer it.
+	LocalSupported bool `json:"localSupported"`
 }
 
 // CloudflareLoginDTO is the only OAuth login state sent to the frontend. It

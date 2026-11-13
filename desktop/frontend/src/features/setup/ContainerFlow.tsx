@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Loader2, Server } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -20,13 +20,15 @@ import {
 import { ModelSelect } from "@/features/models/ModelSelect";
 import type {
   ContainerPreflightDTO,
+  LocalEngine,
+  LocalRuntimesDTO,
   SSHHostInputDTO,
   SSHProbeDTO,
   StepDTO,
 } from "@/services/types";
 import { useCatalogModelOptions } from "./Setup";
 
-type Stage = "host" | "fingerprint" | "preflight" | "configure";
+type Stage = "host" | "fingerprint" | "runtime" | "preflight" | "configure";
 
 const CHECK_LABELS: Record<string, MessageKey> = {
   docker: "setup.containerCheckDocker",
@@ -35,12 +37,29 @@ const CHECK_LABELS: Record<string, MessageKey> = {
   arch: "setup.containerCheckArch",
   port: "setup.containerCheckPort",
   dir: "setup.containerCheckDir",
+  container: "setup.containerCheckContainer",
+  version: "setup.containerCheckVersion",
+  service: "setup.containerCheckService",
 };
 
+const APPLE_RELEASES = "https://github.com/apple/container/releases";
+const ORBSTACK = "https://orbstack.dev";
+const DOCKER_DESKTOP = "https://www.docker.com/products/docker-desktop/";
+
+/** The single installed runtime, or null when there is none or a choice to make. */
+function onlyEngine(found: LocalRuntimesDTO): LocalEngine | null {
+  if (found.apple && found.compose) return null;
+  if (found.apple) return "apple";
+  if (found.compose) return "compose";
+  return null;
+}
+
 export function ContainerFlow({
+  mode,
   onBack,
   onReady,
 }: {
+  mode: "ssh" | "local";
   onBack: () => void;
   onReady: () => void;
 }) {
@@ -53,12 +72,15 @@ export function ContainerFlow({
     [options],
   );
 
-  const [stage, setStage] = useState<Stage>("host");
+  const [stage, setStage] = useState<Stage>(mode === "local" ? "runtime" : "host");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [installFailed, setInstallFailed] = useState(false);
   const [probe, setProbe] = useState<SSHProbeDTO | null>(null);
   const [preflight, setPreflight] = useState<ContainerPreflightDTO | null>(null);
+  const [runtimes, setRuntimes] = useState<LocalRuntimesDTO | null>(null);
+  const [engine, setEngine] = useState<LocalEngine>("apple");
+  const detected = useRef(false);
 
   const [address, setAddress] = useState("");
   const [port, setPort] = useState("22");
@@ -156,6 +178,46 @@ export function ContainerFlow({
     }
   };
 
+  const connectLocalWith = async (chosen: LocalEngine) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setPreflight(await client.connectLocal(chosen));
+      setStage("preflight");
+    } catch (cause) {
+      setError(cause);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const detectRuntimes = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const found = await client.detectLocalRuntimes();
+      setRuntimes(found);
+      // Exactly one runtime needs no choice, so the preflight starts at once;
+      // two leave the choice to the user and none leave the install hints.
+      const only = onlyEngine(found);
+      if (only) {
+        setEngine(only);
+        await connectLocalWith(only);
+      }
+    } catch (cause) {
+      setError(cause);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // StrictMode mounts twice; a second detection would race the first answer.
+  useEffect(() => {
+    if (mode !== "local" || detected.current) return;
+    detected.current = true;
+    void detectRuntimes();
+  }, [mode]);
+
   const recheck = async () => {
     setBusy(true);
     setError(null);
@@ -230,6 +292,11 @@ export function ContainerFlow({
   };
 
   const existing = preflight?.existing;
+  // Nothing to choose from, or the detection itself failed: the runtime stage
+  // can then only offer to look again.
+  const showRuntimeRecheck =
+    (runtimes === null && error !== null) ||
+    (runtimes !== null && !runtimes.apple && !runtimes.compose);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -243,7 +310,9 @@ export function ContainerFlow({
         <ArrowLeft aria-hidden />
         {t("shell.back")}
       </Button>
-      <PageHeader title={t("setup.containerTitle")} />
+      <PageHeader
+        title={mode === "local" ? t("setup.localTitle") : t("setup.containerTitle")}
+      />
 
       {stage === "host" ? (
         <section data-testid="container-host" className="mt-5 space-y-4">
@@ -390,6 +459,136 @@ export function ContainerFlow({
         </section>
       ) : null}
 
+      {stage === "runtime" ? (
+        <section data-testid="container-runtime" className="mt-5 space-y-4">
+          <h2 className="text-base font-medium">{t("setup.containerRuntimeTitle")}</h2>
+
+          {!runtimes && !error ? (
+            <p className="text-sm text-muted-foreground">
+              {t("setup.containerRuntimeDetecting")}
+            </p>
+          ) : null}
+
+          {runtimes && !runtimes.apple && !runtimes.compose ? (
+            <>
+              <p className="text-sm">{t("setup.containerRuntimeMissing")}</p>
+              <div className="space-y-1 rounded-md border border-border p-3">
+                <p className="text-sm font-medium">
+                  {t("setup.containerRuntimeApple")}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {t("setup.containerRuntimeAppleHint")}
+                </p>
+                <a
+                  href={APPLE_RELEASES}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-primary underline underline-offset-3"
+                >
+                  {t("setup.containerRuntimeAppleLink")}
+                </a>
+              </div>
+              <div className="space-y-1 rounded-md border border-border p-3">
+                <p className="text-sm font-medium">
+                  {t("setup.containerRuntimeCompose")}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {t("setup.containerRuntimeComposeHint")}
+                </p>
+                <div className="flex flex-wrap gap-3">
+                  <a
+                    href={ORBSTACK}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-primary underline underline-offset-3"
+                  >
+                    OrbStack
+                  </a>
+                  <a
+                    href={DOCKER_DESKTOP}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-primary underline underline-offset-3"
+                  >
+                    Docker Desktop
+                  </a>
+                </div>
+              </div>
+            </>
+          ) : null}
+
+          {runtimes?.apple && runtimes.compose ? (
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">
+                {t("setup.containerRuntimeTitle")}
+              </legend>
+              <RadioGroup
+                value={engine}
+                onValueChange={(value) => setEngine(value as LocalEngine)}
+                aria-label={t("setup.containerRuntimeTitle")}
+                className="grid gap-2 sm:grid-cols-2"
+              >
+                <label className="flex cursor-pointer items-center gap-3 rounded-md border border-border p-3">
+                  <RadioGroupItem value="apple" id="container-runtime-apple" />
+                  <span>{t("setup.containerRuntimeApple")}</span>
+                </label>
+                <label className="flex cursor-pointer items-center gap-3 rounded-md border border-border p-3">
+                  <RadioGroupItem value="compose" id="container-runtime-compose" />
+                  <span>{t("setup.containerRuntimeCompose")}</span>
+                </label>
+              </RadioGroup>
+            </fieldset>
+          ) : null}
+
+          {busy && runtimes && onlyEngine(runtimes) ? (
+            <p className="text-sm text-muted-foreground">
+              {t("setup.containerConnecting")}
+            </p>
+          ) : null}
+
+          <ErrorAlert error={error} />
+
+          {runtimes?.apple && runtimes.compose ? (
+            <Button
+              type="button"
+              onClick={() => void connectLocalWith(engine)}
+              disabled={busy}
+            >
+              {busy ? (
+                <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : null}
+              {busy ? t("setup.containerConnecting") : t("common.continue")}
+            </Button>
+          ) : null}
+          {showRuntimeRecheck ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void detectRuntimes()}
+              disabled={busy}
+            >
+              {busy ? (
+                <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : null}
+              {t("setup.containerRecheck")}
+            </Button>
+          ) : null}
+          {runtimes && onlyEngine(runtimes) && error ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void connectLocalWith(engine)}
+              disabled={busy}
+            >
+              {busy ? (
+                <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : null}
+              {t("common.retry")}
+            </Button>
+          ) : null}
+        </section>
+      ) : null}
+
       {stage === "preflight" ? (
         <section data-testid="container-preflight" className="mt-5 space-y-4">
           <h2 className="text-base font-medium">{t("setup.containerPreflightTitle")}</h2>
@@ -402,7 +601,11 @@ export function ContainerFlow({
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-sm font-medium">
-                    {CHECK_LABELS[check.id] ? t(CHECK_LABELS[check.id]!) : check.id}
+                    {check.id === "dir" && mode === "local"
+                      ? t("setup.containerCheckDirLocal")
+                      : CHECK_LABELS[check.id]
+                        ? t(CHECK_LABELS[check.id]!)
+                        : check.id}
                   </span>
                   <Badge variant={check.ok ? "secondary" : "outline"}>
                     {check.ok
@@ -442,7 +645,9 @@ export function ContainerFlow({
                   {t("setup.containerExistingTitle")}
                 </h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {t("setup.containerExistingHint")}
+                  {mode === "local"
+                    ? t("setup.containerExistingHintLocal")
+                    : t("setup.containerExistingHint")}
                 </p>
                 <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
                   <div>

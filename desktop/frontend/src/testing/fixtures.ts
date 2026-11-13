@@ -26,6 +26,8 @@ import type {
   InstallInputDTO,
   LifeSourceDTO,
   LifeVitalsDTO,
+  LocalEngine,
+  LocalRuntimesDTO,
   Locale,
   LocaleDTO,
   LocaleSource,
@@ -132,7 +134,12 @@ type Scenario =
   | "container-auth-failed"
   | "container-unhealthy"
   | "container-unreachable"
-  | "container-stopped";
+  | "container-stopped"
+  | "local-apple"
+  | "local-both"
+  | "local-none"
+  | "local-windows"
+  | "local-target";
 
 type ContainerScenario =
   | "fresh"
@@ -144,6 +151,16 @@ type ContainerScenario =
 const CONTAINER_ADDRESS = "203.0.113.7";
 const CONTAINER_FINGERPRINT =
   "SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+// Go names a local target by the localized "This Mac" because it has no host
+// address. Mirrors domain.DefaultLocalDir.
+const LOCAL_TARGET_NAME = "这台 Mac";
+const LOCAL_DIR = "~/Library/Application Support/DeskWand/local";
+const LOCAL_SCENARIOS: Scenario[] = [
+  "local-apple",
+  "local-both",
+  "local-none",
+  "local-target",
+];
 
 interface MockState {
   scenario: Scenario;
@@ -167,6 +184,11 @@ interface MockState {
   targetKind: string;
   containerScenario: ContainerScenario;
   containerStatus: ContainerStatusDTO;
+  // Whether this fixture describes a target on this Mac: the local preflight
+  // checks, install steps and status, instead of the SSH ones.
+  localTarget: boolean;
+  localSupported: boolean;
+  localRuntimes: { apple: boolean; compose: boolean };
   target: string | null;
   targetAccountId: string;
   fingerprint: string;
@@ -455,6 +477,11 @@ function scenarioFromLocation(): Scenario {
     case "container-unhealthy":
     case "container-unreachable":
     case "container-stopped":
+    case "local-apple":
+    case "local-both":
+    case "local-none":
+    case "local-windows":
+    case "local-target":
       return value;
     default:
       return "default";
@@ -510,7 +537,15 @@ function initialState(): MockState {
     scenario === "container-ready" ||
     scenario === "container-unhealthy" ||
     scenario === "container-unreachable" ||
-    scenario === "container-stopped";
+    scenario === "container-stopped" ||
+    scenario === "local-target";
+  const localTarget = LOCAL_SCENARIOS.includes(scenario);
+  const localRuntimes =
+    scenario === "local-apple" || scenario === "local-target"
+      ? { apple: true, compose: false }
+      : scenario === "local-both"
+        ? { apple: true, compose: true }
+        : { apple: false, compose: false };
   const shellScenario = [
     "unknown-long-error",
     "config-conflict",
@@ -653,22 +688,43 @@ function initialState(): MockState {
     accountId: "a".repeat(32),
     targetKind: containerReady ? "container" : "",
     containerScenario,
-    containerStatus: {
-      address: CONTAINER_ADDRESS,
-      user: "root",
-      dir: "~/deskwand",
-      reachable: scenario !== "container-unreachable",
-      running:
-        scenario !== "container-unreachable" &&
-        scenario !== "container-stopped",
-      health: containerScenario === "unhealthy" ? "unhealthy" : "healthy",
-      image: "ghcr.io/deskwand/bot:1.2.3",
-      startedAt: NOW,
-      canRestore: containerScenario === "unhealthy",
-    },
+    containerStatus: localTarget
+      ? {
+          address: "",
+          user: "",
+          dir: LOCAL_DIR,
+          transport: "local",
+          engine: "apple",
+          reachable: true,
+          running: true,
+          health: "healthy",
+          image: "ghcr.io/deskwand/bot:1.2.3",
+          startedAt: NOW,
+          canRestore: false,
+        }
+      : {
+          address: CONTAINER_ADDRESS,
+          user: "root",
+          dir: "~/deskwand",
+          transport: "ssh",
+          engine: "",
+          reachable: scenario !== "container-unreachable",
+          running:
+            scenario !== "container-unreachable" &&
+            scenario !== "container-stopped",
+          health: containerScenario === "unhealthy" ? "unhealthy" : "healthy",
+          image: "ghcr.io/deskwand/bot:1.2.3",
+          startedAt: NOW,
+          canRestore: containerScenario === "unhealthy",
+        },
+    localTarget,
+    localSupported: localTarget,
+    localRuntimes,
     target:
       containerReady
-        ? CONTAINER_ADDRESS
+        ? localTarget
+          ? LOCAL_TARGET_NAME
+          : CONTAINER_ADDRESS
         : scenario === "layout-long-content"
           ? "long-name-".repeat(18)
           : shellScenario
@@ -906,15 +962,51 @@ export function createMockClient(): ClientService {
     { id: "healthy", state: "completed", message: "等待容器就绪" },
   ];
 
+  // A local install writes a launchd agent and registers it instead of writing
+  // a compose file and running compose up.
+  const localContainerSteps: StepDTO[] = [
+    { id: "write-agent", state: "completed", message: "写入启动脚本与开机启动项" },
+    { id: "write-env", state: "completed", message: "写入 .env" },
+    { id: "pull", state: "completed", message: "拉取镜像" },
+    { id: "register", state: "completed", message: "注册开机启动并启动" },
+    { id: "healthy", state: "completed", message: "等待容器进入健康状态" },
+  ];
+  const installSteps = () =>
+    state.localTarget ? localContainerSteps : containerSteps;
+
+  // A local preflight checks the runtime that was connected, so a
+  // Docker-compatible engine reports Docker's checks instead of Apple's.
+  const localChecks = (engine: LocalEngine): ContainerPreflightDTO["checks"] =>
+    engine === "compose"
+      ? [
+          { id: "docker", ok: true, detail: "Docker 可用" },
+          { id: "compose", ok: true, detail: "compose 插件可用" },
+          { id: "arch", ok: true, detail: "arm64" },
+          { id: "port", ok: true, detail: "宿主端口 8787 空闲" },
+          { id: "dir", ok: true, detail: "本机目录可写" },
+        ]
+      : [
+          { id: "container", ok: true, detail: "Apple container 可用" },
+          { id: "version", ok: true, detail: "Apple container 版本可用" },
+          { id: "service", ok: true, detail: "Apple container 服务已启动" },
+          { id: "arch", ok: true, detail: "arm64" },
+          { id: "port", ok: true, detail: "宿主端口 8787 空闲" },
+          { id: "dir", ok: true, detail: "本机目录可写" },
+        ];
+
   const preflightFor = (scenario: ContainerScenario): ContainerPreflightDTO => {
-    const checks: ContainerPreflightDTO["checks"] = [
-      { id: "docker", ok: true, detail: "Docker 可用" },
-      { id: "compose", ok: true, detail: "compose 插件可用" },
-      { id: "permission", ok: true, detail: "当前用户可以运行 Docker" },
-      { id: "arch", ok: true, detail: "x86_64" },
-      { id: "port", ok: true, detail: "端口空闲" },
-      { id: "dir", ok: true, detail: "远程目录可写" },
-    ];
+    const checks: ContainerPreflightDTO["checks"] = state.localTarget
+      ? localChecks(
+          state.containerStatus.engine === "compose" ? "compose" : "apple",
+        )
+      : [
+          { id: "docker", ok: true, detail: "Docker 可用" },
+          { id: "compose", ok: true, detail: "compose 插件可用" },
+          { id: "permission", ok: true, detail: "当前用户可以运行 Docker" },
+          { id: "arch", ok: true, detail: "x86_64" },
+          { id: "port", ok: true, detail: "端口空闲" },
+          { id: "dir", ok: true, detail: "远程目录可写" },
+        ];
     if (scenario === "docker-missing") {
       checks[0] = {
         id: "docker",
@@ -1364,27 +1456,44 @@ export function createMockClient(): ClientService {
       return preflightFor(state.containerScenario);
     },
 
+    async detectLocalRuntimes(): Promise<LocalRuntimesDTO> {
+      record("detectLocalRuntimes");
+      return { ...state.localRuntimes };
+    },
+
+    async connectLocal(engine: LocalEngine): Promise<ContainerPreflightDTO> {
+      record("connectLocal", engine);
+      state.containerStatus.engine = engine;
+      return preflightFor(state.containerScenario);
+    },
+
     async containerPreflight(): Promise<ContainerPreflightDTO> {
       record("containerPreflight");
-      if (!pendingHost) fail("SSH_HOST_KEY_UNKNOWN", "请先连接服务器");
+      if (!pendingHost && !state.localTarget) {
+        fail("SSH_HOST_KEY_UNKNOWN", "请先连接服务器");
+      }
       return preflightFor(state.containerScenario);
     },
 
     async installContainer(input: ContainerInstallInputDTO): Promise<ResultDTO> {
       record("installContainer", input);
+      const steps = installSteps();
       if (state.containerScenario === "unhealthy") {
-        for (const step of containerSteps.slice(0, 4)) {
+        for (const step of steps.slice(0, 4)) {
           emitContainerStep(step);
           await pause(80);
         }
         fail("CONTAINER_UNHEALTHY", "容器启动后没有变为 healthy");
       }
-      for (const step of containerSteps) {
+      // Each step stays on screen long enough to be read before the flow
+      // moves on; a 100ms poll can otherwise miss the last one under load.
+      for (const step of steps) {
         emitContainerStep(step);
-        await pause(120);
+        await pause(250);
       }
+      const targetName = state.localTarget ? LOCAL_TARGET_NAME : CONTAINER_ADDRESS;
       state.targetKind = "container";
-      state.target = CONTAINER_ADDRESS;
+      state.target = targetName;
       state.configPresent = true;
       state.ownerUserIds = [...input.telegramUserIds];
       state.butlerModel = { ...input.butlerModel };
@@ -1398,9 +1507,9 @@ export function createMockClient(): ClientService {
         operationId: "",
         versionId: "container:1.2.3",
         state: "published",
-        workerName: CONTAINER_ADDRESS,
+        workerName: targetName,
         releaseVersion: "1.2.3",
-        steps: containerSteps,
+        steps,
       };
     },
 
@@ -1548,6 +1657,7 @@ export function createMockClient(): ClientService {
         : connected && state.target !== null && !targetMismatch;
       return {
         connection,
+        localSupported: state.localSupported,
         targetKind: containerSelected
           ? "container"
           : targetSelected

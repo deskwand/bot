@@ -169,3 +169,76 @@ func TestSetDoesNotWriteIntoCallerBuffer(t *testing.T) {
 		t.Fatalf("bytes = %q", got)
 	}
 }
+
+func TestPlainParsesValuesVerbatim(t *testing.T) {
+	input := []byte("Q='{\"a\":1}'\nP={\"a\":1,\"b\":\"x y\"}\nD=\"dq\"\nC=a #c\nW= sp \nE=\nexport X=1\n# c\n")
+	f, err := ParseDialect(input, Plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"Q": `'{"a":1}'`,
+		"P": `{"a":1,"b":"x y"}`,
+		"D": `"dq"`,
+		"C": "a #c",
+		"W": " sp ",
+		"E": "",
+	}
+	for key, value := range want {
+		got, ok := f.Get(key)
+		if !ok || got != value {
+			t.Errorf("Get(%q) = %q, %v; want %q, true", key, got, ok, value)
+		}
+	}
+	for _, key := range f.Keys() {
+		if key == "X" {
+			t.Errorf("Keys() contains export line key X")
+		}
+	}
+	if got := f.Bytes(); !bytes.Equal(got, input) {
+		t.Errorf("Bytes() = %q; want %q", got, input)
+	}
+}
+
+func TestPlainRoundTripsApostrophe(t *testing.T) {
+	f, err := ParseDialect(nil, Plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const value = `{"owner":{"name":"Jo's"}}`
+	if err := f.Set("DESKWAND_CONFIG", value); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(f.Bytes()), "DESKWAND_CONFIG="+value+"\n"; got != want {
+		t.Fatalf("Bytes() = %q; want %q", got, want)
+	}
+	g, err := ParseDialect(f.Bytes(), Plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := g.Get("DESKWAND_CONFIG"); !ok || got != value {
+		t.Errorf("Get(DESKWAND_CONFIG) = %q, %v; want %q, true", got, ok, value)
+	}
+}
+
+func TestPlainRejectsUnrepresentable(t *testing.T) {
+	for _, value := range []string{"x\ny", "x\ry", "a\x00b"} {
+		f, err := ParseDialect(nil, Plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Set("A", value); !errors.Is(err, ErrUnrepresentable) {
+			t.Errorf("Set(A, %q) error = %v; want ErrUnrepresentable", value, err)
+		}
+	}
+}
+
+func TestComposeDialectUnchanged(t *testing.T) {
+	f, err := Parse([]byte("A='x'\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := f.Get("A"); !ok || got != "x" {
+		t.Fatalf("Get(A) = %q, %v; want x, true", got, ok)
+	}
+}

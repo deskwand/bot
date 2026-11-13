@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -212,6 +213,9 @@ type ServiceOptions struct {
 	EmitContainerProgress func(StepDTO)
 	NewOperationID        func() (string, error)
 	Now                   func() time.Time
+	// GOOS decides whether this Mac can host the container. Empty means
+	// runtime.GOOS; tests set it to exercise the other platforms.
+	GOOS string
 }
 
 // Service is the single service bound to MyGo. Every exported method is a
@@ -250,6 +254,7 @@ type Service struct {
 	emitContainer      func(StepDTO)
 	newOpID            func() (string, error)
 	now                func() time.Time
+	goos               string
 
 	pendingMu   sync.Mutex
 	pendingHost *domain.HostRef
@@ -300,6 +305,10 @@ func NewService(options ServiceOptions) *Service {
 	now := options.Now
 	if now == nil {
 		now = time.Now
+	}
+	goos := options.GOOS
+	if goos == "" {
+		goos = runtime.GOOS
 	}
 	emitContainer := options.EmitContainerProgress
 	if emitContainer == nil {
@@ -357,6 +366,7 @@ func NewService(options ServiceOptions) *Service {
 		ssh:                options.SSH,
 		emitContainer:      emitContainer,
 		newOpID:            newOpID,
+		goos:               goos,
 		now:                now,
 		logins:             map[string]context.CancelFunc{},
 		exchangeStatus:     map[string]ExchangeSyncDTO{},
@@ -597,7 +607,7 @@ func (s *Service) CloudflareStatus() ConnectionDTO {
 // Cloudflare.
 func (s *Service) BootState() (BootStateDTO, error) {
 	connection := s.CloudflareStatus()
-	state := BootStateDTO{Connection: connection, Pending: []OperationDTO{}}
+	state := BootStateDTO{Connection: connection, Pending: []OperationDTO{}, LocalSupported: s.localSupported()}
 	var stored domain.Target
 	var storedOK bool
 	if s.store != nil {
@@ -609,7 +619,7 @@ func (s *Service) BootState() (BootStateDTO, error) {
 		if ok && target.IsContainer() {
 			state.TargetKind = domain.TargetContainer
 			state.TargetSelected = true
-			state.TargetName = target.Host.Address
+			state.TargetName = s.targetName(target)
 			return state, nil
 		}
 		if ok {
@@ -638,6 +648,30 @@ func (s *Service) BootState() (BootStateDTO, error) {
 		}
 	}
 	return state, nil
+}
+
+// targetName is the user-facing name of target. A local target has no host
+// address, so the name comes from the app's language.
+func (s *Service) targetName(target domain.Target) string {
+	if target.IsContainer() && target.Host.IsLocal() {
+		return s.t("app.localTargetName")
+	}
+	return target.DisplayName()
+}
+
+// localSupported reports whether this OS can run the container on this Mac.
+func (s *Service) localSupported() bool {
+	return s.goos == "darwin"
+}
+
+// rejectUnsupportedLocal reports TARGET_UNSUPPORTED when host is this Mac and
+// the running OS has no local container support. It is how a target file
+// carried over from a Mac stays visible but inert elsewhere.
+func (s *Service) rejectUnsupportedLocal(host domain.HostRef) error {
+	if host.IsLocal() && !s.localSupported() {
+		return s.targetUnsupported()
+	}
+	return nil
 }
 
 // DisconnectCloudflare revokes the authorization and removes local credentials.
@@ -1818,6 +1852,9 @@ func (s *Service) managedTarget(ctx context.Context) (domain.Target, error) {
 			return domain.Target{}, safeAppError(err)
 		}
 		if ok && stored.IsContainer() {
+			if err := s.rejectUnsupportedLocal(stored.Host); err != nil {
+				return domain.Target{}, err
+			}
 			return stored, nil
 		}
 	}
@@ -2121,22 +2158,26 @@ type targetSettings struct {
 }
 
 type hostSettings struct {
-	Address string `json:"address"`
-	Port    int    `json:"port"`
-	User    string `json:"user"`
-	Auth    string `json:"auth"`
-	KeyPath string `json:"keyPath,omitempty"`
-	Dir     string `json:"dir"`
+	Transport string `json:"transport,omitempty"`
+	Engine    string `json:"engine,omitempty"`
+	Address   string `json:"address"`
+	Port      int    `json:"port"`
+	User      string `json:"user"`
+	Auth      string `json:"auth"`
+	KeyPath   string `json:"keyPath,omitempty"`
+	Dir       string `json:"dir"`
 }
 
 func (h hostSettings) target() domain.HostRef {
 	return domain.HostRef{
-		Address: h.Address,
-		Port:    h.Port,
-		User:    h.User,
-		Auth:    h.Auth,
-		KeyPath: h.KeyPath,
-		Dir:     h.Dir,
+		Transport: h.Transport,
+		Engine:    h.Engine,
+		Address:   h.Address,
+		Port:      h.Port,
+		User:      h.User,
+		Auth:      h.Auth,
+		KeyPath:   h.KeyPath,
+		Dir:       h.Dir,
 	}
 }
 
@@ -2183,11 +2224,11 @@ func (s *FileTargetStore) Load() (domain.Target, bool, error) {
 		return domain.Target{AccountID: settings.AccountID, ScriptName: settings.ScriptName}, true, nil
 	case domain.TargetContainer:
 		if settings.Host == nil {
-			return domain.Target{}, false, fmt.Errorf("app: settings contain no SSH host")
+			return domain.Target{}, false, fmt.Errorf("app: settings contain no container host")
 		}
 		host := settings.Host.target()
 		if err := host.Validate(); err != nil {
-			return domain.Target{}, false, fmt.Errorf("app: settings contain an invalid SSH host: %w", err)
+			return domain.Target{}, false, fmt.Errorf("app: settings contain an invalid container host: %w", err)
 		}
 		return domain.Target{Kind: domain.TargetContainer, Host: host}, true, nil
 	default:
@@ -2214,12 +2255,14 @@ func (s *FileTargetStore) Save(target domain.Target) error {
 		}
 		settings.Kind = domain.TargetContainer
 		settings.Host = &hostSettings{
-			Address: target.Host.Address,
-			Port:    target.Host.Port,
-			User:    target.Host.User,
-			Auth:    target.Host.Auth,
-			KeyPath: target.Host.KeyPath,
-			Dir:     target.Host.Dir,
+			Transport: target.Host.Transport,
+			Engine:    target.Host.Engine,
+			Address:   target.Host.Address,
+			Port:      target.Host.Port,
+			User:      target.Host.User,
+			Auth:      target.Host.Auth,
+			KeyPath:   target.Host.KeyPath,
+			Dir:       target.Host.Dir,
 		}
 	default:
 		return domain.Error{Code: deployment.CodeInvalidRequest, Message: "unknown target kind"}

@@ -10,8 +10,8 @@ import (
 	"github.com/deskwand/bot/desktop/internal/config"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/envfile"
+	"github.com/deskwand/bot/desktop/internal/hostexec"
 	"github.com/deskwand/bot/desktop/internal/i18n"
-	"github.com/deskwand/bot/desktop/internal/sshhost"
 )
 
 // Preview describes a publish without writing anything remote.
@@ -51,13 +51,14 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 		return domain.Result{}, err
 	}
 	dir := target.Host.Dir
-	data, file, err := s.readEnvelope(ctx, host, dir)
+	engine := s.engine(target)
+	data, file, err := s.readEnvelope(ctx, host, dir, engine)
 	if err != nil {
 		return domain.Result{}, err
 	}
 
 	snapshotCtx, cancelSnapshot := context.WithTimeout(ctx, commandTimeout)
-	snapshot, err := s.snapshotFromEnv(snapshotCtx, target, host, data, file)
+	snapshot, err := s.snapshotFromEnv(snapshotCtx, target, host, engine, data, file)
 	cancelSnapshot()
 	if err != nil {
 		return domain.Result{}, err
@@ -79,7 +80,7 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 		}
 	}
 
-	if err := s.restart(ctx, host, dir); err != nil {
+	if err := engine.Apply(ctx, host, dir); err != nil {
 		return domain.Result{}, err
 	}
 	if err := s.waitHealthy(ctx, target, plan.Secrets); err != nil {
@@ -99,8 +100,9 @@ func (s *Service) RestorePrevious(ctx context.Context, target domain.Target) (do
 		return domain.Result{}, err
 	}
 	dir := target.Host.Dir
-	if _, err := s.readFile(ctx, host, backupPath(dir)); err != nil {
-		if errors.Is(err, sshhost.ErrNotExist) {
+	engine := s.engine(target)
+	if _, err := readFileOnHost(ctx, host, backupPath(dir)); err != nil {
+		if errors.Is(err, hostexec.ErrNotExist) {
 			return domain.Result{}, invalidRequest("the remote directory has no .env.bak")
 		}
 		return domain.Result{}, err
@@ -108,7 +110,7 @@ func (s *Service) RestorePrevious(ctx context.Context, target domain.Target) (do
 
 	cpCtx, cancelCopy := context.WithTimeout(ctx, commandTimeout)
 	copied, err := host.Run(cpCtx, fmt.Sprintf("cp -p %s %s",
-		sshhost.QuotePath(backupPath(dir)), sshhost.QuotePath(envPath(dir))), nil)
+		hostexec.QuotePath(backupPath(dir)), hostexec.QuotePath(envPath(dir))), nil)
 	cancelCopy()
 	if err != nil {
 		return domain.Result{}, err
@@ -116,7 +118,7 @@ func (s *Service) RestorePrevious(ctx context.Context, target domain.Target) (do
 	if copied.ExitCode != 0 {
 		return domain.Result{}, domain.Error{Code: domain.NOT_SENT, Message: outputMessage(copied)}
 	}
-	if err := s.restart(ctx, host, dir); err != nil {
+	if err := engine.Apply(ctx, host, dir); err != nil {
 		return domain.Result{}, err
 	}
 	if err := s.waitHealthy(ctx, target, nil); err != nil {
@@ -131,17 +133,17 @@ func (s *Service) RestorePrevious(ctx context.Context, target domain.Target) (do
 }
 
 // readEnvelope reads and parses the remote .env in one pass.
-func (s *Service) readEnvelope(ctx context.Context, host Host, dir string) ([]byte, *envfile.File, error) {
+func (s *Service) readEnvelope(ctx context.Context, host Host, dir string, engine Engine) ([]byte, *envfile.File, error) {
 	readCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	data, err := host.ReadFile(readCtx, envPath(dir))
 	if err != nil {
-		if errors.Is(err, sshhost.ErrNotExist) {
+		if errors.Is(err, hostexec.ErrNotExist) {
 			return nil, nil, envFileError("the remote .env file is missing")
 		}
 		return nil, nil, err
 	}
-	file, err := envfile.Parse(data)
+	file, err := envfile.ParseDialect(data, engine.Dialect())
 	if err != nil {
 		return nil, nil, envFileError("the remote .env file cannot be parsed")
 	}
@@ -152,25 +154,12 @@ func (s *Service) backupEnv(ctx context.Context, host Host, dir string) error {
 	cpCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	copied, err := host.Run(cpCtx, fmt.Sprintf("cp -p %s %s",
-		sshhost.QuotePath(envPath(dir)), sshhost.QuotePath(backupPath(dir))), nil)
+		hostexec.QuotePath(envPath(dir)), hostexec.QuotePath(backupPath(dir))), nil)
 	if err != nil {
 		return err
 	}
 	if copied.ExitCode != 0 {
 		return domain.Error{Code: domain.NOT_SENT, Message: outputMessage(copied)}
-	}
-	return nil
-}
-
-func (s *Service) restart(ctx context.Context, host Host, dir string) error {
-	upCtx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	up, err := host.Run(upCtx, fmt.Sprintf("cd %s && docker compose up -d", sshhost.QuotePath(dir)), nil)
-	if err != nil {
-		return err
-	}
-	if up.ExitCode != 0 {
-		return dockerError(up)
 	}
 	return nil
 }
@@ -235,7 +224,7 @@ func secretEditError(message string) error {
 	return domain.Error{Code: domain.INVALID_SECRET_EDIT, Message: message}
 }
 
-func outputMessage(result sshhost.Result) string {
+func outputMessage(result hostexec.Result) string {
 	message := lastLines(result.Stderr, 20)
 	if message == "" {
 		message = lastLines(result.Stdout, 20)

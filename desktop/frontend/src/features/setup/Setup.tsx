@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Check,
   Cloud,
+  Laptop,
   Loader2,
   RefreshCw,
   Server,
@@ -87,6 +88,7 @@ export function useCatalogModelOptions(): {
 
 export function Setup({
   phase,
+  localSupported = false,
   connectionError,
   connectionAccount,
   onSessionChange,
@@ -94,16 +96,25 @@ export function Setup({
   initialStep = "welcome",
 }: {
   phase: SetupPhase;
+  localSupported?: boolean;
   connectionError?: unknown;
   connectionAccount?: string;
   onSessionChange: () => void;
   onReady: () => void;
   initialStep?: "welcome" | "deploy" | "import";
 }) {
-  const [step, setStep] = useState<"welcome" | "deploy" | "import" | "container">(initialStep);
+  const [step, setStep] = useState<
+    "welcome" | "deploy" | "import" | "container" | "local"
+  >(initialStep);
 
-  if (step === "container") {
-    return <ContainerFlow onBack={() => setStep("welcome")} onReady={onReady} />;
+  if (step === "container" || step === "local") {
+    return (
+      <ContainerFlow
+        mode={step === "local" ? "local" : "ssh"}
+        onBack={() => setStep("welcome")}
+        onReady={onReady}
+      />
+    );
   }
 
   if (phase === "disconnected") {
@@ -111,10 +122,12 @@ export function Setup({
       <Welcome
         connectionError={connectionError}
         connectionAccount={connectionAccount}
+        localSupported={localSupported}
         onConnected={onSessionChange}
         onShowDeploy={() => setStep("deploy")}
         onShowImport={() => setStep("import")}
         onShowContainer={() => setStep("container")}
+        onShowLocal={() => setStep("local")}
       />
     );
   }
@@ -129,10 +142,12 @@ export function Setup({
   return (
     <Welcome
       connected
+      localSupported={localSupported}
       onConnected={onSessionChange}
       onShowDeploy={() => setStep("deploy")}
       onShowImport={() => setStep("import")}
       onShowContainer={() => setStep("container")}
+      onShowLocal={() => setStep("local")}
     />
   );
 }
@@ -141,18 +156,22 @@ function Welcome({
   connected = false,
   connectionError,
   connectionAccount,
+  localSupported = false,
   onConnected,
   onShowDeploy,
   onShowImport,
   onShowContainer,
+  onShowLocal,
 }: {
   connected?: boolean;
   connectionError?: unknown;
   connectionAccount?: string;
+  localSupported?: boolean;
   onConnected: () => void;
   onShowDeploy: () => void;
   onShowImport: () => void;
   onShowContainer: () => void;
+  onShowLocal: () => void;
 }) {
   const { client } = useApp();
   const t = useT();
@@ -189,7 +208,7 @@ function Welcome({
             connectionAccount={connectionAccount}
             onConnected={onConnected}
           />
-          <div className="mt-4">
+          <div className={localSupported ? "mt-4 grid gap-4 sm:grid-cols-2" : "mt-4"}>
             <button
               type="button"
               className="w-full text-left"
@@ -206,6 +225,24 @@ function Welcome({
                 </CardHeader>
               </Card>
             </button>
+            {localSupported ? (
+              <button
+                type="button"
+                className="w-full text-left"
+                onClick={onShowLocal}
+                aria-label={t("setup.localTitle")}
+              >
+                <Card className="h-full transition-colors hover:border-primary/60">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Laptop className="size-4" aria-hidden />
+                      {t("setup.localTitle")}
+                    </CardTitle>
+                    <CardDescription>{t("setup.localDescription")}</CardDescription>
+                  </CardHeader>
+                </Card>
+              </button>
+            ) : null}
           </div>
         </>
       ) : (
@@ -259,6 +296,24 @@ function Welcome({
                 </CardHeader>
               </Card>
             </button>
+            {localSupported ? (
+              <button
+                type="button"
+                className="text-left"
+                onClick={onShowLocal}
+                aria-label={t("setup.localTitle")}
+              >
+                <Card className="h-full transition-colors hover:border-primary/60">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Laptop className="size-4" aria-hidden />
+                      {t("setup.localTitle")}
+                    </CardTitle>
+                    <CardDescription>{t("setup.localDescription")}</CardDescription>
+                  </CardHeader>
+                </Card>
+              </button>
+            ) : null}
           </div>
           {accountName ? (
             <p className="mt-4 text-xs text-muted-foreground">

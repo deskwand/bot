@@ -14,13 +14,18 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/envfile"
+	"github.com/deskwand/bot/desktop/internal/hostexec"
 	"github.com/deskwand/bot/desktop/internal/i18n"
-	"github.com/deskwand/bot/desktop/internal/sshhost"
 )
 
 // Check is one preflight result.
 type Check struct {
-	ID     string // "docker" | "compose" | "permission" | "arch" | "port" | "dir"
+	// ID names the check. The Docker-compatible engine reports "docker" |
+	// "compose" | "permission" | "arch" | "port" | "dir"; the Apple
+	// container engine reports "container" | "version" | "service" |
+	// "arch" | "port" | "dir". The sets differ per engine, and local mode
+	// drops "permission" from the Docker-compatible one.
+	ID     string
 	OK     bool
 	Detail string // one localized sentence
 	Fix    string // a copyable repair command; empty when there is none
@@ -28,7 +33,7 @@ type Check struct {
 
 // PreflightReport lists the preflight checks in a fixed order.
 type PreflightReport struct {
-	Checks   []Check // docker, compose, permission, arch, port, dir
+	Checks   []Check // per engine; see Check.ID
 	Existing bool    // the remote directory already holds this project's compose.yaml and .env
 }
 
@@ -65,18 +70,63 @@ func (s *Service) text(id string, ok bool) string {
 	return i18n.T(s.locale(), "container.check."+id+suffix)
 }
 
-func (s *Service) run(ctx context.Context, host Host, command string) (sshhost.Result, error) {
+// message returns one container message verbatim, for the texts that are not
+// an ok/fail pair.
+func (s *Service) message(key string) string {
+	return i18n.T(s.locale(), "container.check."+key)
+}
+
+func runOnHost(ctx context.Context, host Host, command string) (hostexec.Result, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	return host.Run(commandCtx, command, nil)
 }
 
-const (
-	dockerVersionCommand  = `docker version --format '{{.Server.Version}}'`
-	composeVersionCommand = `docker compose version --short`
-	archCommand           = `uname -m`
-	portCommand           = `ss -ltnH 'sport = :8787' 2>/dev/null || true`
-)
+func readFileOnHost(ctx context.Context, host Host, path string) ([]byte, error) {
+	readCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	return host.ReadFile(readCtx, path)
+}
+
+// checkDir checks that dir is writable and already holds this project's
+// files. other lists another engine's start files: a directory that holds one
+// of them belongs to that engine. The caller fills in Detail, because the
+// message differs per engine.
+func checkDir(ctx context.Context, host Host, dir, manifestPath string, other []string) (Check, bool, error) {
+	check := Check{ID: "dir"}
+	existing := false
+	quoted := hostexec.QuotePath(dir)
+	result, err := runOnHost(ctx, host, fmt.Sprintf("mkdir -p %s && test -w %s", quoted, quoted))
+	if err != nil {
+		return Check{}, false, err
+	}
+	if result.ExitCode != 0 {
+		return check, false, nil
+	}
+	for _, path := range other {
+		if _, err := readFileOnHost(ctx, host, path); err == nil {
+			return check, false, nil
+		} else if !errors.Is(err, hostexec.ErrNotExist) {
+			return Check{}, false, err
+		}
+	}
+	data, err := readFileOnHost(ctx, host, manifestPath)
+	switch {
+	case errors.Is(err, hostexec.ErrNotExist):
+		check.OK = true
+	case err != nil:
+		return Check{}, false, err
+	case !strings.Contains(string(data), ImageRepository):
+	default:
+		if _, envErr := readFileOnHost(ctx, host, envPath(dir)); envErr == nil {
+			check.OK = true
+			existing = true
+		} else if !errors.Is(envErr, hostexec.ErrNotExist) {
+			return Check{}, false, envErr
+		}
+	}
+	return check, existing, nil
+}
 
 // Preflight checks that the host can run the container. It never installs
 // anything and never writes to the remote directory.
@@ -85,117 +135,7 @@ func (s *Service) Preflight(ctx context.Context, target domain.Target) (Prefligh
 	if err != nil {
 		return PreflightReport{}, err
 	}
-	dir := target.Host.Dir
-	quoted := sshhost.QuotePath(dir)
-
-	version, err := s.run(ctx, host, dockerVersionCommand)
-	if err != nil {
-		return PreflightReport{}, err
-	}
-	permissionDenied := strings.Contains(strings.ToLower(string(version.Stderr)), "permission denied")
-	notFound := version.ExitCode == 127 || strings.Contains(strings.ToLower(string(version.Stderr)), "not found")
-	docker := Check{ID: "docker"}
-	permission := Check{ID: "permission"}
-	switch {
-	case permissionDenied:
-		docker.OK = true
-		docker.Detail = s.text("docker", true)
-		permission.Detail = s.text("permission", false)
-		permission.Fix = "sudo usermod -aG docker $USER"
-	case notFound:
-		docker.Detail = s.text("docker", false)
-		docker.Fix = "curl -fsSL https://get.docker.com | sh"
-		permission.OK = true
-		permission.Detail = s.text("permission", true)
-	default:
-		docker.OK = version.ExitCode == 0
-		docker.Detail = s.text("docker", docker.OK)
-		if !docker.OK {
-			// Installed but not answering: the daemon is stopped.
-			docker.Fix = "sudo systemctl start docker"
-		}
-		permission.OK = true
-		permission.Detail = s.text("permission", true)
-	}
-
-	compose := Check{ID: "compose"}
-	if !docker.OK || !permission.OK {
-		compose.Detail = s.text("compose", false)
-	} else {
-		composeResult, err := s.run(ctx, host, composeVersionCommand)
-		if err != nil {
-			return PreflightReport{}, err
-		}
-		compose.OK = composeResult.ExitCode == 0
-		compose.Detail = s.text("compose", compose.OK)
-		if !compose.OK {
-			compose.Fix = "sudo apt-get install -y docker-compose-plugin"
-		}
-	}
-
-	arch := Check{ID: "arch"}
-	archResult, err := s.run(ctx, host, archCommand)
-	if err != nil {
-		return PreflightReport{}, err
-	}
-	machine := strings.TrimSpace(string(archResult.Stdout))
-	arch.OK = archResult.ExitCode == 0 && (machine == "x86_64" || machine == "aarch64")
-	arch.Detail = s.text("arch", arch.OK)
-
-	dirCheck := Check{ID: "dir"}
-	existing := false
-	dirResult, err := s.run(ctx, host, fmt.Sprintf("mkdir -p %s && test -w %s", quoted, quoted))
-	if err != nil {
-		return PreflightReport{}, err
-	}
-	if dirResult.ExitCode != 0 {
-		dirCheck.Detail = s.text("dir", false)
-	} else {
-		composeData, readErr := s.readFile(ctx, host, composePath(dir))
-		switch {
-		case errors.Is(readErr, sshhost.ErrNotExist):
-			dirCheck.OK = true
-			dirCheck.Detail = s.text("dir", true)
-		case readErr != nil:
-			return PreflightReport{}, readErr
-		case !strings.Contains(string(composeData), ImageRepository):
-			dirCheck.Detail = s.text("dir", false)
-		default:
-			if _, envErr := s.readFile(ctx, host, envPath(dir)); envErr == nil {
-				dirCheck.OK = true
-				dirCheck.Detail = s.text("dir", true)
-				existing = true
-			} else if errors.Is(envErr, sshhost.ErrNotExist) {
-				dirCheck.Detail = s.text("dir", false)
-			} else {
-				return PreflightReport{}, envErr
-			}
-		}
-	}
-
-	port := Check{ID: "port"}
-	if existing {
-		port.OK = true
-		port.Detail = s.text("port", true)
-	} else {
-		portResult, err := s.run(ctx, host, portCommand)
-		if err != nil {
-			return PreflightReport{}, err
-		}
-		port.OK = strings.TrimSpace(string(portResult.Stdout)) == ""
-		port.Detail = s.text("port", port.OK)
-	}
-
-	return PreflightReport{
-		Checks:   []Check{docker, compose, permission, arch, port, dirCheck},
-		Existing: existing,
-	}, nil
-}
-
-func (s *Service) readFile(ctx context.Context, host Host, path string) ([]byte, error) {
-	readCtx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	return host.ReadFile(readCtx, path)
+	return s.engine(target).Preflight(ctx, host, target.Host.Dir)
 }
 
 // InstallRequest is the configuration for a fresh container install.
@@ -220,19 +160,27 @@ func (s *Service) Install(ctx context.Context, target domain.Target, request Ins
 	}
 	if !report.Passed() {
 		for _, check := range report.Checks {
-			if !check.OK {
-				return domain.Result{}, domain.Error{
-					Code:    domain.DOCKER_UNAVAILABLE,
-					Message: check.ID + ": " + check.Detail,
-				}
+			if check.OK {
+				continue
 			}
+			message := check.ID + ": " + check.Detail
+			if target.Host.IsLocal() {
+				// A local check names what to fix, so it is a request problem.
+				return domain.Result{}, invalidRequest(message)
+			}
+			return domain.Result{}, domain.Error{Code: domain.DOCKER_UNAVAILABLE, Message: message}
 		}
 	}
 	if report.Existing {
-		return domain.Result{}, invalidRequest(i18n.T(s.locale(), "container.installExisting"))
+		key := "container.installExisting"
+		if target.Host.IsLocal() {
+			key = "container.installExisting.local"
+		}
+		return domain.Result{}, invalidRequest(i18n.T(s.locale(), key))
 	}
 
-	envData, err := s.installEnv(request)
+	engine := s.engine(target)
+	envData, err := s.installEnv(request, engine.Dialect())
 	if err != nil {
 		return domain.Result{}, err
 	}
@@ -242,14 +190,14 @@ func (s *Service) Install(ctx context.Context, target domain.Target, request Ins
 		return domain.Result{}, err
 	}
 	dir := target.Host.Dir
-	quoted := sshhost.QuotePath(dir)
+	manifestID, applyID := engine.StepIDs()
 
-	s.beginStep(onStep, "write-compose")
-	if err := host.WriteFileAtomic(ctx, composePath(dir), ComposeFile(s.options.Version), 0o644); err != nil {
-		s.endStep(onStep, "write-compose", "failed")
+	s.beginStep(onStep, manifestID)
+	if err := engine.WriteManifest(ctx, host, dir, s.options.Version); err != nil {
+		s.endStep(onStep, manifestID, "failed")
 		return domain.Result{}, err
 	}
-	s.endStep(onStep, "write-compose", "completed")
+	s.endStep(onStep, manifestID, "completed")
 
 	s.beginStep(onStep, "write-env")
 	if err := host.WriteFileAtomic(ctx, envPath(dir), envData, 0o600); err != nil {
@@ -259,32 +207,18 @@ func (s *Service) Install(ctx context.Context, target domain.Target, request Ins
 	s.endStep(onStep, "write-env", "completed")
 
 	s.beginStep(onStep, "pull")
-	pullCtx, cancelPull := context.WithTimeout(ctx, 10*time.Minute)
-	pull, err := host.Run(pullCtx, fmt.Sprintf("cd %s && docker compose pull", quoted), nil)
-	cancelPull()
-	if err != nil {
+	if err := engine.Pull(ctx, host, dir); err != nil {
 		s.endStep(onStep, "pull", "failed")
 		return domain.Result{}, err
-	}
-	if pull.ExitCode != 0 {
-		s.endStep(onStep, "pull", "failed")
-		return domain.Result{}, dockerError(pull)
 	}
 	s.endStep(onStep, "pull", "completed")
 
-	s.beginStep(onStep, "up")
-	upCtx, cancelUp := context.WithTimeout(ctx, commandTimeout)
-	up, err := host.Run(upCtx, fmt.Sprintf("cd %s && docker compose up -d", quoted), nil)
-	cancelUp()
-	if err != nil {
-		s.endStep(onStep, "up", "failed")
+	s.beginStep(onStep, applyID)
+	if err := engine.Apply(ctx, host, dir); err != nil {
+		s.endStep(onStep, applyID, "failed")
 		return domain.Result{}, err
 	}
-	if up.ExitCode != 0 {
-		s.endStep(onStep, "up", "failed")
-		return domain.Result{}, dockerError(up)
-	}
-	s.endStep(onStep, "up", "completed")
+	s.endStep(onStep, applyID, "completed")
 
 	s.beginStep(onStep, "healthy")
 	if err := s.waitHealthy(ctx, target, request.Secrets); err != nil {
@@ -298,9 +232,11 @@ func (s *Service) Install(ctx context.Context, target domain.Target, request Ins
 
 var stepKeys = map[string]string{
 	"write-compose": "writeCompose",
+	"write-agent":   "writeAgent",
 	"write-env":     "writeEnv",
 	"pull":          "pull",
 	"up":            "up",
+	"register":      "register",
 	"healthy":       "healthy",
 	"restart":       "restart",
 }
@@ -324,7 +260,7 @@ func (s *Service) reportStep(onStep func(domain.Step), id, state string) {
 	})
 }
 
-func dockerError(result sshhost.Result) error {
+func dockerError(result hostexec.Result) error {
 	message := lastLines(result.Stderr, 20)
 	if message == "" {
 		message = lastLines(result.Stdout, 20)
@@ -359,16 +295,9 @@ func (s *Service) waitHealthy(ctx context.Context, target domain.Target, secrets
 	if err != nil {
 		return err
 	}
-	logsCtx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	logs, err := host.Run(logsCtx, fmt.Sprintf(
-		"cd %s && docker compose logs --no-color --tail 50 bot", sshhost.QuotePath(target.Host.Dir)), nil)
+	message, err := s.engine(target).Logs(ctx, host, target.Host.Dir)
 	if err != nil {
 		return err
-	}
-	message := string(logs.Stdout)
-	if message == "" {
-		message = string(logs.Stderr)
 	}
 	for _, secret := range secrets {
 		if value := secret.Value(); value != "" {
@@ -380,7 +309,7 @@ func (s *Service) waitHealthy(ctx context.Context, target domain.Target, secrets
 
 // installEnv builds the remote .env. It validates everything before the
 // caller writes anything.
-func (s *Service) installEnv(request InstallRequest) ([]byte, error) {
+func (s *Service) installEnv(request InstallRequest, dialect envfile.Dialect) ([]byte, error) {
 	for _, secret := range request.Secrets {
 		if !Allowed(secret.Name) || IsPlainVar(secret.Name) {
 			return nil, invalidRequest("not a writable secret name: " + secret.Name)
@@ -407,7 +336,7 @@ func (s *Service) installEnv(request InstallRequest) ([]byte, error) {
 	}
 	adminToken := hex.EncodeToString(adminBytes)
 
-	file, err := envfile.Parse(nil)
+	file, err := envfile.ParseDialect(nil, dialect)
 	if err != nil {
 		return nil, err
 	}

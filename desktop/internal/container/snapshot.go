@@ -4,14 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/envfile"
-	"github.com/deskwand/bot/desktop/internal/sshhost"
+	"github.com/deskwand/bot/desktop/internal/hostexec"
 )
 
 // RuntimeStatus is what the server page shows. A host that cannot be reached
@@ -43,21 +42,22 @@ func (s *Service) ReadSnapshot(ctx context.Context, target domain.Target) (domai
 
 	data, err := host.ReadFile(ctx, envPath(target.Host.Dir))
 	if err != nil {
-		if errors.Is(err, sshhost.ErrNotExist) {
+		if errors.Is(err, hostexec.ErrNotExist) {
 			return domain.Snapshot{}, envFileError("the remote .env file is missing")
 		}
 		return domain.Snapshot{}, err
 	}
-	file, err := envfile.Parse(data)
+	engine := s.engine(target)
+	file, err := envfile.ParseDialect(data, engine.Dialect())
 	if err != nil {
 		return domain.Snapshot{}, envFileError("the remote .env file cannot be parsed")
 	}
-	return s.snapshotFromEnv(ctx, target, host, data, file)
+	return s.snapshotFromEnv(ctx, target, host, engine, data, file)
 }
 
 // snapshotFromEnv builds the snapshot from .env bytes the caller already read,
 // so a publish can merge and rewrite the exact bytes it validated.
-func (s *Service) snapshotFromEnv(ctx context.Context, target domain.Target, host Host, data []byte, file *envfile.File) (domain.Snapshot, error) {
+func (s *Service) snapshotFromEnv(ctx context.Context, target domain.Target, host Host, engine Engine, data []byte, file *envfile.File) (domain.Snapshot, error) {
 	var configJSON []byte
 	if value, ok := file.Get("DESKWAND_CONFIG"); ok {
 		if !json.Valid([]byte(value)) {
@@ -77,11 +77,9 @@ func (s *Service) snapshotFromEnv(ctx context.Context, target domain.Target, hos
 	}
 	sort.Strings(secretNames)
 
-	var releaseVersion string
-	if compose, err := host.ReadFile(ctx, composePath(target.Host.Dir)); err == nil {
-		if match := imageLinePattern.FindSubmatch(compose); match != nil {
-			releaseVersion = string(match[1])
-		}
+	releaseVersion, err := engine.ReadVersion(ctx, host, target.Host.Dir)
+	if err != nil {
+		return domain.Snapshot{}, err
 	}
 
 	settingsJSON, err := settingsDocument(file)
@@ -128,42 +126,27 @@ const inspectFormat = `{{.State.Status}}|{{if .State.Health}}{{.State.Health.Sta
 
 // Status reports whether the host and the container are up.
 func (s *Service) Status(ctx context.Context, target domain.Target) (RuntimeStatus, error) {
-	status := RuntimeStatus{}
 	host, err := s.dial(target)
 	if err != nil {
-		if isSSHError(err) {
-			return status, nil
+		if isUnreachable(err) {
+			return RuntimeStatus{}, nil
 		}
-		return status, err
+		return RuntimeStatus{}, err
 	}
-	dir := sshhost.QuotePath(target.Host.Dir)
 
-	inspectCtx, cancelInspect := context.WithTimeout(ctx, commandTimeout)
-	result, err := host.Run(inspectCtx, fmt.Sprintf(
-		`cd %s && docker inspect --format '%s' "$(docker compose ps -q bot)"`, dir, inspectFormat), nil)
-	cancelInspect()
+	status, err := s.engine(target).Status(ctx, host, target.Host.Dir)
 	if err != nil {
-		if isSSHError(err) {
+		if isUnreachable(err) {
 			return status, nil
 		}
 		return status, err
-	}
-	status.Reachable = true
-	if result.ExitCode == 0 {
-		parts := strings.Split(strings.TrimSpace(string(result.Stdout)), "|")
-		if len(parts) == 4 {
-			status.Running = parts[0] == "running"
-			status.Health = parts[1]
-			status.StartedAt = parts[2]
-			status.Image = parts[3]
-		}
 	}
 
 	backupCtx, cancelBackup := context.WithTimeout(ctx, commandTimeout)
-	backupResult, err := host.Run(backupCtx, "test -e "+sshhost.QuotePath(backupPath(target.Host.Dir)), nil)
+	backupResult, err := host.Run(backupCtx, "test -e "+hostexec.QuotePath(backupPath(target.Host.Dir)), nil)
 	cancelBackup()
 	if err != nil {
-		if isSSHError(err) {
+		if isUnreachable(err) {
 			return RuntimeStatus{}, nil
 		}
 		return status, err
@@ -172,10 +155,12 @@ func (s *Service) Status(ctx context.Context, target domain.Target) (RuntimeStat
 	return status, nil
 }
 
-func isSSHError(err error) bool {
+// isUnreachable reports whether err means the runtime could not be contacted,
+// over SSH or on this Mac.
+func isUnreachable(err error) bool {
 	var coded domain.Error
 	if errors.As(err, &coded) {
-		return strings.HasPrefix(coded.Code, "SSH_")
+		return strings.HasPrefix(coded.Code, "SSH_") || strings.HasPrefix(coded.Code, "LOCAL_RUNTIME_")
 	}
 	return false
 }

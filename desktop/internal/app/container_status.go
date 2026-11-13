@@ -57,10 +57,19 @@ func (d *ContainerDiagnostics) Status(ctx context.Context, target domain.Target)
 		d.channelItem("wechat", "WECHAT_CREDENTIALS", snapshot, observedAt),
 	}
 	return DiagnosticsReport{
-		WorkerName: target.DisplayName(),
+		WorkerName: d.targetName(target),
 		ObservedAt: observedAt,
 		Items:      items,
 	}, nil
+}
+
+// targetName is the user-facing name of target. A local target has no host
+// address, so the name comes from the app's language.
+func (d *ContainerDiagnostics) targetName(target domain.Target) string {
+	if target.IsContainer() && target.Host.IsLocal() {
+		return i18n.T(d.lang(), "app.localTargetName")
+	}
+	return target.DisplayName()
 }
 
 // ExportDiagnostics returns the sanitized JSON export of the same report.

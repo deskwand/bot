@@ -1,0 +1,38 @@
+[
+  {
+    "id": "bot",
+    "configuration": {
+      "id": "bot",
+      "image": {
+        "descriptor": {
+          "mediaType": "application/vnd.oci.image.index.v1+json",
+          "size": 1248
+        },
+        "reference": "ghcr.io/deskwand/bot:latest"
+      },
+      "publishedPorts": [
+        {
+          "containerPort": 8787,
+          "count": 1,
+          "hostAddress": "127.0.0.1",
+          "hostPort": 8787,
+          "proto": "tcp"
+        }
+      ]
+    },
+    "status": {
+      "state": "running",
+      "startedDate": "2026-11-13T14:06:30Z",
+      "networks": [
+        {
+          "hostname": "bot",
+          "ipv4Address": "192.0.2.2/24",
+          "ipv4Gateway": "192.0.2.1",
+          "macAddress": "02:00:00:00:00:01",
+          "mtu": 1500,
+          "network": "default"
+        }
+      ]
+    }
+  }
+]

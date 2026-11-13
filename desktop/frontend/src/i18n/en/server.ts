@@ -3,12 +3,19 @@ import type { Messages } from "../types";
 export const server: Messages["server"] = {
   statusUnknown: "Status unknown",
   statusUnreachable: "Cannot reach the server",
+  statusUnreachableLocal: "Cannot reach the container runtime on this Mac",
   statusStopped: "The container is not running",
   statusUnhealthy: "The container is not ready",
   statusHealthy: "Running normally",
   address: "Host address",
   user: "User",
   dir: "Remote directory",
+  dirLocal: "Local directory",
+  localTitle: "This Mac",
+  subtitleLocal: "The running state and containers on this Mac.",
+  runtime: "Runtime",
+  runtimeApple: "Apple container",
+  runtimeCompose: "Docker-compatible",
   status: "Status",
   image: "Image",
   startedAt: "Started at",
@@ -21,6 +28,9 @@ export const server: Messages["server"] = {
   disconnectTitle: "Disconnect this server?",
   disconnectDescription:
     "This clears the sign-in information saved on this computer; the container and its data on the server are not affected. Do not run the same Telegram bot on Cloudflare and the server at the same time.",
+  disconnectTitleLocal: "Disconnect this Mac?",
+  disconnectDescriptionLocal:
+    "The bot will stop. Configuration and data stay, so you can add it again later.",
   confirmDisconnect: "Disconnect",
   unsupportedTitle: "Not available for this way of running yet",
   unsupportedDescription:

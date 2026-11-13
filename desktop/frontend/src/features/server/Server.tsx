@@ -22,7 +22,10 @@ export function containerStatusKey(
   status: ContainerStatusDTO | undefined,
 ): MessageKey {
   if (!status) return "server.statusUnknown";
-  if (!status.reachable) return "server.statusUnreachable";
+  if (!status.reachable)
+    return status.transport === "local"
+      ? "server.statusUnreachableLocal"
+      : "server.statusUnreachable";
   if (!status.running) return "server.statusStopped";
   if (status.health !== "healthy") return "server.statusUnhealthy";
   return "server.statusHealthy";
@@ -76,36 +79,60 @@ export function Server() {
     startedAt && !Number.isNaN(startedAt.getTime())
       ? formatDateTime(startedAt)
       : t("common.unknown");
+  // A local target has no address or user, only the runtime that hosts it.
+  const local = status?.transport === "local";
 
   return (
     <div data-testid="server-page">
-      <PageHeader title={t("shell.pages.server")} subtitle={pageSubtitle("server")} />
+      <PageHeader
+        title={local ? t("server.localTitle") : t("shell.pages.server")}
+        subtitle={local ? t("server.subtitleLocal") : pageSubtitle("server")}
+      />
 
       <ErrorAlert error={actionError ?? statusQuery.error} />
 
       <dl className="max-w-2xl divide-y divide-border rounded-lg border border-border bg-card text-sm">
+        {local ? (
+          <div className="flex flex-wrap gap-2 p-4">
+            <dt className="w-28 shrink-0 text-muted-foreground">
+              {t("server.runtime")}
+            </dt>
+            <dd className="min-w-0 break-all">
+              {status?.engine === "compose"
+                ? t("server.runtimeCompose")
+                : status?.engine === "apple"
+                  ? t("server.runtimeApple")
+                  : t("common.unknown")}
+            </dd>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-2 p-4">
+              <dt className="w-28 shrink-0 text-muted-foreground">{t("server.address")}</dt>
+              <dd className="min-w-0 break-all">
+                {status?.address ? (
+                  <span data-i18n-ignore>{status.address}</span>
+                ) : (
+                  t("common.unknown")
+                )}
+              </dd>
+            </div>
+            <div className="flex flex-wrap gap-2 p-4">
+              <dt className="w-28 shrink-0 text-muted-foreground">{t("server.user")}</dt>
+              <dd className="min-w-0 break-all">
+                {status?.user ? (
+                  <span data-i18n-ignore>{status.user}</span>
+                ) : (
+                  t("common.unknown")
+                )}
+              </dd>
+            </div>
+          </>
+        )}
         <div className="flex flex-wrap gap-2 p-4">
-          <dt className="w-28 shrink-0 text-muted-foreground">{t("server.address")}</dt>
-          <dd className="min-w-0 break-all">
-            {status?.address ? (
-              <span data-i18n-ignore>{status.address}</span>
-            ) : (
-              t("common.unknown")
-            )}
-          </dd>
-        </div>
-        <div className="flex flex-wrap gap-2 p-4">
-          <dt className="w-28 shrink-0 text-muted-foreground">{t("server.user")}</dt>
-          <dd className="min-w-0 break-all">
-            {status?.user ? (
-              <span data-i18n-ignore>{status.user}</span>
-            ) : (
-              t("common.unknown")
-            )}
-          </dd>
-        </div>
-        <div className="flex flex-wrap gap-2 p-4">
-          <dt className="w-28 shrink-0 text-muted-foreground">{t("server.dir")}</dt>
+          <dt className="w-28 shrink-0 text-muted-foreground">
+            {local ? t("server.dirLocal") : t("server.dir")}
+          </dt>
           <dd className="min-w-0 break-all">
             {status?.dir ? (
               <span data-i18n-ignore>{status.dir}</span>
@@ -185,8 +212,14 @@ export function Server() {
       <Dialog open={disconnectOpen} onOpenChange={(open) => !open && setDisconnectOpen(false)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("server.disconnectTitle")}</DialogTitle>
-            <DialogDescription>{t("server.disconnectDescription")}</DialogDescription>
+            <DialogTitle>
+              {local ? t("server.disconnectTitleLocal") : t("server.disconnectTitle")}
+            </DialogTitle>
+            <DialogDescription>
+              {local
+                ? t("server.disconnectDescriptionLocal")
+                : t("server.disconnectDescription")}
+            </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setDisconnectOpen(false)}>

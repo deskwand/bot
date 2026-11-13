@@ -11,7 +11,7 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/envfile"
-	"github.com/deskwand/bot/desktop/internal/sshhost"
+	"github.com/deskwand/bot/desktop/internal/hostexec"
 )
 
 // seededConfig is already in canonical JSON form, so a publish that changes
@@ -30,8 +30,8 @@ func seedInstance(host *fakeHost) {
 	host.respond = publishRespond(host, "healthy", "")
 }
 
-func publishRespond(host *fakeHost, health, logs string) func(string) (sshhost.Result, error) {
-	return func(command string) (sshhost.Result, error) {
+func publishRespond(host *fakeHost, health, logs string) func(string) (hostexec.Result, error) {
+	return func(command string) (hostexec.Result, error) {
 		switch {
 		case strings.HasPrefix(command, "cp -p "):
 			if strings.HasSuffix(command, ".env'") {
@@ -39,20 +39,20 @@ func publishRespond(host *fakeHost, health, logs string) func(string) (sshhost.R
 			} else {
 				host.files["~/deskwand/.env.bak"] = append([]byte(nil), host.files["~/deskwand/.env"]...)
 			}
-			return sshhost.Result{}, nil
+			return hostexec.Result{}, nil
 		case strings.Contains(command, "docker compose up -d"):
-			return sshhost.Result{}, nil
+			return hostexec.Result{}, nil
 		case strings.Contains(command, "docker inspect"):
-			return sshhost.Result{Stdout: []byte("running|" + health + "|2026-11-13T02:00:00Z|ghcr.io/deskwand/bot:1.2.3\n")}, nil
+			return hostexec.Result{Stdout: []byte("running|" + health + "|2026-11-13T02:00:00Z|ghcr.io/deskwand/bot:1.2.3\n")}, nil
 		case strings.Contains(command, "docker compose logs"):
-			return sshhost.Result{Stdout: []byte(logs + "\n")}, nil
+			return hostexec.Result{Stdout: []byte(logs + "\n")}, nil
 		case strings.HasPrefix(command, "test -e"):
 			if _, ok := host.files["~/deskwand/.env.bak"]; ok {
-				return sshhost.Result{}, nil
+				return hostexec.Result{}, nil
 			}
-			return sshhost.Result{ExitCode: 1}, nil
+			return hostexec.Result{ExitCode: 1}, nil
 		}
-		return sshhost.Result{ExitCode: 1}, nil
+		return hostexec.Result{ExitCode: 1}, nil
 	}
 }
 

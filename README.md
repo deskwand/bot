@@ -26,6 +26,8 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 
 桌面客户端还能直接把它部署到一台能 SSH 的 Linux 主机上，不需要 Cloudflare 账号：连上主机、写配置、起容器，都在客户端里完成。
 
+也可以就在这台 Mac 上跑：欢迎页选「这台 Mac」，用 Docker 兼容运行时或 Apple `container` 都行，配置文件和各运行时的启动文件都由客户端替你写。
+
 ## 它是什么
 
 - **一个部署就是一条命。** 使命、守则、记忆、账本都在这一次部署里，随时能备份成一份 zip。不是一次对话。

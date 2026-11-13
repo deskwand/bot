@@ -20,6 +20,7 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/hostexec"
 	"github.com/deskwand/bot/desktop/internal/platform"
 )
 
@@ -27,14 +28,10 @@ const dialTimeout = 15 * time.Second
 
 // Result is the outcome of a remote command. A nonzero ExitCode is not an
 // error; errors mean the transport or authentication failed.
-type Result struct {
-	Stdout   []byte
-	Stderr   []byte
-	ExitCode int
-}
+type Result = hostexec.Result
 
 // ErrNotExist reports that a remote path does not exist.
-var ErrNotExist = errors.New("sshhost: remote file does not exist")
+var ErrNotExist = hostexec.ErrNotExist
 
 // Client talks to one host. It is safe to use one Client from one goroutine
 // at a time; Probe and Trust share the last probe through a mutex.
@@ -82,13 +79,7 @@ func Forget(ctx context.Context, creds platform.CredentialStore, knownHostsPath 
 // QuotePath turns a validated path into a shell word. A leading "~/" becomes
 // the quoted $HOME, so the path is never expanded as a bare word.
 func QuotePath(path string) string {
-	if path == "~" {
-		return "'~'"
-	}
-	if rest, ok := strings.CutPrefix(path, "~/"); ok {
-		return `"$HOME"/'` + rest + `'`
-	}
-	return "'" + path + "'"
+	return hostexec.QuotePath(path)
 }
 
 // Probe performs the key exchange without authenticating. known reports that

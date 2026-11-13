@@ -11,7 +11,7 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/envfile"
-	"github.com/deskwand/bot/desktop/internal/sshhost"
+	"github.com/deskwand/bot/desktop/internal/hostexec"
 )
 
 func TestComposeFileMatchesRepositoryCompose(t *testing.T) {
@@ -25,20 +25,20 @@ func TestComposeFileMatchesRepositoryCompose(t *testing.T) {
 	}
 }
 
-func passingPreflight(command string) (sshhost.Result, error) {
+func passingPreflight(command string) (hostexec.Result, error) {
 	switch {
 	case strings.HasPrefix(command, "docker version"):
-		return sshhost.Result{Stdout: []byte("27.0.1\n")}, nil
+		return hostexec.Result{Stdout: []byte("27.0.1\n")}, nil
 	case strings.HasPrefix(command, "docker compose version"):
-		return sshhost.Result{Stdout: []byte("2.29.0\n")}, nil
+		return hostexec.Result{Stdout: []byte("2.29.0\n")}, nil
 	case strings.HasPrefix(command, "uname -m"):
-		return sshhost.Result{Stdout: []byte("x86_64\n")}, nil
+		return hostexec.Result{Stdout: []byte("x86_64\n")}, nil
 	case strings.HasPrefix(command, "mkdir -p"):
-		return sshhost.Result{}, nil
+		return hostexec.Result{}, nil
 	case strings.HasPrefix(command, "ss "):
-		return sshhost.Result{}, nil
+		return hostexec.Result{}, nil
 	}
-	return sshhost.Result{ExitCode: 1}, nil
+	return hostexec.Result{ExitCode: 1}, nil
 }
 
 func preflightIDs(report PreflightReport) []string {
@@ -84,9 +84,9 @@ func TestPreflightAllPass(t *testing.T) {
 }
 
 func TestPreflightDockerMissing(t *testing.T) {
-	host := &fakeHost{respond: func(command string) (sshhost.Result, error) {
+	host := &fakeHost{respond: func(command string) (hostexec.Result, error) {
 		if strings.HasPrefix(command, "docker version") {
-			return sshhost.Result{Stderr: []byte("sh: docker: not found\n"), ExitCode: 127}, nil
+			return hostexec.Result{Stderr: []byte("sh: docker: not found\n"), ExitCode: 127}, nil
 		}
 		return passingPreflight(command)
 	}}
@@ -112,9 +112,9 @@ func TestPreflightDockerMissing(t *testing.T) {
 }
 
 func TestPreflightPermissionDenied(t *testing.T) {
-	host := &fakeHost{respond: func(command string) (sshhost.Result, error) {
+	host := &fakeHost{respond: func(command string) (hostexec.Result, error) {
 		if strings.HasPrefix(command, "docker version") {
-			return sshhost.Result{
+			return hostexec.Result{
 				Stderr:   []byte("permission denied while trying to connect to the Docker daemon socket\n"),
 				ExitCode: 1,
 			}, nil
@@ -141,9 +141,9 @@ func TestPreflightPermissionDenied(t *testing.T) {
 }
 
 func TestPreflightUnsupportedArch(t *testing.T) {
-	host := &fakeHost{respond: func(command string) (sshhost.Result, error) {
+	host := &fakeHost{respond: func(command string) (hostexec.Result, error) {
 		if strings.HasPrefix(command, "uname -m") {
-			return sshhost.Result{Stdout: []byte("armv7l\n")}, nil
+			return hostexec.Result{Stdout: []byte("armv7l\n")}, nil
 		}
 		return passingPreflight(command)
 	}}
@@ -157,9 +157,9 @@ func TestPreflightUnsupportedArch(t *testing.T) {
 }
 
 func TestPreflightPortBusy(t *testing.T) {
-	host := &fakeHost{respond: func(command string) (sshhost.Result, error) {
+	host := &fakeHost{respond: func(command string) (hostexec.Result, error) {
 		if strings.HasPrefix(command, "ss ") {
-			return sshhost.Result{Stdout: []byte("LISTEN 0 4096 0.0.0.0:8787 0.0.0.0:*\n")}, nil
+			return hostexec.Result{Stdout: []byte("LISTEN 0 4096 0.0.0.0:8787 0.0.0.0:*\n")}, nil
 		}
 		return passingPreflight(command)
 	}}
@@ -178,9 +178,9 @@ func TestPreflightExistingInstance(t *testing.T) {
 			"~/deskwand/compose.yaml": []byte("services:\n  bot:\n    image: ghcr.io/deskwand/bot:1.0.0\n"),
 			"~/deskwand/.env":         []byte("ADMIN_TOKEN=t\n"),
 		},
-		respond: func(command string) (sshhost.Result, error) {
+		respond: func(command string) (hostexec.Result, error) {
 			if strings.HasPrefix(command, "ss ") {
-				return sshhost.Result{Stdout: []byte("LISTEN 0 4096 0.0.0.0:8787 0.0.0.0:*\n")}, nil
+				return hostexec.Result{Stdout: []byte("LISTEN 0 4096 0.0.0.0:8787 0.0.0.0:*\n")}, nil
 			}
 			return passingPreflight(command)
 		},
@@ -231,17 +231,17 @@ func TestPreflightForeignCompose(t *testing.T) {
 	}
 }
 
-func installRespond(inspect func() sshhost.Result) func(string) (sshhost.Result, error) {
-	return func(command string) (sshhost.Result, error) {
+func installRespond(inspect func() hostexec.Result) func(string) (hostexec.Result, error) {
+	return func(command string) (hostexec.Result, error) {
 		switch {
 		case strings.Contains(command, "docker inspect"):
 			return inspect(), nil
 		case strings.Contains(command, "docker compose pull"):
-			return sshhost.Result{}, nil
+			return hostexec.Result{}, nil
 		case strings.Contains(command, "docker compose up -d"):
-			return sshhost.Result{}, nil
+			return hostexec.Result{}, nil
 		case strings.HasPrefix(command, "test -e"):
-			return sshhost.Result{ExitCode: 1}, nil
+			return hostexec.Result{ExitCode: 1}, nil
 		}
 		return passingPreflight(command)
 	}
@@ -260,12 +260,12 @@ func installRequest() InstallRequest {
 
 func TestInstallWritesFilesThenStarts(t *testing.T) {
 	inspections := 0
-	host := &fakeHost{respond: installRespond(func() sshhost.Result {
+	host := &fakeHost{respond: installRespond(func() hostexec.Result {
 		inspections++
 		if inspections == 1 {
-			return sshhost.Result{Stdout: []byte("running|starting|2026-11-13T02:00:00Z|ghcr.io/deskwand/bot:1.2.3\n")}
+			return hostexec.Result{Stdout: []byte("running|starting|2026-11-13T02:00:00Z|ghcr.io/deskwand/bot:1.2.3\n")}
 		}
-		return sshhost.Result{Stdout: []byte("running|healthy|2026-11-13T02:00:00Z|ghcr.io/deskwand/bot:1.2.3\n")}
+		return hostexec.Result{Stdout: []byte("running|healthy|2026-11-13T02:00:00Z|ghcr.io/deskwand/bot:1.2.3\n")}
 	})}
 	service := newService(host)
 
@@ -375,8 +375,8 @@ func TestInstallValidatesBeforeWriting(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			host := &fakeHost{respond: installRespond(func() sshhost.Result {
-				return sshhost.Result{ExitCode: 1}
+			host := &fakeHost{respond: installRespond(func() hostexec.Result {
+				return hostexec.Result{ExitCode: 1}
 			})}
 			_, err := newService(host).Install(context.Background(), containerTarget(), c.request, nil)
 			assertCode(t, err, c.code)
@@ -406,12 +406,12 @@ func TestInstallRefusesExistingInstance(t *testing.T) {
 }
 
 func TestInstallPullFailure(t *testing.T) {
-	host := &fakeHost{respond: func(command string) (sshhost.Result, error) {
+	host := &fakeHost{respond: func(command string) (hostexec.Result, error) {
 		if strings.Contains(command, "docker compose pull") {
-			return sshhost.Result{Stderr: []byte("manifest unknown\n"), ExitCode: 1}, nil
+			return hostexec.Result{Stderr: []byte("manifest unknown\n"), ExitCode: 1}, nil
 		}
-		return installRespond(func() sshhost.Result {
-			return sshhost.Result{ExitCode: 1}
+		return installRespond(func() hostexec.Result {
+			return hostexec.Result{ExitCode: 1}
 		})(command)
 	}}
 	_, err := newService(host).Install(context.Background(), containerTarget(), installRequest(), nil)
@@ -428,14 +428,14 @@ func TestInstallPullFailure(t *testing.T) {
 }
 
 func TestInstallUnhealthyReturnsRedactedLogs(t *testing.T) {
-	host := &fakeHost{respond: func(command string) (sshhost.Result, error) {
+	host := &fakeHost{respond: func(command string) (hostexec.Result, error) {
 		switch {
 		case strings.Contains(command, "docker compose logs"):
-			return sshhost.Result{Stdout: []byte("boot failed key=s3cr3t-value\n")}, nil
+			return hostexec.Result{Stdout: []byte("boot failed key=s3cr3t-value\n")}, nil
 		case strings.Contains(command, "docker inspect"):
-			return sshhost.Result{Stdout: []byte("running|starting|2026-11-13T02:00:00Z|ghcr.io/deskwand/bot:1.2.3\n")}, nil
+			return hostexec.Result{Stdout: []byte("running|starting|2026-11-13T02:00:00Z|ghcr.io/deskwand/bot:1.2.3\n")}, nil
 		case strings.Contains(command, "docker compose pull"), strings.Contains(command, "docker compose up -d"):
-			return sshhost.Result{}, nil
+			return hostexec.Result{}, nil
 		}
 		return passingPreflight(command)
 	}}

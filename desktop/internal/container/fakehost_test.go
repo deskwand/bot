@@ -6,30 +6,30 @@ import (
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
-	"github.com/deskwand/bot/desktop/internal/sshhost"
+	"github.com/deskwand/bot/desktop/internal/hostexec"
 )
 
 type fakeHost struct {
 	files    map[string][]byte
 	commands []string
 	stdins   [][]byte
-	respond  func(command string) (sshhost.Result, error)
+	respond  func(command string) (hostexec.Result, error)
 	writeErr error
 }
 
-func (h *fakeHost) Run(_ context.Context, command string, stdin []byte) (sshhost.Result, error) {
+func (h *fakeHost) Run(_ context.Context, command string, stdin []byte) (hostexec.Result, error) {
 	h.commands = append(h.commands, command)
 	h.stdins = append(h.stdins, append([]byte(nil), stdin...))
 	if h.respond != nil {
 		return h.respond(command)
 	}
-	return sshhost.Result{}, nil
+	return hostexec.Result{}, nil
 }
 
 func (h *fakeHost) ReadFile(_ context.Context, path string) ([]byte, error) {
 	data, ok := h.files[path]
 	if !ok {
-		return nil, sshhost.ErrNotExist
+		return nil, hostexec.ErrNotExist
 	}
 	return append([]byte(nil), data...), nil
 }

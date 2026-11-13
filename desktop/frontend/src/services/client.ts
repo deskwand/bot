@@ -36,6 +36,9 @@ export function createProductionClient(): ClientService {
     probeSSHHost: (input) => Service.probeSSHHost(input),
     connectSSHHost: (input, fingerprint) =>
       Service.connectSSHHost(input, fingerprint),
+    detectLocalRuntimes: () => Service.detectLocalRuntimes(),
+    // Go rejects any engine name but these two before it runs a command.
+    connectLocal: (engine) => Service.connectLocal(engine),
     containerPreflight: () => Service.containerPreflight(),
     installContainer: (input) => Service.installContainer(input),
     adoptContainer: () => Service.adoptContainer(),

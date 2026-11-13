@@ -26,6 +26,8 @@ The container has no Workers AI, so at least one `MODEL_KEY_*` is required. Do n
 
 The desktop app can also deploy the same package to a Linux host over SSH, with no Cloudflare account: connect, write the config and start the container from the app.
 
+It can also run it right on this Mac: pick "This Mac" on the welcome page and the app writes the config and the start files for you, with either a Docker-compatible runtime or Apple `container`.
+
 ## What it is
 
 - **One deployment is one life.** Mission, rules, memory and ledger all live in that one deployment and export to a single zip. Not a conversation.

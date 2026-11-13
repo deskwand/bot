@@ -8,6 +8,10 @@ Cloudflare 部署仍然是默认形态；容器是并列的另一种部署方式
 
 前提：主机已装 Docker 与 compose 插件，当前用户可以直接执行 `docker`。在桌面客户端欢迎页点「运行在自己的服务器」，按向导填写主机与配置即可。之后在客户端里改配置或密钥会重启容器，约半分钟不可用。
 
+在自己这台 Mac 上也一样：欢迎页选「这台 Mac」，用 Docker 兼容运行时（OrbStack、Docker Desktop 等）或 Apple `container` 都行，不用手写 `compose.yaml` 和 `.env`。
+
+用 Apple `container` 时，文件落在本机目录：默认 `~/Library/Application Support/DeskWand/local`，里面是 `.env`、`run.sh` 和 `logs/launchd.log`；开机启动项是 `~/Library/LaunchAgents/com.deskwand.bot.plist`，容器叫 `deskwand-bot`，数据卷叫 `deskwand-data`。两种运行时的保活方式、`.env` 的权限和断开的后果见 [docs/desktop-client.md](desktop-client.md)。
+
 ## 快速开始
 
 1. 把仓库根目录的 `compose.yaml` 和 `.env.container.example` 放到同一个目录（例如 `~/deskwand`），把后者改名为 `.env`。

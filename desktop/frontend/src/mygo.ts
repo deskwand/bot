@@ -78,6 +78,11 @@ export interface BootStateDTO {
   targetMismatch: boolean;
   targetName: string;
   pending: OperationDTO[];
+  /**
+   * LocalSupported reports whether this OS can host the container on this
+   * Mac, so the setup page can offer it.
+   */
+  localSupported: boolean;
 }
 
 /**
@@ -206,6 +211,8 @@ export interface ContainerStatusDTO {
   address: string;
   user: string;
   dir: string;
+  transport: string;
+  engine: string;
   reachable: boolean;
   running: boolean;
   health: string;
@@ -338,6 +345,16 @@ export interface LifeVitalsDTO {
   metabolismStarted: boolean;
   unpriced: boolean;
   topSources: LifeSourceDTO[];
+}
+
+/**
+ * LocalRuntimesDTO names the container runtimes this Mac has installed. A
+ * runtime that is installed but stopped still counts: the preflight reports
+ * the stopped daemon as a fixable state.
+ */
+export interface LocalRuntimesDTO {
+  apple: boolean;
+  compose: boolean;
 }
 
 /**
@@ -634,7 +651,7 @@ export const Service = {
   },
   /**
    * AdoptContainer takes over an existing instance without writing anything
-   * remote.
+   * remote. A local target takes over the container running on this Mac.
    */
   adoptContainer(): Promise<ResultDTO> {
     return call("Service.AdoptContainer");
@@ -726,6 +743,14 @@ export const Service = {
     return call("Service.ConfirmImport", input);
   },
   /**
+   * ConnectLocal runs the preflight for this Mac and makes it the host being set
+   * up. The engine is the one the user chose; a runtime the UI wanted but this
+   * Mac lacks shows up in the checks rather than as an error here.
+   */
+  connectLocal(engine: string): Promise<ContainerPreflightDTO> {
+    return call("Service.ConnectLocal", engine);
+  },
+  /**
    * ConnectSSHHost pins a first-seen host key, stores the password or passphrase
    * and runs the preflight, which authenticates for real. A failed
    * authentication forgets the credential and trust it just wrote.
@@ -748,13 +773,22 @@ export const Service = {
   containerStatus(): Promise<ContainerStatusDTO> {
     return call("Service.ContainerStatus");
   },
+  /**
+   * DetectLocalRuntimes reports which container runtimes this Mac has. It only
+   * runs local commands and never touches an SSH host.
+   */
+  detectLocalRuntimes(): Promise<LocalRuntimesDTO> {
+    return call("Service.DetectLocalRuntimes");
+  },
   /** DisconnectCloudflare revokes the authorization and removes local credentials. */
   disconnectCloudflare(): Promise<void> {
     return call("Service.DisconnectCloudflare");
   },
   /**
    * DisconnectContainer forgets the host credential and the pinned key and
-   * clears the local target. It runs no remote command.
+   * clears the local target. A local target stops and removes this Mac's
+   * container first; a runtime that is already gone is not an error. An SSH
+   * target runs no remote command, so its container is left alone.
    */
   disconnectContainer(): Promise<void> {
     return call("Service.DisconnectContainer");
