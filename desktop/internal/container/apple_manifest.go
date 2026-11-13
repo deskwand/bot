@@ -15,6 +15,11 @@ const (
 	agentPlistPath     = "~/Library/LaunchAgents/com.deskwand.bot.plist"
 )
 
+// appleDataOwner owns the data volume before the bot starts. container/
+// Dockerfile creates the deskwand user and owns /data with it, but Apple's
+// container tool hands a fresh volume to root, so the run script sets it.
+const appleDataOwner = "10001:10001"
+
 // appleXMLText escapes a string for use as XML text or as an attribute value.
 var appleXMLText = strings.NewReplacer(
 	"&", "&amp;",
@@ -29,14 +34,16 @@ var appleXMLText = strings.NewReplacer(
 // is proof of which engine owns it.
 const appleScriptMarker = "Managed by DeskWand"
 
-// appleImagePattern matches the image the run script execs, up to the end of
-// its line. The tag is read whole, so a hostile tail cannot be truncated into
-// a value that looks like a valid tag.
-var appleImagePattern = regexp.MustCompile(regexp.QuoteMeta(ImageRepository) + `:([^\r\n]*)`)
+// appleImagePattern matches the image on the run script's exec line, up to the
+// end of that line. Anchoring on exec keeps the helper commands that run
+// earlier mention the same image out of the match, and reading the tag whole
+// keeps a hostile tail from being truncated into a value that looks valid.
+var appleImagePattern = regexp.MustCompile(`(?m)^exec .*?` + regexp.QuoteMeta(ImageRepository) + `:([^\r\n]*)$`)
 
 // appleRunScript returns run.sh: it starts the container service (launchd has
-// nobody to answer the kernel install prompt), clears a stale container, and
-// then execs the bot so launchd supervises the container process itself.
+// nobody to answer the kernel install prompt), clears a stale container, hands
+// the data volume to the bot user, and then execs the bot so launchd supervises
+// the container process itself.
 func appleRunScript(absDir, containerBin, image string) []byte {
 	quotedDir := "'" + absDir + "'"
 	quotedBin := "'" + containerBin + "'"
@@ -47,8 +54,9 @@ mkdir -p logs
 if [ -f logs/launchd.log ] && [ "$(wc -c < logs/launchd.log)" -gt 1048576 ]; then : > logs/launchd.log; fi
 %s system start --enable-kernel-install
 %s rm -f %s >/dev/null 2>&1
+%s run --rm --user root --entrypoint chown -v %s:/data %s %s /data
 exec %s run --rm --name %s --env-file .env -p 127.0.0.1:8787:8787 -v %s:/data %s
-`, appleScriptMarker, quotedDir, quotedBin, quotedBin, appleContainerName, quotedBin, appleContainerName, appleVolume, image))
+`, appleScriptMarker, quotedDir, quotedBin, quotedBin, appleContainerName, quotedBin, appleVolume, image, appleDataOwner, quotedBin, appleContainerName, appleVolume, image))
 }
 
 // appleAgentPlist returns the launchd agent that runs run.sh at login and

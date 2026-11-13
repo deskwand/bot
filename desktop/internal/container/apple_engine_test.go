@@ -149,6 +149,25 @@ func TestAppleRunScriptStartsServiceFirst(t *testing.T) {
 	}
 }
 
+// Apple's container tool creates a named volume as a fresh, root-owned file
+// system: unlike Docker it does not copy the image directory's ownership into
+// it. The bot runs as uid 10001 and refuses to start on a /data it cannot
+// write, so the run script hands the volume to that user before it execs.
+func TestAppleRunScriptHandsTheVolumeToTheBotUser(t *testing.T) {
+	script := string(appleRunScript(appleTestAbsDir, appleTestContainerBin, appleTestImage))
+
+	want := appleTestContainerBin + "' run --rm --user root --entrypoint chown -v " +
+		appleVolume + ":/data " + appleTestImage + " " + appleDataOwner + " /data"
+	if !strings.Contains(script, want) {
+		t.Fatalf("run.sh does not give the volume to the bot user, want %q:\n%s", want, script)
+	}
+	chown := strings.Index(script, "--entrypoint chown")
+	exec := strings.Index(script, "\nexec ")
+	if chown < 0 || exec < 0 || chown > exec {
+		t.Fatalf("run.sh chown at %d must come before exec at %d:\n%s", chown, exec, script)
+	}
+}
+
 func TestApplePlistKeepsAlive(t *testing.T) {
 	values, _ := readApplePlist(t, appleAgentPlist(appleTestAbsDir))
 	for key, want := range map[string]string{
