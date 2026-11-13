@@ -5,6 +5,7 @@ import {
   needsApproval,
   type AppConfig,
 } from "../src/config";
+import { readSandboxTimeoutMs, sandboxEnabled } from "../src/sandbox/config";
 
 const cfg: AppConfig = {
   owner: { telegramUserIds: [111, 222] },
@@ -53,5 +54,42 @@ describe("needsApproval", () => {
 
   it("is false for an unknown server", () => {
     expect(needsApproval(cfg, "github", "create_page")).toBe(false);
+  });
+});
+
+describe("sandbox settings", () => {
+  const base = {
+    schemaVersion: 1,
+    owner: { telegramUserIds: [1] },
+    models: {
+      butler: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+      task: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+    },
+    mcpServers: [],
+  };
+
+  const envWith = (sandbox?: Record<string, unknown>) =>
+    ({ DESKWAND_CONFIG: { ...base, ...(sandbox ? { sandbox } : {}) } }) as unknown as Env;
+
+  it("defaults to a ten minute command timeout", () => {
+    expect(readSandboxTimeoutMs(envWith())).toBe(600_000);
+  });
+
+  it("reads commandTimeoutMs from the sandbox section", () => {
+    expect(readSandboxTimeoutMs(envWith({ commandTimeoutMs: 30_000 }))).toBe(30_000);
+  });
+
+  it("falls back to the default when the value fails the schema", () => {
+    expect(readSandboxTimeoutMs(envWith({ commandTimeoutMs: 99_000_000 }))).toBe(600_000);
+  });
+
+  it("is enabled unless the section says otherwise", () => {
+    expect(sandboxEnabled(envWith())).toBe(true);
+    expect(sandboxEnabled(envWith({ enabled: true }))).toBe(true);
+    expect(sandboxEnabled(envWith({ enabled: false }))).toBe(false);
+  });
+
+  it("keeps the tools enabled when the document is unreadable", () => {
+    expect(sandboxEnabled({} as unknown as Env)).toBe(true);
   });
 });

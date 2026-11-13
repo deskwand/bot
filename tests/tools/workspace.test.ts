@@ -200,10 +200,10 @@ describe("workspaceTools", () => {
     }
   });
 
-  it("says there is no shell and how to continue a long file", () => {
+  it("says the workspace holds files only and how to continue a long file", () => {
     for (const name of ["read", "write", "edit", "list"]) {
       expect(tool(name).description).toContain(
-        "There is no shell; continue long files with offset/limit.",
+        "This area only holds files; execution happens elsewhere, if the deployment has it.",
       );
     }
   });

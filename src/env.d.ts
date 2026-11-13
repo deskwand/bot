@@ -14,6 +14,10 @@ declare namespace Cloudflare {
     DESKWAND_CONFIG?: unknown;
     /** Selected business channel; absent keeps the Telegram default. */
     ACTIVE_CHANNEL?: string;
+    /** Sandbox executor base URL, e.g. http://sandbox:8080 (container deployments). */
+    SANDBOX_URL?: string;
+    /** Shared bearer token for the sandbox executor. */
+    SANDBOX_TOKEN?: string;
     /** Local artifact store (container deployments only); absent on Cloudflare. */
     ARTIFACT_STORE?: DurableObjectNamespace<
       import("../container/store/store-do").StoreDO

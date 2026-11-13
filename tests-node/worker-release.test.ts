@@ -461,9 +461,13 @@ describe("release template consistency", () => {
 
   it("declares exactly the Worker secrets from src/env.d.ts", () => {
     const envSource = readFileSync(join(repoRoot, "src", "env.d.ts"), "utf8");
+    // Container-only deployment variables: the Worker reads them, but a
+    // Cloudflare deployment never sets them and its secret page must not offer
+    // them. ACTIVE_CHANNEL is a plain var for the same reason.
+    const containerOnly = ["ACTIVE_CHANNEL", "SANDBOX_URL", "SANDBOX_TOKEN"];
     const secrets = [...envSource.matchAll(/^\s+([A-Z0-9_]+)\?:\s*string;\s*$/gm)]
       .map((match) => match[1])
-      .filter((name) => name !== "ACTIVE_CHANNEL")
+      .filter((name) => !containerOnly.includes(name))
       .sort();
 
     // The release template keeps TELEGRAM_WEBHOOK_SECRET for old deployments;

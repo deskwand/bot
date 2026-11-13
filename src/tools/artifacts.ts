@@ -100,6 +100,24 @@ async function readBody(
 }
 
 /**
+ * Stores one artifact and returns its key. Shared with the sandbox tools so
+ * every producer keeps the `<taskId>/<fileId>/<name>` shape that
+ * `artifactKeySegments` validates.
+ */
+export async function writeArtifact(
+  bucket: ArtifactStore,
+  taskId: string,
+  bytes: Uint8Array,
+  name: string,
+  contentType: string,
+): Promise<string> {
+  const finalName = sanitizeFilename(name);
+  const key = `${taskId}/${crypto.randomUUID()}/${finalName}`;
+  await bucket.put(key, bytes, { httpMetadata: { contentType } });
+  return key;
+}
+
+/**
  * Store a file in R2 and return a public link. `taskId` is a getter because
  * tools are installed before the DO knows which task it will run.
  */
@@ -279,14 +297,19 @@ export function saveArtifactTool(
       // lease so this write cannot slip past it.
       if (hasUrl && guard) await guard();
 
-      const finalName = sanitizeFilename(name);
-      const fileId = crypto.randomUUID();
-      const key = `${id}/${fileId}/${finalName}`;
-      await bucket.put(key, body, {
-        httpMetadata: {
-          contentType: resolvedType || DOWNLOAD_CONTENT_TYPE,
-        },
-      });
+      // A string body becomes the same UTF-8 bytes R2 would have stored, so
+      // this switch does not change what a caller gets back.
+      const bytes =
+        typeof body === "string"
+          ? new TextEncoder().encode(body)
+          : (body as Uint8Array);
+      const key = await writeArtifact(
+        bucket,
+        id,
+        bytes,
+        name,
+        resolvedType || DOWNLOAD_CONTENT_TYPE,
+      );
 
       return { output: [{ type: "text" as const, text: `已保存：${key}` }] };
     },

@@ -34,6 +34,7 @@ It can also run it right on this Mac: pick "This Mac" on the welcome page and th
 - **Keeps its own books.** Every model call is priced and written to the ledger. Balance, daily burn and runway are always answerable, and the desktop app opens on that card. Four tiers: ample, lean, critical, dormant. The poorer it gets, the cheaper it runs: lean and critical switch to a cheaper model, and at zero balance only Cloudflare's free models are left.
 - **Earns its own living.** With a wallet configured there is an address on Base; you fund it with USDC. When the balance stops covering 21 days of spend it remits USDC back to you. Until the tier recovers, the livelihood bot trades in one order: protect the principal, then cover its own wake-ups, then grow.
 - **Runs in your container.** The Worker, the Durable Objects and the R2 bucket are yours: visible in the dashboard, deletable by you. Messages and tasks never pass through our servers. Cloudflare is one container among several; the same package also runs on Docker or an SSH host.
+- **It can run commands.** With a sandbox (one extra container) a task installs packages, clones repositories and runs scripts on its own Linux, and files in `/sandbox` survive between tasks. Optional: without it nothing changes, and the default Cloudflare deployment cannot use it.
 - **Quiet by default.** No "started" message, no progress, no heartbeat. It speaks only when something actually changed.
 - **Spending has a ceiling.** When the Cloudflare free allowance runs out it pauses until 00:00 UTC instead of billing you.
 

@@ -229,11 +229,15 @@ async function buildService(
   root: string,
   entry: string,
   target: string,
+  platform: "browser" | "node" = "browser",
 ): Promise<void> {
   await build({
     entryPoints: [join(root, entry)],
     bundle: true,
     format: "esm",
+    // A node platform keeps `node:*` imports out of the bundle; workerd's
+    // workers resolve their own builtins instead.
+    platform,
     external: ["cloudflare:*"],
     outfile: target,
   });
@@ -268,6 +272,15 @@ async function main(): Promise<void> {
     root,
     "container/store/index.ts",
     join(outDir, "store/index.js"),
+  );
+  // `.mjs`, not `.js`: the sandbox image runs this file under node, which needs
+  // the extension to treat a package-less file as ESM. `front` and `store` stay
+  // `.js` because workerd loads them.
+  await buildService(
+    root,
+    "container/sandbox/index.ts",
+    join(outDir, "sandbox/index.mjs"),
+    "node",
   );
 
   const config = readWranglerConfig(root) as {

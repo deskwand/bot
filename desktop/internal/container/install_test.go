@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"os"
 	"reflect"
@@ -19,7 +20,9 @@ func TestComposeFileMatchesRepositoryCompose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Both services carry the release version, so both tags are replaced.
 	want := strings.ReplaceAll(string(repository), "ghcr.io/deskwand/bot:latest", "ghcr.io/deskwand/bot:1.2.3")
+	want = strings.ReplaceAll(want, "ghcr.io/deskwand/sandbox:latest", "ghcr.io/deskwand/sandbox:1.2.3")
 	if got := string(ComposeFile("1.2.3")); got != want {
 		t.Fatalf("ComposeFile(1.2.3) differs from the repository compose.yaml:\n%s", got)
 	}
@@ -450,5 +453,63 @@ func TestInstallUnhealthyReturnsRedactedLogs(t *testing.T) {
 	}
 	if strings.Contains(coded.Message, "s3cr3t-value") {
 		t.Errorf("Message leaked a secret value: %q", coded.Message)
+	}
+}
+
+func TestInstallWritesSandboxCredentials(t *testing.T) {
+	host := &fakeHost{respond: installRespond(func() hostexec.Result {
+		return hostexec.Result{Stdout: []byte("running|healthy|2026-11-13T02:00:00Z|ghcr.io/deskwand/bot:1.2.3\n")}
+	})}
+	service := newService(host)
+
+	if _, err := service.Install(context.Background(), containerTarget(), installRequest(), func(domain.Step) {}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	file, err := envfile.Parse(host.files["~/deskwand/.env"])
+	if err != nil {
+		t.Fatalf("parse .env: %v", err)
+	}
+	url, ok := file.Get("SANDBOX_URL")
+	if !ok || url != "http://sandbox:8080" {
+		t.Fatalf("SANDBOX_URL = %q (present=%v)", url, ok)
+	}
+	token, ok := file.Get("SANDBOX_TOKEN")
+	if !ok || len(token) != 64 {
+		t.Fatalf("SANDBOX_TOKEN = %q (present=%v), want 64 hex characters", token, ok)
+	}
+	if _, err := hex.DecodeString(token); err != nil {
+		t.Fatalf("SANDBOX_TOKEN is not hex: %v", err)
+	}
+
+	compose := string(host.files["~/deskwand/compose.yaml"])
+	if !strings.Contains(compose, "image: ghcr.io/deskwand/sandbox:1.2.3") {
+		t.Fatalf("compose has no sandbox image")
+	}
+	if !strings.Contains(compose, "SANDBOX_TOKEN=${SANDBOX_TOKEN}") {
+		t.Fatalf("compose does not pass SANDBOX_TOKEN to the sandbox service")
+	}
+	if strings.Count(compose, "env_file: .env") != 1 {
+		t.Fatalf("only the bot service may share the .env file")
+	}
+	// The sandbox boundary: no published port, no host mounts beyond its own
+	// volume, no docker socket, not privileged, and no restart loop when the
+	// deployment has no sandbox token.
+	start := strings.Index(compose, "  sandbox:")
+	if start < 0 {
+		t.Fatalf("compose has no sandbox service")
+	}
+	sandbox := compose[start:]
+	if strings.Contains(sandbox, "ports:") {
+		t.Fatalf("the sandbox service must not publish a port")
+	}
+	if strings.Contains(sandbox, "privileged") {
+		t.Fatalf("the sandbox service must not be privileged")
+	}
+	if !strings.Contains(sandbox, "restart: on-failure") {
+		t.Fatalf("the sandbox service must not restart-loop without a token")
+	}
+	if strings.Count(sandbox, "- SANDBOX_TOKEN=${SANDBOX_TOKEN}") != 1 {
+		t.Fatalf("the sandbox service must receive exactly the token")
 	}
 }

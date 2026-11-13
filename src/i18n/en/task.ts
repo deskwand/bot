@@ -8,6 +8,9 @@ export const task: Messages["task"] = {
     read: "Read: {url}",
     save: "Save: {filename}",
     download: "Downloading {url}",
+    sandboxRun: "Sandbox: {command}",
+    sandboxPut: "Into the sandbox: {source}",
+    sandboxGet: "Out of the sandbox: {path}",
   },
   invalidUrl: "[invalid URL]",
   skillsUnavailable:

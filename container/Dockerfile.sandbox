@@ -1,0 +1,32 @@
+# The sandbox: a plain Linux box with a toolchain and one small HTTP executor.
+# Build context is the repository root. The bundle is built here because
+# `.dockerignore` keeps `dist/` out of the context.
+FROM node:26-bookworm-slim AS build
+
+WORKDIR /src
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build:container
+
+FROM node:26-bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git jq ripgrep unzip \
+      python3 python3-pip python3-venv \
+      build-essential \
+ && rm -rf /var/lib/apt/lists/*
+
+# Root inside the container is the point: apt-get has to work. The boundary is
+# the container itself (no host mounts, no docker socket, no published port).
+RUN mkdir -p /app /sandbox /tmp
+COPY --from=build /src/dist/container/sandbox/index.mjs /app/index.mjs
+
+ENV SANDBOX_DIR=/sandbox \
+    SANDBOX_PORT=8080
+
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD sh -c 'curl -fsS -H "Authorization: Bearer $SANDBOX_TOKEN" http://127.0.0.1:8080/healthz' || exit 1
+ENTRYPOINT ["node", "/app/index.mjs"]

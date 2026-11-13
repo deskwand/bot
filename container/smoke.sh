@@ -1,9 +1,11 @@
 #!/bin/sh
 # Smoke-tests a bot image: health, artifact write/read, restart persistence and
-# a non-root runtime. Usage: sh container/smoke.sh <image>
+# a non-root runtime. With a second argument it also round-trips a file through
+# the sandbox image. Usage: sh container/smoke.sh <bot-image> [sandbox-image]
 set -eu
 
-image=${1:?usage: sh container/smoke.sh <image>}
+image=${1:?usage: sh container/smoke.sh <bot-image> [sandbox-image]}
+sandbox=${2:-}
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 port=18787
@@ -21,6 +23,9 @@ fi
 cleanup() {
   docker rm -f "$container" >/dev/null 2>&1 || true
   docker volume rm "$volume" >/dev/null 2>&1 || true
+  # Set only when the sandbox half of this script runs.
+  [ -z "${sandbox_container:-}" ] || docker rm -f "$sandbox_container" >/dev/null 2>&1 || true
+  [ -z "${sandbox_dir:-}" ] || rm -rf "$sandbox_dir"
 }
 trap cleanup EXIT
 
@@ -85,5 +90,32 @@ wait_healthy || fail "容器重启后没有变成 healthy"
 
 uid=$(docker exec "$container" id -u)
 [ "$uid" != "0" ] || fail "容器以 root 运行"
+
+if [ -n "$sandbox" ]; then
+  sandbox_container="deskwand-smoke-sandbox-$$"
+  sandbox_dir=$(mktemp -d)
+  docker run --rm -d --name "$sandbox_container" -p 127.0.0.1:18080:8080 \
+    -e SANDBOX_TOKEN=smoke-token -v "$sandbox_dir:/sandbox" "$sandbox" >/dev/null
+  ready=0
+  i=0
+  while [ "$i" -lt 30 ]; do
+    if curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" \
+      http://127.0.0.1:18080/healthz >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  [ "$ready" = 1 ] || fail "沙箱没有在 30 秒内起来"
+
+  printf 'binary payload' > "$sandbox_dir/payload.txt"
+  curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X PUT \
+    --data-binary @"$sandbox_dir/payload.txt" \
+    "http://127.0.0.1:18080/files?path=%2Fsandbox%2Froundtrip.txt" >/dev/null
+  got=$(curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" \
+    "http://127.0.0.1:18080/files?path=%2Fsandbox%2Froundtrip.txt")
+  [ "$got" = "binary payload" ] || fail "沙箱往返内容不一致"
+fi
 
 echo "smoke ok"

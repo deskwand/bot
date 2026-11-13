@@ -45,6 +45,15 @@
       },
       "description": "Web search provider for the web_search tool. Absent means exa. Keys: SEARCH_KEY_TAVILY, SEARCH_KEY_BRAVE, MODEL_KEY_DEEPSEEK."
     },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "commandTimeoutMs": { "type": "number", "minimum": 1000, "maximum": 3600000 }
+      },
+      "description": "Optional shell sandbox for tasks. The tools exist only when SANDBOX_URL and SANDBOX_TOKEN are set in the deployment; this section tunes behaviour and can switch them off. Absent means enabled."
+    },
     "email": {
       "type": "object",
       "description": "Mailbox accounts the bot may read. This schema only constrains the structure (no counts or string lengths, which could reject the whole document): field-level checks (id pattern, port range, security enum, presence of the account secret) live in src/mail/accounts.ts, which drops a bad account instead of rejecting the whole document.",

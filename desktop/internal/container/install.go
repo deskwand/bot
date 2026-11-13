@@ -336,6 +336,12 @@ func (s *Service) installEnv(request InstallRequest, dialect envfile.Dialect) ([
 	}
 	adminToken := hex.EncodeToString(adminBytes)
 
+	sandboxBytes := make([]byte, 32)
+	if _, err := rand.Read(sandboxBytes); err != nil {
+		return nil, err
+	}
+	sandboxToken := hex.EncodeToString(sandboxBytes)
+
 	file, err := envfile.ParseDialect(nil, dialect)
 	if err != nil {
 		return nil, err
@@ -358,6 +364,10 @@ func (s *Service) installEnv(request InstallRequest, dialect envfile.Dialect) ([
 		{"ADMIN_TOKEN", adminToken},
 		{"ACTIVE_CHANNEL", request.ActiveChannel},
 		{"DESKWAND_CONFIG", compact.String()},
+		// The sandbox service interpolates SANDBOX_TOKEN out of this file; the
+		// bot reads both variables to reach it.
+		{"SANDBOX_URL", "http://sandbox:8080"},
+		{"SANDBOX_TOKEN", sandboxToken},
 	} {
 		if err := set(entry.name, entry.value); err != nil {
 			return nil, err

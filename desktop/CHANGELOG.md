@@ -1,5 +1,9 @@
 # Changelog
 
+## 未发布
+
+- 部署容器时可以同时起一个沙箱容器：任务因此能在自己那台 Linux 上跑命令、装依赖、clone 仓库，`/sandbox` 里的文件跨任务保留。沙箱可选——没有 `SANDBOX_URL`/`SANDBOX_TOKEN` 时行为与之前完全一致；它只拿到自己的 token，不共享 bot 的 `.env`；端口不对外发布。
+
 ## 0.1.51
 
 - 也可以就跑在这台 Mac 上：欢迎页多了第三项「这台 Mac」，容器在本机运行，不需要 Cloudflare 账号，也不用准备服务器。运行时可以是 Docker 兼容的（OrbStack、Docker Desktop 等），也可以是 Apple 官方的 `container`；客户端不替你安装运行时，两个都装了才让你在向导里选，默认 Apple `container`。

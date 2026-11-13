@@ -52,6 +52,31 @@ jobs:
       - name: Smoke test
         run: sh container/smoke.sh deskwand-bot:ci
 
+      - name: Build the sandbox image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag deskwand-sandbox:ci \
+            --load \
+            -f container/Dockerfile.sandbox .
+
+      - name: Smoke test the sandbox image
+        run: |
+          set -eu
+          docker run --rm -d --name sandbox-ci -p 127.0.0.1:18080:8080 \
+            -e SANDBOX_TOKEN=ci-token deskwand-sandbox:ci
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS -H "Authorization: Bearer ci-token" http://127.0.0.1:18080/healthz >/dev/null; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+          docker logs sandbox-ci > /tmp/sandbox-ci.log 2>&1 || true
+          docker rm -f sandbox-ci >/dev/null 2>&1 || true
+          if [ "$ok" != 1 ]; then cat /tmp/sandbox-ci.log; echo "sandbox healthz never came up" >&2; exit 1; fi
+
       - name: Log in to GHCR
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -70,3 +95,15 @@ jobs:
             --tag ghcr.io/deskwand/bot:latest \
             --push \
             -f container/Dockerfile .
+
+      - name: Publish the multi-arch sandbox image
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --tag "ghcr.io/deskwand/sandbox:$VERSION" \
+            --tag ghcr.io/deskwand/sandbox:latest \
+            --push \
+            -f container/Dockerfile.sandbox .

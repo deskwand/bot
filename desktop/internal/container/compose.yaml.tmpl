@@ -7,5 +7,18 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       - deskwand-data:/data
+  sandbox:
+    # Only SANDBOX_TOKEN reaches this container: an env_file here would hand it
+    # the bot's model keys and wallet private key.
+    image: ghcr.io/deskwand/sandbox:{{VERSION}}
+    restart: on-failure
+    environment:
+      - SANDBOX_TOKEN=${SANDBOX_TOKEN}
+      - SANDBOX_DISK_MB=${SANDBOX_DISK_MB:-10240}
+    cpus: "2"
+    mem_limit: 2g
+    volumes:
+      - deskwand-sandbox:/sandbox
 volumes:
   deskwand-data:
+  deskwand-sandbox:

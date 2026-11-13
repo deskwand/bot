@@ -1,6 +1,9 @@
 export const task = {
   progress: {
     search: "搜索：{query}",
+    sandboxRun: "沙箱：{command}",
+    sandboxPut: "送入沙箱：{source}",
+    sandboxGet: "取出沙箱文件：{path}",
     artifact: "读取产物：{ref}",
     time: "查看时间",
     read: "读取：{url}",

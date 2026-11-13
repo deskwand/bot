@@ -51,6 +51,19 @@ docker build -f container/Dockerfile -t ghcr.io/deskwand/bot:latest .
 
 可选项：`PUBLIC_BASE_URL`（默认 `http://localhost:8787`）、`SEARCH_KEY_*`、`EMAIL_SECRET_*`、`EXCHANGE_SECRET_*`、`WALLET_PRIVATE_KEY` / `WALLET_OWNER_ADDRESS`。完整条目和说明见 `.env.container.example` 里的注释。
 
+## 沙箱（可选）
+
+沙箱是第二个容器，给任务一台能跑命令的 Linux。不配也能用；配了才有 `sandbox_run`、`sandbox_put`、`sandbox_get` 三条工具。
+
+- 两个容器由同一份 `compose.yaml` 拉起，`sandbox` 容器只拿到 `SANDBOX_TOKEN` 一个变量，不共享 bot 的 `.env`。端口不发布到宿主机，数据在自己的卷 `deskwand-sandbox` 里。
+- 容器内是 root，整个根文件系统可写（不然 `apt-get` 装不了东西）。隔离边界就是这个容器：不挂宿主目录、不挂 docker socket、不 `privileged`。
+- `/sandbox` 跨任务、跨重启保留；`/tmp`、`apt-get` 装的东西随容器重建消失。
+- 磁盘占用只是观测：`SANDBOX_DISK_MB`（默认 10240）到点会在工具里提示，但不是配额，shell 照样写得进去。真正的上限是宿主机磁盘。
+- 沙箱里的任何东西都可能被模型发到网上。它本来就拿不到 bot 的密钥，别往里放你自己的。
+- 备份**不含**沙箱卷。要清空沙箱：`docker compose down --volumes` 后重新 `up -d`——注意这会把 bot 的数据卷一起删掉，先备份。
+- 只在 Docker Compose（本机或 SSH 主机）部署里可用；桌面客户端用 Apple `container` 运行时这一版没有沙箱。
+- 没填 `SANDBOX_TOKEN` 时沙箱容器会自己退出（退出码 0），compose 用的是 `restart: on-failure`，所以不会无限重启；bot 那边也拿不到 `SANDBOX_URL`，等于没有沙箱。
+
 ## 资源要求
 
 1 核 1 GB 起步，建议 2 GB 内存（估计值，未在 Linux 上实测；镜像大小也未实测）。磁盘占用主要是 `/data` 里的 SQLite 和产物，按实际使用量增长。

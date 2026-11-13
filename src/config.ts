@@ -38,6 +38,8 @@ export type AppConfig = {
   exchange?: { accounts?: unknown[] };
   /** Raw wallet section; every field is validated in src/wallet/config.ts. */
   wallet?: { rpcUrl?: unknown };
+  /** Sandbox execution; `enabled: false` hides the tools even when env is set. */
+  sandbox?: { enabled?: boolean; commandTimeoutMs?: number };
 };
 
 export function configLocale(cfg: AppConfig): Locale {

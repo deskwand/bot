@@ -93,6 +93,8 @@ MyGo 0.7.4 的 NSIS 安装器不会自动下载或安装 WebView2。客户端启
 - 用 Apple `container` 时的开机启动项是 `~/Library/LaunchAgents/com.deskwand.bot.plist`。
 - 容器固定叫 `deskwand-bot`，数据卷固定叫 `deskwand-data`；别的名字的容器客户端一律不碰。
 
+`.env` 里还有 `SANDBOX_URL` 与 `SANDBOX_TOKEN`：前者指向同一个 compose 里的 `sandbox` 服务，后者是安装时随机生成的共享密钥。设置页会把 `SANDBOX_TOKEN` 显示成一行可编辑的密钥；改它等于换沙箱凭据，两个容器都要重建。沙箱本身只在 Docker 兼容运行时（本机或 SSH 主机）里存在，Apple `container` 运行时这一版只跑 bot 一个容器。
+
 `.env` 是本机实例配置和密钥的唯一来源：模型 key、入口凭据、钱包私钥都在里面，就在这台 Mac 的磁盘上，**不加密**，权限 600（两种运行时都一样）。不要把它贴进 issue、聊天记录或诊断报告；要贴日志时用「服务器」页里的日志。在客户端里改配置走「保存并发布」，它会重写 `.env` 并重启容器，约半分钟不可用；如果发现 `.env` 已经被手改过，发布会以 `CONFIG_CONFLICT` 被拒绝，不会覆盖你手写的值。每次发布会先把当前 `.env` 存成 `.env.bak`，需要时可以用「服务器」页的「恢复上一份配置」换回去。
 
 用 Apple `container` 时，保活靠的是登录用户的 launchd 代理，所以它只在你登录之后才运行：Mac 开着但停在登录窗口时，机器人不在线；重启后也要先登录一次，它才会回来。

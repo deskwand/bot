@@ -409,3 +409,28 @@ it.each([
   const headers = disposition ? { "content-disposition": disposition } : undefined;
   expect(filenameFromResponse(new Response(null, { headers }), new URL(url))).toBe(expected);
 });
+
+describe("artifact key shape", () => {
+  it("writeArtifact produces a key the store can parse", async () => {
+    const { writeArtifact } = await import("../../src/tools/artifacts");
+    const { artifactKeySegments } = await import("../../src/artifact");
+    const store = new Map<string, Uint8Array>();
+    const bucket = {
+      put: async (key: string, value: unknown) => {
+        store.set(key, value as Uint8Array);
+      },
+    } as unknown as Parameters<typeof writeArtifact>[0];
+
+    const key = await writeArtifact(
+      bucket,
+      "task-9",
+      new Uint8Array([1]),
+      "../evil name.png",
+      "image/png",
+    );
+
+    expect(artifactKeySegments(key)).not.toBeNull();
+    expect(artifactKeySegments(key)?.[0]).toBe("task-9");
+    expect(artifactKeySegments(key)?.[2]).toBe("evil_name.png");
+  });
+});

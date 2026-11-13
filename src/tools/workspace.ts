@@ -20,7 +20,7 @@ import { isAbortError, toolErrorResult } from "./wrap";
 const WORKSPACE_PREFIX =
   "Private workspace for drafts; the owner never sees these files." +
   " The one exception is /skills/, the shared skill library: files there persist across tasks and every task can read them." +
-  " Files over 1 MB are refused. There is no shell; continue long files with offset/limit." +
+  " Files over 1 MB are refused. This area only holds files; execution happens elsewhere, if the deployment has it." +
   " Deliver a final file with save_artifact. ";
 
 const LIST_PAGE_LIMIT = 1000;
