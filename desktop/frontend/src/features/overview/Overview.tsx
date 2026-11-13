@@ -41,7 +41,7 @@ export function Overview() {
   const isContainer = targetKind === "container";
   const configQuery = useConfigQuery();
   const statusQuery = useStatusQuery();
-  const vitalsQuery = useLifeVitalsQuery(!isContainer);
+  const vitalsQuery = useLifeVitalsQuery();
   const containerQuery = useContainerStatusQuery(isContainer);
   const container = containerQuery.data;
   const refetchVitals = vitalsQuery.refetch;
@@ -91,7 +91,7 @@ export function Overview() {
   const refresh = useCallback(() => {
     void configQuery.refetch();
     void statusQuery.refetch();
-    if (!isContainer) void refetchVitals();
+    void refetchVitals();
     void queryClient.invalidateQueries({ queryKey: queryKeys.walletStatus });
     void loadLocal();
   }, [configQuery, isContainer, loadLocal, queryClient, refetchVitals, statusQuery]);
@@ -366,9 +366,9 @@ export function Overview() {
         </Alert>
       ) : null}
 
-      {!isContainer ? <VitalsCard /> : null}
+      <VitalsCard />
 
-      {!isContainer ? <WalletCard /> : null}
+      <WalletCard />
 
       <section className="mt-6" aria-labelledby="overview-health-title">
         <h2 id="overview-health-title" className="text-base font-medium">{t("overview.health")}</h2>

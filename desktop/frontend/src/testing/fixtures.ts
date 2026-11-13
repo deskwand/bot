@@ -701,6 +701,7 @@ function initialState(): MockState {
           image: "ghcr.io/deskwand/bot:1.2.3",
           startedAt: NOW,
           canRestore: false,
+          tunnelOpen: false,
         }
       : {
           address: CONTAINER_ADDRESS,
@@ -716,6 +717,7 @@ function initialState(): MockState {
           image: "ghcr.io/deskwand/bot:1.2.3",
           startedAt: NOW,
           canRestore: containerScenario === "unhealthy",
+          tunnelOpen: true,
         },
     localTarget,
     localSupported: localTarget,

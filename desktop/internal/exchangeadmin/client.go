@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deskwand/bot/desktop/internal/backup"
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/exchangesync"
 	"github.com/deskwand/bot/desktop/internal/i18n"
@@ -41,23 +41,6 @@ type Probe struct {
 	Total      *float64 `json:"total,omitempty"`
 	Code       string   `json:"code,omitempty"`
 	Message    string   `json:"message,omitempty"`
-}
-
-// Deps mirrors mcpadmin.Deps. The app passes only Token and Locale, so HTTP
-// and ReadyTimeout stay zero and the client's own timeout/default window apply.
-type Deps struct {
-	Token        backup.TokenDeps
-	HTTP         *http.Client
-	ReadyTimeout time.Duration
-	// Locale supplies the error language; nil means zh.
-	Locale func() string
-}
-
-func (d Deps) lang() string {
-	if d.Locale == nil {
-		return "zh"
-	}
-	return d.Locale()
 }
 
 type Client struct {
@@ -131,7 +114,10 @@ func (c *Client) post(ctx context.Context, path string, payload any) (Probe, err
 	if err != nil {
 		return Probe{}, fmt.Errorf("exchangeadmin: read response: %w", err)
 	}
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusNotFound {
+	if response.StatusCode == http.StatusUnauthorized {
+		return Probe{}, domain.Error{Code: adminendpoint.CodeTokenRejected, Message: c.t("exchangeadmin.unauthorized")}
+	}
+	if response.StatusCode == http.StatusNotFound {
 		return Probe{}, c.unavailable()
 	}
 
@@ -176,33 +162,4 @@ func (c *Client) unreachable() error {
 
 func (c *Client) unavailable() error {
 	return domain.Error{Code: CodeAdminUnavailable, Message: c.t("exchangeadmin.unavailable")}
-}
-
-// Connect resolves the deployment's public URL and ADMIN_TOKEN, waiting for a
-// freshly published version to serve the route.
-func Connect(ctx context.Context, deps Deps, target domain.Target) (*Client, error) {
-	snapshot, err := deps.Token.Snapshots.ReadSnapshot(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	baseURL := backup.PublicBaseURL(snapshot.SettingsJSON)
-	if baseURL == "" {
-		return nil, domain.Error{Code: CodeAdminUnavailable, Message: i18n.T(deps.lang(), "exchangeadmin.unavailable")}
-	}
-	token, published, err := backup.EnsureAdminToken(ctx, deps.Token, target)
-	if err != nil {
-		return nil, err
-	}
-	client := NewClient(baseURL, token, deps.HTTP)
-	client.Locale = deps.Locale
-	if published {
-		// Info is lease-checked, so a 409 already proves the route and token
-		// are live. This reuses the backup flow's propagation window.
-		wait := backup.NewAdminClient(baseURL, token, "", deps.HTTP)
-		waitDeps := backup.Deps{HTTP: deps.HTTP, ReadyTimeout: deps.ReadyTimeout}
-		if err := backup.WaitForAdmin(ctx, waitDeps, wait); err != nil {
-			return nil, client.unavailable()
-		}
-	}
-	return client, nil
 }

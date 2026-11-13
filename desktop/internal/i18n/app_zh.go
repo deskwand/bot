@@ -96,4 +96,6 @@ var zhApp = map[string]string{
 	"app.exchangeSyncNoLocalKey":    "这个账号的密钥没有存在本机：重新填写密钥并保存后再同步",
 	"app.walletPrivateKeyInvalid":   "钱包私钥必须是 0x 开头的 64 位十六进制字符",
 	"app.walletOwnerAddressInvalid": "收款地址必须是 0x 开头的 40 位十六进制地址",
+	"adminendpoint.unavailable":     "部署的管理接口不可用，请确认部署已完成。",
+	"adminendpoint.portBusy":        "本机 8787 被占用，MCP 授权回调需要它。",
 }

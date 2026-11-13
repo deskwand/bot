@@ -683,3 +683,28 @@ func TestPasswordAuthOverKeyboardInteractive(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 }
+
+func TestDialClientReturnsAConnectionTheCallerOwns(t *testing.T) {
+	_, host, fingerprint := startServer(t, serverOptions{password: "right"})
+	host.Auth = domain.SSHAuthPassword
+	creds := platform.NewMemoryCredentialStore()
+	if err := StoreSecret(context.Background(), creds, host, "right"); err != nil {
+		t.Fatalf("store secret: %v", err)
+	}
+	client := New(host, creds, filepath.Join(t.TempDir(), "known_hosts"))
+	trustHost(t, client, fingerprint)
+
+	conn, err := client.DialClient(context.Background())
+	if err != nil {
+		t.Fatalf("DialClient: %v", err)
+	}
+	session, err := conn.NewSession()
+	if err != nil {
+		conn.Close()
+		t.Fatalf("new session: %v", err)
+	}
+	_ = session.Close()
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}

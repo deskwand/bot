@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/walletadmin"
@@ -77,23 +76,14 @@ func walletSectionPatch(input WalletSectionDTO) ([]byte, error) {
 // walletClient mirrors exchangeClient: the ADMIN_TOKEN flow is shared with
 // backups, so the page works before the user ever opens the backup page.
 func (s *Service) walletClient(ctx context.Context, target domain.Target) (*walletadmin.Client, error) {
-	if s.snapshots == nil || s.publish == nil || s.credentials == nil {
+	if s.endpoints == nil {
 		return nil, s.serviceUnavailable()
 	}
-	// A Connect may publish a Worker version; see adminConnectMu.
-	s.adminConnectMu.Lock()
-	client, err := walletadmin.Connect(ctx, walletadmin.Deps{
-		Token: backup.TokenDeps{
-			Snapshots:   s.snapshots,
-			Publisher:   s.publish,
-			Credentials: s.credentials,
-		},
-		Locale: s.locale.Current,
-	}, target)
-	s.adminConnectMu.Unlock()
+	endpoint, err := s.endpoints.Resolve(ctx, target)
 	if err != nil {
-		return nil, err
+		return nil, safeAppError(err)
 	}
+	client := walletadmin.NewClient(endpoint.BaseURL, endpoint.Token, endpoint.HTTP)
 	client.Locale = s.locale.Current
 	return client, nil
 }
@@ -101,7 +91,7 @@ func (s *Service) walletClient(ctx context.Context, target domain.Target) (*wall
 // WalletStatus reads the deployed wallet's public state.
 func (s *Service) WalletStatus() (WalletStatusDTO, error) {
 	ctx := context.Background()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return WalletStatusDTO{}, err
 	}
@@ -111,7 +101,7 @@ func (s *Service) WalletStatus() (WalletStatusDTO, error) {
 	}
 	status, err := client.Status(ctx)
 	if err != nil {
-		return WalletStatusDTO{}, safeAppError(err)
+		return WalletStatusDTO{}, s.adminFailure(err)
 	}
 	return WalletStatusDTO{
 		Configured: status.Configured,

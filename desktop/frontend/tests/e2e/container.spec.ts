@@ -145,36 +145,74 @@ test("连不上服务器与容器没在运行是两种提示", async ({ page }) 
   }
 });
 
-test("容器目标下暂不支持的页面显示占位", async ({ page }) => {
+test("容器目标下暂不支持的页面只剩备份与成长", async ({ page }) => {
   await page.goto("/test.html?fixture=container-ready");
   const nav = page.getByRole("navigation", { name: "主导航" });
 
-  for (const name of ["双手", "钱包", "交易所", "记忆存档", "成长"]) {
+  for (const name of ["记忆存档", "成长"]) {
     await nav.getByRole("button", { name, exact: true }).click();
     await expect(page.getByTestId("unsupported")).toBeVisible();
   }
 
-  await nav.getByRole("button", { name: "头脑", exact: true }).click();
-  await expect(page.getByTestId("unsupported")).toHaveCount(0);
-  await nav.getByRole("button", { name: "声音", exact: true }).click();
-  await expect(page.getByTestId("unsupported")).toHaveCount(0);
+  for (const name of ["双手", "钱包", "交易所", "头脑", "声音", "服务器"]) {
+    await nav.getByRole("button", { name, exact: true }).click();
+    await expect(page.getByTestId("unsupported")).toHaveCount(0);
+  }
 
-  for (const method of [
-    "walletStatus",
-    "saveWallet",
-    "mcpStatus",
-    "updateMcpServer",
-    "removeMcpServer",
-    "testExchange",
-    "syncExchange",
-    "exchangeSyncStatus",
-    "exportData",
-    "restoreData",
-    "upgrade",
-    "upgradeAvailable",
-  ]) {
+  // Backup and upgrades are the only placeholders left, so nothing they own
+  // may be called by accident.
+  for (const method of ["exportData", "restoreData", "upgrade", "upgradeAvailable"]) {
     expect(await mockCalls(page, method)).toHaveLength(0);
   }
+});
+
+test("容器目标下三页真的渲染出内容", async ({ page }) => {
+  // A gated page used to leave the content pane empty rather than showing the
+  // placeholder, so assert what each page actually renders, on both container
+  // kinds.
+  const pages = [
+    ["双手", '[data-testid="mcp-callback-hint"]'],
+    ["钱包", '[data-testid="wallet-status"], [data-testid="wallet-missing"]'],
+    ["交易所", '[data-testid="exchange-empty"], [data-testid^="exchange-row-"]'],
+  ] as const;
+
+  for (const fixture of ["container-ready", "local-target"] as const) {
+    await page.goto(`/test.html?fixture=${fixture}`);
+    const nav = page.getByRole("navigation", { name: "主导航" });
+    for (const [name, marker] of pages) {
+      await nav.getByRole("button", { name, exact: true }).click();
+      await expect(
+        page.getByRole("heading", { level: 1, name, exact: true }),
+      ).toBeVisible();
+      await expect(page.locator(marker).first(), `${fixture} ${name}`).toBeVisible();
+    }
+  }
+});
+
+test("容器目标下体征与钱包会真的去问实例", async ({ page }) => {
+  await page.goto("/test.html?fixture=container-ready");
+  await expect
+    .poll(async () => (await mockCalls(page, "lifeVitals")).length)
+    .toBeGreaterThan(0);
+  await expect
+    .poll(async () => (await mockCalls(page, "walletStatus")).length)
+    .toBeGreaterThan(0);
+});
+
+test("服务器页只对 SSH 目标显示管理通道", async ({ page }) => {
+  await page.goto("/test.html?fixture=container-ready");
+  await page
+    .getByRole("navigation", { name: "主导航" })
+    .getByRole("button", { name: "服务器", exact: true })
+    .click();
+  await expect(page.getByTestId("server-tunnel")).toContainText("已建立");
+
+  await page.goto("/test.html?fixture=local-target");
+  await page
+    .getByRole("navigation", { name: "主导航" })
+    .getByRole("button", { name: "服务器", exact: true })
+    .click();
+  await expect(page.getByTestId("server-tunnel")).toHaveCount(0);
 });
 
 test("断开服务器后回到欢迎页", async ({ page }) => {
@@ -384,4 +422,25 @@ test("非 macOS 不显示这台 Mac", async ({ page }) => {
     .poll(async () => (await mockCalls(page, "bootState")).length)
     .toBeGreaterThan(0);
   await expect(page.getByRole("button", { name: "这台 Mac" })).toHaveCount(0);
+});
+
+test("断开容器后接管 Cloudflare 不会落在空白页", async ({ page }) => {
+  await page.goto("/test.html?fixture=container-ready");
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await nav.getByRole("button", { name: "服务器", exact: true }).click();
+  await page.getByRole("button", { name: "断开", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "断开", exact: true }).click();
+
+  await page.getByRole("button", { name: "连接已有服务" }).click();
+  const worker = page.locator("li", { hasText: "deskwand-bot-old" }).first();
+  await worker.getByRole("button", { name: "检查并接管" }).click();
+  await page.getByRole("button", { name: "确认配置并接管" }).click();
+  await page.getByRole("button", { name: "进入管理首页" }).click();
+
+  // The server page belonged to the container target; landing on it now would
+  // render an empty pane.
+  await expect(
+    page.getByRole("heading", { level: 1, name: "生命体征", exact: true }),
+  ).toBeVisible();
 });

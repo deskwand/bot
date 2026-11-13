@@ -219,6 +219,7 @@ export interface ContainerStatusDTO {
   image: string;
   startedAt: string;
   canRestore: boolean;
+  tunnelOpen: boolean;
 }
 
 /** CustomModelDTO is one model declared by a custom provider. */

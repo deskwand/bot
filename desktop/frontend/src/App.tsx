@@ -97,7 +97,7 @@ const NAV_GROUPS: { group?: NavGroup; items: { page: Page; icon: LucideIcon }[] 
   },
 ];
 
-const CONTAINER_UNSUPPORTED: Page[] = ["mcp", "agent", "exchange", "backup", "updates"];
+const CONTAINER_UNSUPPORTED: Page[] = ["backup", "updates"];
 
 export function App({ client }: { client: ClientService }) {
   const t = useT();
@@ -262,6 +262,12 @@ export function App({ client }: { client: ClientService }) {
   );
 
   const isContainer = targetKind === "container";
+  // 服务器页只属于容器、Cloudflare 页只属于 Cloudflare：切换运行方式后停在
+  // 另一个目标的分区页上会渲染出一片空白。回到生命体征。
+  useEffect(() => {
+    if (isContainer && page === "cloudflare") setPage("overview");
+    if (!isContainer && page === "server") setPage("overview");
+  }, [isContainer, page, setPage]);
   const nav = useMemo(() => {
     const containerItem = isContainer
       ? { page: "server" as Page, icon: ServerIcon }
@@ -409,9 +415,9 @@ export function App({ client }: { client: ClientService }) {
                   {!unsupported && page === "overview" ? <Overview /> : null}
                   {page === "models" ? <Models /> : null}
                   {page === "search" ? <Search /> : null}
-                  {page === "exchange" && !isContainer ? <Exchanges /> : null}
-                  {page === "agent" && !isContainer ? <Agent /> : null}
-                  {page === "mcp" && !isContainer ? <Mcp /> : null}
+                  {page === "exchange" ? <Exchanges /> : null}
+                  {page === "agent" ? <Agent /> : null}
+                  {page === "mcp" ? <Mcp /> : null}
                   {page === "entries" ? (
                     <Suspense fallback={<PageLoading label={t("shell.pageLoading")} />}>
                       <Entries />

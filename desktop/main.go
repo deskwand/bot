@@ -8,8 +8,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/plugins/updater"
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/app"
 	"github.com/deskwand/bot/desktop/internal/auth"
 	"github.com/deskwand/bot/desktop/internal/backup"
@@ -24,7 +23,11 @@ import (
 	"github.com/deskwand/bot/desktop/internal/platform"
 	"github.com/deskwand/bot/desktop/internal/release"
 	"github.com/deskwand/bot/desktop/internal/sshhost"
+	"github.com/deskwand/bot/desktop/internal/sshtunnel"
 	"github.com/deskwand/bot/desktop/internal/telemetry"
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
+	"golang.org/x/crypto/ssh"
 )
 
 // appVersion is the client version reported in the Cloudflare User-Agent. Keep
@@ -149,6 +152,23 @@ func main() {
 	})
 	publishRouter := &app.PublishRouter{Cloudflare: publish, Container: containers}
 	snapshotRouter := &app.SnapshotRouter{Cloudflare: api, Container: containers}
+
+	adminTunnel := sshtunnel.New(func(ctx context.Context, host domain.HostRef) (*ssh.Client, error) {
+		return sshhost.New(host, credentials, knownHosts).DialClient(ctx)
+	})
+	endpoints := &adminendpoint.Router{
+		Cloudflare: adminendpoint.NewCloudflare(adminendpoint.CloudflareDeps{
+			Snapshots:   snapshotRouter,
+			Publisher:   publish,
+			Credentials: credentials,
+			Locale:      locale.Current,
+		}),
+		Container: adminendpoint.NewContainer(adminendpoint.ContainerDeps{
+			Access: containers,
+			Tunnel: adminTunnel,
+			Locale: locale.Current,
+		}),
+	}
 	statusRouter := &app.StatusRouter{
 		Cloudflare: app.NewDiagnosticsServiceWithOptions(api, api, app.DiagnosticsOptions{Locale: locale.Current}),
 		Container:  &app.ContainerDiagnostics{Runtime: containers, Locale: locale.Current},
@@ -177,6 +197,8 @@ func main() {
 		Cache:       cache,
 		Container:   containers,
 		SSH:         sshProber{credentials: credentials, knownHosts: knownHosts},
+		Endpoints:   endpoints,
+		Tunnel:      adminTunnel,
 		ApplyTheme:  func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) },
 		Browser:     platform.NewSystemBrowserOpener(),
 		McpBrowser:  platform.NewMcpOAuthBrowserOpener(),

@@ -96,4 +96,6 @@ var enApp = map[string]string{
 	"app.exchangeSyncNoLocalKey":    "This account's key is not stored on this computer; re-enter it and save first",
 	"app.walletPrivateKeyInvalid":   "The wallet private key must be 0x followed by 64 hexadecimal characters",
 	"app.walletOwnerAddressInvalid": "The payout address must be 0x followed by 40 hexadecimal characters",
+	"adminendpoint.unavailable":     "The deployment's admin API is unavailable. Check that the deployment finished.",
+	"adminendpoint.portBusy":        "Local port 8787 is taken; the MCP OAuth callback needs it.",
 }

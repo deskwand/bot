@@ -18,8 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/plugins/updater"
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/auth"
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/deployment"
@@ -32,6 +31,8 @@ import (
 	"github.com/deskwand/bot/desktop/internal/release"
 	"github.com/deskwand/bot/desktop/internal/telemetry"
 	"github.com/deskwand/bot/desktop/internal/wechat"
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
 )
 
 // Stable error codes returned to the frontend in domain.Error.Code. Messages
@@ -152,6 +153,13 @@ func (r EmbeddedRelease) Version() string { return r.Pkg.Version() }
 // Manifest returns the embedded release manifest, or its zero value.
 func (r EmbeddedRelease) Manifest() release.Manifest { return r.Pkg.Manifest() }
 
+// TunnelState reports and stops the container admin tunnel. It never opens
+// one: the server page must not pull up an SSH connection just by being shown.
+type TunnelState interface {
+	Established() bool
+	Close()
+}
+
 // ServiceOptions composes the application service. The production composition
 // root supplies every dependency; tests substitute small fakes.
 type ServiceOptions struct {
@@ -209,6 +217,10 @@ type ServiceOptions struct {
 	Container ContainerRuntime
 	// SSH probes and pins SSH host keys and keeps host credentials.
 	SSH SSHProber
+	// Endpoints resolves where each target's /admin/* requests go.
+	Endpoints *adminendpoint.Router
+	// Tunnel reports and stops the container admin tunnel.
+	Tunnel TunnelState
 	// EmitContainerProgress defaults to ContainerProgressEvent.Broadcast.
 	EmitContainerProgress func(StepDTO)
 	NewOperationID        func() (string, error)
@@ -251,6 +263,8 @@ type Service struct {
 	emitCloudflare     func(CloudflareLoginDTO)
 	container          ContainerRuntime
 	ssh                SSHProber
+	endpoints          *adminendpoint.Router
+	tunnel             TunnelState
 	emitContainer      func(StepDTO)
 	newOpID            func() (string, error)
 	now                func() time.Time
@@ -281,11 +295,9 @@ type Service struct {
 	exchangeStatusMu sync.Mutex
 	exchangeStatus   map[string]ExchangeSyncDTO
 
-	// adminConnectMu serializes the wallet and life clients' Connect calls
 	// (the two the home page fires together): each may publish a new Worker
 	// version when ADMIN_TOKEN is missing, and two concurrent publishes would
 	// collide on the same fingerprint.
-	adminConnectMu sync.Mutex
 }
 
 // NewService constructs the application service.
@@ -363,6 +375,8 @@ func NewService(options ServiceOptions) *Service {
 		emitLogin:          emit,
 		emitCloudflare:     emitCloudflare,
 		container:          options.Container,
+		endpoints:          options.Endpoints,
+		tunnel:             options.Tunnel,
 		ssh:                options.SSH,
 		emitContainer:      emitContainer,
 		newOpID:            newOpID,
@@ -1134,6 +1148,9 @@ func (s *Service) PublishConfig(input ConfigEditDTO) (ResultDTO, error) {
 		return ResultDTO{}, safeAppError(err, secretInputValues(input.Secrets)...)
 	}
 	result, err := s.publish.Apply(ctx, target, change)
+	if err == nil && result.State == deployment.StatePublished && s.endpoints != nil {
+		s.endpoints.Invalidate()
+	}
 	failure := safeAppError(err, secretInputValues(input.Secrets)...)
 	s.reportFeature(telemetry.FeaturePublish, result.State, failure)
 	if rememberKeys && failure == nil && result.State == deployment.StatePublished {
@@ -2082,6 +2099,16 @@ func formatTime(value time.Time) string {
 		return ""
 	}
 	return value.UTC().Format(time.RFC3339)
+}
+
+// adminFailure clears the cached container endpoint when the deployment
+// rejected its token, so the next attempt reads .env again instead of failing
+// until the client restarts.
+func (s *Service) adminFailure(err error) error {
+	if adminendpoint.Unauthorized(err) && s.endpoints != nil {
+		s.endpoints.Invalidate()
+	}
+	return safeAppError(err)
 }
 
 func (s *Service) serviceUnavailable() error {

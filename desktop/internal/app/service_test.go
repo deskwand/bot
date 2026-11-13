@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/auth"
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/deployment"
@@ -418,6 +419,7 @@ type serviceFixture struct {
 	cache       *FileSnapshotCache
 	service     *Service
 	emitted     chan LoginStatusDTO
+	endpoints   *adminendpoint.Router
 	// These are nil unless a test sets them: telemetry, and the mcp fixtures'
 	// credential store and consent-page opener.
 	telemetry         *fakeReporter
@@ -496,6 +498,17 @@ func (f *serviceFixture) buildService() *Service {
 	}
 	if f.telemetrySettings != nil {
 		options.TelemetrySettings = f.telemetrySettings
+	}
+	// Rebuilt on every buildService call because the fixture can swap the
+	// credential store after the first build.
+	options.Endpoints = f.endpoints
+	if options.Endpoints == nil {
+		options.Endpoints = &adminendpoint.Router{Cloudflare: adminendpoint.NewCloudflare(adminendpoint.CloudflareDeps{
+			Snapshots:   f.snapshots,
+			Publisher:   f.publish,
+			Credentials: f.credentials,
+			Locale:      func() string { return "zh" },
+		})}
 	}
 	if f.credentials != nil {
 		options.Credentials = f.credentials

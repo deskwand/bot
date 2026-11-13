@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deskwand/bot/desktop/internal/backup"
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/i18n"
 )
@@ -58,23 +58,6 @@ type AuthStatus struct {
 	State string `json:"state"`
 }
 
-// Deps are the services Connect needs. They mirror the backup flow's token
-// dependencies so both surfaces use the same vault entry.
-type Deps struct {
-	Token        backup.TokenDeps
-	HTTP         *http.Client
-	ReadyTimeout time.Duration
-	// Locale supplies the error language; nil means zh.
-	Locale func() string
-}
-
-func (d Deps) lang() string {
-	if d.Locale == nil {
-		return i18n.ZH
-	}
-	return d.Locale()
-}
-
 // Client calls the MCP admin routes with one deployment's token.
 type Client struct {
 	baseURL string
@@ -95,36 +78,6 @@ func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 		token:   token,
 		http:    httpClient,
 	}
-}
-
-// Connect reads the deployment's PUBLIC_BASE_URL, ensures ADMIN_TOKEN exists,
-// and waits for it to reach the Worker when this call published it for the
-// first time.
-func Connect(ctx context.Context, deps Deps, target domain.Target) (*Client, error) {
-	snapshot, err := deps.Token.Snapshots.ReadSnapshot(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	baseURL := backup.PublicBaseURL(snapshot.SettingsJSON)
-	if baseURL == "" {
-		return nil, domain.Error{Code: CodeAdminUnavailable, Message: i18n.T(deps.lang(), "mcpadmin.unavailable")}
-	}
-	token, published, err := backup.EnsureAdminToken(ctx, deps.Token, target)
-	if err != nil {
-		return nil, err
-	}
-	client := NewClient(baseURL, token, deps.HTTP)
-	client.Locale = deps.Locale
-	if published {
-		// Info is lease-checked, so a 409 already proves the route and token
-		// are live. This reuses the backup flow's propagation window.
-		wait := backup.NewAdminClient(baseURL, token, "", deps.HTTP)
-		waitDeps := backup.Deps{HTTP: deps.HTTP, ReadyTimeout: deps.ReadyTimeout}
-		if err := backup.WaitForAdmin(ctx, waitDeps, wait); err != nil {
-			return nil, client.unavailable()
-		}
-	}
-	return client, nil
 }
 
 // Probe connects to one server and returns its tools or failure reason.
@@ -201,7 +154,10 @@ func (c *Client) readResponse(response *http.Response, path string, out any) err
 	if err != nil {
 		return fmt.Errorf("mcpadmin: read %s response: %s", path, c.redact(err.Error()))
 	}
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusNotFound {
+	if response.StatusCode == http.StatusUnauthorized {
+		return domain.Error{Code: adminendpoint.CodeTokenRejected, Message: c.t("mcpadmin.unauthorized")}
+	}
+	if response.StatusCode == http.StatusNotFound {
 		return c.unavailable()
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

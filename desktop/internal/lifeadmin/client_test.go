@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/domain"
 )
 
@@ -84,7 +85,7 @@ func TestVitalsMapsNotFoundToUnsupported(t *testing.T) {
 	}
 }
 
-func TestVitalsMapsUnauthorizedToUnavailable(t *testing.T) {
+func TestVitalsMapsUnauthorizedToTokenRejected(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -92,8 +93,8 @@ func TestVitalsMapsUnauthorizedToUnavailable(t *testing.T) {
 
 	client := NewClient(server.URL, "token", server.Client())
 	_, err := client.Vitals(context.Background())
-	if got := codeOf(t, err); got != CodeAdminUnavailable {
-		t.Fatalf("code = %q, want %q", got, CodeAdminUnavailable)
+	if got := codeOf(t, err); got != adminendpoint.CodeTokenRejected {
+		t.Fatalf("code = %q, want %q", got, adminendpoint.CodeTokenRejected)
 	}
 }
 

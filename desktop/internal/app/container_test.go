@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/auth"
 	"github.com/deskwand/bot/desktop/internal/container"
 	"github.com/deskwand/bot/desktop/internal/deployment"
@@ -217,6 +220,7 @@ type containerFixture struct {
 	store     *fakeStore
 	release   *fakeRelease
 	cache     *FileSnapshotCache
+	endpoints *adminendpoint.Router
 	steps     []StepDTO
 	service   *Service
 	// goos is the OS the service believes it runs on; darwin unless a test
@@ -260,6 +264,7 @@ func (f *containerFixture) build() {
 		Release:     f.release,
 		Container:   f.container,
 		SSH:         f.ssh,
+		Endpoints:   f.endpoints,
 		GOOS:        f.goos,
 		EmitContainerProgress: func(step StepDTO) {
 			f.steps = append(f.steps, step)
@@ -510,6 +515,9 @@ func TestAdoptContainerRequiresExistingInstance(t *testing.T) {
 	}
 }
 
+// WalletStatus, LifeVitals, McpStatus and TestExchange used to be listed here;
+// they are covered by TestContainerTargetReadsVitalsThroughTheResolver now that
+// a container can be managed through its admin API.
 func TestCloudflareOnlyMethodsReportUnsupported(t *testing.T) {
 	f := newContainerFixture(t)
 	f.store.target = routerContainerTarget()
@@ -525,10 +533,6 @@ func TestCloudflareOnlyMethodsReportUnsupported(t *testing.T) {
 			return err
 		},
 		"ExportData":       func() error { _, err := f.service.ExportData(); return err },
-		"WalletStatus":     func() error { _, err := f.service.WalletStatus(); return err },
-		"LifeVitals":       func() error { _, err := f.service.LifeVitals(); return err },
-		"McpStatus":        func() error { _, err := f.service.McpStatus(); return err },
-		"TestExchange":     func() error { _, err := f.service.TestExchange("okx-1"); return err },
 		"Install":          func() error { _, err := f.service.Install(InstallInputDTO{}); return err },
 		"SelectDeployment": func() error { return f.service.SelectDeployment("another-worker") },
 	}
@@ -1095,5 +1099,82 @@ func TestTargetStoreLoadDoesNotCallEveryHostSSH(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "SSH") {
 		t.Fatalf("error = %q, want wording that fits a local target too", err)
+	}
+}
+
+type staticResolver struct {
+	endpoint adminendpoint.Endpoint
+	err      error
+}
+
+func (r staticResolver) Resolve(context.Context, domain.Target) (adminendpoint.Endpoint, error) {
+	return r.endpoint, r.err
+}
+
+type countingResolver struct {
+	endpoint    adminendpoint.Endpoint
+	calls       int
+	invalidated bool
+}
+
+func (r *countingResolver) Resolve(context.Context, domain.Target) (adminendpoint.Endpoint, error) {
+	r.calls++
+	return r.endpoint, nil
+}
+
+func (r *countingResolver) Invalidate() { r.invalidated = true }
+
+func TestContainerTargetReadsVitalsThroughTheResolver(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/life/vitals" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer container-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"balanceUsd":3,"dailySpendUsd":0.5,"runwayDays":6,"tier":"tight","metabolismStarted":true,"unpriced":false,"topSources":[]}`))
+	}))
+	defer server.Close()
+
+	f := newContainerFixture(t)
+	f.store.target = routerContainerTarget()
+	f.store.ok = true
+	f.endpoints = &adminendpoint.Router{Container: staticResolver{endpoint: adminendpoint.Endpoint{
+		BaseURL: server.URL,
+		Token:   "container-token",
+		HTTP:    server.Client(),
+	}}}
+	f.build()
+
+	vitals, err := f.service.LifeVitals()
+	if err != nil {
+		t.Fatalf("LifeVitals: %v", err)
+	}
+	if vitals.BalanceUSD != 3 || vitals.Tier != "tight" {
+		t.Fatalf("vitals = %#v", vitals)
+	}
+}
+
+func TestUnauthorizedDropsTheCachedEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	f := newContainerFixture(t)
+	f.store.target = routerContainerTarget()
+	f.store.ok = true
+	resolver := &countingResolver{endpoint: adminendpoint.Endpoint{BaseURL: server.URL, Token: "stale", HTTP: server.Client()}}
+	f.endpoints = &adminendpoint.Router{Container: resolver}
+	f.build()
+
+	if _, err := f.service.LifeVitals(); err == nil {
+		t.Fatal("expected an error")
+	}
+	if !resolver.invalidated {
+		t.Fatal("the resolver was not invalidated after a 401")
 	}
 }

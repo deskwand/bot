@@ -10,12 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/deskwand/bot/desktop/internal/backup"
-	"github.com/deskwand/bot/desktop/internal/deployment"
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/i18n"
 	"github.com/deskwand/bot/desktop/internal/i18n/i18ntest"
-	"github.com/deskwand/bot/desktop/internal/platform"
 )
 
 const testAdminToken = "admin-token-sentinel"
@@ -99,20 +97,35 @@ func TestClientCallsMcpRoutesWithBearer(t *testing.T) {
 	}
 }
 
-func TestClientMapsUnauthorizedAndMissingRouteToUnavailable(t *testing.T) {
-	for _, status := range []int{http.StatusUnauthorized, http.StatusNotFound} {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(status)
-		}))
-		client := NewClient(server.URL, testAdminToken, nil)
-		_, err := client.Probe(context.Background(), "github")
-		server.Close()
-		if code := errorCode(err); code != CodeAdminUnavailable {
-			t.Fatalf("status %d code = %q, want %s (%v)", status, code, CodeAdminUnavailable, err)
-		}
-		if err == nil || !strings.Contains(err.Error(), i18n.T(i18n.ZH, "mcpadmin.unavailable")) {
-			t.Fatalf("status %d error = %v", status, err)
-		}
+func TestClientMapsUnauthorizedToTokenRejected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, testAdminToken, nil)
+	_, err := client.Probe(context.Background(), "github")
+	if code := errorCode(err); code != adminendpoint.CodeTokenRejected {
+		t.Fatalf("code = %q, want %s (%v)", code, adminendpoint.CodeTokenRejected, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), i18n.T(i18n.ZH, "mcpadmin.unauthorized")) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestClientMapsAMissingRouteToUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, testAdminToken, nil)
+	_, err := client.Probe(context.Background(), "github")
+	if code := errorCode(err); code != CodeAdminUnavailable {
+		t.Fatalf("code = %q, want %s (%v)", code, CodeAdminUnavailable, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), i18n.T(i18n.ZH, "mcpadmin.unavailable")) {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -130,129 +143,6 @@ func TestClientPreservesWorkerErrorCode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "服务不存在或不需要授权") {
 		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestConnectRequiresPublicBaseURL(t *testing.T) {
-	deps := Deps{Token: backup.TokenDeps{Snapshots: fixedSnapshots{snapshot: snapshotWithSettings(settingsJSON(""))}, Credentials: platform.NewMemoryCredentialStore()}}
-	if _, err := Connect(context.Background(), deps, target()); errorCode(err) != CodeAdminUnavailable {
-		t.Fatalf("error = %v, want %s", err, CodeAdminUnavailable)
-	}
-}
-
-func TestConnectErrorsFollowLocale(t *testing.T) {
-	en := func() string { return i18n.EN }
-
-	t.Run("missing public base url", func(t *testing.T) {
-		deps := Deps{
-			Token: backup.TokenDeps{
-				Snapshots:   fixedSnapshots{snapshot: snapshotWithSettings(settingsJSON(""))},
-				Credentials: platform.NewMemoryCredentialStore(),
-			},
-			Locale: en,
-		}
-		_, err := Connect(context.Background(), deps, target())
-		if err == nil {
-			t.Fatal("expected an error")
-		}
-		i18ntest.NoHan(t, "missing public base url", err.Error())
-	})
-
-	t.Run("admin token wait timeout", func(t *testing.T) {
-		server := httptest.NewServer(http.NotFoundHandler())
-		defer server.Close()
-
-		deps := Deps{
-			Token: backup.TokenDeps{
-				Snapshots:   fixedSnapshots{snapshot: snapshotWithSettings(settingsJSON(server.URL))},
-				Publisher:   &recordingPublisher{},
-				Credentials: platform.NewMemoryCredentialStore(),
-			},
-			ReadyTimeout: 20 * time.Millisecond,
-			Locale:       en,
-		}
-		_, err := Connect(context.Background(), deps, target())
-		if err == nil {
-			t.Fatal("expected an error")
-		}
-		i18ntest.NoHan(t, "admin token wait timeout", err.Error())
-	})
-}
-
-func TestConnectPublishesTokenOnFirstUse(t *testing.T) {
-	var infoCalls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/admin/backup/info" {
-			http.NotFound(w, r)
-			return
-		}
-		infoCalls++
-		// A 409 proves the route and token are live while a lease is absent.
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]string{"code": "MAINTENANCE_REQUIRED"})
-	}))
-	defer server.Close()
-
-	publisher := &recordingPublisher{}
-	credentials := platform.NewMemoryCredentialStore()
-	deps := Deps{
-		Token: backup.TokenDeps{
-			Snapshots:   fixedSnapshots{snapshot: snapshotWithSettings(settingsJSON(server.URL))},
-			Publisher:   publisher,
-			Credentials: credentials,
-		},
-		ReadyTimeout: time.Second,
-	}
-	client, err := Connect(context.Background(), deps, target())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if client.token == "" {
-		t.Fatal("connect did not obtain an admin token")
-	}
-	if len(publisher.changes) != 1 || len(publisher.changes[0].Secrets) != 1 {
-		t.Fatalf("publish changes = %#v", publisher.changes)
-	}
-	secret := publisher.changes[0].Secrets[0]
-	if secret.Name != backup.AdminTokenSecret || secret.Operation != domain.SecretReplace || secret.Value() == "" {
-		t.Fatalf("secret edit = %#v", secret)
-	}
-	if infoCalls == 0 {
-		t.Fatal("connect did not wait for the freshly published token")
-	}
-}
-
-type fixedSnapshots struct{ snapshot domain.Snapshot }
-
-func (s fixedSnapshots) ReadSnapshot(context.Context, domain.Target) (domain.Snapshot, error) {
-	return s.snapshot, nil
-}
-
-type recordingPublisher struct{ changes []domain.Change }
-
-func (p *recordingPublisher) Apply(_ context.Context, _ domain.Target, change domain.Change) (domain.Result, error) {
-	p.changes = append(p.changes, change)
-	return domain.Result{State: deployment.StatePublished}, nil
-}
-
-func target() domain.Target {
-	return domain.Target{AccountID: "0123456789abcdef0123456789abcdef", ScriptName: "deskwand-bot"}
-}
-
-func settingsJSON(baseURL string) []byte {
-	bindings := []any{}
-	if baseURL != "" {
-		bindings = append(bindings, map[string]any{"type": "plain_text", "name": "PUBLIC_BASE_URL", "text": baseURL})
-	}
-	raw, _ := json.Marshal(map[string]any{"bindings": bindings})
-	return raw
-}
-
-func snapshotWithSettings(settings []byte) domain.Snapshot {
-	return domain.Snapshot{
-		Target:       target(),
-		SettingsJSON: settings,
-		SecretNames:  []string{"ANTHROPIC_API_KEY"},
 	}
 }
 

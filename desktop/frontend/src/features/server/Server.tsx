@@ -163,6 +163,16 @@ export function Server() {
           <dt className="w-28 shrink-0 text-muted-foreground">{t("server.startedAt")}</dt>
           <dd className="min-w-0 break-all">{startedAtText}</dd>
         </div>
+        {!local ? (
+          <div className="flex flex-wrap gap-2 p-4" data-testid="server-tunnel">
+            <dt className="w-28 shrink-0 text-muted-foreground">
+              {t("server.tunnel")}
+            </dt>
+            <dd className="min-w-0 break-all">
+              {status?.tunnelOpen ? t("server.tunnelOpen") : t("server.tunnelClosed")}
+            </dd>
+          </div>
+        ) : null}
       </dl>
 
       <div className="mt-4 flex flex-wrap gap-2">

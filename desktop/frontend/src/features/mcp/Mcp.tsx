@@ -56,11 +56,12 @@ function authMap(statuses: { name: string; state: string }[]): Record<string, st
 }
 
 function isAdminUnavailable(error: unknown): boolean {
-  return toClientError(error).code === "MCP_ADMIN_UNAVAILABLE";
+  const code = toClientError(error).code;
+  return code === "MCP_ADMIN_UNAVAILABLE" || code === "ADMIN_ENDPOINT_UNAVAILABLE";
 }
 
 export function Mcp() {
-  const { client } = useApp();
+  const { client, targetKind } = useApp();
   const t = useT();
   const configQuery = useConfigQuery();
   const catalogQuery = useMcpCatalogQuery();
@@ -433,6 +434,11 @@ export function Mcp() {
       <ErrorAlert error={loadError} onRetry={() => void reload()} />
       <ErrorAlert error={catalogError} onRetry={() => void reload()} />
       <ErrorAlert error={error} />
+      {targetKind === "container" ? (
+        <p className="mt-3 text-xs text-muted-foreground" data-testid="mcp-callback-hint">
+          {t("mcp.containerCallbackHint")}
+        </p>
+      ) : null}
       {configData ? (
         <ApprovalModeSwitch
           config={configData}

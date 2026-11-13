@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/i18n"
@@ -27,8 +26,8 @@ const CodeMcpServerNotFound = "MCP_SERVER_NOT_FOUND"
 const mcpServerMissing = "服务不存在" // i18n-ignore: legacy Worker response text
 
 var (
-	mcpPropagationTimeout  = 30 * time.Second
-	propagationInterval = 2 * time.Second
+	mcpPropagationTimeout = 30 * time.Second
+	propagationInterval   = 2 * time.Second
 )
 
 // untilLive retries call while the Worker does not know the server
@@ -244,7 +243,7 @@ func (s *Service) UpdateMcpServer(name string, server json.RawMessage, secrets [
 // and asks the Worker to forget its OAuth client and tokens.
 func (s *Service) RemoveMcpServer(name string) (ResultDTO, error) {
 	ctx := context.Background()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return ResultDTO{}, err
 	}
@@ -305,7 +304,7 @@ func (s *Service) RemoveMcpServer(name string) (ResultDTO, error) {
 // ProbeMcp connects to one server through the Worker and returns its tools.
 func (s *Service) ProbeMcp(name string) (McpProbeDTO, error) {
 	ctx := context.Background()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return McpProbeDTO{}, err
 	}
@@ -319,7 +318,7 @@ func (s *Service) ProbeMcp(name string) (McpProbeDTO, error) {
 			return err == nil && isMcpProbeMissing(probe)
 		})
 	if err != nil {
-		return McpProbeDTO{}, safeAppError(err)
+		return McpProbeDTO{}, s.adminFailure(err)
 	}
 	dto := McpProbeDTO{
 		OK:     result.OK,
@@ -336,7 +335,7 @@ func (s *Service) ProbeMcp(name string) (McpProbeDTO, error) {
 // McpStatus lists every configured server's authorization state.
 func (s *Service) McpStatus() ([]McpAuthDTO, error) {
 	ctx := context.Background()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return []McpAuthDTO{}, err
 	}
@@ -346,7 +345,7 @@ func (s *Service) McpStatus() ([]McpAuthDTO, error) {
 	}
 	statuses, err := client.Status(ctx)
 	if err != nil {
-		return []McpAuthDTO{}, safeAppError(err)
+		return []McpAuthDTO{}, s.adminFailure(err)
 	}
 	out := make([]McpAuthDTO, 0, len(statuses))
 	for _, status := range statuses {
@@ -359,7 +358,7 @@ func (s *Service) McpStatus() ([]McpAuthDTO, error) {
 // system browser. The token never leaves the Worker.
 func (s *Service) StartMcpOAuth(name string) error {
 	ctx := context.Background()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return err
 	}
@@ -371,7 +370,7 @@ func (s *Service) StartMcpOAuth(name string) error {
 		func() (string, error) { return client.StartOAuth(ctx, strings.TrimSpace(name)) },
 		func(_ string, err error) bool { return isMcpServerMissing(err) })
 	if err != nil {
-		return safeAppError(err)
+		return s.adminFailure(err)
 	}
 	if authorizeURL == "" {
 		return domain.Error{Code: mcpadmin.CodeRequestFailed, Message: s.t("app.mcpNoAuthorizeURL")}
@@ -390,20 +389,14 @@ func (s *Service) StartMcpOAuth(name string) error {
 }
 
 func (s *Service) mcpClient(ctx context.Context, target domain.Target) (*mcpadmin.Client, error) {
-	if s.snapshots == nil || s.publish == nil || s.credentials == nil {
+	if s.endpoints == nil {
 		return nil, s.serviceUnavailable()
 	}
-	client, err := mcpadmin.Connect(ctx, mcpadmin.Deps{
-		Token: backup.TokenDeps{
-			Snapshots:   s.snapshots,
-			Publisher:   s.publish,
-			Credentials: s.credentials,
-		},
-		Locale: s.locale.Current,
-	}, target)
+	endpoint, err := s.endpoints.Resolve(ctx, target)
 	if err != nil {
-		return nil, err
+		return nil, safeAppError(err)
 	}
+	client := mcpadmin.NewClient(endpoint.BaseURL, endpoint.Token, endpoint.HTTP)
 	client.Locale = s.locale.Current
 	return client, nil
 }

@@ -1,6 +1,7 @@
 // Package sshhost runs one-shot commands on an SSH host and keeps the host
 // key the application trusts for it. Connections are not reused: every
-// operation dials, authenticates, runs, and closes.
+// operation dials, authenticates, runs, and closes. DialClient is the one
+// exception, for the admin tunnel, which keeps its connection open.
 package sshhost
 
 import (
@@ -201,6 +202,13 @@ func (c *Client) WriteFileAtomic(ctx context.Context, path string, data []byte, 
 		return fmt.Errorf("sshhost: writing the remote file exited with status %d", result.ExitCode)
 	}
 	return nil
+}
+
+// DialClient opens one authenticated connection and hands it to the caller,
+// which owns it and must close it. Only the admin tunnel uses this: every
+// other operation still dials, runs and closes.
+func (c *Client) DialClient(ctx context.Context) (*ssh.Client, error) {
+	return c.dial(ctx)
 }
 
 func (c *Client) dial(ctx context.Context) (*ssh.Client, error) {

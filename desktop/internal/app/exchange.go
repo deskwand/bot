@@ -9,7 +9,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/exchangeadmin"
 )
@@ -86,20 +85,14 @@ const codeExchangeAccountUnknown = "EXCHANGE_ACCOUNT_UNKNOWN"
 // exchangeClient mirrors mcpClient: the ADMIN_TOKEN flow is shared with backups,
 // so the page works before the user ever opens the backup page.
 func (s *Service) exchangeClient(ctx context.Context, target domain.Target) (*exchangeadmin.Client, error) {
-	if s.snapshots == nil || s.publish == nil || s.credentials == nil {
+	if s.endpoints == nil {
 		return nil, s.serviceUnavailable()
 	}
-	client, err := exchangeadmin.Connect(ctx, exchangeadmin.Deps{
-		Token: backup.TokenDeps{
-			Snapshots:   s.snapshots,
-			Publisher:   s.publish,
-			Credentials: s.credentials,
-		},
-		Locale: s.locale.Current,
-	}, target)
+	endpoint, err := s.endpoints.Resolve(ctx, target)
 	if err != nil {
-		return nil, err
+		return nil, safeAppError(err)
 	}
+	client := exchangeadmin.NewClient(endpoint.BaseURL, endpoint.Token, endpoint.HTTP)
 	client.Locale = s.locale.Current
 	return client, nil
 }
@@ -109,7 +102,7 @@ func (s *Service) exchangeClient(ctx context.Context, target domain.Target) (*ex
 // MCP probe applies.
 func (s *Service) TestExchange(accountID string) (ExchangeProbeDTO, error) {
 	ctx := context.Background()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return ExchangeProbeDTO{}, err
 	}
@@ -125,7 +118,7 @@ func (s *Service) TestExchange(accountID string) (ExchangeProbeDTO, error) {
 			return err == nil && result.Code == codeExchangeAccountUnknown
 		})
 	if err != nil {
-		return ExchangeProbeDTO{}, safeAppError(err)
+		return ExchangeProbeDTO{}, s.adminFailure(err)
 	}
 	return ExchangeProbeDTO{
 		OK:         probe.OK,

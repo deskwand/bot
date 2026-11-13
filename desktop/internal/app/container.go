@@ -115,6 +115,7 @@ type ContainerStatusDTO struct {
 	Image      string `json:"image"`
 	StartedAt  string `json:"startedAt"`
 	CanRestore bool   `json:"canRestore"`
+	TunnelOpen bool   `json:"tunnelOpen"`
 }
 
 // LocalRuntimesDTO names the container runtimes this Mac has installed. A
@@ -288,6 +289,7 @@ func (s *Service) InstallContainer(input ContainerInstallInputDTO) (ResultDTO, e
 	if err := s.store.Save(target); err != nil {
 		return summary, safeAppError(err)
 	}
+	clearAdminEndpoints(s)
 	s.clearPendingHost()
 	s.clearSnapshotCache()
 	return summary, nil
@@ -325,6 +327,7 @@ func (s *Service) AdoptContainer() (ResultDTO, error) {
 	if err := s.store.Save(target); err != nil {
 		return ResultDTO{}, safeAppError(err)
 	}
+	clearAdminEndpoints(s)
 	s.clearPendingHost()
 	s.clearSnapshotCache()
 	return ResultDTO{
@@ -346,6 +349,7 @@ func (s *Service) adoptLocalContainer(ctx context.Context, target domain.Target)
 	if err := s.store.Save(target); err != nil {
 		return summary, safeAppError(err)
 	}
+	clearAdminEndpoints(s)
 	s.clearPendingHost()
 	s.clearSnapshotCache()
 	return summary, nil
@@ -377,6 +381,7 @@ func (s *Service) ContainerStatus() (ContainerStatusDTO, error) {
 		Image:      status.Image,
 		StartedAt:  status.StartedAt,
 		CanRestore: status.CanRestore,
+		TunnelOpen: s.tunnel != nil && s.tunnel.Established(),
 	}
 	return dto, safeAppError(err)
 }
@@ -392,6 +397,9 @@ func (s *Service) RestoreContainerConfig() (ResultDTO, error) {
 		return ResultDTO{}, s.serviceUnavailable()
 	}
 	result, err := s.container.RestorePrevious(context.Background(), target)
+	if err == nil {
+		clearAdminEndpoints(s)
+	}
 	return s.summaryFromResult(result, s.targetName(target)), safeAppError(err)
 }
 
@@ -425,6 +433,7 @@ func (s *Service) DisconnectContainer() error {
 			return safeAppError(err)
 		}
 	}
+	clearAdminEndpoints(s)
 	s.clearPendingHost()
 	s.clearSnapshotCache()
 	return nil
@@ -588,6 +597,17 @@ func (s *Service) containerTarget() (domain.Target, error) {
 		return domain.Target{}, err
 	}
 	return target, nil
+}
+
+// clearAdminEndpoints drops the cached admin token and closes the tunnel, so a
+// target switch never sends the previous instance's requests to a new one.
+func clearAdminEndpoints(s *Service) {
+	if s.endpoints != nil {
+		s.endpoints.Invalidate()
+	}
+	if s.tunnel != nil {
+		s.tunnel.Close()
+	}
 }
 
 func (s *Service) clearSnapshotCache() {

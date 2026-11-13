@@ -32,7 +32,9 @@ export const server: Messages["server"] = {
   disconnectDescriptionLocal:
     "The bot will stop. Configuration and data stay, so you can add it again later.",
   confirmDisconnect: "Disconnect",
-  unsupportedTitle: "Not available for this way of running yet",
-  unsupportedDescription:
-    "This feature is currently available only for Cloudflare deployments.",
+  unsupportedTitle: "This page does not support this runtime yet",
+  unsupportedDescription: "Backup and image upgrades arrive in the next phase.",
+  tunnel: "Admin channel",
+  tunnelOpen: "Open",
+  tunnelClosed: "Not open",
 };

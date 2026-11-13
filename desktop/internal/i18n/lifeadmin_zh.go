@@ -5,4 +5,5 @@ var zhLifeAdmin = map[string]string{
 	"lifeadmin.unreachable":     "连不上部署地址，检查网络后重试",
 	"lifeadmin.invalidResponse": "管理接口返回了看不懂的内容",
 	"lifeadmin.unsupported":     "云端版本过旧，升级后可查看体征",
+	"lifeadmin.unauthorized":    "管理接口拒绝了令牌，请重启服务后重试。",
 }

@@ -28,6 +28,9 @@ export const server = {
     "会清除本机保存的登录信息；服务器上的容器和数据不受影响。同一个 Telegram bot 不要同时在 Cloudflare 和服务器上运行。",
   disconnectDescriptionLocal: "机器人会停止。配置和数据保留，以后可以重新添加。",
   confirmDisconnect: "断开",
-  unsupportedTitle: "此运行方式暂不支持",
-  unsupportedDescription: "这项功能目前只对 Cloudflare 部署可用。",
+  unsupportedTitle: "这个页面暂不支持当前运行方式",
+  unsupportedDescription: "备份恢复与镜像升级在下一期支持。",
+  tunnel: "管理通道",
+  tunnelOpen: "已建立",
+  tunnelClosed: "未建立",
 } as const;

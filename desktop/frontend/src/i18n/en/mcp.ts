@@ -67,4 +67,5 @@ export const mcp: Messages["mcp"] = {
     approval: "Requires approval",
     disabled: "Disabled",
   },
+  containerCallbackHint: "The browser callback arrives on local port 8787. Keep this app running.",
 };

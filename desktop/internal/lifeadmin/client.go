@@ -11,16 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deskwand/bot/desktop/internal/backup"
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/i18n"
 )
 
 // Error codes returned in domain.Error.Code by this package.
 const (
-	CodeAdminUnavailable = "LIFE_ADMIN_UNAVAILABLE"
-	CodeUnsupported      = "LIFE_VITALS_UNSUPPORTED"
-	CodeRequestFailed    = "LIFE_VITALS_FAILED"
+	CodeUnsupported   = "LIFE_VITALS_UNSUPPORTED"
+	CodeRequestFailed = "LIFE_VITALS_FAILED"
 )
 
 const (
@@ -45,23 +44,6 @@ type Vitals struct {
 	MetabolismStarted bool     `json:"metabolismStarted"`
 	Unpriced          bool     `json:"unpriced"`
 	TopSources        []Source `json:"topSources"`
-}
-
-// Deps mirrors walletadmin.Deps. The app passes only Token and Locale, so
-// HTTP and ReadyTimeout stay zero and the client's own timeout applies.
-type Deps struct {
-	Token        backup.TokenDeps
-	HTTP         *http.Client
-	ReadyTimeout time.Duration
-	// Locale supplies the error language; nil means zh.
-	Locale func() string
-}
-
-func (d Deps) lang() string {
-	if d.Locale == nil {
-		return "zh"
-	}
-	return d.Locale()
 }
 
 type Client struct {
@@ -107,7 +89,7 @@ func (c *Client) Vitals(ctx context.Context) (Vitals, error) {
 		return Vitals{}, fmt.Errorf("lifeadmin: read vitals response: %w", err)
 	}
 	if response.StatusCode == http.StatusUnauthorized {
-		return Vitals{}, c.unavailable()
+		return Vitals{}, domain.Error{Code: adminendpoint.CodeTokenRejected, Message: c.t("lifeadmin.unauthorized")}
 	}
 	if response.StatusCode == http.StatusNotFound {
 		return Vitals{}, c.unsupported()
@@ -157,39 +139,6 @@ func (c *Client) unreachable() error {
 	return domain.Error{Code: CodeRequestFailed, Message: c.t("lifeadmin.unreachable")}
 }
 
-func (c *Client) unavailable() error {
-	return domain.Error{Code: CodeAdminUnavailable, Message: c.t("lifeadmin.unavailable")}
-}
-
 func (c *Client) unsupported() error {
 	return domain.Error{Code: CodeUnsupported, Message: c.t("lifeadmin.unsupported")}
-}
-
-// Connect resolves the deployment's public URL and ADMIN_TOKEN, waiting for a
-// freshly published version to serve the route.
-func Connect(ctx context.Context, deps Deps, target domain.Target) (*Client, error) {
-	snapshot, err := deps.Token.Snapshots.ReadSnapshot(ctx, target)
-	if err != nil {
-		return nil, err
-	}
-	baseURL := backup.PublicBaseURL(snapshot.SettingsJSON)
-	if baseURL == "" {
-		return nil, domain.Error{Code: CodeAdminUnavailable, Message: i18n.T(deps.lang(), "lifeadmin.unavailable")}
-	}
-	token, published, err := backup.EnsureAdminToken(ctx, deps.Token, target)
-	if err != nil {
-		return nil, err
-	}
-	client := NewClient(baseURL, token, deps.HTTP)
-	client.Locale = deps.Locale
-	if published {
-		// Info is lease-checked, so a 409 already proves the route and token
-		// are live. This reuses the backup flow's propagation window.
-		wait := backup.NewAdminClient(baseURL, token, "", deps.HTTP)
-		waitDeps := backup.Deps{HTTP: deps.HTTP, ReadyTimeout: deps.ReadyTimeout}
-		if err := backup.WaitForAdmin(ctx, waitDeps, wait); err != nil {
-			return nil, client.unavailable()
-		}
-	}
-	return client, nil
 }

@@ -62,4 +62,5 @@ export const mcp = {
     approval: "要审",
     disabled: "停用",
   },
+  containerCallbackHint: "浏览器回调会打到本机 8787，请保持客户端运行。",
 } as const;

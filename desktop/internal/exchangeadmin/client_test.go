@@ -3,10 +3,13 @@ package exchangeadmin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
+	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/exchangesync"
 )
 
@@ -53,15 +56,31 @@ func TestProbeReadsRefusalFrom400(t *testing.T) {
 	}
 }
 
-func TestProbeMapsUnauthorizedToUnavailable(t *testing.T) {
+func TestProbeMapsUnauthorizedToTokenRejected(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer server.Close()
 
 	client := NewClient(server.URL, "token", server.Client())
-	if _, err := client.Probe(context.Background(), "okx-main"); err == nil {
-		t.Fatal("401 must be an error")
+	_, err := client.Probe(context.Background(), "okx-main")
+	var coded domain.Error
+	if !errors.As(err, &coded) || coded.Code != adminendpoint.CodeTokenRejected {
+		t.Fatalf("error = %v, want %s", err, adminendpoint.CodeTokenRejected)
+	}
+}
+
+func TestProbeMapsAMissingRouteToUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "token", server.Client())
+	_, err := client.Probe(context.Background(), "okx-main")
+	var coded domain.Error
+	if !errors.As(err, &coded) || coded.Code != CodeAdminUnavailable {
+		t.Fatalf("error = %v, want %s", err, CodeAdminUnavailable)
 	}
 }
 

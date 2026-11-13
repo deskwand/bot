@@ -82,7 +82,7 @@ func (s *Service) syncAllExchanges(ctx context.Context) {
 	if len(keys) == 0 {
 		return
 	}
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return
 	}
@@ -132,7 +132,7 @@ func (s *Service) syncOne(ctx context.Context, id string, credentials exchangesy
 		return s.failedExchangeSync(id, safeAppError(err))
 	}
 
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return s.failedExchangeSync(id, safeAppError(err))
 	}
@@ -142,7 +142,7 @@ func (s *Service) syncOne(ctx context.Context, id string, credentials exchangesy
 	}
 	probe, err := client.PushSnapshot(ctx, id, bundle)
 	if err != nil {
-		return s.failedExchangeSync(id, safeAppError(err))
+		return s.failedExchangeSync(id, s.adminFailure(err))
 	}
 	return ExchangeSyncDTO{
 		AccountID:  id,
