@@ -261,6 +261,32 @@ func (e *composeEngine) Apply(ctx context.Context, host Host, dir string) error 
 	return nil
 }
 
+func (e *composeEngine) Stop(ctx context.Context, host Host, dir string) error {
+	return e.composeVerb(ctx, host, dir, "stop")
+}
+
+func (e *composeEngine) Start(ctx context.Context, host Host, dir string) error {
+	return e.composeVerb(ctx, host, dir, "start")
+}
+
+// composeVerb runs one docker compose subcommand in dir, mapping failures the
+// way Apply does.
+func (e *composeEngine) composeVerb(ctx context.Context, host Host, dir, verb string) error {
+	verbCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	result, err := host.Run(verbCtx, fmt.Sprintf("cd %s && docker compose %s", hostexec.QuotePath(dir), verb), nil)
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		if e.local {
+			return runtimeError(domain.LOCAL_RUNTIME_STOPPED, result)
+		}
+		return dockerError(result)
+	}
+	return nil
+}
+
 func (e *composeEngine) Status(ctx context.Context, host Host, dir string) (RuntimeStatus, error) {
 	var status RuntimeStatus
 	if e.local {

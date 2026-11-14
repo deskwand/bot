@@ -2,15 +2,17 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/egoist/mygo"
+	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/telemetry"
+	"github.com/egoist/mygo"
 )
 
 // hiddenSecretName is the Worker secret the client manages on its own. It is
@@ -78,6 +80,9 @@ type BackupPreviewDTO struct {
 	Summary        BackupSummaryDTO `json:"summary"`
 	CurrentRelease string           `json:"currentRelease"`
 	Problem        string           `json:"problem,omitempty"`
+	// Warnings are stable codes the page renders through its catalog. They
+	// never block a restore.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // PendingRestoreDTO describes an unfinished restore found at startup.
@@ -137,9 +142,6 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 		return nil, err
 	}
 	defer s.endBackupOperation()
-	if err := s.rejectContainerTarget(); err != nil {
-		return nil, err
-	}
 	if s.backup == nil || s.settings == nil {
 		return nil, s.serviceUnavailable()
 	}
@@ -149,14 +151,14 @@ func (s *Service) ExportData() (*BackupSummaryDTO, error) {
 	}
 	ctx, cancel := s.backupContext()
 	defer cancel()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if err := ensureWritableDirIn(s.locale.Current(), settings.Dir); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(settings.Dir, backupFileName(target.ScriptName, s.now()))
+	path := filepath.Join(settings.Dir, backupFileName(target, s.now()))
 	manifest, err := s.backup.Export(ctx, target, path)
 	if err != nil {
 		if recordsExportFailure(err) {
@@ -273,7 +275,7 @@ func (s *Service) ChooseBackup() (*BackupPreviewDTO, error) {
 	defer s.endBackupOperation()
 	ctx, cancel := s.backupContext()
 	defer cancel()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -299,9 +301,6 @@ func (s *Service) ChooseBackupAt(path string) (*BackupPreviewDTO, error) {
 		return nil, err
 	}
 	defer s.endBackupOperation()
-	if err := s.rejectContainerTarget(); err != nil {
-		return nil, err
-	}
 	if s.backup == nil || s.settings == nil || s.snapshots == nil {
 		return nil, s.serviceUnavailable()
 	}
@@ -319,7 +318,7 @@ func (s *Service) ChooseBackupAt(path string) (*BackupPreviewDTO, error) {
 	}
 	ctx, cancel := s.backupContext()
 	defer cancel()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -344,6 +343,10 @@ func (s *Service) inspectBackup(ctx context.Context, target domain.Target, path 
 	preview := BackupPreviewDTO{
 		Summary:        backupSummary(path, manifest),
 		CurrentRelease: snapshot.ReleaseVersion,
+	}
+	preview.Warnings = backup.VersionWarnings(manifest, snapshot)
+	if err := backup.CheckTargetLimits(manifest, target); err != nil {
+		preview.Problem = appErrorCode(err)
 	}
 	if err := s.backup.CheckVersion(manifest, snapshot); err != nil {
 		code := appErrorCode(err)
@@ -423,7 +426,7 @@ func (s *Service) RestoreData() error {
 	defer s.endBackupOperation()
 	ctx, cancel := s.backupContext()
 	defer cancel()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return err
 	}
@@ -520,6 +523,43 @@ type BackupRunner struct {
 	Deps        backup.Deps
 	Journal     *backup.RestoreJournal
 	SnapshotDir string
+}
+
+// AdaptEndpoints adapts the shared admin endpoint resolver to the shape the
+// backup package declares, which cannot name adminendpoint's types.
+func AdaptEndpoints(resolver adminendpoint.Resolver) backup.EndpointResolver {
+	return endpointResolver{resolver: resolver}
+}
+
+// endpointResolver also implements backup.EndpointRefresher when the wrapped
+// resolver can republish a rejected credential.
+type endpointResolver struct{ resolver adminendpoint.Resolver }
+
+func (a endpointResolver) ResolveEndpoint(ctx context.Context, target domain.Target) (string, string, *http.Client, error) {
+	endpoint, err := a.resolver.Resolve(ctx, target)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return endpoint.BaseURL, endpoint.Token, endpoint.HTTP, nil
+}
+
+// RefreshEndpoint republishes the admin credential when the resolver supports
+// it. A container target does not, and reports CodeAdminUnauthorized itself.
+func (a endpointResolver) RefreshEndpoint(ctx context.Context, target domain.Target) (string, string, *http.Client, error) {
+	republisher, ok := a.resolver.(interface {
+		Republish(ctx context.Context, target domain.Target) (adminendpoint.Endpoint, error)
+	})
+	if !ok {
+		return "", "", nil, domain.Error{
+			Code:    backup.CodeAdminUnauthorized,
+			Message: "this residence cannot republish an admin credential",
+		}
+	}
+	endpoint, err := republisher.Republish(ctx, target)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return endpoint.BaseURL, endpoint.Token, endpoint.HTTP, nil
 }
 
 // NewBackupRunner composes the production backup flows.

@@ -655,3 +655,28 @@ func TestAppleInstallWritesPlainEnv(t *testing.T) {
 		t.Fatalf(".env = %q, want a DESKWAND_CONFIG line", host.files[envPath(target.Host.Dir)])
 	}
 }
+
+func TestStopTargetOnAppleBootsOutAndStopsTheContainer(t *testing.T) {
+	host := &fakeHost{}
+	service := newService(host)
+	target := containerTarget()
+	target.Host.Transport = domain.TransportLocal
+	target.Host.Engine = domain.EngineApple
+	target.Host.Address = ""
+	target.Host.User = ""
+	target.Host.Auth = ""
+
+	if err := service.StopTarget(context.Background(), target); err != nil {
+		t.Fatalf("StopTarget: %v", err)
+	}
+	command := host.commands[0]
+	if !strings.Contains(command, "launchctl bootout") || !strings.Contains(command, "container stop "+appleContainerName) {
+		t.Fatalf("command = %q", command)
+	}
+	if err := service.StartTarget(context.Background(), target); err != nil {
+		t.Fatalf("StartTarget: %v", err)
+	}
+	if start := host.commands[1]; !strings.Contains(start, "launchctl") {
+		t.Fatalf("start = %q", start)
+	}
+}

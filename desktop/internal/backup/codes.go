@@ -19,6 +19,15 @@ const (
 // body. Larger objects are recorded as oversized and cannot be restored.
 const MaxR2ObjectBytes int64 = 100 << 20
 
+// CodeBackupObjectTooLargeForTarget reports a backup whose artifacts exceed
+// what the target itself can store.
+const CodeBackupObjectTooLargeForTarget = "BACKUP_OBJECT_TOO_LARGE_FOR_TARGET"
+
+// ContainerMaxObjectBytes is the largest artifact the container artifact store
+// accepts (container/store/store-do.ts: STORE_MAX_BYTES). The product caps
+// artifacts at 15 MiB, so only backups written before that cap reach it.
+const ContainerMaxObjectBytes int64 = 16 << 20
+
 // CodeBackupSettingsInvalid reports a backup folder or schedule that cannot
 // be stored: empty, relative, unwritable, or outside the offered choices.
 const CodeBackupSettingsInvalid = "BACKUP_SETTINGS_INVALID"

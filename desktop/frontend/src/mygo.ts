@@ -26,6 +26,11 @@ export interface BackupPreviewDTO {
   summary: BackupSummaryDTO;
   currentRelease: string;
   problem?: string;
+  /**
+   * Warnings are stable codes the page renders through its catalog. They
+   * never block a restore.
+   */
+  warnings?: string[];
 }
 
 /**
@@ -78,6 +83,10 @@ export interface BootStateDTO {
   targetMismatch: boolean;
   targetName: string;
   pending: OperationDTO[];
+  /** PreviousTarget names the old residence once a move has settled. */
+  previousTarget?: ResidenceDTO;
+  /** MoveInProgress is set while a move has not reached done or abandoned. */
+  moveInProgress?: MoveDTO;
   /**
    * LocalSupported reports whether this OS can host the container on this
    * Mac, so the setup page can offer it.
@@ -380,6 +389,16 @@ export interface LoginStatusDTO {
 }
 
 /**
+ * ManifestBrief is the part of a Manifest the move page shows without opening
+ * the archive again.
+ */
+export interface ManifestBrief {
+  release: string;
+  exportedAt: string;
+  bytes: number;
+}
+
+/**
  * McpAddInput is the add-service form. Exactly one of CatalogID or Custom is
  * set; Values carries the catalog fields.
  */
@@ -481,6 +500,14 @@ export interface ModelProviderDTO {
   models: ModelEntryDTO[];
 }
 
+/** MoveDTO is the state the move page renders. */
+export interface MoveDTO {
+  phase: string;
+  archivePath?: string;
+  from: ResidenceDTO;
+  summary: ManifestBrief;
+}
+
 /** OperationDTO is one journaled operation summary for the resume view. */
 export interface OperationDTO {
   operationId: string;
@@ -525,6 +552,13 @@ export interface Progress {
   rows: number;
   objects: number;
   totalObjects: number;
+}
+
+/** ResidenceDTO names one residence for the page. */
+export interface ResidenceDTO {
+  kind: string;
+  name: string;
+  reachable: boolean;
 }
 
 /** ResultDTO is the outcome of one deployment operation. */
@@ -628,6 +662,13 @@ export interface WorkerDTO {
  */
 export const Service = {
   /**
+   * AbandonMove forgets the move without reviving the old residence; the page
+   * offers ReviveOldHouse separately.
+   */
+  abandonMove(): Promise<void> {
+    return call("Service.AbandonMove");
+  },
+  /**
    * AbandonOperation delegates to the state machine that owns the journal
    * record. A publish abandon deletes its pending credential-store values;
    * install and upgrade abandons never touch those references.
@@ -666,9 +707,8 @@ export const Service = {
     return call("Service.BackupSettings");
   },
   /**
-   * BootState reports what the app needs to choose its first screen. It reads
-   * only local credentials, the target file and the journal; it never contacts
-   * Cloudflare.
+   * BootState reports what the app needs to choose its first screen and the two
+   * residence facts the move page needs.
    */
   bootState(): Promise<BootStateDTO> {
     return call("Service.BootState");
@@ -868,6 +908,17 @@ export const Service = {
   modelCatalog(): Promise<ModelCatalogDTO> {
     return call("Service.ModelCatalog");
   },
+  /**
+   * MoveBack swaps the residences and revives the old entry, so the old
+   * residence answers again without another backup.
+   */
+  moveBack(): Promise<void> {
+    return call("Service.MoveBack");
+  },
+  /** MoveStatus reports the recorded move, or nil when none exists. */
+  moveStatus(): Promise<MoveDTO | null> {
+    return call("Service.MoveStatus");
+  },
   /** Name returns the product name for the shell header. */
   name(): Promise<string> {
     return call("Service.Name");
@@ -949,6 +1000,10 @@ export const Service = {
   retryRestore(useSnapshot: boolean): Promise<void> {
     return call("Service.RetryRestore", useSnapshot);
   },
+  /** ReviveOldHouse restores the entry of an abandoned move. */
+  reviveOldHouse(): Promise<void> {
+    return call("Service.ReviveOldHouse");
+  },
   /** SaveBackupSettings stores the folder and schedule the page edited. */
   saveBackupSettings(input: BackupSettingsEditDTO): Promise<BackupSettingsDTO> {
     return call("Service.SaveBackupSettings", input);
@@ -999,6 +1054,13 @@ export const Service = {
     return call("Service.SetTheme", source);
   },
   /**
+   * SettleMove installs the archive into the current residence, which the deploy
+   * flow already wrote to settings.json.
+   */
+  settleMove(): Promise<void> {
+    return call("Service.SettleMove");
+  },
+  /**
    * StartCloudflareLogin opens Cloudflare's authorization page and waits for the
    * loopback callback in the background. It returns the operation id used by
    * CancelCloudflareLogin; progress arrives through CloudflareLoginEvent.
@@ -1012,6 +1074,14 @@ export const Service = {
    */
   startMcpOAuth(name: string): Promise<void> {
     return call("Service.StartMcpOAuth", name);
+  },
+  /**
+   * StartMove packs the current residence, silences it, and records the move.
+   * Silencing happens before the new residence exists, so the two never poll the
+   * same entry at once.
+   */
+  startMove(): Promise<MoveDTO | null> {
+    return call("Service.StartMove");
   },
   /**
    * StartWeChatLogin starts a QR login in the background and returns the

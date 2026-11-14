@@ -2,11 +2,11 @@ package backup
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,7 +15,6 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/domain"
-	"github.com/deskwand/bot/desktop/internal/platform"
 )
 
 var backupTestTarget = domain.Target{AccountID: "acc", ScriptName: "deskwand-bot"}
@@ -34,27 +33,64 @@ func exportSnapshot(baseURL, release string, withToken bool) domain.Snapshot {
 	return snapshot
 }
 
-func exportDeps(t *testing.T, snapshot domain.Snapshot, storedToken string, readyTimeout time.Duration) (Deps, *fakePublisher) {
+// exportDeps keeps its signature: the endpoint now comes from a resolver built
+// on the same fixture, so no call site changes.
+func exportDeps(t *testing.T, snapshot domain.Snapshot, token string, readyTimeout time.Duration) (Deps, *fakePublisher) {
 	t.Helper()
 	snapshots := &fakeSnapshots{queue: []domain.Snapshot{snapshot}}
 	publisher := &fakePublisher{result: domain.Result{State: deployment.StatePublished}}
-	credentials := platform.NewMemoryCredentialStore()
-	if storedToken != "" {
-		if err := credentials.Set(context.Background(), AdminTokenKey(backupTestTarget), storedToken); err != nil {
-			t.Fatal(err)
-		}
-	}
 	deps := Deps{
-		Token: TokenDeps{
-			Snapshots:   snapshots,
-			Publisher:   publisher,
-			Credentials: credentials,
-			Random:      rand.Reader,
-		},
+		Endpoints:    &fakeResolver{baseURL: PublicBaseURL(snapshot.SettingsJSON), token: token},
+		Snapshots:    snapshots,
 		Now:          func() time.Time { return time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC) },
 		ReadyTimeout: readyTimeout,
 	}
 	return deps, publisher
+}
+
+// fakeResolver satisfies EndpointResolver: this package cannot import
+// adminendpoint, so the interface speaks in plain values.
+type fakeResolver struct {
+	baseURL string
+	token   string
+	err     error
+	calls   int
+	freshen []string
+}
+
+func (f *fakeResolver) ResolveEndpoint(context.Context, domain.Target) (string, string, *http.Client, error) {
+	f.calls++
+	return f.baseURL, f.token, nil, f.err
+}
+
+// fakeRefresher is a resolver that can replace a rejected credential, like the
+// Cloudflare one. A container resolver cannot, which the 401 tests rely on.
+type fakeRefresher struct {
+	fakeResolver
+	fresh     string
+	refreshed int
+}
+
+func (f *fakeRefresher) RefreshEndpoint(context.Context, domain.Target) (string, string, *http.Client, error) {
+	f.refreshed++
+	return f.baseURL, f.fresh, nil, nil
+}
+
+func TestConnectUsesTheEndpointResolver(t *testing.T) {
+	resolver := &fakeResolver{baseURL: "http://worker.test", token: "tok"}
+	snapshots := &fakeSnapshots{queue: []domain.Snapshot{{ReleaseVersion: "1.2.3"}}}
+	deps := Deps{Endpoints: resolver, Snapshots: snapshots}
+
+	client, snapshot, err := connect(context.Background(), deps, backupTestTarget, "op-1")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+	}
+	if client == nil || snapshot.ReleaseVersion != "1.2.3" {
+		t.Fatalf("client = %v, snapshot = %+v", client, snapshot)
+	}
 }
 
 func assertRowsEqual(t *testing.T, got, want []json.RawMessage) {
@@ -328,43 +364,6 @@ func TestExportRecordsOversizedObjects(t *testing.T) {
 	}
 }
 
-func TestExportRepublishesTokenOnUnauthorized(t *testing.T) {
-	worker := newFakeWorker(t)
-	worker.token = "tok"
-	worker.versionID = "version-1"
-	worker.failRoute("POST", acquirePath, "", "", 1, 401)
-
-	deps, publisher := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
-	path := filepath.Join(t.TempDir(), "backup.zip")
-
-	if _, err := Export(context.Background(), deps, backupTestTarget, path); err != nil {
-		t.Fatal(err)
-	}
-	if len(publisher.changes) != 1 {
-		t.Fatalf("publish calls = %d, want 1", len(publisher.changes))
-	}
-	if got := publisher.changes[0].Secrets[0].Value(); got != "tok" {
-		t.Fatalf("republished value = %q", got)
-	}
-}
-
-func TestExportWaitsForFreshAdminToken(t *testing.T) {
-	worker := newFakeWorker(t)
-	worker.versionID = "version-1"
-	worker.failRoute("POST", acquirePath, "", "", 1, 404)
-	worker.failRoute("POST", acquirePath, "", "", 2, 404)
-
-	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", false), "", time.Second)
-	path := filepath.Join(t.TempDir(), "backup.zip")
-
-	if _, err := Export(context.Background(), deps, backupTestTarget, path); err != nil {
-		t.Fatal(err)
-	}
-	if got := worker.requestCount("POST", acquirePath); got != 3 {
-		t.Fatalf("acquire calls = %d, want 3", got)
-	}
-}
-
 func TestExportReportsAdminUnavailable(t *testing.T) {
 	worker := newFakeWorker(t)
 	worker.failAll(404)
@@ -478,15 +477,17 @@ func TestExportStopsAfterSecondUnauthorized(t *testing.T) {
 	worker.failRoute("POST", acquirePath, "", "", 1, 401)
 	worker.failRoute("POST", acquirePath, "", "", 2, 401)
 
-	deps, publisher := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	refresher := &fakeRefresher{fakeResolver: fakeResolver{baseURL: worker.URL(), token: "tok"}, fresh: "tok2"}
+	deps.Endpoints = refresher
 	path := filepath.Join(t.TempDir(), "backup.zip")
 
 	_, err := Export(context.Background(), deps, backupTestTarget, path)
 	if code := adminErrorCode(t, err); code != CodeAdminUnauthorized {
 		t.Fatalf("code = %q", code)
 	}
-	if len(publisher.changes) != 1 {
-		t.Fatalf("publish calls = %d, want 1", len(publisher.changes))
+	if refresher.refreshed != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refresher.refreshed)
 	}
 	if got := worker.requestCount("POST", acquirePath); got != 2 {
 		t.Fatalf("acquire calls = %d, want 2", got)

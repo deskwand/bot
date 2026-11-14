@@ -63,10 +63,26 @@ type Progress struct {
 	TotalObjects int    `json:"totalObjects"`
 }
 
+// EndpointResolver turns a target into an admin surface. This package cannot
+// import adminendpoint (that package imports backup), so the interface speaks
+// in plain values and the app layer adapts it.
+type EndpointResolver interface {
+	ResolveEndpoint(ctx context.Context, target domain.Target) (baseURL, token string, httpClient *http.Client, err error)
+}
+
+// EndpointRefresher is the optional half of a resolver that can replace a
+// rejected admin credential, which only a Worker can do. A container's token
+// lives in its .env and cannot be republished from here.
+type EndpointRefresher interface {
+	RefreshEndpoint(ctx context.Context, target domain.Target) (baseURL, token string, httpClient *http.Client, err error)
+}
+
 // Deps are the services the export and restore flows need. Every field except
-// Token has a default, so tests can replace only what they observe.
+// Endpoints and Snapshots has a default, so tests can replace only what they
+// observe.
 type Deps struct {
-	Token        TokenDeps
+	Endpoints    EndpointResolver
+	Snapshots    SnapshotReader
 	HTTP         *http.Client
 	Locker       TargetLocker
 	Now          func() time.Time
@@ -129,7 +145,7 @@ func Export(ctx context.Context, deps Deps, target domain.Target, path string) (
 	if err != nil {
 		return Manifest{}, err
 	}
-	client, snapshot, published, err := connect(ctx, deps, target, opID)
+	client, snapshot, err := connect(ctx, deps, target, opID)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -140,7 +156,7 @@ func Export(ctx context.Context, deps Deps, target domain.Target, path string) (
 	}
 	defer writer.Abort()
 
-	client, err = acquireLease(ctx, deps, target, client, published, "export")
+	client, err = acquireLease(ctx, deps, target, client, "export")
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -189,33 +205,45 @@ func Export(ctx context.Context, deps Deps, target domain.Target, path string) (
 	return manifest, nil
 }
 
-// connect builds the admin client for target and waits for a freshly published
-// ADMIN_TOKEN to reach the Worker. The returned flag reports whether this call
-// published the secret, so the caller knows it may need to wait for a 404 to
-// clear before acquiring the lease.
-func connect(ctx context.Context, deps Deps, target domain.Target, opID string) (*AdminClient, domain.Snapshot, bool, error) {
-	snapshot, err := deps.Token.Snapshots.ReadSnapshot(ctx, target)
+// connect builds the admin client for target. The resolver owns the credential
+// flow, so this package never reads PUBLIC_BASE_URL or publishes a secret.
+func connect(ctx context.Context, deps Deps, target domain.Target, opID string) (*AdminClient, domain.Snapshot, error) {
+	if deps.Endpoints == nil || deps.Snapshots == nil {
+		return nil, domain.Snapshot{}, domain.Error{Code: CodeAdminUnavailable, Message: "the backup endpoint is not wired"}
+	}
+	snapshot, err := deps.Snapshots.ReadSnapshot(ctx, target)
 	if err != nil {
-		return nil, domain.Snapshot{}, false, err
+		return nil, domain.Snapshot{}, err
 	}
-	baseURL := PublicBaseURL(snapshot.SettingsJSON)
-	if baseURL == "" {
-		return nil, snapshot, false, domain.Error{
-			Code:    CodeAdminUnavailable,
-			Message: "deployment settings do not declare PUBLIC_BASE_URL",
-		}
-	}
-	token, published, err := EnsureAdminToken(ctx, deps.Token, target)
+	client, err := newClient(ctx, deps, target, opID)
 	if err != nil {
-		return nil, snapshot, false, err
+		return nil, snapshot, err
 	}
-	client := NewAdminClient(baseURL, token, opID, deps.HTTP)
-	if published {
-		if err := WaitForAdmin(ctx, deps, client); err != nil {
-			return nil, snapshot, published, err
-		}
+	return client, snapshot, nil
+}
+
+// newClientWith builds a client from one resolve function, so the refresh path
+// and the normal path share the same plumbing.
+func newClientWith(
+	ctx context.Context,
+	deps Deps,
+	target domain.Target,
+	opID string,
+	resolve func(context.Context, domain.Target) (string, string, *http.Client, error),
+) (*AdminClient, error) {
+	baseURL, token, httpClient, err := resolve(ctx, target)
+	if err != nil {
+		return nil, err
 	}
-	return client, snapshot, published, nil
+	if httpClient == nil {
+		httpClient = deps.HTTP
+	}
+	return NewAdminClient(baseURL, token, opID, httpClient), nil
+}
+
+// newClient resolves the endpoint and returns a client for it.
+func newClient(ctx context.Context, deps Deps, target domain.Target, opID string) (*AdminClient, error) {
+	return newClientWith(ctx, deps, target, opID, deps.Endpoints.ResolveEndpoint)
 }
 
 // WaitForAdmin polls Info until the Worker answers for the new token. A 409
@@ -265,13 +293,13 @@ func retryableReadyError(err error) bool {
 	}
 }
 
-// acquireLease takes the maintenance lease. It retries a 404 while a freshly
-// published secret propagates and republishes the token once after a 401.
-func acquireLease(ctx context.Context, deps Deps, target domain.Target, client *AdminClient, published bool, op string) (*AdminClient, error) {
+// acquireLease takes the maintenance lease. A 401 is retried once through the
+// resolver's refresher: the deployment may have been replaced by a version
+// that lost the ADMIN_TOKEN binding.
+func acquireLease(ctx context.Context, deps Deps, target domain.Target, client *AdminClient, op string) (*AdminClient, error) {
 	deadline := time.Now().Add(deps.readyTimeout())
 	interval := deps.pollInterval()
-	retryUnavailable := published
-	republished := false
+	refreshed := false
 	for {
 		err := client.Acquire(ctx, op)
 		if err == nil {
@@ -279,23 +307,19 @@ func acquireLease(ctx context.Context, deps Deps, target domain.Target, client *
 		}
 		switch errorCode(err) {
 		case CodeAdminUnauthorized:
-			if republished {
+			refresher, ok := deps.Endpoints.(EndpointRefresher)
+			if refreshed || !ok {
 				return client, err
 			}
-			republished = true
-			retryUnavailable = true
-			token, republishErr := RepublishAdminToken(ctx, deps.Token, target)
-			if republishErr != nil {
-				return client, republishErr
+			refreshed = true
+			fresh, refreshErr := newClientWith(ctx, deps, target, client.opID, refresher.RefreshEndpoint)
+			if refreshErr != nil {
+				return client, refreshErr
 			}
-			client = NewAdminClient(client.baseURL, token, client.opID, deps.HTTP)
-			// The old deadline may have been spent while the secret was
-			// published. Give the new token at least one full window.
+			client = fresh
+			// The old deadline may have been spent while the credential was
+			// republished. Give the new token at least one full window.
 			deadline = time.Now().Add(deps.readyTimeout())
-		case CodeAdminUnavailable:
-			if !retryUnavailable {
-				return client, err
-			}
 		default:
 			return client, err
 		}

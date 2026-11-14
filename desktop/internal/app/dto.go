@@ -33,6 +33,10 @@ type BootStateDTO struct {
 	TargetMismatch bool           `json:"targetMismatch"`
 	TargetName     string         `json:"targetName"`
 	Pending        []OperationDTO `json:"pending"`
+	// PreviousTarget names the old residence once a move has settled.
+	PreviousTarget *ResidenceDTO `json:"previousTarget,omitempty"`
+	// MoveInProgress is set while a move has not reached done or abandoned.
+	MoveInProgress *MoveDTO `json:"moveInProgress,omitempty"`
 	// LocalSupported reports whether this OS can host the container on this
 	// Mac, so the setup page can offer it.
 	LocalSupported bool `json:"localSupported"`

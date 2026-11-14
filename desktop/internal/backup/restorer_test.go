@@ -236,11 +236,13 @@ func TestRestoreReplacesAllData(t *testing.T) {
 	}
 }
 
-func TestRestoreRefusesVersionMismatch(t *testing.T) {
+// A backup newer than the deployment is the only direction CheckVersion
+// refuses: older code cannot know the newer tables.
+func TestRestoreRefusesNewerBackup(t *testing.T) {
 	worker := seedRestoreWorker(t)
-	path := makeRestoreBackup(t, worker, "1.2.0")
+	path := makeRestoreBackup(t, worker, "1.3.0")
 	journal := newRestoreJournal(t)
-	deps := restoreTestDeps(t, worker, "1.3.0")
+	deps := restoreTestDeps(t, worker, "1.2.0")
 
 	err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups"))
 	if code := adminErrorCode(t, err); code != CodeBackupVersionMismatch {
@@ -261,7 +263,9 @@ func TestRestoreRefusesVersionMismatch(t *testing.T) {
 	}
 }
 
-func TestRestoreRefusesUnknownRelease(t *testing.T) {
+// An unknown release no longer blocks a restore: it is reported as a warning
+// in the preview instead.
+func TestRestoreAcceptsUnknownRelease(t *testing.T) {
 	cases := []struct {
 		name    string
 		backup  string
@@ -278,15 +282,11 @@ func TestRestoreRefusesUnknownRelease(t *testing.T) {
 			journal := newRestoreJournal(t)
 			deps := restoreTestDeps(t, worker, testCase.current)
 
-			err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups"))
-			if code := adminErrorCode(t, err); code != CodeBackupVersionMismatch {
-				t.Fatalf("code = %q", code)
+			if err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups")); err != nil {
+				t.Fatalf("Restore: %v", err)
 			}
-			if got := len(restoreCalls(worker)); got != 0 {
-				t.Fatalf("restore calls = %d, want 0", got)
-			}
-			if worker.hasLease() {
-				t.Fatal("the lease was not released")
+			if got := len(restoreCalls(worker)); got == 0 {
+				t.Fatal("the restore never reached the Worker")
 			}
 		})
 	}
@@ -908,10 +908,10 @@ func TestRestoreRechecksVersionImmediatelyBeforeDestructiveStep(t *testing.T) {
 	worker := seedRestoreWorker(t)
 	path := makeRestoreBackup(t, worker, "1.2.3")
 
-	initial := exportSnapshot(worker.URL(), "1.2.3", true)
-	upgraded := exportSnapshot(worker.URL(), "1.3.0", true)
+	initial := exportSnapshot(worker.URL(), "1.3.0", true)
+	upgraded := exportSnapshot(worker.URL(), "1.2.0", true)
 	deps, _ := exportDeps(t, initial, "tok", time.Second)
-	deps.Token.Snapshots = &fakeSnapshots{queue: []domain.Snapshot{initial, upgraded}}
+	deps.Snapshots = &fakeSnapshots{queue: []domain.Snapshot{initial, upgraded}}
 
 	journal := newRestoreJournal(t)
 	err := Restore(context.Background(), deps, journal, backupTestTarget, path, filepath.Join(t.TempDir(), "backups"))

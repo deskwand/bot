@@ -145,23 +145,21 @@ test("连不上服务器与容器没在运行是两种提示", async ({ page }) 
   }
 });
 
-test("容器目标下暂不支持的页面只剩备份与成长", async ({ page }) => {
+test("容器目标下暂不支持的页面只剩成长", async ({ page }) => {
   await page.goto("/test.html?fixture=container-ready");
   const nav = page.getByRole("navigation", { name: "主导航" });
 
-  for (const name of ["记忆存档", "成长"]) {
-    await nav.getByRole("button", { name, exact: true }).click();
-    await expect(page.getByTestId("unsupported")).toBeVisible();
-  }
+  await nav.getByRole("button", { name: "成长", exact: true }).click();
+  await expect(page.getByTestId("unsupported")).toBeVisible();
 
-  for (const name of ["双手", "钱包", "交易所", "头脑", "声音", "服务器"]) {
+  for (const name of ["记忆存档", "双手", "钱包", "交易所", "头脑", "声音", "服务器"]) {
     await nav.getByRole("button", { name, exact: true }).click();
     await expect(page.getByTestId("unsupported")).toHaveCount(0);
   }
 
-  // Backup and upgrades are the only placeholders left, so nothing they own
-  // may be called by accident.
-  for (const method of ["exportData", "restoreData", "upgrade", "upgradeAvailable"]) {
+  // Upgrades are the only placeholder left, so its methods must never run; a
+  // container residence is backed up through the same admin endpoint.
+  for (const method of ["upgrade", "upgradeAvailable"]) {
     expect(await mockCalls(page, method)).toHaveLength(0);
   }
 });

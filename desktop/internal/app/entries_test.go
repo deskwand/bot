@@ -624,3 +624,34 @@ func TestSelectEntryDefaultSelectorIsExplicitlyNotWired(t *testing.T) {
 		t.Fatalf("selection = %#v", selection)
 	}
 }
+
+// A move silences the entry through its own path; the UI's selection path keeps
+// rejecting the disabled value.
+func TestMuteEntryWritesTheDisabledSelection(t *testing.T) {
+	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp", SettingsJSON: []byte(`{"ACTIVE_CHANNEL":"telegram"}`)}}
+	service := &EntryService{selector: NewActiveChannelSelector(publisher, publisher)}
+	target := domain.Target{ScriptName: "w"}
+
+	if _, err := service.MuteEntry(context.Background(), target); err != nil {
+		t.Fatalf("MuteEntry: %v", err)
+	}
+	change := publisher.lastChange(t)
+	if got := change.Vars["ACTIVE_CHANNEL"]; got != EntryDisabled {
+		t.Fatalf("ACTIVE_CHANNEL = %q, want %q", got, EntryDisabled)
+	}
+	if _, err := service.SelectEntry(context.Background(), target, EntryDisabled); err == nil {
+		t.Fatal("SelectEntry must keep rejecting the disabled selection")
+	}
+}
+
+func TestReviveEntryRestoresTheRecordedChannel(t *testing.T) {
+	publisher := &fakePublisher{snapshot: domain.Snapshot{Fingerprint: "fp", SettingsJSON: []byte(`{"ACTIVE_CHANNEL":"none"}`)}}
+	service := &EntryService{selector: NewActiveChannelSelector(publisher, publisher), snapshots: publisher}
+
+	if _, err := service.ReviveEntry(context.Background(), domain.Target{ScriptName: "w"}, EntryTelegram); err != nil {
+		t.Fatalf("ReviveEntry: %v", err)
+	}
+	if got := publisher.lastChange(t).Vars["ACTIVE_CHANNEL"]; got != EntryTelegram {
+		t.Fatalf("ACTIVE_CHANNEL = %q, want %q", got, EntryTelegram)
+	}
+}

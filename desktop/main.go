@@ -91,6 +91,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	moveJournal, err := backup.NewMoveJournal(filepath.Join(dataDir, "move.json"))
+	if err != nil {
+		log.Fatal(err)
+	}
 	// Backups default to the app data directory: Documents is a protected folder
 	// on macOS, and every upgrade re-signs the bundle, so a default there asks for
 	// access again on each update.
@@ -182,39 +186,41 @@ func main() {
 		Locale:      locale.Current,
 	})
 
+	backupRunner := app.NewBackupRunner(backup.Deps{
+		Endpoints: app.AdaptEndpoints(endpoints),
+		Snapshots: snapshotRouter,
+		Locker:    locker,
+		Progress: func(progress backup.Progress) {
+			_ = app.BackupProgressEvent.Broadcast(progress)
+		},
+	}, restoreJournal, filepath.Join(dataDir, "backups"))
+
 	options := app.ServiceOptions{
-		Auth:        tokens,
-		Publish:     publishRouter,
-		Lifecycle:   lifecycle,
-		Entries:     entries,
-		Diagnostics: statusRouter,
-		Snapshots:   snapshotRouter,
-		Scripts:     api,
-		Journal:     journal,
-		Store:       targets,
-		Theme:       themes,
-		Locale:      locale,
-		Cache:       cache,
-		Container:   containers,
-		SSH:         sshProber{credentials: credentials, knownHosts: knownHosts},
-		Endpoints:   endpoints,
-		Tunnel:      adminTunnel,
-		ApplyTheme:  func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) },
-		Browser:     platform.NewSystemBrowserOpener(),
-		McpBrowser:  platform.NewMcpOAuthBrowserOpener(),
-		Credentials: credentials,
-		Release:     app.EmbeddedRelease{Pkg: pkg, Err: releaseErr},
-		Backup: app.NewBackupRunner(backup.Deps{
-			Token: backup.TokenDeps{
-				Snapshots:   api,
-				Publisher:   publish,
-				Credentials: credentials,
-			},
-			Locker: locker,
-			Progress: func(progress backup.Progress) {
-				_ = app.BackupProgressEvent.Broadcast(progress)
-			},
-		}, restoreJournal, filepath.Join(dataDir, "backups")),
+		Auth:           tokens,
+		Publish:        publishRouter,
+		Lifecycle:      lifecycle,
+		Entries:        entries,
+		Diagnostics:    statusRouter,
+		Snapshots:      snapshotRouter,
+		Scripts:        api,
+		Journal:        journal,
+		Store:          targets,
+		Theme:          themes,
+		Locale:         locale,
+		Cache:          cache,
+		Container:      containers,
+		SSH:            sshProber{credentials: credentials, knownHosts: knownHosts},
+		Endpoints:      endpoints,
+		Tunnel:         adminTunnel,
+		ApplyTheme:     func(source string) { mygo.Theme.SetSource(mygo.ThemeSource(source)) },
+		Browser:        platform.NewSystemBrowserOpener(),
+		McpBrowser:     platform.NewMcpOAuthBrowserOpener(),
+		Credentials:    credentials,
+		Release:        app.EmbeddedRelease{Pkg: pkg, Err: releaseErr},
+		Backup:         backupRunner,
+		MoveJournal:    moveJournal,
+		MoveExporter:   backupRunner,
+		MoveMuter:      &app.MuteRouter{Containers: containers, Entries: entries},
 		FileDialogs:    mygoFileDialogs{},
 		BackupSettings: backupSettings,
 	}

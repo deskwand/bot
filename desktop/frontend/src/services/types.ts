@@ -42,12 +42,15 @@ import type {
   McpToolDTO,
   ModelCatalogDTO,
   ModelDTO,
+  ManifestBrief,
   ModelEntryDTO,
   ModelProviderDTO,
+  MoveDTO,
   OperationDTO,
   PendingRestoreDTO,
   PlaintextSecretDTO,
   Progress,
+  ResidenceDTO,
   ResultDTO,
   SecretNameDTO,
   SSHHostInputDTO,
@@ -100,10 +103,12 @@ export type {
   ModelDTO,
   ModelEntryDTO,
   ModelProviderDTO,
+  MoveDTO,
   OperationDTO,
   PendingRestoreDTO,
   PlaintextSecretDTO,
   Progress,
+  ResidenceDTO,
   ResultDTO,
   SecretNameDTO,
   SSHHostInputDTO,
@@ -113,6 +118,7 @@ export type {
   UpgradeDTO,
   WalletStatusDTO,
   WorkerDTO,
+  ManifestBrief,
 };
 
 /**
@@ -262,6 +268,12 @@ export interface ClientService {
   openBackupFolder(): Promise<void>;
   listBackups(): Promise<BackupFileDTO[]>;
   chooseBackupAt(path: string): Promise<BackupPreviewDTO | null>;
+  startMove(): Promise<MoveDTO | null>;
+  settleMove(): Promise<void>;
+  moveStatus(): Promise<MoveDTO | null>;
+  moveBack(): Promise<void>;
+  abandonMove(): Promise<void>;
+  reviveOldHouse(): Promise<void>;
   chooseBackup(): Promise<BackupPreviewDTO | null>;
   restoreData(): Promise<void>;
   pendingRestore(): Promise<PendingRestoreDTO | null>;

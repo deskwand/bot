@@ -123,4 +123,13 @@ export const errors: Messages["errors"] = {
   goToUpdates: "Go to Growth",
   reimport: "Import again",
   resolvePendingFirst: "Handle it with Continue at the top",
+  BACKUP_OBJECT_TOO_LARGE_FOR_TARGET: "Artifact too big for the new home",
+  BACKUP_RELEASE_UNKNOWN: "Backup records no version",
+  TARGET_RELEASE_UNKNOWN: "New home reports no version",
+  RELEASE_UNCOMPARABLE: "Versions cannot be compared",
+  MOVE_NO_PREVIOUS: "No old home to return to",
+  MOVE_ALREADY_RUNNING: "A move is already running",
+  MOVE_SOURCE_MUTE_FAILED: "The old home was not muted",
+  MOVE_ARCHIVE_MISSING: "The packed archive is missing",
+  MOVE_JOURNAL_CORRUPT: "The move record is unreadable",
 };

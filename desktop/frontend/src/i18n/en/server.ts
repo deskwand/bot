@@ -33,7 +33,7 @@ export const server: Messages["server"] = {
     "The bot will stop. Configuration and data stay, so you can add it again later.",
   confirmDisconnect: "Disconnect",
   unsupportedTitle: "This page does not support this runtime yet",
-  unsupportedDescription: "Backup and image upgrades arrive in the next phase.",
+  unsupportedDescription: "Image upgrades arrive in the next phase.",
   tunnel: "Admin channel",
   tunnelOpen: "Open",
   tunnelClosed: "Not open",

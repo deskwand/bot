@@ -85,3 +85,45 @@ func (c *Cloudflare) Resolve(ctx context.Context, target domain.Target) (Endpoin
 	}
 	return Endpoint{BaseURL: baseURL, Token: token, HTTP: c.deps.HTTP}, nil
 }
+
+// Republish pushes the vault's admin token through the publish flow again and
+// returns the endpoint that uses it. It is the recovery path after the Worker
+// answered 401: the deployment may have been replaced by a version that lost
+// the ADMIN_TOKEN binding. A container cannot do this, so only this resolver
+// implements it.
+func (c *Cloudflare) Republish(ctx context.Context, target domain.Target) (Endpoint, error) {
+	if c.deps.Snapshots == nil || c.deps.Publisher == nil || c.deps.Credentials == nil {
+		return Endpoint{}, domain.Error{Code: CodeServiceUnavailable, Message: "the admin endpoint is not wired"}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	snapshot, err := c.deps.Snapshots.ReadSnapshot(ctx, target)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	baseURL := backup.PublicBaseURL(snapshot.SettingsJSON)
+	if baseURL == "" {
+		return Endpoint{}, domain.Error{
+			Code:    CodeAdminUnavailable,
+			Message: i18n.T(c.lang(), "adminendpoint.unavailable"),
+		}
+	}
+	token, err := backup.RepublishAdminToken(ctx, backup.TokenDeps{
+		Snapshots:   c.deps.Snapshots,
+		Publisher:   c.deps.Publisher,
+		Credentials: c.deps.Credentials,
+	}, target)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	wait := backup.NewAdminClient(baseURL, token, "", c.deps.HTTP)
+	waitDeps := backup.Deps{HTTP: c.deps.HTTP, ReadyTimeout: c.deps.ReadyTimeout}
+	if err := backup.WaitForAdmin(ctx, waitDeps, wait); err != nil {
+		return Endpoint{}, domain.Error{
+			Code:    CodeAdminUnavailable,
+			Message: i18n.T(c.lang(), "adminendpoint.unavailable"),
+		}
+	}
+	return Endpoint{BaseURL: baseURL, Token: token, HTTP: c.deps.HTTP}, nil
+}

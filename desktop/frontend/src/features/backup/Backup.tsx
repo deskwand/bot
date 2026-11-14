@@ -1,4 +1,5 @@
 import { PageHeader } from "@/components/page-header";
+import { MoveCard } from "@/features/backup/MoveCard";
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Download, Loader2, Upload } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -52,6 +53,17 @@ const PHASE_KEYS: Record<string, MessageKey> = {
 function phaseLabel(phase: string): string {
   const key = PHASE_KEYS[phase];
   return key ? getT()(key) : phase;
+}
+
+const WARNING_KEYS: Record<string, MessageKey> = {
+  BACKUP_RELEASE_UNKNOWN: "backup.warningReleaseUnknownBackup",
+  TARGET_RELEASE_UNKNOWN: "backup.warningReleaseUnknownTarget",
+  RELEASE_UNCOMPARABLE: "backup.warningReleaseUncomparable",
+};
+
+function warningLabel(code: string): string {
+  const key = WARNING_KEYS[code];
+  return key ? getT()(key) : code;
 }
 
 function formatBytes(bytes: number): string {
@@ -307,6 +319,8 @@ export function Backup() {
   return (
     <div>
       <PageHeader title={t("shell.pages.backup")} subtitle={pageSubtitle("backup")} />
+
+      <MoveCard />
 
       <ErrorAlert error={exportError} onRetry={exportData} retryLabel={t("backup.retryExport")} />
       <ErrorAlert error={chooseError} onRetry={chooseBackup} retryLabel={t("backup.retryChoose")} />
@@ -582,6 +596,19 @@ export function Backup() {
                   <div>{t("backup.objectCount")}{preview.summary.objects}</div>
                   <div>{t("backup.fileSize")}{formatBytes(preview.summary.bytes)}</div>
                 </dl>
+                {preview.warnings?.length ? (
+                  <Alert className="mt-2">
+                    <AlertTriangle aria-hidden />
+                    <AlertTitle>{t("backup.warningsTitle")}</AlertTitle>
+                    <AlertDescription>
+                      <ul className="list-disc pl-4">
+                        {preview.warnings.map((code) => (
+                          <li key={code}>{warningLabel(code)}</li>
+                        ))}
+                      </ul>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
                 {preview.summary.oversized.length > 0 ? (
                   <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
                     {t("backup.oversizedPreview")}

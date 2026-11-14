@@ -116,4 +116,13 @@ export const errors = {
   goToUpdates: "前往成长页",
   reimport: "重新导入",
   resolvePendingFirst: "先用顶部的「继续」处理",
+  BACKUP_OBJECT_TOO_LARGE_FOR_TARGET: "有产物超过新住处容量",
+  BACKUP_RELEASE_UNKNOWN: "备份没记版本号",
+  TARGET_RELEASE_UNKNOWN: "读不出新住处版本",
+  RELEASE_UNCOMPARABLE: "版本号无法比较",
+  MOVE_NO_PREVIOUS: "没有可回的旧屋",
+  MOVE_ALREADY_RUNNING: "已有未完成的搬家",
+  MOVE_SOURCE_MUTE_FAILED: "旧屋没能静音",
+  MOVE_ARCHIVE_MISSING: "行李文件不见了",
+  MOVE_JOURNAL_CORRUPT: "搬家记录损坏",
 } as const;

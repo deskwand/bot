@@ -374,10 +374,12 @@ func (f fakeRelease) Version() string                   { return f.version }
 func (f fakeRelease) Manifest() release.Manifest        { return f.manifest }
 
 type fakeStore struct {
-	target domain.Target
-	ok     bool
-	err    error
-	saved  []domain.Target
+	target      domain.Target
+	ok          bool
+	err         error
+	saved       []domain.Target
+	previous    domain.Target
+	hasPrevious bool
 }
 
 func (f *fakeStore) Load() (domain.Target, bool, error) {
@@ -400,6 +402,39 @@ func (f *fakeStore) Clear() error {
 	}
 	f.target = domain.Target{}
 	f.ok = false
+	return nil
+}
+
+func (f *fakeStore) Previous() (domain.Target, bool, error) {
+	return f.previous, f.hasPrevious, f.err
+}
+
+func (f *fakeStore) SetPrevious(target domain.Target) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.previous = target
+	f.hasPrevious = true
+	return nil
+}
+
+func (f *fakeStore) ClearPrevious() error {
+	if f.err != nil {
+		return f.err
+	}
+	f.previous = domain.Target{}
+	f.hasPrevious = false
+	return nil
+}
+
+func (f *fakeStore) SwapResidence() error {
+	if f.err != nil {
+		return f.err
+	}
+	if !f.hasPrevious {
+		return domain.Error{Code: CodeMoveNoPrevious}
+	}
+	f.target, f.previous = f.previous, f.target
 	return nil
 }
 

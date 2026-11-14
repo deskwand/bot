@@ -16,6 +16,10 @@ type Engine interface {
 	ReadVersion(ctx context.Context, host Host, dir string) (string, error)
 	Pull(ctx context.Context, host Host, dir string) error
 	Apply(ctx context.Context, host Host, dir string) error
+	// Stop stops the container and its supervisor, keeping the data volume and
+	// the .env file. Start brings the same volume back up.
+	Stop(ctx context.Context, host Host, dir string) error
+	Start(ctx context.Context, host Host, dir string) error
 	// Status fills Running, Health, StartedAt and Image. An error whose code
 	// starts with SSH_ or LOCAL_RUNTIME_ means the runtime is unreachable.
 	Status(ctx context.Context, host Host, dir string) (RuntimeStatus, error)

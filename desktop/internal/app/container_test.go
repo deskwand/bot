@@ -517,7 +517,8 @@ func TestAdoptContainerRequiresExistingInstance(t *testing.T) {
 
 // WalletStatus, LifeVitals, McpStatus and TestExchange used to be listed here;
 // they are covered by TestContainerTargetReadsVitalsThroughTheResolver now that
-// a container can be managed through its admin API.
+// a container can be managed through its admin API. ExportData left the list
+// too: a container residence is backed up through the same admin endpoint.
 func TestCloudflareOnlyMethodsReportUnsupported(t *testing.T) {
 	f := newContainerFixture(t)
 	f.store.target = routerContainerTarget()
@@ -532,7 +533,6 @@ func TestCloudflareOnlyMethodsReportUnsupported(t *testing.T) {
 			_, err := f.service.ConfirmImport(ImportInputDTO{})
 			return err
 		},
-		"ExportData":       func() error { _, err := f.service.ExportData(); return err },
 		"Install":          func() error { _, err := f.service.Install(InstallInputDTO{}); return err },
 		"SelectDeployment": func() error { return f.service.SelectDeployment("another-worker") },
 	}
