@@ -81,6 +81,25 @@ async function expireLease(name: string): Promise<void> {
 }
 
 describe("admin gateway", () => {
+  it("requires the admin token for /admin/owner/status", async () => {
+    const gateway = createAdminGateway(deps("owner-gateway"));
+    const unauthorized = await gateway.fetch(
+      new Request("https://bot.test/admin/owner/status"),
+    );
+    expect(unauthorized.status).toBe(401);
+
+    const authorized = await gateway.fetch(
+      new Request("https://bot.test/admin/owner/status", {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      }),
+    );
+    expect(authorized.status).toBe(200);
+    const body = (await authorized.json()) as { mode: string };
+    expect(["static", "closed", "claimed", "claimable", "expired"]).toContain(
+      body.mode,
+    );
+  });
+
   it("returns 404 for every admin path when ADMIN_TOKEN is unset", async () => {
     const gateway = createAdminGateway(deps("admin-unset", null));
 

@@ -24,6 +24,7 @@ import { createWalletRoutes, type WalletReads } from "./wallet-routes";
 import { createLifeRoutes } from "./life-routes";
 import { BOTS_PATH, createBotRoutes } from "./bot-routes";
 import { createMcpAdminRoutes } from "./mcp-routes";
+import { createOwnerRoutes } from "./owner-routes";
 import { createR2Routes } from "./r2-routes";
 import type {
   DbSchema,
@@ -237,6 +238,11 @@ export function createAdminGateway(deps: AdminDeps): {
   const wallet =
     deps.walletReads === undefined ? null : createWalletRoutes(deps.walletReads);
   const life = createLifeRoutes({ vitals: () => deps.life().vitals() });
+  const owner = createOwnerRoutes({
+    status: () => deps.channel().ownerStatus(),
+    open: () => deps.channel().openOwnerClaim(),
+    revoke: () => deps.channel().revokeOwner(),
+  });
   const bots = createBotRoutes({
     overview: () => deps.butler().botsOverview(),
     snapshot: (id) => deps.bot(id).snapshot(),
@@ -269,6 +275,7 @@ export function createAdminGateway(deps: AdminDeps): {
     if (url.pathname.startsWith("/admin/life/")) {
       return life.fetch(req);
     }
+    if (url.pathname.startsWith("/admin/owner/")) return owner.fetch(req);
 
     // Bots are read-only and need no lease, so the page works during a backup.
     if (url.pathname === BOTS_PATH || url.pathname.startsWith(`${BOTS_PATH}/`)) {
