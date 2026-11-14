@@ -32,7 +32,7 @@ import (
 
 // appVersion is the client version reported in the Cloudflare User-Agent. Keep
 // it in sync with desktop/mygo.json.
-const appVersion = "0.1.52"
+const appVersion = "0.1.53"
 
 // telemetryBaseURL is the API that receives the client's anonymous usage
 // events. It lives in the code rather than in a build flag: a release once
