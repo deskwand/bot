@@ -21,7 +21,7 @@ declare module "cloudflare:test" {
 
 const OWNER_ID = readRuntimeConfig(
   env as unknown as Env,
-).owner.telegramUserIds[0]!;
+).owner!.telegramUserIds[0]!;
 
 const MESSAGE: MessageEvent = {
   type: "message",

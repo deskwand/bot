@@ -552,8 +552,9 @@ export class ChannelDO extends Agent<Env> {
       return raw ? credentialsHash(raw) : sha256Hex("wechat:unconfigured");
     }
 
+    // 认领是运行时状态，不参与这个哈希：认领后不必迁移已有的消息引用。
     const ownerIds = [
-      ...new Set(readRuntimeConfig(this.env).owner.telegramUserIds),
+      ...new Set(readRuntimeConfig(this.env).owner?.telegramUserIds ?? []),
     ].sort((a, b) => a - b);
     return sha256Hex(
       `telegram:${this.env.TELEGRAM_BOT_TOKEN ?? ""}:${ownerIds.join(",")}`,
@@ -686,7 +687,7 @@ export class ChannelDO extends Agent<Env> {
     if (row) return row.conversation_id;
 
     if (channel === "telegram") {
-      const fallback = readRuntimeConfig(this.env).owner.telegramUserIds[0];
+      const fallback = readRuntimeConfig(this.env).owner?.telegramUserIds[0];
       if (fallback !== undefined) return String(fallback);
     }
 
