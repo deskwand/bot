@@ -28,7 +28,8 @@ export type OwnerStatusMode =
   | "closed"
   | "claimed"
   | "claimable"
-  | "expired";
+  | "expired"
+  | "revoked";
 
 /** 给管理接口用的状态快照。 */
 export type OwnerStatus = {
@@ -79,7 +80,7 @@ export function ownerStatusOf(input: {
         : claim.ownerUserId !== null
           ? "claimed"
           : claim.windowOpenedAt <= 0
-            ? "closed"
+            ? "revoked"
             : claimWindowOpen(claim.windowOpenedAt, now)
               ? "claimable"
               : "expired";

@@ -26,7 +26,7 @@ var enApp = map[string]string{
 	"app.webViewMissingDownload": "Open the download page",
 	"app.webViewMissingQuit":     "Quit",
 	"app.configInvalidJSON":      "DESKWAND_CONFIG is not valid JSON",
-	"app.ownerMissing":           "No owner yet: after deploying, the first person to message the bot becomes the owner (within 60 minutes). You can also set IDs explicitly in Settings.",
+	"app.ownerMissing":           "No owner yet: after deploying, the first person to message the bot becomes the owner (within 60 minutes).",
 	"app.activeChannelInvalid":   "ACTIVE_CHANNEL must be telegram or wechat",
 	"app.containerEngineInvalid": "Unsupported container runtime",
 	"app.installAccountMismatch": "The install target must belong to the connected Cloudflare account",

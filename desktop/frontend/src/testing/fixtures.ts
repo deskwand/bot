@@ -216,7 +216,7 @@ interface MockState {
   configPresent: boolean;
   activeChannel: string;
   ownerUserIds: number[];
-  ownerMode: "static" | "closed" | "claimed" | "claimable" | "expired";
+  ownerMode: "static" | "closed" | "claimed" | "claimable" | "expired" | "revoked";
   butlerModel: ModelDTO | null;
   taskModel: ModelDTO | null;
   customProviders: CustomProviderDTO[];

@@ -99,7 +99,17 @@ describe("ownerStatusOf", () => {
     expect(status.ownerUserId).toBe("111");
   });
 
-  it("窗口开 → claimable，过期 → expired，撤销 → closed", () => {
+  it("撤销（起点 0 + 无主人）与配置空名单区分开：前者是 revoked", () => {
+    expect(
+      ownerStatusOf({ config: pending, claim: unclaimed(0), now: NOW }).mode,
+    ).toBe("revoked");
+    expect(
+      ownerStatusOf({ config: staticList([]), claim: unclaimed(0), now: NOW })
+        .mode,
+    ).toBe("closed");
+  });
+
+  it("窗口开 → claimable，过期 → expired", () => {
     expect(
       ownerStatusOf({ config: pending, claim: unclaimed(), now: NOW }).mode,
     ).toBe("claimable");
@@ -110,9 +120,6 @@ describe("ownerStatusOf", () => {
         now: NOW,
       }).mode,
     ).toBe("expired");
-    expect(
-      ownerStatusOf({ config: pending, claim: unclaimed(0), now: NOW }).mode,
-    ).toBe("closed");
   });
 
   it("窗口关闭时不给窗口结束时间", () => {

@@ -76,4 +76,7 @@ export const entries = {
   ownerModeClaimed: "已认领",
   ownerModeClaimable: "待认领",
   ownerModeExpired: "认领窗口已过期",
+  ownerModeRevoked: "已撤销",
+  ownerReopenHandsOver:
+    "「重新开启认领」会先移除当前主人，等下一个发消息的人接手。",
 } as const;

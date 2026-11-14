@@ -31,12 +31,16 @@ export class OwnerStore {
   }
 
   /**
-   * 认领行；没有行时按「窗口从此刻开始」写一行。
+   * 认领行；没有行时返回「没有主人、窗口未开启」（起点 0）。
    *
-   * 这个方法有写入副作用，所以每个调用方只调一次，不要在同一次改写里
-   * 重复读它。
+   * 读不写库：管理接口的状态查询不能顺带启动认领窗口。
    */
   read(): OwnerClaimRow {
+    return this.select() ?? { ownerUserId: null, claimedAt: null, windowOpenedAt: 0 };
+  }
+
+  /** 原始行；存在但起点为 0 表示「关闭」，与「没有行」不同。 */
+  private select(): OwnerClaimRow | null {
     const row = this.sql
       .exec<{
         owner_user_id: string | null;
@@ -49,14 +53,24 @@ export class OwnerStore {
       )
       .toArray()[0];
 
-    if (row !== undefined) {
-      return {
-        ownerUserId: row.owner_user_id,
-        claimedAt: row.claimed_at,
-        windowOpenedAt: row.window_opened_at,
-      };
-    }
+    if (row === undefined) return null;
+    return {
+      ownerUserId: row.owner_user_id,
+      claimedAt: row.claimed_at,
+      windowOpenedAt: row.window_opened_at,
+    };
+  }
 
+  /**
+   * 认领行；没有行时把窗口起点定为现在并写一行。
+   *
+   * 只有「真的要判定/开始认领」的路径才用它（DO 启动、收到消息）。状态查询
+   * 走 read()，不能借读启动窗口。
+   */
+  ensureWindow(): OwnerClaimRow {
+    // 有行就原样返回：起点 0 是「已撤销/已关闭」，不能被一条新消息重新打开。
+    const current = this.select();
+    if (current !== null) return current;
     const openedAt = this.now();
     this.write({ ownerUserId: null, claimedAt: null, windowOpenedAt: openedAt });
     return { ownerUserId: null, claimedAt: null, windowOpenedAt: openedAt };
@@ -80,13 +94,15 @@ export class OwnerStore {
     this.clearAddresses();
   }
 
+  /**
+   * 开窗 = 交棒：清掉当前主人并重新开始 60 分钟计时。
+   *
+   * 保留主人再开窗是骗人的 —— 已认领时窗口不参与判定，点「重新开启认领」
+   * 的语义本来就是让下一个人接手。
+   */
   openWindow(): void {
-    const current = this.read();
-    this.write({
-      ownerUserId: current.ownerUserId,
-      claimedAt: current.claimedAt,
-      windowOpenedAt: this.now(),
-    });
+    this.write({ ownerUserId: null, claimedAt: null, windowOpenedAt: this.now() });
+    this.clearAddresses();
   }
 
   private clearAddresses(): void {

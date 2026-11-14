@@ -24,13 +24,29 @@ function withStore<T>(
 }
 
 describe("OwnerStore", () => {
-  it("第一次读会写入窗口起点，之后不再重置", async () => {
+  it("读是纯的：没有行时不写库（状态接口不该启动窗口）", async () => {
+    await withStore((store, sql) => {
+      expect(store.read()).toEqual({
+        ownerUserId: null,
+        claimedAt: null,
+        windowOpenedAt: 0,
+      });
+      expect(sql.exec(`SELECT channel FROM channel_claims`).toArray()).toEqual(
+        [],
+      );
+    });
+  });
+
+  it("开窗会写入起点，并清掉当前主人（交棒语义）", async () => {
     await withStore((store) => {
+      store.openWindow();
       expect(store.read()).toEqual({
         ownerUserId: null,
         claimedAt: null,
         windowOpenedAt: NOW,
       });
+      store.claim("111");
+      store.openWindow();
       expect(store.read()).toEqual({
         ownerUserId: null,
         claimedAt: null,
@@ -44,7 +60,7 @@ describe("OwnerStore", () => {
       sql.exec(
         `INSERT INTO owner_addresses (channel, conversation_id, updated_at) VALUES ('telegram', '42', 1)`,
       );
-      store.read();
+      store.openWindow();
       store.claim("111");
       expect(store.read()).toEqual({
         ownerUserId: "111",
@@ -57,7 +73,7 @@ describe("OwnerStore", () => {
 
   it("撤销清空主人并关闭窗口（起点 0）", async () => {
     await withStore((store) => {
-      store.read();
+      store.openWindow();
       store.claim("111");
       store.revoke();
       expect(store.read()).toEqual({
@@ -68,9 +84,9 @@ describe("OwnerStore", () => {
     });
   });
 
-  it("重新开窗只改起点，不动主人", async () => {
+  it("撤销后再开窗会重新开始计时", async () => {
     await withStore((store) => {
-      store.read();
+      store.openWindow();
       store.claim("111");
       store.revoke();
       store.openWindow();

@@ -538,6 +538,11 @@ export function Entries() {
                 {t("entries.ownerRevoke")}
               </Button>
             </div>
+            {ownerStatus?.mode === "claimed" ? (
+              <p className="text-xs text-muted-foreground">
+                {t("entries.ownerReopenHandsOver")}
+              </p>
+            ) : null}
             <ErrorAlert error={ownerError} />
           </div>
         </CardContent>
@@ -851,6 +856,7 @@ function loginSteps(state: LoginState): LocalizedStep[] {
 
 function canManageOwner(status: OwnerStatusDTO | undefined): boolean {
   if (!status) return false;
+  // static = 名单写在部署配置里；closed = 配置里明确是空名单。两者运行时都改不了。
   return status.mode !== "static" && status.mode !== "closed";
 }
 
@@ -869,5 +875,7 @@ function ownerModeLabel(
       return t("entries.ownerModeClaimable");
     case "expired":
       return t("entries.ownerModeExpired");
+    case "revoked":
+      return t("entries.ownerModeRevoked");
   }
 }

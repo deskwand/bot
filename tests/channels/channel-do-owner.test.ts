@@ -197,10 +197,50 @@ describe("telegram 认领门禁", () => {
     await h.send(message("111111"));
 
     const status = await channels().revokeOwner();
-    expect(status.mode).toBe("closed");
+    expect(status.mode).toBe("revoked");
     expect(status.ownerUserId).toBeNull();
     expect(await claims()).toEqual([
       { owner_user_id: null, window_opened_at: 0 },
     ]);
+  });
+});
+
+describe("交棒", () => {
+  it("已认领时点重新开启认领：清掉当前主人并开窗", async () => {
+    setEnv({ DESKWAND_CONFIG: configWithoutOwner() });
+    await reset();
+    const h = await harness();
+    await h.send(message("111111"));
+
+    const status = await channels().openOwnerClaim();
+    expect(status.mode).toBe("claimable");
+    expect(status.ownerUserId).toBeNull();
+    expect(await claims()).toEqual([
+      { owner_user_id: null, window_opened_at: expect.any(Number) },
+    ]);
+  });
+
+  it("状态查询不会启动认领窗口（读是纯的）", async () => {
+    setEnv({ DESKWAND_CONFIG: configWithoutOwner() });
+    await reset();
+    const status = await channels().ownerStatus();
+    expect(status.mode).toBe("revoked");
+    expect(await claims()).toEqual([]);
+  });
+});
+
+describe("撤销之后", () => {
+  it("再来消息不会把窗口重新打开", async () => {
+    setEnv({ DESKWAND_CONFIG: configWithoutOwner() });
+    await reset();
+    const h = await harness();
+    await h.send(message("111111"));
+    await channels().revokeOwner();
+
+    await h.send(message("999999"));
+    expect(await claims()).toEqual([
+      { owner_user_id: null, window_opened_at: 0 },
+    ]);
+    expect((await channels().ownerStatus()).mode).toBe("revoked");
   });
 });

@@ -83,4 +83,7 @@ export const entries: Messages["entries"] = {
   ownerModeClaimed: "Claimed",
   ownerModeClaimable: "Waiting for a claim",
   ownerModeExpired: "Claim window expired",
+  ownerModeRevoked: "Revoked",
+  ownerReopenHandsOver:
+    "Reopening the claim window removes the current owner; the next person to message takes over.",
 };

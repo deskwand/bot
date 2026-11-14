@@ -212,7 +212,7 @@ export interface ConfigDTO {
 
 /** OwnerStatusDTO mirrors the Worker's /admin/owner/status response. */
 export interface OwnerStatusDTO {
-  mode: "static" | "closed" | "claimed" | "claimable" | "expired";
+  mode: "static" | "closed" | "claimed" | "claimable" | "expired" | "revoked";
   ownerUserId: string;
   windowOpenedAt: number;
   windowClosesAt: number;

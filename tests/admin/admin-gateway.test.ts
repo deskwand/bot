@@ -81,6 +81,18 @@ async function expireLease(name: string): Promise<void> {
 }
 
 describe("admin gateway", () => {
+  it("requires the maintenance lease for /admin/owner/open", async () => {
+    const gateway = createAdminGateway(deps("owner-open-lease"));
+    const response = await gateway.fetch(
+      new Request("https://bot.test/admin/owner/open", {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      }),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ code: "MAINTENANCE_REQUIRED" });
+  });
+
   it("requires the admin token for /admin/owner/status", async () => {
     const gateway = createAdminGateway(deps("owner-gateway"));
     const unauthorized = await gateway.fetch(

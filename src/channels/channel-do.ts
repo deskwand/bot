@@ -288,6 +288,14 @@ export class ChannelDO extends Agent<Env> {
 
   override async onStart(props?: object): Promise<void> {
     await super.onStart(props);
+    // 认领窗口从 DO 第一次醒来开始计时（部署后几秒），而不是等有人打开桌面端
+    // 的状态页 —— 读状态不该启动计时，也不该让窗口被动延后。
+    try {
+      if (this.ownerConfig().telegramUserIds === undefined) this.owners.ensureWindow();
+    } catch (error) {
+      // 配置缺失时 readRuntimeConfig 会抛；不能因此卡住 DO 启动。
+      console.warn(`channel: claim window not opened: ${errorMessage(error)}`);
+    }
     // First wake (any existing RPC or the Cron) applies the selection early.
     try {
       await this.ensurePolling();
@@ -406,7 +414,11 @@ export class ChannelDO extends Agent<Env> {
   async ownerStatus(): Promise<OwnerStatus> {
     return ownerStatusOf({
       config: this.ownerConfig(),
-      claim: this.claim(),
+      // 读状态不启动窗口（read 是纯的）；开窗只发生在 DO 启动、收到消息或显式 open。
+      claim:
+        this.ownerConfig().telegramUserIds === undefined
+          ? this.owners.read()
+          : { ownerUserId: null, windowOpenedAt: 0 },
       now: Date.now(),
     });
   }
@@ -1697,7 +1709,7 @@ export class ChannelDO extends Agent<Env> {
   /** 静态配置下不碰认领表：那会把一个正常运行的部署写成待认领。 */
   private claim(): OwnerClaimView {
     return this.ownerConfig().telegramUserIds === undefined
-      ? this.owners.read()
+      ? this.owners.ensureWindow()
       : { ownerUserId: null, windowOpenedAt: 0 };
   }
 
