@@ -154,7 +154,7 @@ func TestInstallOwnerWarningFollowsLocale(t *testing.T) {
 		if len(summary.Warnings) != 1 {
 			t.Fatalf("warnings = %v", summary.Warnings)
 		}
-		assertLocalized(t, locale, "install owner warning", "owner 列表为空：Worker 会忽略所有消息，直到在设置中发布 owner。", summary.Warnings[0])
+		assertLocalized(t, locale, "install owner warning", "还没设主人：部署完成后，第一个给 bot 发消息的人会成为主人（60 分钟内）。也可以在设置里直接填 ID。", summary.Warnings[0])
 	}
 }
 

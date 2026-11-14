@@ -476,7 +476,7 @@ func assertLifecycleState(t *testing.T, result domain.Result, state string) {
 	}
 }
 
-func TestInstallCreatesResourcesAndAllowsEmptyOwner(t *testing.T) {
+func TestInstallCreatesResourcesAndLeavesOwnerUnsetWhenEmpty(t *testing.T) {
 	f := newLifecycleFixture(t, lifecyclePackage(t, "1.0.0", "1.0.0", nil))
 	result, err := f.Lifecycle.Install(context.Background(), installRequest(t))
 	if err != nil {
@@ -503,8 +503,9 @@ func TestInstallCreatesResourcesAndAllowsEmptyOwner(t *testing.T) {
 	if record.PublicBaseURL != expectedURL || record.BucketName != "deskwand-probe-bucket" {
 		t.Fatalf("record = %#v", record)
 	}
-	if !bytes.Contains(f.API.lastUploadPlan.ConfigJSON, []byte(`"telegramUserIds":[]`)) {
-		t.Fatalf("empty owner was not written: %s", f.API.lastUploadPlan.ConfigJSON)
+	// 空 owner 不写补丁：没有 owner 键 = 待认领，空数组 = 明确关闭。
+	if bytes.Contains(f.API.lastUploadPlan.ConfigJSON, []byte(`"owner"`)) {
+		t.Fatalf("empty owner must leave the key out: %s", f.API.lastUploadPlan.ConfigJSON)
 	}
 }
 

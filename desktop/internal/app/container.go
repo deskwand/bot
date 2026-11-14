@@ -85,7 +85,10 @@ type ContainerCheckDTO struct {
 // ContainerExistingDTO describes an instance the remote directory already
 // holds, so the user can take it over instead of installing again.
 type ContainerExistingDTO struct {
-	OwnerUserIDs   []int64   `json:"ownerUserIds"`
+	OwnerUserIDs []int64 `json:"ownerUserIds"`
+	// OwnerClaimMode is true when the existing .env carries no owner key, so
+	// the flow can show "waiting for a claim" instead of an empty list.
+	OwnerClaimMode bool      `json:"ownerClaimMode"`
 	ButlerModel    *ModelDTO `json:"butlerModel"`
 	TaskModel      *ModelDTO `json:"taskModel"`
 	ActiveChannel  string    `json:"activeChannel,omitempty"`
@@ -553,6 +556,7 @@ func existingContainerDTO(snapshot domain.Snapshot) *ContainerExistingDTO {
 	if document.Owner.TelegramUserIDs != nil {
 		dto.OwnerUserIDs = document.Owner.TelegramUserIDs
 	}
+	dto.OwnerClaimMode = document.Owner.TelegramUserIDs == nil
 	dto.ButlerModel = summarizeModel(document.Models.Butler)
 	dto.TaskModel = summarizeModel(document.Models.Task)
 	return dto
@@ -568,7 +572,10 @@ func (s *Service) containerInstallConfig(target domain.Target, input ContainerIn
 		return nil, err
 	}
 	ids := append([]int64(nil), input.TelegramUserIDs...)
-	patch := domain.EditablePatch{TelegramUserIDs: &ids, ButlerModel: &butler, TaskModel: &task}
+	patch := domain.EditablePatch{ButlerModel: &butler, TaskModel: &task}
+	if len(ids) > 0 {
+		patch.TelegramUserIDs = &ids
+	}
 	if locale := s.locale.Current(); locale != "" {
 		patch.Locale = &locale
 	}

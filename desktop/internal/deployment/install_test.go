@@ -56,3 +56,27 @@ func TestInstallConfigJSONOmitsLocaleWithoutHook(t *testing.T) {
 		t.Fatalf("installed config has a locale without a hook: %s", f.API.lastUploadPlan.ConfigJSON)
 	}
 }
+
+func TestInstallConfigJSONOmitsOwnerWhenTheListIsEmpty(t *testing.T) {
+	request := installRequest(t)
+	request.Config.TelegramUserIDs = nil
+	raw, err := installConfigJSON(request, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(`"owner"`)) {
+		t.Fatalf("config must not carry an owner key: %s", raw)
+	}
+}
+
+func TestInstallConfigJSONCarriesOwnerWhenProvided(t *testing.T) {
+	request := installRequest(t)
+	request.Config.TelegramUserIDs = []int64{7}
+	raw, err := installConfigJSON(request, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"telegramUserIds":[7]`)) {
+		t.Fatalf("owner missing from config: %s", raw)
+	}
+}

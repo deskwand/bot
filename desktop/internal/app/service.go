@@ -1124,6 +1124,7 @@ func (s *Service) GetConfig() (ConfigDTO, error) {
 		if document.Owner.TelegramUserIDs != nil {
 			dto.OwnerUserIDs = document.Owner.TelegramUserIDs
 		}
+		dto.OwnerClaimMode = document.Owner.TelegramUserIDs == nil
 		dto.ButlerModel = summarizeModel(document.Models.Butler)
 		dto.TaskModel = summarizeModel(document.Models.Task)
 		if document.Models.CustomProviders != nil {

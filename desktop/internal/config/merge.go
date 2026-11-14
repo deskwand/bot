@@ -73,7 +73,7 @@ func Merge(base domain.Snapshot, change domain.Change) (domain.PublishPlan, erro
 	if err := Validate(canonical); err != nil {
 		message := "the merged configuration does not match schema version 1"
 		if empty && patchIsEmpty(change.Patch) {
-			message = "DESKWAND_CONFIG is not set; set owner.telegramUserIds and models before publishing"
+			message = "DESKWAND_CONFIG is not set; set models before publishing (owner is optional and enables first-message claiming)"
 		}
 		if locations := schemaLocations(err); len(locations) > 0 {
 			message += " at " + strings.Join(locations, ", ")
