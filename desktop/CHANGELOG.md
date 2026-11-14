@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.52
+
+- 任务可以执行命令了：可选地外挂一个沙箱容器（`SANDBOX_URL` / `SANDBOX_TOKEN`），任务就能装依赖、克隆仓库、编译、对一批文件跑脚本。没配置沙箱的部署工具集与以前完全一样，沙箱容器也不会反复重启。
+- 新增「在本机运行」：除 Cloudflare 和远程 SSH 主机之外，还可以直接跑在你这台 Mac 上。Docker 兼容运行时（OrbStack、Docker Desktop 等）用与 SSH 流程相同的 compose 文件并保持常驻；Apple 的 `container` 则用 launchd 用户代理，登录即启动、退出即重启。实例目录默认 `~/Library/Application Support/DeskWand/local`，容器固定叫 `deskwand-bot`、卷固定 `deskwand-data`，不碰机器上别的东西。
+- 容器实例也能用管理页了：以前只有 Cloudflare 部署能看生命体征、钱包、交易所、MCP，现在 SSH 主机和本机实例同样可用——容器已提供相同的 `/admin/*` 接口，桌面端直接连它，SSH 目标通过本地 8787 隧道转发。
+- 顺带修 Apple `container` 场景下数据卷的属主问题。
+
 ## 未发布
 
 - 部署容器时可以同时起一个沙箱容器：任务因此能在自己那台 Linux 上跑命令、装依赖、clone 仓库，`/sandbox` 里的文件跨任务保留。沙箱可选——没有 `SANDBOX_URL`/`SANDBOX_TOKEN` 时行为与之前完全一致；它只拿到自己的 token，不共享 bot 的 `.env`；端口不对外发布。
