@@ -10,7 +10,6 @@ import type {
 import { MAX_ARTIFACT_BYTES, artifactKeySegments, artifactNameFromKey } from "../artifact";
 import { artifactStore } from "../artifact-store";
 import { actionHint } from "../butler/owner-copy";
-import { isOwner } from "../config";
 import { ownerLocale, t, type Locale } from "../i18n";
 import { readRuntimeConfig } from "../runtime-config";
 import { classifyFile, extensionForMime } from "../tools/file-content";
@@ -41,6 +40,15 @@ import {
   versionIdOf,
 } from "./route-identity";
 import { emitChannelEvent } from "./events";
+import {
+  decideOwner,
+  ownerStatusOf,
+  type OwnerClaimView,
+  type OwnerConfigView,
+  type OwnerDecision,
+  type OwnerStatus,
+} from "./owner-access";
+import { OwnerStore } from "./owner-store";
 import { inboxStore } from "./inbox";
 import { OutboundQueue } from "./outbound-queue";
 import { describeImageBytes, prepareInboundImage, sniffImageType } from "./media";
@@ -225,6 +233,8 @@ export class ChannelDO extends Agent<Env> {
 
   private readonly backup: BackupRpc;
 
+  private readonly owners: OwnerStore;
+
   private readonly outbound: OutboundQueue;
 
   /** Single-flight guard: an inbound drain and a send-time drain must not run twice. */
@@ -239,6 +249,7 @@ export class ChannelDO extends Agent<Env> {
     this.outbound = new OutboundQueue(this.db);
     this.lease = new MaintenanceStore(this.db);
     this.backup = new BackupRpc(ctx, this.lease);
+    this.owners = new OwnerStore(this.db);
 
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS owner_addresses (
@@ -309,9 +320,13 @@ export class ChannelDO extends Agent<Env> {
       }
       if (!event) return "accepted";
 
-      if (!this.isOwner(event)) {
+      const access = this.ownerAccess(event);
+      if (access === "deny") {
         console.warn(`channel: ignoring event from non-owner ${event.userId}`);
         return "accepted";
+      }
+      if (access === "claim") {
+        await this.claimOwner(event);
       }
 
       this.rememberOwner(event);
@@ -386,6 +401,31 @@ export class ChannelDO extends Agent<Env> {
 
   async maintenanceActive(): Promise<boolean> {
     return this.lease.current() !== null;
+  }
+
+  async ownerStatus(): Promise<OwnerStatus> {
+    return ownerStatusOf({
+      config: this.ownerConfig(),
+      claim: this.claim(),
+      now: Date.now(),
+    });
+  }
+
+  async openOwnerClaim(): Promise<OwnerStatus> {
+    // 名单来自 env，运行时无权改；静默返回现状而不是写一行认领记录。
+    if (this.ownerConfig().telegramUserIds !== undefined) {
+      return this.ownerStatus();
+    }
+    this.owners.openWindow();
+    return this.ownerStatus();
+  }
+
+  async revokeOwner(): Promise<OwnerStatus> {
+    if (this.ownerConfig().telegramUserIds !== undefined) {
+      return this.ownerStatus();
+    }
+    this.owners.revoke();
+    return this.ownerStatus();
   }
 
   async backupSchema(): Promise<DbSchema> {
@@ -1648,11 +1688,42 @@ export class ChannelDO extends Agent<Env> {
     }
   }
 
-  private isOwner(event: InboundEvent): boolean {
-    if (event.channel === "telegram") {
-      return isOwner(readRuntimeConfig(this.env), Number(event.userId));
+  private ownerConfig(): OwnerConfigView {
+    return {
+      telegramUserIds: readRuntimeConfig(this.env).owner?.telegramUserIds,
+    };
+  }
+
+  /** 静态配置下不碰认领表：那会把一个正常运行的部署写成待认领。 */
+  private claim(): OwnerClaimView {
+    return this.ownerConfig().telegramUserIds === undefined
+      ? this.owners.read()
+      : { ownerUserId: null, windowOpenedAt: 0 };
+  }
+
+  private ownerAccess(event: InboundEvent): OwnerDecision {
+    // 只有 Telegram 有认领；微信的 userId 来自登录凭据，不走这里。
+    if (event.channel !== "telegram") return "deny";
+    return decideOwner({
+      config: this.ownerConfig(),
+      claim: this.claim(),
+      userId: event.userId,
+      now: Date.now(),
+    });
+  }
+
+  private async claimOwner(event: InboundEvent): Promise<void> {
+    this.owners.claim(event.userId);
+    emitChannelEvent(this.env, { channel: "telegram", event: "owner_claimed" });
+    try {
+      await this.adapter("telegram").send(event.chatId, {
+        text: t(ownerLocale(this.env), "channel.owner.claimed", {
+          id: event.userId,
+        }),
+      });
+    } catch (error) {
+      console.error(`channel: claim receipt failed: ${errorMessage(error)}`);
     }
-    return this.parseWeChatCredentials()?.userId === event.userId;
   }
 
   private rememberOwner(event: InboundEvent): void {
