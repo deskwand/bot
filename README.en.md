@@ -133,7 +133,7 @@ The desktop app groups its sidebar by the parts of that body, matching the chapt
 - `WalletDO` — the global Base wallet: balances, valuation, automatic remittances and reconciliation
 - `ExchangeDO` — the global snapshot store for Binance balances synced from the desktop app
 - `McpAuthDO` — remote MCP OAuth registration, token storage and renewal
-- Scheduled work goes through the Agents SDK `Agent.schedule` onto cron triggers, interpreted in **UTC**
+- Scheduled work goes through the Agents SDK `Agent.schedule`. Repeating jobs use a cron expression interpreted in **UTC**; a one-off uses `after` (such as `2h`) or `at` (a UTC ISO time) and disappears once it has run
 - Artifacts land in R2 and are delivered as files or images through the channel, never behind a public URL. 15MB per file
 
 Every step of a task is committed to storage before it is shown, so an interrupted process resumes from the last commit rather than the start. Re-sending the same request returns the stored result instead of running it twice.

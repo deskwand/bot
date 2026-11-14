@@ -222,7 +222,11 @@ describe("backup and restore end to end", () => {
 
     // Write through the public RPCs where they exist; the private stores are
     // reached the same way the rest of the suite does.
-    await butler.createSchedule("0 3 1 1 *", "年度提醒", "提醒主人备份");
+    await butler.createSchedule(
+      { cron: "0 3 1 1 *" },
+      "年度提醒",
+      "提醒主人备份",
+    );
     const taskId = await butler.spawn("备份任务", "什么也不做");
 
     const before = await runInDurableObject(

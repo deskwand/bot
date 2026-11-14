@@ -127,7 +127,13 @@ import {
   type PendingApproval,
   type Resolution,
 } from "./text-resolution";
-import { createButlerTools, SpawnFailedError, type TaskControl } from "./tools";
+import {
+  createButlerTools,
+  SpawnFailedError,
+  type ScheduleSpec,
+  type TaskControl,
+} from "./tools";
+import { nowTool } from "../tools/now";
 import { searchWeb } from "../tools/web-search";
 
 type TaskEventRow = {
@@ -142,6 +148,9 @@ type ApprovalMessageRow = {
   message_ref_json: string | null;
   text: string;
 };
+
+/** Payload of the `runSchedule` callback; `once` marks a one-shot row. */
+type SchedulePayload = { scheduleId: string; once?: true };
 
 const PROGRESS_DETAIL_MAX = 200;
 const MESSAGE_MAX = 4096;
@@ -333,8 +342,8 @@ export class ButlerDO extends Agent<Env> {
             this.spawn(title, instructions, undefined, attachments),
           resolveAttachment: (key) => this.resolveAttachment(key),
           memory: this.memory,
-          createSchedule: (cron, title, instructions) =>
-            this.createSchedule(cron, title, instructions),
+          createSchedule: (spec, title, instructions) =>
+            this.createSchedule(spec, title, instructions),
           listSchedules: () => this.schedules.list(),
           removeSchedule: (id) => this.removeSchedule(id),
           lookup: (question, queries) =>
@@ -356,6 +365,7 @@ export class ButlerDO extends Agent<Env> {
           task: (id) => this.taskFor(id),
           locale: ownerLocale(this.env),
         }),
+        nowTool(() => new Date(getClock().now())),
       ],
       sections: [
         {
@@ -828,25 +838,33 @@ export class ButlerDO extends Agent<Env> {
     return { ok: true, taskId: id };
   }
 
-  /** Persists a schedule and registers its cron on the Agent lifecycle. */
+  /** Persists a schedule and registers its Agent callback. */
   async createSchedule(
-    cron: string,
+    spec: ScheduleSpec,
     title: string,
     instructions: string,
   ): Promise<string> {
-    const id = this.schedules.add(cron, instructions, title, null);
+    const id =
+      "cron" in spec
+        ? this.schedules.add(spec.cron, instructions, title, null)
+        : this.schedules.addOnce(spec.at, instructions, title, null);
 
+    // A number means seconds of delay to `Agent.schedule`, so a one-shot
+    // always passes the resolved Date instead of an epoch timestamp.
+    const when = "cron" in spec ? spec.cron : new Date(spec.at);
     try {
-      const schedule = await this.schedule<{ scheduleId: string }>(
-        cron,
+      const schedule = await this.schedule<SchedulePayload>(
+        when,
         "runSchedule",
-        { scheduleId: id },
+        "at" in spec ? { scheduleId: id, once: true } : { scheduleId: id },
       );
       this.schedules.setAgentScheduleId(id, schedule.id);
     } catch (error) {
-      // Keep no row for an expression the scheduler refuses.
+      // Keep no row for a schedule the scheduler refuses.
       this.schedules.remove(id);
-      throw isCronParseError(error) ? new InvalidCronError(cron) : error;
+      throw "cron" in spec && isCronParseError(error)
+        ? new InvalidCronError(spec.cron)
+        : error;
     }
 
     return id;
@@ -861,10 +879,24 @@ export class ButlerDO extends Agent<Env> {
     return this.schedules.remove(id);
   }
 
-  /** Cron callback registered through `Agent.schedule`. */
-  async runSchedule(payload: { scheduleId: string }): Promise<void> {
+  /** Callback registered through `Agent.schedule`. */
+  async runSchedule(payload: SchedulePayload): Promise<void> {
     const row = this.schedules.get(payload.scheduleId);
-    if (!row) return;
+    if (!row) {
+      // A one-shot row is deleted before its work starts, so a retry after a
+      // platform failure lands here: the reminder is gone, and say so.
+      if (payload.once === true) {
+        console.warn(
+          `butler one-shot ${payload.scheduleId} fired with no row: lost to an interruption`,
+        );
+      }
+      return;
+    }
+
+    // A one-shot has no next occurrence, so the row goes before anything can
+    // skip it: a disabled channel or a failed spawn must not leave an entry
+    // that will never fire again.
+    if (row.at !== null) this.schedules.remove(row.id);
 
     // With a disabled selection (for example a typo in ACTIVE_CHANNEL) every
     // notification would be swallowed: do not burn model tokens on a run

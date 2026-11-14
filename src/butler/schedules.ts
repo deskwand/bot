@@ -6,6 +6,8 @@ export type ScheduleRow = {
   chatId: string | null;
   agentScheduleId: string | null;
   createdAt: number;
+  /** Wake time of a one-shot schedule; null for a recurring cron. */
+  at: number | null;
 };
 
 type RawScheduleRow = {
@@ -16,6 +18,7 @@ type RawScheduleRow = {
   chat_id: string | null;
   agent_schedule_id: string | null;
   created_at: number;
+  at: number | null;
 };
 
 const COUNTER_KEY = "schedule_counter";
@@ -63,9 +66,18 @@ export class ScheduleStore {
         instructions TEXT NOT NULL,
         chat_id TEXT,
         agent_schedule_id TEXT,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        at INTEGER
       )`,
     );
+    // Older objects predate one-shot schedules: `at` is set only by
+    // `addOnce`, so a recurring row keeps the column empty.
+    const columns = this.sql
+      .exec<{ name: string }>(`PRAGMA table_info(schedules)`)
+      .toArray();
+    if (!columns.some((column) => column.name === "at")) {
+      this.sql.exec(`ALTER TABLE schedules ADD COLUMN at INTEGER`);
+    }
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS schedules_meta (
         key TEXT PRIMARY KEY,
@@ -93,6 +105,32 @@ export class ScheduleStore {
       instructions,
       chatId,
       Date.now(),
+    );
+    return id;
+  }
+
+  /**
+   * Saves a schedule that fires once at `at` and returns its `s<number>` id.
+   * The cron column is NOT NULL, so the row carries an empty expression and
+   * `at` marks it as one-shot.
+   */
+  addOnce(
+    at: number,
+    instructions: string,
+    title: string,
+    chatId: string | null = null,
+  ): string {
+    const id = this.nextId();
+    this.sql.exec(
+      `INSERT INTO schedules
+        (id, cron, title, instructions, chat_id, agent_schedule_id, created_at, at)
+       VALUES (?, '', ?, ?, ?, NULL, ?, ?)`,
+      id,
+      title,
+      instructions,
+      chatId,
+      Date.now(),
+      at,
     );
     return id;
   }
@@ -165,5 +203,6 @@ function toScheduleRow(row: RawScheduleRow): ScheduleRow {
     chatId: row.chat_id,
     agentScheduleId: row.agent_schedule_id,
     createdAt: row.created_at,
+    at: row.at ?? null,
   };
 }

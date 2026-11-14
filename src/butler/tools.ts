@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { t, type Locale } from "../i18n";
 import type { InboundFile, TaskSpec } from "../protocol";
+import { parseDuration } from "../bot/wake";
 import type { MemoryStore } from "./memory";
 import { getClock } from "./notifier";
 import type { ScheduleRow } from "./schedules";
@@ -40,7 +41,15 @@ const Recall = Type.Object({ keyword: Type.String() });
 const Forget = Type.Object({ id: Type.Number() });
 
 const CreateSchedule = Type.Object({
-  cron: Type.String(),
+  cron: Type.Optional(
+    Type.String({ description: "5-field cron expression, interpreted in UTC" }),
+  ),
+  after: Type.Optional(
+    Type.String({ description: "run once after a duration such as 90m, 2h, 1d12h" }),
+  ),
+  at: Type.Optional(
+    Type.String({ description: "run once at this UTC ISO time" }),
+  ),
   title: Type.String(),
   instructions: Type.String(),
 });
@@ -80,9 +89,9 @@ export type ButlerToolDeps = {
   /** Resolves an inbox key to its stored file reference, or null. */
   resolveAttachment(key: string): Promise<InboundFile | null>;
   memory: MemoryStore;
-  /** Persists the schedule and registers its Agent cron callback. */
+  /** Persists the schedule and registers its Agent callback. */
   createSchedule(
-    cron: string,
+    spec: ScheduleSpec,
     title: string,
     instructions: string,
   ): Promise<string>;
@@ -96,6 +105,9 @@ export type ButlerToolDeps = {
   /** Locale for model-facing tool text; defaults to Chinese. */
   locale?: Locale;
 };
+
+/** A schedule either repeats on `cron` or fires once at `at`. */
+export type ScheduleSpec = { cron: string } | { at: number };
 
 /** A `spawn` that created the task row but could not start its Task DO. */
 export class SpawnFailedError extends Error {
@@ -362,16 +374,64 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
   const createSchedule: ToolRegistration<typeof CreateSchedule> = {
     name: "schedule",
     description: [
-      "Create a recurring background task.",
-      "cron is a standard 5-field expression (minute hour day month weekday)",
+      "Create a scheduled background task. Exactly one of `cron`, `after` and `at` is required.",
+      "cron repeats: a standard 5-field expression (minute hour day month weekday)",
       "interpreted in UTC. The owner is normally in Asia/Shanghai (UTC+8), so",
       "convert their local time: a daily 09:00 request becomes `0 1 * * *`.",
+      "after (a duration such as `90m`, `2h`, `1d`; a week is `7d` and a minute is",
+      "the finest step) or at (a UTC ISO time carrying `Z` or an offset) runs",
+      "once, then the schedule disappears; call `now` first when the owner names",
+      "a clock time.",
     ].join(" "),
     parameters: CreateSchedule,
-    async execute({ cron, title, instructions }) {
+    async execute({ cron, after, at, title, instructions }) {
+      const given = [cron, after, at].filter((value) => value !== undefined);
+      if (given.length !== 1) return output("cron、after、at 三选一");
+
+      let spec: ScheduleSpec;
+      if (cron !== undefined) {
+        spec = { cron };
+      } else {
+        const now = getClock().now();
+        let parsed: number;
+        if (after !== undefined) {
+          const afterMs = parseDuration(after);
+          if (afterMs === null) {
+            return output(`时长格式无效：${after}（示例：30m、2h、1d）`);
+          }
+          parsed = now + afterMs;
+        } else {
+          parsed = Date.parse(at ?? "");
+          if (Number.isNaN(parsed)) return output(`时间格式无效：${at}`);
+          // A value without an offset parses as local time, which silently
+          // moves a Beijing 10:00 reminder to 18:00, so refuse it.
+          if (!/(?:Z|[+-]\d{2}:?\d{2})$/.test(at ?? "")) {
+            return output(
+              `时间必须带时区偏移：${at}（例如 2030-03-01T10:00:00+08:00 或 2030-03-01T02:00:00Z）`,
+            );
+          }
+        }
+        if (parsed <= now) {
+          return output(
+            `时间已过去：${new Date(parsed).toISOString()}，现在是 ${new Date(
+              now,
+            ).toISOString()}`,
+          );
+        }
+        spec = { at: parsed };
+      }
+
       try {
-        const id = await deps.createSchedule(cron, title, instructions);
-        return output(`已创建定时任务 ${id}`);
+        const id = await deps.createSchedule(spec, title, instructions);
+        if (!("at" in spec)) return output(`已创建定时任务 ${id}`);
+        // Echo the instant the owner will actually feel, in both zones.
+        const beijing = new Date(spec.at + 8 * 3_600_000)
+          .toISOString()
+          .slice(0, 16)
+          .replace("T", " ");
+        return output(
+          `已创建定时任务 ${id}（${new Date(spec.at).toISOString()}，北京时间 ${beijing}）`,
+        );
       } catch (error) {
         return output(errorText(error));
       }
@@ -380,7 +440,8 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
 
   const listSchedules: ToolRegistration<typeof ListSchedules> = {
     name: "list_schedules",
-    description: "List recurring scheduled tasks with their ids and cron expressions.",
+    description:
+      "List scheduled tasks with their ids and when they run: a cron expression, or an ISO time for a one-shot.",
     parameters: ListSchedules,
     replay: "safe",
     async execute() {
@@ -388,7 +449,12 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
         const rows = deps.listSchedules();
         if (rows.length === 0) return output("没有定时任务");
         return output(
-          rows.map((row) => `${row.id} ${row.cron} ${row.title}`).join("\n"),
+          rows
+            .map(
+              (row) =>
+                `${row.id} ${row.at === null ? row.cron : new Date(row.at).toISOString()} ${row.title}`,
+            )
+            .join("\n"),
         );
       } catch (error) {
         return output(errorText(error));
@@ -398,7 +464,7 @@ export function createButlerTools(deps: ButlerToolDeps): ToolRegistration[] {
 
   const unschedule: ToolRegistration<typeof ScheduleId> = {
     name: "unschedule",
-    description: "Delete a scheduled recurring task by its s<number> id.",
+    description: "Delete a scheduled task by its s<number> id.",
     parameters: ScheduleId,
     async execute({ id }) {
       try {

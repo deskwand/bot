@@ -134,6 +134,66 @@ describe("ScheduleStore", () => {
         chatId: "42",
         agentScheduleId: "agent-job-1",
         createdAt: expect.any(Number),
+        at: null,
+      },
+    ]);
+  });
+
+  it("adds a one-shot row to a table that predates the at column", async () => {
+    const result = await runInDurableObject(
+      butler("schedules-store-once"),
+      (_instance, state) => {
+        // An object created before one-shot schedules has no `at` column.
+        state.storage.sql.exec(`DROP TABLE schedules`);
+        state.storage.sql.exec(`DROP TABLE schedules_meta`);
+        state.storage.sql.exec(
+          `CREATE TABLE schedules (
+            id TEXT PRIMARY KEY,
+            cron TEXT NOT NULL,
+            title TEXT NOT NULL,
+            instructions TEXT NOT NULL,
+            chat_id TEXT,
+            agent_schedule_id TEXT,
+            created_at INTEGER NOT NULL
+          )`,
+        );
+        state.storage.sql.exec(
+          `CREATE TABLE schedules_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+        );
+        state.storage.sql.exec(
+          `INSERT INTO schedules_meta VALUES ('schedule_counter', '1')`,
+        );
+        state.storage.sql.exec(
+          `INSERT INTO schedules VALUES ('s1', '0 1 * * *', '旧任务', '旧内容', NULL, 'job-1', 1)`,
+        );
+
+        const store = new ScheduleStore(state.storage.sql);
+        const once = store.addOnce(1_800_000_000_000, "交材料", "提醒交材料", null);
+        return { once, list: store.list() };
+      },
+    );
+
+    expect(result.once).toBe("s2");
+    expect(result.list).toEqual([
+      {
+        id: "s1",
+        cron: "0 1 * * *",
+        title: "旧任务",
+        instructions: "旧内容",
+        chatId: null,
+        agentScheduleId: "job-1",
+        createdAt: 1,
+        at: null,
+      },
+      {
+        id: "s2",
+        cron: "",
+        title: "提醒交材料",
+        instructions: "交材料",
+        chatId: null,
+        agentScheduleId: null,
+        createdAt: expect.any(Number),
+        at: 1_800_000_000_000,
       },
     ]);
   });
@@ -193,6 +253,90 @@ describe("butler schedule tools", () => {
 
     expect(result.empty).toBe("没有定时任务");
     expect(result.listed).toBe("s1 0 1 * * * 每日早报");
+  });
+
+  it("creates a one-shot schedule and lists its time instead of a cron", async () => {
+    const result = await runInDurableObject(
+      butler("schedules-once"),
+      async (instance) => {
+        const before = Date.now();
+        const created = await runTool(instance, "schedule", {
+          after: "2h",
+          title: "交材料",
+          instructions: "提醒主人交材料",
+        });
+        return {
+          before,
+          created,
+          listed: await runTool(instance, "list_schedules", {}),
+          scheduled: await instance.listSchedules(),
+        };
+      },
+    );
+
+    expect(result.created).toMatch(/^已创建定时任务 s1（.+Z，北京时间 .+）$/);
+    // A Date schedules a one-shot callback; a number would mean a delay.
+    expect(result.scheduled[0]).toMatchObject({
+      callback: "runSchedule",
+      type: "scheduled",
+    });
+
+    const match = /^s1 (\S+) 交材料$/.exec(result.listed);
+    expect(match).not.toBeNull();
+    const at = Date.parse(match![1]!);
+    expect(at).toBeGreaterThanOrEqual(result.before + 7_200_000);
+    expect(at).toBeLessThanOrEqual(Date.now() + 7_200_000);
+  });
+
+  it("converts an at with an offset to the stated instant", async () => {
+    const result = await runInDurableObject(
+      butler("schedules-once-at"),
+      async (instance) => ({
+        created: await runTool(instance, "schedule", {
+          at: "2030-03-01T10:00:00+08:00",
+          title: "交材料",
+          instructions: "提醒主人交材料",
+        }),
+        listed: await runTool(instance, "list_schedules", {}),
+      }),
+    );
+
+    expect(result.created).toBe(
+      "已创建定时任务 s1（2030-03-01T02:00:00.000Z，北京时间 2030-03-01 10:00）",
+    );
+    expect(result.listed).toBe("s1 2030-03-01T02:00:00.000Z 交材料");
+  });
+
+  it("rejects anything but exactly one of cron, after and at", async () => {
+    const result = await runInDurableObject(
+      butler("schedules-once-args"),
+      async (instance) => {
+        const ask = (args: Record<string, unknown>) =>
+          runTool(instance, "schedule", {
+            title: "x",
+            instructions: "y",
+            ...args,
+          });
+        return {
+          none: await ask({}),
+          two: await ask({ cron: "0 1 * * *", after: "1h" }),
+          badAfter: await ask({ after: "soon" }),
+          badAt: await ask({ at: "明天" }),
+          zoneMissing: await ask({ at: "2030-03-01T10:00" }),
+          past: await ask({ at: "2020-01-01T00:00:00Z" }),
+          rows: (await instance.listSchedules()).length,
+        };
+      },
+    );
+
+    expect(result.none).toBe("cron、after、at 三选一");
+    expect(result.two).toBe("cron、after、at 三选一");
+    expect(result.badAfter).toBe("时长格式无效：soon（示例：30m、2h、1d）");
+    expect(result.badAt).toBe("时间格式无效：明天");
+    // Without an offset the string would parse as local time and land 8 hours off.
+    expect(result.zoneMissing).toContain("时间必须带时区偏移：2030-03-01T10:00");
+    expect(result.past).toContain("时间已过去：2020-01-01T00:00:00.000Z");
+    expect(result.rows).toBe(0);
   });
 
   it("returns 没有定时任务 for unknown schedule ids", async () => {
@@ -324,6 +468,81 @@ describe("ButlerDO.runSchedule", () => {
       ),
     ).toBe(true);
   }, 20_000);
+
+  it("fires a one-shot once and drops its row", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    setModelOverride(
+      scriptedModel([
+        { toolCalls: [{ name: "finish_task", args: { summary: "ok" } }] },
+      ]),
+    );
+
+    const stub = butler("schedules-once-run");
+    const created = await runInDurableObject(stub, (instance) =>
+      runTool(instance, "schedule", {
+        after: "2h",
+        title: "交材料",
+        instructions: "提醒主人交材料",
+      }),
+    );
+    expect(created).toMatch(/^已创建定时任务 s1（.+）/);
+
+    // The alarm fires the callback once; the schedule has no second chance at
+    // running, so the row is gone before anything can skip it.
+    await stub.runSchedule({ scheduleId: "s1" });
+
+    expect(await taskRow(stub, "t1")).toMatchObject({
+      id: "t1",
+      title: "交材料",
+    });
+    const listed = await runInDurableObject(stub, (instance) =>
+      runTool(instance, "list_schedules", {}),
+    );
+    expect(listed).toBe("没有定时任务");
+  }, 20_000);
+
+  it("drops a one-shot row even when the channel selection is disabled", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const stub = butler("schedules-once-disabled");
+    await runInDurableObject(stub, (_instance, state) => {
+      new ScheduleStore(state.storage.sql).addOnce(
+        Date.now() + 7_200_000,
+        "提醒主人交材料",
+        "交材料",
+        null,
+      );
+    });
+
+    setEnv({ ACTIVE_CHANNEL: "wechat " });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { channels(): unknown }).channels = () =>
+        env.CHANNELS.get(
+          env.CHANNELS.idFromName("schedules-once-disabled-hub"),
+        );
+    });
+
+    await stub.runSchedule({ scheduleId: "s1", once: true });
+
+    // Nothing ran, but a one-shot never gets a second alarm: leaving the row
+    // would list a reminder that can never fire again.
+    expect(await taskRow(stub, "t1")).toBeUndefined();
+    const listed = await runInDurableObject(stub, (instance) =>
+      runTool(instance, "list_schedules", {}),
+    );
+    expect(listed).toBe("没有定时任务");
+  }, 20_000);
+
+  it("exposes the current time to the butler", async () => {
+    const names = await runInDurableObject(butler("schedules-now"), (instance) =>
+      instance.registry
+        .snapshot()
+        .tools()
+        .map(({ tool }) => tool.name),
+    );
+    expect(names).toContain("now");
+  });
 
   it("does nothing when the schedule row is gone", async () => {
     const stub = butler("schedules-run-missing");
