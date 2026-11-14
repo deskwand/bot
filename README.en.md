@@ -20,13 +20,85 @@ Command-line deployment, secrets and the `DESKWAND_CONFIG` format are documented
 
 ## Run it yourself with Docker
 
-If you do not want a Cloudflare account, you can run the same Worker locally with Docker Compose and keep the data in a local volume. See [docs/container-deploy.md](docs/container-deploy.md).
+No Cloudflare account needed: the same Worker bundle runs on bare workerd inside a container, and the data lives in a local volume. Behaviour matches the Cloudflare deployment. What follows is the from-zero install; the details (sandbox, network, differences from Cloudflare, backups) are in [docs/container-deploy.md](docs/container-deploy.md).
 
-The container has no Workers AI, so at least one `MODEL_KEY_*` is required. Do not run the same Telegram bot token in both places.
+If you would rather not write these files by hand, the desktop app does the same thing: it deploys to a Linux host over SSH, or runs it right on this Mac with a Docker-compatible runtime or Apple `container`.
 
-The desktop app can also deploy the same package to a Linux host over SSH, with no Cloudflare account: connect, write the config and start the container from the app.
+Prerequisites: `docker compose version` returns something, you can pull from `ghcr.io` (or build the image yourself), and outbound traffic reaches your model API and your channel. 1 CPU and 1 GB RAM to start, 2 GB recommended (an estimate, untested on Linux).
 
-It can also run it right on this Mac: pick "This Mac" on the welcome page and the app writes the config and the start files for you, with either a Docker-compatible runtime or Apple `container`.
+### 1. Get the two files
+
+```bash
+mkdir -p ~/deskwand && cd ~/deskwand
+curl -fsSLO https://raw.githubusercontent.com/deskwand/bot/main/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/deskwand/bot/main/.env.container.example
+mv .env.container.example .env && chmod 600 .env
+```
+
+`git clone https://github.com/deskwand/bot.git` works too; both files sit in the repository root.
+
+### 2. Fill in `.env`
+
+Four required values:
+
+| Variable | What to put there |
+| --- | --- |
+| `ADMIN_TOKEN` | `openssl rand -hex 32`; the Bearer token for `/admin/*` |
+| `DESKWAND_CONFIG` | One-line JSON, wrapped in single quotes; replace `owner.telegramUserIds` with your own Telegram user ID (ask `@userinfobot`) |
+| `MODEL_KEY_<ID>` | At least one model key; `<ID>` is the provider id uppercased with `-` turned into `_`. There is no Workers AI in the container, so this one is not optional |
+| `TELEGRAM_BOT_TOKEN` | Required for the Telegram channel; for WeChat, fill in `WECHAT_CREDENTIALS` instead |
+
+The provider named in `models.butler` / `models.task` must have a matching `MODEL_KEY_*`. `ACTIVE_CHANNEL` accepts only `telegram` / `wechat`; anything else silently disables business traffic (the log says `channel: invalid ACTIVE_CHANNEL`).
+
+### 3. Start it
+
+```bash
+docker compose up -d
+docker compose ps              # wait for STATUS to read healthy
+curl -fsS http://127.0.0.1:8787/healthz
+docker compose logs -f bot
+```
+
+First start takes an estimated 20–40 seconds (untested on Linux). Port 8787 is mapped to `127.0.0.1` only, so it is not exposed to your LAN.
+
+### 4. Say hello
+
+Talk to it in the channel you picked. If it answers, you are done.
+
+### 5. Upgrade
+
+The tag in `compose.yaml` can pin a version (`ghcr.io/deskwand/bot:0.1.52`); leaving `latest` follows every release. CI pushes the images on `v*` tags:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+The volume carries over. Downgrades are not supported: data written by a newer version is not guaranteed to be readable by an older image.
+
+### 6. Backups and moving
+
+The desktop app's Memory page works for containers too: export, restore and automatic backups, no need to stop the stack and pack the volume. Moving to another machine, or to and from Cloudflare, uses the same page's "move" flow. The manual `tar` recipe is in [docs/container-deploy.md](docs/container-deploy.md#备份).
+
+### Optional: the sandbox
+
+The sandbox is a second container that gives a task a Linux box to run commands on (`sandbox_run`, `sandbox_put`, `sandbox_get`). Everything works without it. Add two lines to `.env` and `docker compose up -d` again:
+
+```bash
+SANDBOX_TOKEN=<random string from openssl rand -hex 32>
+SANDBOX_URL=http://sandbox:8080
+```
+
+The `sandbox` container receives `SANDBOX_TOKEN` and nothing else; it does not read the bot's `.env`, publishes no ports and keeps its data in its own volume. It is not included in backups, and `docker compose down --volumes` deletes both volumes — back up first.
+
+### When it will not start
+
+- Status stays `restarting` and the log says `缺少必填环境变量: ...`: `.env` was not picked up, or a required value is still empty (an empty value counts as unset).
+- `ACTIVE_CHANNEL` typo: business traffic is silently disabled, the log says `channel: invalid ACTIVE_CHANNEL`.
+- Messages arrive intermittently: do not run the same Telegram bot token in both Cloudflare and the container, they fight over updates.
+- A voice message gets “收到了语音，但没能转成文字”: there is no Workers AI in the container, this is expected.
+- Reaching Telegram or your model API needs a proxy: this build has no in-container proxy support; use a transparent proxy on the host or the network (TUN, sidecar gateway).
+
+More detail: [sandbox isolation](docs/container-deploy.md#沙箱可选), [network and reverse proxy](docs/container-deploy.md#网络), [differences from the Cloudflare deployment](docs/container-deploy.md#与-cloudflare-部署的差异), [resource requirements](docs/container-deploy.md#资源要求).
 
 ## What it is
 

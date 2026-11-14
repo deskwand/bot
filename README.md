@@ -20,13 +20,85 @@ AGPL-3.0 · [English](README.en.md) · [官网](https://deskwand.com/bot?src=gh-
 
 ## 用 Docker 自己跑
 
-没有 Cloudflare 账号也可以：用 Docker Compose 在本机跑同一份 Worker，数据存在本地卷里。步骤见 [docs/container-deploy.md](docs/container-deploy.md)。
+没有 Cloudflare 账号也可以：同一个 Worker 包跑在容器里的裸 workerd 上，数据只存在本地卷里，业务行为和 Cloudflare 部署一致。下面是从零开始的步骤；沙箱、网络、与 Cloudflare 的差异、备份这些细节在 [docs/container-deploy.md](docs/container-deploy.md)。
 
-容器里没有 Workers AI，至少需要一个 `MODEL_KEY_*`；同一个 Telegram bot token 不要同时在两处运行。
+不想手写这些文件的话，桌面客户端做的是同一件事：把它部署到一台能 SSH 的 Linux 主机，或者就在这台 Mac 上用 Docker 兼容运行时或 Apple `container`。
 
-桌面客户端还能直接把它部署到一台能 SSH 的 Linux 主机上，不需要 Cloudflare 账号：连上主机、写配置、起容器，都在客户端里完成。
+前提：`docker compose version` 有输出、能拉 `ghcr.io` 的镜像（或者能自己构建）、出口能到模型 API 和你的入口。1 核 1 GB 起步，建议 2 GB 内存（估计值，未在 Linux 上实测）。
 
-也可以就在这台 Mac 上跑：欢迎页选「这台 Mac」，用 Docker 兼容运行时或 Apple `container` 都行，配置文件和各运行时的启动文件都由客户端替你写。
+### 1. 拿到两个文件
+
+```bash
+mkdir -p ~/deskwand && cd ~/deskwand
+curl -fsSLO https://raw.githubusercontent.com/deskwand/bot/main/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/deskwand/bot/main/.env.container.example
+mv .env.container.example .env && chmod 600 .env
+```
+
+也可以 `git clone https://github.com/deskwand/bot.git`，直接用仓库根目录里的这两个文件。
+
+### 2. 填 `.env`
+
+四个必填项：
+
+| 变量 | 怎么填 |
+| --- | --- |
+| `ADMIN_TOKEN` | `openssl rand -hex 32`，`/admin/*` 的 Bearer token |
+| `DESKWAND_CONFIG` | 单行 JSON，整行用单引号包住；`owner.telegramUserIds` 换成你自己的 Telegram 用户 ID（找 `@userinfobot` 查） |
+| `MODEL_KEY_<ID>` | 至少一个模型 key，`<ID>` 是厂商 id 转大写、`-` 换成 `_`。容器里没有 Workers AI，这一项不能省 |
+| `TELEGRAM_BOT_TOKEN` | 入口是 Telegram 时必填；微信入口改成填写 `WECHAT_CREDENTIALS` |
+
+`models.butler` / `models.task` 里的 provider 必须有对应的 `MODEL_KEY_*`。`ACTIVE_CHANNEL` 只在 `telegram` / `wechat` 里选，写了别的值会静默停用业务流量（日志里是 `channel: invalid ACTIVE_CHANNEL`）。
+
+### 3. 起
+
+```bash
+docker compose up -d
+docker compose ps              # 等 STATUS 变成 healthy
+curl -fsS http://127.0.0.1:8787/healthz
+docker compose logs -f bot
+```
+
+首次启动预计 20–40 秒（估计值，未在 Linux 上实测）。8787 只映射到 `127.0.0.1`，不对局域网开放。
+
+### 4. 验一句
+
+用你选的入口跟它说句「你好」，回了就通了。
+
+### 5. 升级
+
+`compose.yaml` 里的 tag 可以钉版本（`ghcr.io/deskwand/bot:0.1.52`），留 `latest` 就一直跟最新发布；镜像在打 `v*` tag 时由 CI 推出：
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+数据卷原样沿用。不支持降级：新版本写过的数据，旧镜像不保证能读。
+
+### 6. 备份与搬家
+
+桌面客户端的「记忆存档」页对容器同样可用：导出、恢复、自动备份都不用停机打包卷。换一台机器、从 Cloudflare 搬来或搬回，用同一页的「搬家」。手工 `tar` 的写法在 [docs/container-deploy.md](docs/container-deploy.md#备份)。
+
+### 可选：沙箱
+
+沙箱是第二个容器，给任务一台能跑命令的 Linux（`sandbox_run`、`sandbox_put`、`sandbox_get`）。不配也能用。往 `.env` 追加两行再 `docker compose up -d`：
+
+```bash
+SANDBOX_TOKEN=<用 openssl rand -hex 32 生成的随机串>
+SANDBOX_URL=http://sandbox:8080
+```
+
+`sandbox` 容器只拿到 `SANDBOX_TOKEN` 一个变量，不读 bot 的 `.env`；端口不发布到宿主机，数据在自己的卷里。它不在备份里，`docker compose down --volumes` 会把两个卷一起删掉——先备份。
+
+### 起不来时
+
+- 状态一直 `restarting`，日志是 `缺少必填环境变量: ...`：`.env` 没被读到，或必填项还空着（空值等于没设置）。
+- `ACTIVE_CHANNEL` 打错：业务流量静默停用，日志里是 `channel: invalid ACTIVE_CHANNEL`。
+- 消息时有时无：同一个 Telegram bot token 不要同时跑在 Cloudflare 和容器里，两边互抢 update。
+- 语音消息回「收到了语音，但没能转成文字」：容器里没有 Workers AI，属预期。
+- 需要代理才能到 Telegram 或模型 API：这一版容器内不支持，在宿主机或网络层做透明代理（TUN、旁路网关）。
+
+更多细节：[沙箱的隔离边界](docs/container-deploy.md#沙箱可选)、[网络与反向代理](docs/container-deploy.md#网络)、[与 Cloudflare 部署的差异](docs/container-deploy.md#与-cloudflare-部署的差异)、[资源要求](docs/container-deploy.md#资源要求)。
 
 ## 它是什么
 

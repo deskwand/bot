@@ -4,6 +4,8 @@
 
 Cloudflare 部署仍然是默认形态；容器是并列的另一种部署方式，业务行为一致，差异见文末。
 
+首次安装的逐步命令在 README 的「用 Docker 自己跑」一节（[中文](../README.md#用-docker-自己跑) / [English](../README.en.md#run-it-yourself-with-docker)）；这份文档是它背后的手册。
+
 ## 用桌面客户端部署
 
 前提：主机已装 Docker 与 compose 插件，当前用户可以直接执行 `docker`。在桌面客户端欢迎页点「运行在自己的服务器」，按向导填写主机与配置即可。之后在客户端里改配置或密钥会重启容器，约半分钟不可用。
@@ -23,7 +25,7 @@ Cloudflare 部署仍然是默认形态；容器是并列的另一种部署方式
    docker compose ps
    ```
 
-镜像 `ghcr.io/deskwand/bot` 在打发布 tag 时由 CI 构建并推送。还没有发布版本、或想用自己改过的代码时，在仓库根目录自己构建，tag 与 `compose.yaml` 里的保持一致：
+镜像 `ghcr.io/deskwand/bot` 在打 `v*` tag 时由 CI 构建并推送，tag 是版本号（如 `0.1.52`）和 `latest`，多架构 amd64/arm64，匿名可拉，不用登录 GHCR。还没有发布版本、或想用自己改过的代码时，在仓库根目录自己构建，tag 与 `compose.yaml` 里的保持一致：
 
 ```bash
 docker build -f container/Dockerfile -t ghcr.io/deskwand/bot:latest .
