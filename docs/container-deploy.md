@@ -4,7 +4,7 @@
 
 Cloudflare 部署仍然是默认形态；容器是并列的另一种部署方式，业务行为一致，差异见文末。
 
-首次安装的逐步命令在 README 的「用 Docker 自己跑」一节（[中文](../README.md#用-docker-自己跑) / [English](../README.en.md#run-it-yourself-with-docker)）；这份文档是它背后的手册。
+首次安装的四行命令在 README 的「也可以生在自己家里」一节（[中文](../README.md#也可以生在自己家里) / [English](../README.en.md#or-born-on-your-own-machine)）；这份文档是它背后的手册。
 
 ## 用桌面客户端部署
 
