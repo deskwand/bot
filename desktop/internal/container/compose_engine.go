@@ -1,6 +1,7 @@
 package container
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -227,6 +228,22 @@ func (e *composeEngine) ReadVersion(ctx context.Context, host Host, dir string) 
 		return string(match[1]), nil
 	}
 	return "", nil
+}
+
+// ManifestUnchanged compares the compose file on disk with the one an upgrade
+// would write. A bind mount, a renamed volume or an extra service is a user
+// edit, and overwriting it could start the bot against an empty volume.
+func (e *composeEngine) ManifestUnchanged(ctx context.Context, host Host, dir, version string) (bool, error) {
+	readCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	data, err := host.ReadFile(readCtx, composePath(dir))
+	if err != nil {
+		if errors.Is(err, hostexec.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return bytes.Equal(data, ComposeFile(version)), nil
 }
 
 func (e *composeEngine) Pull(ctx context.Context, host Host, dir string) error {

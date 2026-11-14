@@ -239,6 +239,7 @@ var stepKeys = map[string]string{
 	"register":      "register",
 	"healthy":       "healthy",
 	"restart":       "restart",
+	"rollback":      "rollback",
 }
 
 func (s *Service) beginStep(onStep func(domain.Step), id string) {

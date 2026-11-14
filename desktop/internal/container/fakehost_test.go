@@ -10,11 +10,14 @@ import (
 )
 
 type fakeHost struct {
-	files    map[string][]byte
-	commands []string
-	stdins   [][]byte
-	respond  func(command string) (hostexec.Result, error)
-	writeErr error
+	files           map[string][]byte
+	commands        []string
+	stdins          [][]byte
+	reads           []string
+	respond         func(command string) (hostexec.Result, error)
+	writeErr        error
+	writes          int
+	failWritesAfter int
 }
 
 func (h *fakeHost) Run(_ context.Context, command string, stdin []byte) (hostexec.Result, error) {
@@ -27,6 +30,7 @@ func (h *fakeHost) Run(_ context.Context, command string, stdin []byte) (hostexe
 }
 
 func (h *fakeHost) ReadFile(_ context.Context, path string) ([]byte, error) {
+	h.reads = append(h.reads, path)
 	data, ok := h.files[path]
 	if !ok {
 		return nil, hostexec.ErrNotExist
@@ -35,8 +39,12 @@ func (h *fakeHost) ReadFile(_ context.Context, path string) ([]byte, error) {
 }
 
 func (h *fakeHost) WriteFileAtomic(_ context.Context, path string, data []byte, _ os.FileMode) error {
-	if h.writeErr != nil {
-		return h.writeErr
+	h.writes++
+	if h.failWritesAfter > 0 && h.writes > h.failWritesAfter {
+		if h.writeErr != nil {
+			return h.writeErr
+		}
+		return hostexec.ErrNotExist
 	}
 	if h.files == nil {
 		h.files = make(map[string][]byte)

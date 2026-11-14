@@ -215,6 +215,7 @@ export interface ClientService {
   installContainer(input: ContainerInstallInputDTO): Promise<ResultDTO>;
   adoptContainer(): Promise<ResultDTO>;
   containerStatus(): Promise<ContainerStatusDTO>;
+  startContainer(): Promise<ContainerStatusDTO>;
   restoreContainerConfig(): Promise<ResultDTO>;
   disconnectContainer(): Promise<void>;
   onContainerProgress(listener: (step: StepDTO) => void): () => void;

@@ -22,4 +22,10 @@ export const updates = {
   compatTitle: "兼容性",
   compatDescription: "签名与迁移历史已校验；失败不会改云端。",
   confirmUpgrade: "确认升级",
+  containerTitle: "容器部署",
+  containerDescription: "升级会换成客户端内置的镜像版本，数据卷和 .env 保持不变。",
+  containerConfirmDescription: "从 {current} 升级到 {available}。机器人会重启，约半分钟不可用。",
+  containerRollbackTitle: "失败会自动回滚",
+  containerRollbackDescription: "新版本 3 分钟内没有就绪，会自动恢复上一版本并保留日志。配置与数据不会被改动；建议先做一次备份。",
+  containerPublishedHint: "已升级，容器按新镜像重启完成。",
 } as const;

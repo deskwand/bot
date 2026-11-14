@@ -26,4 +26,10 @@ export const updates: Messages["updates"] = {
   compatDescription:
     "Signature and migration history verified; a failure leaves the cloud unchanged.",
   confirmUpgrade: "Confirm upgrade",
+  containerTitle: "Container deployment",
+  containerDescription: "The upgrade switches to the image bundled with this client; the data volume and .env stay as they are.",
+  containerConfirmDescription: "Upgrade from {current} to {available}. The bot restarts and is unavailable for about half a minute.",
+  containerRollbackTitle: "A failure rolls back automatically",
+  containerRollbackDescription: "If the new version is not ready within 3 minutes, the previous version is restored and the logs are kept. Configuration and data are untouched; back up first if you want.",
+  containerPublishedHint: "Upgraded; the container restarted with the new image.",
 };

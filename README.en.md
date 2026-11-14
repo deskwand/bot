@@ -67,6 +67,8 @@ Talk to it in the channel you picked. If it answers, you are done.
 
 ### 5. Upgrade
 
+The desktop app's Growth page upgrades containers in one click: when its bundled release is newer, it retags both the bot and sandbox images, rolls back automatically on failure, and never touches the data volume or `.env`.
+
 The tag in `compose.yaml` can pin a version (`ghcr.io/deskwand/bot:0.1.52`); leaving `latest` follows every release. CI pushes the images on `v*` tags:
 
 ```bash
@@ -77,7 +79,7 @@ The volume carries over. Downgrades are not supported: data written by a newer v
 
 ### 6. Backups and moving
 
-The desktop app's Memory page works for containers too: export, restore and automatic backups, no need to stop the stack and pack the volume. Moving to another machine, or to and from Cloudflare, uses the same page's "move" flow. The manual `tar` recipe is in [docs/container-deploy.md](docs/container-deploy.md#备份).
+The desktop app's Memory page works for containers too: export, restore and automatic backups, no need to stop the stack and pack the volume. If the container is stopped, start it from the page first: backup and restore need a reachable admin API. Moving to another machine, or to and from Cloudflare, uses the same page's "move" flow. The manual `tar` recipe is in [docs/container-deploy.md](docs/container-deploy.md#备份).
 
 ### Optional: the sandbox
 

@@ -29,6 +29,9 @@ export const backup: Messages["backup"] = {
   retryPending: "Retry the unfinished restore",
   exportTitle: "Export",
   exportNow: "Back up now",
+  containerStoppedTitle: "The container is not running",
+  containerStoppedDescription: "Backup and restore need a running container with a reachable admin API. Start it first.",
+  startContainer: "Start container",
   exportDescription:
     "Does not include the deployment configuration or keys; it is not encrypted, so keep it safe. Messages pause during the export, for up to about 15 minutes.",
   progressRestore: "Restore",

@@ -136,6 +136,10 @@ type Scenario =
   | "container-unhealthy"
   | "container-unreachable"
   | "container-stopped"
+  | "container-upgrade"
+  | "container-upgrade-failed"
+  | "container-runtime-stopped"
+  | "container-manifest-ahead"
   | "local-apple"
   | "local-both"
   | "local-none"
@@ -480,6 +484,10 @@ function scenarioFromLocation(): Scenario {
     case "container-unhealthy":
     case "container-unreachable":
     case "container-stopped":
+    case "container-upgrade":
+    case "container-upgrade-failed":
+    case "container-runtime-stopped":
+    case "container-manifest-ahead":
     case "local-apple":
     case "local-both":
     case "local-none":
@@ -541,6 +549,10 @@ function initialState(): MockState {
     scenario === "container-unhealthy" ||
     scenario === "container-unreachable" ||
     scenario === "container-stopped" ||
+    scenario === "container-upgrade" ||
+    scenario === "container-upgrade-failed" ||
+    scenario === "container-runtime-stopped" ||
+    scenario === "container-manifest-ahead" ||
     scenario === "local-target";
   const localTarget = LOCAL_SCENARIOS.includes(scenario);
   const localRuntimes =
@@ -1543,6 +1555,16 @@ export function createMockClient(): ClientService {
 
     async containerStatus(): Promise<ContainerStatusDTO> {
       record("containerStatus");
+      if (state.scenario === "container-runtime-stopped") {
+        fail("LOCAL_RUNTIME_STOPPED", "本机容器运行时没有启动");
+      }
+      return { ...state.containerStatus };
+    },
+
+    async startContainer(): Promise<ContainerStatusDTO> {
+      record("startContainer");
+      state.containerStatus.running = true;
+      state.containerStatus.health = "healthy";
       return { ...state.containerStatus };
     },
 
@@ -1573,6 +1595,15 @@ export function createMockClient(): ClientService {
     },
 
     async upgradeAvailable() {
+      if (state.targetKind === "container") {
+        if (state.scenario === "container-upgrade" || state.scenario === "container-upgrade-failed") {
+          return { available: true, currentVersion: "1.2.2", availableVersion: "1.2.3" };
+        }
+        if (state.scenario === "container-manifest-ahead") {
+          return { available: false, currentVersion: "1.2.4", availableVersion: "1.2.4", reason: "UP_TO_DATE" };
+        }
+        return { available: false, currentVersion: "1.2.3", availableVersion: "1.2.3", reason: "UP_TO_DATE" };
+      }
       if (state.scenario === "version-unknown") {
         return {
           available: false,
@@ -1593,6 +1624,24 @@ export function createMockClient(): ClientService {
     },
 
     async upgrade() {
+      record("upgrade");
+      if (state.targetKind === "container") {
+        for (const step of [
+          { id: "write-compose", state: "completed", message: "写入 compose.yaml" },
+          { id: "pull", state: "completed", message: "拉取镜像" },
+          { id: "up", state: "completed", message: "启动容器" },
+          { id: "healthy", state: "completed", message: "等待容器进入健康状态" },
+        ] satisfies StepDTO[]) {
+          emitContainerStep(step);
+        }
+        if (state.scenario === "container-upgrade-failed") {
+          fail("UPGRADE_ROLLED_BACK", "新版本未就绪，已自动回滚到上一版本");
+        }
+        return published("op-upgrade-container", {
+          versionId: "container:1.2.3",
+          releaseVersion: "1.2.3",
+        });
+      }
       return published("op-upgrade-1");
     },
 
@@ -2163,6 +2212,7 @@ export function createMockClient(): ClientService {
     },
 
     async exportData(): Promise<BackupSummaryDTO | null> {
+      record("exportData");
       if (!state.target) fail("TARGET_NOT_SELECTED", "请先选择一个 Worker 部署");
       if (state.scenario === "backup-progress") {
         for (const listener of backupListeners) {

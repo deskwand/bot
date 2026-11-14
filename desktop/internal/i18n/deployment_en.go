@@ -122,6 +122,7 @@ var enDeployment = map[string]string{
 	"container.step.up":                   "Starting the container",
 	"container.step.healthy":              "Waiting for the container to become healthy",
 	"container.step.restart":              "Publishing restarts the bot; it is unavailable for about half a minute",
+	"container.step.rollback":             "Rolling back to the previous version",
 
 	"container.check.container.ok":           "Apple container is available",
 	"container.check.container.fail":         "The container command is missing; install it from https://github.com/apple/container/releases",

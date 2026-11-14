@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
@@ -37,6 +37,36 @@ export function Server() {
   const queryClient = useQueryClient();
   const statusQuery = useContainerStatusQuery(targetKind === "container");
   const status = statusQuery.data;
+  const [manifestVersion, setManifestVersion] = useState("");
+  useEffect(() => {
+    if (targetKind !== "container") {
+      setManifestVersion("");
+      return;
+    }
+    let live = true;
+    client
+      .upgradeAvailable()
+      .then((dto) => {
+        if (live) setManifestVersion(dto.currentVersion ?? "");
+      })
+      .catch(() => {
+        if (live) setManifestVersion("");
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, targetKind, status?.image]);
+
+  // The tag after the last colon is the version docker/container reports; the
+  // manifest version comes from compose.yaml or run.sh.
+  const runningVersion =
+    status?.image && !status.image.includes("@")
+      ? (status.image.split(":").pop() ?? "")
+      : "";
+  const manifestMismatch =
+    manifestVersion !== "" &&
+    runningVersion !== "" &&
+    manifestVersion !== runningVersion;
   const [actionError, setActionError] = useState<unknown>(null);
   const [busy, setBusy] = useState<"restore" | "disconnect" | null>(null);
   const [restoreOpen, setRestoreOpen] = useState(false);
@@ -159,6 +189,17 @@ export function Server() {
             )}
           </dd>
         </div>
+        {manifestMismatch ? (
+          <div className="flex flex-wrap gap-2 p-4" data-testid="server-manifest-mismatch">
+            <dt className="w-28 shrink-0 text-muted-foreground">{t("server.manifest")}</dt>
+            <dd className="min-w-0 break-all">
+              {t("server.manifestMismatch", {
+                manifest: manifestVersion,
+                running: runningVersion,
+              })}
+            </dd>
+          </div>
+        ) : null}
         <div className="flex flex-wrap gap-2 p-4">
           <dt className="w-28 shrink-0 text-muted-foreground">{t("server.startedAt")}</dt>
           <dd className="min-w-0 break-all">{startedAtText}</dd>

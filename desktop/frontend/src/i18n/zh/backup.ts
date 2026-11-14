@@ -27,6 +27,9 @@ export const backup = {
   retryPending: "重试未完成恢复",
   exportTitle: "导出",
   exportNow: "立即备份",
+  containerStoppedTitle: "容器没有运行",
+  containerStoppedDescription: "备份与恢复需要容器运行并响应管理接口。先启动容器再试。",
+  startContainer: "启动容器",
   exportDescription:
     "不含部署配置和密钥；未加密，请妥善保管。导出期间消息暂停，最长约 15 分钟。",
   progressRestore: "恢复",

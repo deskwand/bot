@@ -22,6 +22,12 @@ type ContainerRuntime interface {
 	Status(ctx context.Context, target domain.Target) (container.RuntimeStatus, error)
 	RestorePrevious(ctx context.Context, target domain.Target) (domain.Result, error)
 	ReadSnapshot(ctx context.Context, target domain.Target) (domain.Snapshot, error)
+	// UpgradeAvailable compares the installed image tag with this client's
+	// release.
+	UpgradeAvailable(ctx context.Context, target domain.Target) (container.VersionState, error)
+	// Upgrade moves the container to this client's release, rolling back when
+	// the new version never becomes healthy.
+	Upgrade(ctx context.Context, target domain.Target, onStep func(domain.Step)) (domain.Result, error)
 
 	// DetectLocal reports the container runtimes installed on this Mac.
 	DetectLocal(ctx context.Context) (container.LocalRuntimes, error)
@@ -30,6 +36,8 @@ type ContainerRuntime interface {
 	AdoptLocal(ctx context.Context, target domain.Target, onStep func(domain.Step)) (domain.Result, error)
 	// Remove stops the container on this Mac and deletes its manifest.
 	Remove(ctx context.Context, target domain.Target) error
+	// StartTarget brings a stopped container back up, keeping its data volume.
+	StartTarget(ctx context.Context, target domain.Target) error
 }
 
 // SSHProber probes and pins SSH host keys and keeps host credentials. The
@@ -401,6 +409,23 @@ func (s *Service) RestoreContainerConfig() (ResultDTO, error) {
 		clearAdminEndpoints(s)
 	}
 	return s.summaryFromResult(result, s.targetName(target)), safeAppError(err)
+}
+
+// StartContainer brings the managed container back up so the backup page can
+// reach its admin API.
+func (s *Service) StartContainer() (ContainerStatusDTO, error) {
+	target, err := s.containerTarget()
+	if err != nil {
+		return ContainerStatusDTO{}, err
+	}
+	if s.container == nil {
+		return ContainerStatusDTO{}, s.serviceUnavailable()
+	}
+	if err := s.container.StartTarget(context.Background(), target); err != nil {
+		return ContainerStatusDTO{}, safeAppError(err)
+	}
+	clearAdminEndpoints(s)
+	return s.ContainerStatus()
 }
 
 // DisconnectContainer forgets the host credential and the pinned key and

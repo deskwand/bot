@@ -19,6 +19,8 @@ export const server: Messages["server"] = {
   status: "Status",
   image: "Image",
   startedAt: "Started at",
+  manifest: "Manifest version",
+  manifestMismatch: "The manifest names {manifest} but the container runs {running}; it may not have restarted yet.",
   restore: "Restore the previous configuration",
   restoreTitle: "Restore the previous configuration?",
   restoreDescription:
@@ -32,8 +34,6 @@ export const server: Messages["server"] = {
   disconnectDescriptionLocal:
     "The bot will stop. Configuration and data stay, so you can add it again later.",
   confirmDisconnect: "Disconnect",
-  unsupportedTitle: "This page does not support this runtime yet",
-  unsupportedDescription: "Image upgrades arrive in the next phase.",
   tunnel: "Admin channel",
   tunnelOpen: "Open",
   tunnelClosed: "Not open",

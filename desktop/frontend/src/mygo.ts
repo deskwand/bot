@@ -1069,6 +1069,13 @@ export const Service = {
     return call("Service.StartCloudflareLogin");
   },
   /**
+   * StartContainer brings the managed container back up so the backup page can
+   * reach its admin API.
+   */
+  startContainer(): Promise<ContainerStatusDTO> {
+    return call("Service.StartContainer");
+  },
+  /**
    * StartMcpOAuth asks the Worker for an authorization URL and opens it in the
    * system browser. The token never leaves the Worker.
    */

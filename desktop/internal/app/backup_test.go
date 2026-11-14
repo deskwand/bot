@@ -801,3 +801,21 @@ func TestExportDataAcceptsAContainerTarget(t *testing.T) {
 		t.Fatalf("export path = %q, want a local residence name", f.backup.exportPath)
 	}
 }
+
+func TestRestoreDataAcceptsAContainerTarget(t *testing.T) {
+	f := newBackupFixture(t)
+	box := domain.Target{Kind: domain.TargetContainer, Host: domain.HostRef{
+		Transport: domain.TransportLocal, Engine: domain.EngineCompose, Dir: "/tmp/deskwand",
+	}}
+	f.store.target, f.store.ok = box, true
+	f.service.backupMu.Lock()
+	f.service.backupPath = "/tmp/deskwand-backup-local-20261102-100000.zip"
+	f.service.backupMu.Unlock()
+
+	if err := f.service.RestoreData(); err != nil {
+		t.Fatalf("RestoreData: %v", err)
+	}
+	if !f.backup.restoreTarget.IsContainer() {
+		t.Fatalf("restore target = %+v, want the container target", f.backup.restoreTarget)
+	}
+}

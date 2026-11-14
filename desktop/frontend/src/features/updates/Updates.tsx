@@ -26,13 +26,15 @@ import { describeCode } from "@/services/errors";
 import { useInvalidate } from "@/services/queries";
 import type {
   ResultDTO,
+  StepDTO,
   UpgradeDTO,
 } from "@/services/types";
 
 declare const __APP_VERSION__: string;
 
 export function Updates() {
-  const { client, navigateImport } = useApp();
+  const { client, navigateImport, targetKind } = useApp();
+  const isContainer = targetKind === "container";
   const t = useT();
   const invalidate = useInvalidate();
   const [upgrade, setUpgrade] = useState<UpgradeDTO | null>(null);
@@ -45,6 +47,20 @@ export function Updates() {
   const [clientChecking, setClientChecking] = useState(false);
   const [clientChecked, setClientChecked] = useState(false);
   const [clientError, setClientError] = useState<unknown>(null);
+  const [steps, setSteps] = useState<StepDTO[]>([]);
+
+  useEffect(() => {
+    if (!isContainer) return;
+    return client.onContainerProgress((step) => {
+      setSteps((current) => {
+        const index = current.findIndex((entry) => entry.id === step.id);
+        if (index === -1) return [...current, step];
+        const next = current.slice();
+        next[index] = step;
+        return next;
+      });
+    });
+  }, [client, isContainer]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -81,6 +97,7 @@ export function Updates() {
     setRunning(true);
     setRunError(null);
     setResult(null);
+    setSteps([]);
     try {
       const upgraded = await client.upgrade();
       setResult(upgraded);
@@ -103,15 +120,15 @@ export function Updates() {
 
       <ErrorAlert error={error} onRetry={load} />
 
-      <Card className="mt-5">
+      <Card className="mt-5" data-testid={isContainer ? "container-upgrade" : undefined}>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle className="flex items-center gap-2">
                 <ArrowUpCircle className="size-4" aria-hidden />
-                {t("common.cloudService")}
+                {isContainer ? t("updates.containerTitle") : t("common.cloudService")}
               </CardTitle>
-              <CardDescription>{t("updates.verifySignature")}</CardDescription>
+              <CardDescription>{isContainer ? t("updates.containerDescription") : t("updates.verifySignature")}</CardDescription>
             </div>
             {upgrade?.available ? (
               <Badge>{t("updates.available")}</Badge>
@@ -129,13 +146,13 @@ export function Updates() {
                   available: upgrade.availableVersion || t("common.unknown"),
                 })}
               </p>
-              {upgrade.reason ? (
+              {upgrade.reason && !(isContainer && upgrade.reason === "UP_TO_DATE") ? (
                 <div className="text-muted-foreground">
                   <p>{describeCode(upgrade.reason)}</p>
                   <details className="mt-2"><summary className="cursor-pointer text-xs" data-testid="upgrade-reason">{t("common.details")}</summary><p className="mt-1 break-all text-xs" data-i18n-ignore>{upgrade.reason}</p></details>
                 </div>
               ) : null}
-              {upgrade.modelKeysMissing?.length ? (
+              {!isContainer && upgrade.modelKeysMissing?.length ? (
                 <Alert>
                   <AlertTitle>{t("updates.modelKeysMissingTitle")}</AlertTitle>
                   <AlertDescription>
@@ -143,7 +160,7 @@ export function Updates() {
                   </AlertDescription>
                 </Alert>
               ) : null}
-              {upgrade.reason === "VERSION_UNKNOWN_REIMPORT" ? (
+              {!isContainer && upgrade.reason === "VERSION_UNKNOWN_REIMPORT" ? (
                 <Button type="button" size="sm" variant="outline" onClick={navigateImport}>
                   {t("errors.reimport")}
                 </Button>
@@ -156,7 +173,7 @@ export function Updates() {
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button
               type="button"
-              data-testid="upgrade-cloud"
+              data-testid={isContainer ? "upgrade-container" : "upgrade-cloud"}
               onClick={() => setConfirmOpen(true)}
               disabled={!upgrade?.available || running}
             >
@@ -171,9 +188,11 @@ export function Updates() {
                 <StateBadge state={result.state} />
               </div>
               {result.state === "published" ? <>
-                <p className="mt-2 text-xs text-muted-foreground">{t("updates.publishedHint")}</p>
-                <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">{t("common.details")}</summary><StepList steps={result.steps ?? []} /></details>
-              </> : <StepList steps={result.steps ?? []} />}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {isContainer ? t("updates.containerPublishedHint") : t("updates.publishedHint")}
+                </p>
+                <details className="mt-3"><summary className="cursor-pointer text-xs text-muted-foreground">{t("common.details")}</summary><StepList steps={isContainer ? steps : result.steps ?? []} /></details>
+              </> : <StepList steps={isContainer ? steps : result.steps ?? []} />}
               {result.state === "unknown" || result.state === "needs_input" ? (
                 <Button
                   type="button"
@@ -196,6 +215,11 @@ export function Updates() {
                   {t("common.continue")}
                 </Button>
               ) : null}
+            </div>
+          ) : null}
+          {isContainer && !result && steps.length > 0 ? (
+            <div className="mt-4">
+              <StepList steps={steps} />
             </div>
           ) : null}
           <ErrorAlert error={runError} onRetry={() => setConfirmOpen(true)} retryLabel={t("updates.retryUpgrade")} />
@@ -245,19 +269,29 @@ export function Updates() {
           <DialogHeader>
             <DialogTitle>{t("updates.confirmTitle")}</DialogTitle>
             <DialogDescription>
-              {t("updates.confirmDescription", {
-                current: upgrade?.currentVersion || t("common.unknown"),
-                available: upgrade?.availableVersion || t("common.unknown"),
-              })}
+              {isContainer
+                ? t("updates.containerConfirmDescription", {
+                    current: upgrade?.currentVersion || t("common.unknown"),
+                    available: upgrade?.availableVersion || t("common.unknown"),
+                  })
+                : t("updates.confirmDescription", {
+                    current: upgrade?.currentVersion || t("common.unknown"),
+                    available: upgrade?.availableVersion || t("common.unknown"),
+                  })}
             </DialogDescription>
           </DialogHeader>
-          <Alert>
-            <AlertTitle>{t("updates.compatTitle")}</AlertTitle>
-            <AlertDescription>
-              {t("updates.compatDescription")}
-            </AlertDescription>
-          </Alert>
-          {upgrade?.modelKeysMissing?.length ? (
+          {isContainer ? (
+            <Alert>
+              <AlertTitle>{t("updates.containerRollbackTitle")}</AlertTitle>
+              <AlertDescription>{t("updates.containerRollbackDescription")}</AlertDescription>
+            </Alert>
+          ) : (
+            <Alert>
+              <AlertTitle>{t("updates.compatTitle")}</AlertTitle>
+              <AlertDescription>{t("updates.compatDescription")}</AlertDescription>
+            </Alert>
+          )}
+          {!isContainer && upgrade?.modelKeysMissing?.length ? (
             <Alert>
               <AlertTitle>{t("updates.modelKeysMissingTitle")}</AlertTitle>
               <AlertDescription>

@@ -23,7 +23,8 @@ import {
 import { pageSubtitle, useApp } from "@/components/app-context";
 import { ErrorAlert } from "@/components/feedback";
 import { formatDateTime, getT, useT, type MessageKey } from "@/i18n";
-import { useInvalidate } from "@/services/queries";
+import { queryKeys, useContainerStatusQuery, useInvalidate } from "@/services/queries";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Select,
   SelectContent,
@@ -31,7 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { describeCode } from "@/services/errors";
+import { describeCode, toClientError } from "@/services/errors";
 import type {
   BackupFileDTO,
   BackupPreviewDTO,
@@ -97,9 +98,38 @@ function problemMessage(preview: BackupPreviewDTO): string | null {
 }
 
 export function Backup() {
-  const { client } = useApp();
+  const { client, targetKind } = useApp();
   const t = useT();
   const invalidate = useInvalidate();
+  const queryClient = useQueryClient();
+  const statusQuery = useContainerStatusQuery(targetKind === "container");
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<unknown>(null);
+  const statusErrorCode = statusQuery.error ? toClientError(statusQuery.error).code : "";
+  const runtimeDown =
+    targetKind === "container" &&
+    (statusErrorCode.startsWith("LOCAL_RUNTIME_") || statusErrorCode.startsWith("SSH_"));
+  const stopped =
+    !runtimeDown &&
+    targetKind === "container" &&
+    statusQuery.data?.reachable === true &&
+    statusQuery.data.running === false;
+  // Backup and restore both need the admin API; a stopped runtime or host makes
+  // every request fail, so the buttons are off with the reason above them.
+  const actionsBlocked = stopped || runtimeDown;
+
+  const startContainer = async () => {
+    setStarting(true);
+    setStartError(null);
+    try {
+      await client.startContainer();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.containerStatus });
+    } catch (cause) {
+      setStartError(cause);
+    } finally {
+      setStarting(false);
+    }
+  };
   const [progress, setProgress] = useState<Progress | null>(null);
   const [exportRunning, setExportRunning] = useState(false);
   const [exportSummary, setExportSummary] = useState<BackupSummaryDTO | null>(null);
@@ -422,11 +452,28 @@ export function Backup() {
         </div>
       </section>
 
+      {stopped ? (
+        <Alert className="mt-5" data-testid="backup-container-stopped">
+          <AlertTitle>{t("backup.containerStoppedTitle")}</AlertTitle>
+          <AlertDescription className="space-y-2">
+            <p>{t("backup.containerStoppedDescription")}</p>
+            <Button type="button" size="sm" disabled={starting} onClick={() => void startContainer()}>
+              {starting ? (
+                <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
+              ) : null}
+              {t("backup.startContainer")}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      <ErrorAlert error={runtimeDown ? statusQuery.error : null} />
+      <ErrorAlert error={startError} />
+
       <Card className="mt-5">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle>{t("backup.exportTitle")}</CardTitle>
-          <Button type="button" onClick={() => void exportData()} disabled={exportRunning}>
+          <Button type="button" onClick={() => void exportData()} disabled={exportRunning || actionsBlocked}>
             {exportRunning ? (
               <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
             ) : (
@@ -559,7 +606,7 @@ export function Backup() {
             type="button"
             variant="outline"
             onClick={() => void chooseBackup()}
-            disabled={choosing || restoreRunning}
+            disabled={choosing || restoreRunning || actionsBlocked}
           >
             {choosing ? (
               <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />
@@ -632,7 +679,7 @@ export function Backup() {
                   type="button"
                   variant={blocked ? "outline" : "destructive"}
                   onClick={() => setRestoreOpen(true)}
-                  disabled={!canRestore || restoreRunning}
+                  disabled={!canRestore || restoreRunning || actionsBlocked}
                 >
                   {restoreRunning ? (
                     <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden />

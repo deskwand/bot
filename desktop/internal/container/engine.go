@@ -14,6 +14,10 @@ type Engine interface {
 	Preflight(ctx context.Context, host Host, dir string) (PreflightReport, error)
 	WriteManifest(ctx context.Context, host Host, dir, version string) error
 	ReadVersion(ctx context.Context, host Host, dir string) (string, error)
+	// ManifestUnchanged reports whether the manifest in dir is exactly what
+	// WriteManifest(dir, version) would write, so an upgrade never overwrites a
+	// hand-edited compose file or run script.
+	ManifestUnchanged(ctx context.Context, host Host, dir, version string) (bool, error)
 	Pull(ctx context.Context, host Host, dir string) error
 	Apply(ctx context.Context, host Host, dir string) error
 	// Stop stops the container and its supervisor, keeping the data volume and

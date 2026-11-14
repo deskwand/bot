@@ -145,23 +145,33 @@ test("连不上服务器与容器没在运行是两种提示", async ({ page }) 
   }
 });
 
-test("容器目标下暂不支持的页面只剩成长", async ({ page }) => {
+test("容器目标在成长页升级而不是显示占位页", async ({ page }) => {
+  await page.goto("/test.html?fixture=container-upgrade");
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await nav.getByRole("button", { name: "成长", exact: true }).click();
+
+  await expect(page.getByTestId("unsupported")).toHaveCount(0);
+  await expect(page.getByTestId("container-upgrade")).toBeVisible();
+  await expect(page.getByTestId("container-upgrade")).toContainText("当前 1.2.2 → 可用 1.2.3");
+
+  await page.getByTestId("upgrade-container").click();
+  const dialog = page.getByRole("dialog", { name: "升级前确认" });
+  await expect(dialog).toContainText("失败会自动回滚");
+  await dialog.getByRole("button", { name: "确认升级" }).click();
+
+  await expect(page.getByTestId("step-list")).toContainText("拉取镜像");
+  await expect
+    .poll(async () => (await mockCalls(page, "upgrade")).length)
+    .toBe(1);
+  await expect(page.getByText("升级结果")).toBeVisible();
+});
+
+test("容器已是最新时不提供升级按钮", async ({ page }) => {
   await page.goto("/test.html?fixture=container-ready");
   const nav = page.getByRole("navigation", { name: "主导航" });
-
   await nav.getByRole("button", { name: "成长", exact: true }).click();
-  await expect(page.getByTestId("unsupported")).toBeVisible();
-
-  for (const name of ["记忆存档", "双手", "钱包", "交易所", "头脑", "声音", "服务器"]) {
-    await nav.getByRole("button", { name, exact: true }).click();
-    await expect(page.getByTestId("unsupported")).toHaveCount(0);
-  }
-
-  // Upgrades are the only placeholder left, so its methods must never run; a
-  // container residence is backed up through the same admin endpoint.
-  for (const method of ["upgrade", "upgradeAvailable"]) {
-    expect(await mockCalls(page, method)).toHaveLength(0);
-  }
+  await expect(page.getByTestId("container-upgrade")).toContainText("已是最新");
+  await expect(page.getByTestId("upgrade-container")).toBeDisabled();
 });
 
 test("容器目标下三页真的渲染出内容", async ({ page }) => {
@@ -441,4 +451,69 @@ test("断开容器后接管 Cloudflare 不会落在空白页", async ({ page }) 
   await expect(
     page.getByRole("heading", { level: 1, name: "生命体征", exact: true }),
   ).toBeVisible();
+});
+
+test("清单版本与运行镜像不一致时服务器页提醒", async ({ page }) => {
+  await page.goto("/test.html?fixture=container-manifest-ahead");
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await nav.getByRole("button", { name: "服务器", exact: true }).click();
+
+  const row = page.getByTestId("server-manifest-mismatch");
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("1.2.4");
+  await expect(row).toContainText("1.2.3");
+});
+
+test("容器目标可以用记忆存档导出备份", async ({ page }) => {
+  await page.goto("/test.html?fixture=container-ready");
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await nav.getByRole("button", { name: "记忆存档", exact: true }).click();
+
+  await expect(page.getByTestId("unsupported")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "立即备份" })).toBeEnabled();
+  await page.getByRole("button", { name: "立即备份" }).click();
+  await expect
+    .poll(async () => (await mockCalls(page, "exportData")).length)
+    .toBe(1);
+  await expect(page.getByTestId("backup-file")).toHaveCount(1);
+});
+
+test("容器停着时备份页引导先启动容器", async ({ page }) => {
+  await page.goto("/test.html?fixture=container-stopped");
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await nav.getByRole("button", { name: "记忆存档", exact: true }).click();
+
+  const stopped = page.getByTestId("backup-container-stopped");
+  await expect(stopped).toBeVisible();
+  await expect(page.getByRole("button", { name: "立即备份" })).toBeDisabled();
+
+  await page.getByRole("button", { name: "启动容器" }).click();
+  await expect
+    .poll(async () => (await mockCalls(page, "startContainer")).length)
+    .toBe(1);
+  await expect(stopped).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "立即备份" })).toBeEnabled();
+});
+
+test("容器升级失败时仍然显示步骤与回滚结果", async ({ page }) => {
+  await page.goto("/test.html?fixture=container-upgrade-failed");
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await nav.getByRole("button", { name: "成长", exact: true }).click();
+
+  await page.getByTestId("upgrade-container").click();
+  const dialog = page.getByRole("dialog", { name: "升级前确认" });
+  await dialog.getByRole("button", { name: "确认升级" }).click();
+
+  await expect(page.getByTestId("error-alert")).toContainText("已自动回滚到上一版本");
+  await expect(page.getByTestId("step-list")).toContainText("拉取镜像");
+});
+
+test("容器运行时没启动时备份页禁用并说明原因", async ({ page }) => {
+  await page.goto("/test.html?fixture=container-runtime-stopped");
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  await nav.getByRole("button", { name: "记忆存档", exact: true }).click();
+
+  await expect(page.getByTestId("error-alert")).toContainText("容器运行时没有启动");
+  await expect(page.getByRole("button", { name: "立即备份" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "从本地恢复" })).toBeDisabled();
 });

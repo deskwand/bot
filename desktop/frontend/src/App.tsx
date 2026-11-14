@@ -50,7 +50,6 @@ import { Cloudflare } from "@/features/cloudflare/Cloudflare";
 import { Search } from "@/features/search/Search";
 import { Setup } from "@/features/setup/Setup";
 import { Server } from "@/features/server/Server";
-import { Unsupported } from "@/components/unsupported";
 import { Updates } from "@/features/updates/Updates";
 
 const Entries = lazy(() =>
@@ -96,8 +95,6 @@ const NAV_GROUPS: { group?: NavGroup; items: { page: Page; icon: LucideIcon }[] 
     ],
   },
 ];
-
-const CONTAINER_UNSUPPORTED: Page[] = ["updates"];
 
 export function App({ client }: { client: ClientService }) {
   const t = useT();
@@ -280,7 +277,6 @@ export function App({ client }: { client: ClientService }) {
           : items,
     }));
   }, [isContainer]);
-  const unsupported = isContainer && CONTAINER_UNSUPPORTED.includes(page);
 
   const shell = session.kind === "ready";
   const connectionFailure =
@@ -411,8 +407,7 @@ export function App({ client }: { client: ClientService }) {
                   key={page}
                   className="animate-in fade-in-0 slide-in-from-bottom-1 duration-150 motion-reduce:animate-none"
                 >
-                  {unsupported ? <Unsupported /> : null}
-                  {!unsupported && page === "overview" ? <Overview /> : null}
+                  {page === "overview" ? <Overview /> : null}
                   {page === "models" ? <Models /> : null}
                   {page === "search" ? <Search /> : null}
                   {page === "exchange" ? <Exchanges /> : null}
@@ -424,8 +419,8 @@ export function App({ client }: { client: ClientService }) {
                     </Suspense>
                   ) : null}
                   {page === "diagnostics" ? <Diagnostics /> : null}
-                  {page === "backup" && !isContainer ? <Backup /> : null}
-                  {page === "updates" && !isContainer ? <Updates /> : null}
+                  {page === "backup" ? <Backup /> : null}
+                  {page === "updates" ? <Updates /> : null}
                   {page === "cloudflare" && !isContainer ? <Cloudflare /> : null}
                   {page === "server" && isContainer ? <Server /> : null}
                 </div>

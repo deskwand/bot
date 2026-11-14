@@ -43,6 +43,7 @@ export function createProductionClient(): ClientService {
     installContainer: (input) => Service.installContainer(input),
     adoptContainer: () => Service.adoptContainer(),
     containerStatus: () => Service.containerStatus(),
+    startContainer: () => Service.startContainer(),
     restoreContainerConfig: () => Service.restoreContainerConfig(),
     disconnectContainer: () => Service.disconnectContainer(),
     onContainerProgress: (listener) => events.containerProgress.on(listener),

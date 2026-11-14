@@ -22,6 +22,7 @@ import (
 	"github.com/deskwand/bot/desktop/internal/auth"
 	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
+	"github.com/deskwand/bot/desktop/internal/container"
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
 	"github.com/deskwand/bot/desktop/internal/domain"
@@ -937,9 +938,12 @@ func (s *Service) Install(input InstallInputDTO) (ResultDTO, error) {
 // UpgradeAvailable compares the embedded release with the active deployment.
 func (s *Service) UpgradeAvailable() (UpgradeDTO, error) {
 	ctx := context.Background()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return UpgradeDTO{}, err
+	}
+	if target.IsContainer() {
+		return s.containerUpgradeAvailable(ctx, target)
 	}
 	if _, err := s.releasePackage(); err != nil {
 		return UpgradeDTO{Reason: releaseErrorCode(err)}, nil
@@ -1006,9 +1010,18 @@ func missingModelKeys(snapshot domain.Snapshot) []string {
 // Upgrade applies the embedded release to the managed deployment.
 func (s *Service) Upgrade() (ResultDTO, error) {
 	ctx := context.Background()
-	target, err := s.cloudflareTarget(ctx)
+	target, err := s.managedTarget(ctx)
 	if err != nil {
 		return ResultDTO{}, err
+	}
+	if target.IsContainer() {
+		if s.container == nil {
+			return ResultDTO{}, s.serviceUnavailable()
+		}
+		result, err := s.container.Upgrade(ctx, target, s.emitStep)
+		failure := safeAppError(err)
+		s.reportFeature(telemetry.FeatureUpgrade, result.State, failure)
+		return s.summaryFromResult(result, s.targetName(target)), failure
 	}
 	pkg, err := s.releasePackage()
 	if err != nil {
@@ -1021,6 +1034,32 @@ func (s *Service) Upgrade() (ResultDTO, error) {
 	failure := safeAppError(err)
 	s.reportFeature(telemetry.FeatureUpgrade, result.State, failure)
 	return s.summaryFromResult(result, target.ScriptName), failure
+}
+
+// containerUpgradeAvailable maps the container runtime's version state onto the
+// same DTO the Cloudflare page already reads.
+func (s *Service) containerUpgradeAvailable(ctx context.Context, target domain.Target) (UpgradeDTO, error) {
+	if s.container == nil {
+		return UpgradeDTO{}, s.serviceUnavailable()
+	}
+	state, err := s.container.UpgradeAvailable(ctx, target)
+	if err != nil {
+		return UpgradeDTO{}, safeAppError(err)
+	}
+	dto := UpgradeDTO{CurrentVersion: state.Current, AvailableVersion: state.Target}
+	switch state.State {
+	case container.VersionUpgradable:
+		dto.Available = true
+	case container.VersionCurrent:
+		dto.Reason = "UP_TO_DATE"
+	case container.VersionClientBehind:
+		dto.Reason = domain.CONTAINER_CLIENT_BEHIND
+	case container.VersionManifestPending:
+		dto.Reason = domain.CONTAINER_MANIFEST_PENDING
+	default:
+		dto.Reason = domain.CONTAINER_VERSION_UNKNOWN
+	}
+	return dto, nil
 }
 
 // GetConfig reads the editable configuration summary.

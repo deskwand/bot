@@ -73,6 +73,8 @@ func (s *Service) dial(target domain.Target) (Host, error) {
 
 // StopTarget stops the container, keeping its volume and .env.
 func (s *Service) StopTarget(ctx context.Context, target domain.Target) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	host, err := s.dial(target)
 	if err != nil {
 		return err
@@ -82,6 +84,8 @@ func (s *Service) StopTarget(ctx context.Context, target domain.Target) error {
 
 // StartTarget brings a stopped container back up.
 func (s *Service) StartTarget(ctx context.Context, target domain.Target) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	host, err := s.dial(target)
 	if err != nil {
 		return err

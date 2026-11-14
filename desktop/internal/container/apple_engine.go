@@ -1,6 +1,7 @@
 package container
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -244,6 +245,25 @@ func applePortOwner(ctx context.Context, host Host) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// ManifestUnchanged compares the run script with the one an upgrade would
+// write. The launch agent plist is not compared: it names no image and no
+// volume, and rewriting it cannot change where the data lives.
+func (e *appleEngine) ManifestUnchanged(ctx context.Context, host Host, dir, version string) (bool, error) {
+	home, containerBin, err := e.home(ctx, host)
+	if err != nil {
+		return false, err
+	}
+	script, err := readFileOnHost(ctx, host, runScriptPath(dir))
+	if err != nil {
+		if errors.Is(err, hostexec.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	want := appleRunScript(expandHome(dir, home), containerBin, appleImageRef(version))
+	return bytes.Equal(script, want), nil
 }
 
 // Pull fetches the image the run script names, unless it is already here.

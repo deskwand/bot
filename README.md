@@ -67,6 +67,8 @@ docker compose logs -f bot
 
 ### 5. 升级
 
+桌面客户端在「成长」页提供一键升级：客户端内置版本比容器新时，会把 bot 与 sandbox 的 tag 一起换掉，失败自动回滚，数据卷和 `.env` 不动。
+
 `compose.yaml` 里的 tag 可以钉版本（`ghcr.io/deskwand/bot:0.1.52`），留 `latest` 就一直跟最新发布；镜像在打 `v*` tag 时由 CI 推出：
 
 ```bash
@@ -77,7 +79,7 @@ docker compose pull && docker compose up -d
 
 ### 6. 备份与搬家
 
-桌面客户端的「记忆存档」页对容器同样可用：导出、恢复、自动备份都不用停机打包卷。换一台机器、从 Cloudflare 搬来或搬回，用同一页的「搬家」。手工 `tar` 的写法在 [docs/container-deploy.md](docs/container-deploy.md#备份)。
+桌面客户端的「记忆存档」页对容器同样可用：导出、恢复、自动备份都不用停机打包卷。容器停着时先在页面上点「启动容器」，备份与恢复都要求管理接口可达。换一台机器、从 Cloudflare 搬来或搬回，用同一页的「搬家」。手工 `tar` 的写法在 [docs/container-deploy.md](docs/container-deploy.md#备份)。
 
 ### 可选：沙箱
 

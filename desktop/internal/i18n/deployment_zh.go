@@ -122,6 +122,7 @@ var zhDeployment = map[string]string{
 	"container.step.up":                   "启动容器",
 	"container.step.healthy":              "等待容器进入健康状态",
 	"container.step.restart":              "发布会重启机器人，约半分钟不可用",
+	"container.step.rollback":             "回滚到上一版本",
 
 	"container.check.container.ok":           "Apple container 可用",
 	"container.check.container.fail":         "没找到 container 命令；请从 https://github.com/apple/container/releases 安装",

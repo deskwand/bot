@@ -44,6 +44,20 @@ type fakeContainer struct {
 	restoreErr    error
 	restoreCalls  int
 
+	versionState    container.VersionState
+	versionStateErr error
+	versionCalls    int
+
+	upgradeTarget domain.Target
+	upgradeSteps  []domain.Step
+	upgradeResult domain.Result
+	upgradeErr    error
+	upgradeCalls  int
+
+	startTargetTarget domain.Target
+	startTargetErr    error
+	startTargetCalls  int
+
 	snapshot      domain.Snapshot
 	snapshotErr   error
 	snapshotCalls int
@@ -112,6 +126,35 @@ func (f *fakeContainer) RestorePrevious(context.Context, domain.Target) (domain.
 		result = domain.Result{State: deployment.StatePublished}
 	}
 	return result, f.restoreErr
+}
+
+func (f *fakeContainer) UpgradeAvailable(context.Context, domain.Target) (container.VersionState, error) {
+	f.versionCalls++
+	f.totalCalls++
+	return f.versionState, f.versionStateErr
+}
+
+func (f *fakeContainer) StartTarget(_ context.Context, target domain.Target) error {
+	f.startTargetCalls++
+	f.totalCalls++
+	f.startTargetTarget = target
+	return f.startTargetErr
+}
+
+func (f *fakeContainer) Upgrade(_ context.Context, target domain.Target, onStep func(domain.Step)) (domain.Result, error) {
+	f.upgradeCalls++
+	f.totalCalls++
+	f.upgradeTarget = target
+	for _, step := range f.upgradeSteps {
+		if onStep != nil {
+			onStep(step)
+		}
+	}
+	result := f.upgradeResult
+	if result.State == "" && f.upgradeErr == nil {
+		result = domain.Result{State: deployment.StatePublished}
+	}
+	return result, f.upgradeErr
 }
 
 func (f *fakeContainer) ReadSnapshot(context.Context, domain.Target) (domain.Snapshot, error) {
@@ -525,10 +568,8 @@ func TestCloudflareOnlyMethodsReportUnsupported(t *testing.T) {
 	f.store.ok = true
 
 	calls := map[string]func() error{
-		"UpgradeAvailable": func() error { _, err := f.service.UpgradeAvailable(); return err },
-		"Upgrade":          func() error { _, err := f.service.Upgrade(); return err },
-		"ListWorkers":      func() error { _, err := f.service.ListWorkers(); return err },
-		"InspectImport":    func() error { _, err := f.service.InspectImport(); return err },
+		"ListWorkers":   func() error { _, err := f.service.ListWorkers(); return err },
+		"InspectImport": func() error { _, err := f.service.InspectImport(); return err },
 		"ConfirmImport": func() error {
 			_, err := f.service.ConfirmImport(ImportInputDTO{})
 			return err
@@ -1176,5 +1217,95 @@ func TestUnauthorizedDropsTheCachedEndpoint(t *testing.T) {
 	}
 	if !resolver.invalidated {
 		t.Fatal("the resolver was not invalidated after a 401")
+	}
+}
+
+func TestUpgradeAvailableForAContainerUsesTheRuntime(t *testing.T) {
+	f := newContainerFixture(t)
+	f.store.target, f.store.ok = routerContainerTarget(), true
+	f.container.versionState = container.VersionState{
+		Current: "1.2.2", Target: "1.2.3", State: container.VersionUpgradable,
+	}
+	dto, err := f.service.UpgradeAvailable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dto.Available || dto.CurrentVersion != "1.2.2" || dto.AvailableVersion != "1.2.3" {
+		t.Fatalf("dto = %#v", dto)
+	}
+	if len(dto.ModelKeysMissing) != 0 {
+		t.Fatalf("modelKeysMissing = %v, want none for a container", dto.ModelKeysMissing)
+	}
+	if f.container.versionCalls != 1 {
+		t.Fatalf("versionCalls = %d", f.container.versionCalls)
+	}
+}
+
+func TestUpgradeAvailableMapsContainerStatesToReasons(t *testing.T) {
+	for _, tc := range []struct{ state, want string }{
+		{container.VersionCurrent, "UP_TO_DATE"},
+		{container.VersionClientBehind, domain.CONTAINER_CLIENT_BEHIND},
+		{container.VersionUnknown, domain.CONTAINER_VERSION_UNKNOWN},
+	} {
+		f := newContainerFixture(t)
+		f.store.target, f.store.ok = routerContainerTarget(), true
+		f.container.versionState = container.VersionState{Current: "1.2.3", Target: "1.2.3", State: tc.state}
+		dto, err := f.service.UpgradeAvailable()
+		if err != nil {
+			t.Fatalf("state %q: %v", tc.state, err)
+		}
+		if dto.Available || dto.Reason != tc.want {
+			t.Fatalf("state %q: dto = %#v, want reason %s", tc.state, dto, tc.want)
+		}
+	}
+}
+
+func TestUpgradeForAContainerRunsTheRuntime(t *testing.T) {
+	f := newContainerFixture(t)
+	target := routerContainerTarget()
+	f.store.target, f.store.ok = target, true
+	f.container.upgradeResult = domain.Result{State: "published", VersionID: "container:1.2.3"}
+	f.container.upgradeSteps = []domain.Step{{ID: "pull", State: "applying"}}
+
+	dto, err := f.service.Upgrade()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.container.upgradeCalls != 1 || f.container.upgradeTarget != target {
+		t.Fatalf("upgrade target = %#v, calls = %d", f.container.upgradeTarget, f.container.upgradeCalls)
+	}
+	if dto.State != "published" {
+		t.Fatalf("dto = %#v", dto)
+	}
+	if len(f.steps) != 1 || f.steps[0].ID != "pull" {
+		t.Fatalf("emitted steps = %#v", f.steps)
+	}
+}
+
+func TestStartContainerStartsTheManagedTarget(t *testing.T) {
+	f := newContainerFixture(t)
+	target := routerContainerTarget()
+	f.store.target, f.store.ok = target, true
+	f.container.status = container.RuntimeStatus{
+		Reachable: true, Running: true, Health: "healthy", Image: "ghcr.io/deskwand/bot:1.2.3",
+	}
+	dto, err := f.service.StartContainer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.container.startTargetCalls != 1 || f.container.startTargetTarget != target {
+		t.Fatalf("start calls = %d, target = %#v", f.container.startTargetCalls, f.container.startTargetTarget)
+	}
+	if !dto.Running || dto.Health != "healthy" {
+		t.Fatalf("dto = %#v", dto)
+	}
+}
+
+func TestStartContainerRejectsACloudflareTarget(t *testing.T) {
+	f := newContainerFixture(t)
+	f.store.target = domain.Target{AccountID: "a", ScriptName: "worker"}
+	f.store.ok = true
+	if _, err := f.service.StartContainer(); !hasCode(err, domain.TARGET_UNSUPPORTED) {
+		t.Fatalf("error = %v, want %s", err, domain.TARGET_UNSUPPORTED)
 	}
 }
