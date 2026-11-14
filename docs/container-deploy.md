@@ -18,6 +18,8 @@ Cloudflare 部署仍然是默认形态；容器是并列的另一种部署方式
 
 1. 把仓库根目录的 `compose.yaml` 和 `.env.container.example` 放到同一个目录（例如 `~/deskwand`），把后者改名为 `.env`。
 2. 打开 `.env`，至少填好 `DESKWAND_CONFIG`、`ADMIN_TOKEN` 和一个 `MODEL_KEY_*`，再按入口填 `TELEGRAM_BOT_TOKEN` 或 `WECHAT_CREDENTIALS`。
+认领：装完不用填任何 ID。给 bot 发一句「你好」，它回你「已把你设为主人」就完成了。之后换人，在桌面端「声音」页点「重新开启认领」，让新的人先发消息。
+
 3. 启动并查看状态：
 
    ```bash
@@ -39,7 +41,7 @@ docker build -f container/Dockerfile -t ghcr.io/deskwand/bot:latest .
 
 | 变量 | 说明 |
 | --- | --- |
-| `DESKWAND_CONFIG` | 可管理配置，单行 JSON。整行必须用单引号包住：compose 会去掉单引号，且不做 `$` 插值。`owner` 填你自己的 ID。 |
+| `DESKWAND_CONFIG` | 可管理配置，单行 JSON。整行必须用单引号包住：compose 会去掉单引号，且不做 `$` 插值。`owner` 可以整段省略 —— 省略后由第一条消息认领主人，换人不需要重建容器。 |
 | `ADMIN_TOKEN` | `/admin/*` 的 Bearer token，用随机长字符串，不要用示例值。 |
 | `MODEL_KEY_<ID>` | 至少一个模型 key。`<ID>` 是厂商 id 转大写、`-` 换成 `_`。容器里没有 Workers AI。 |
 
