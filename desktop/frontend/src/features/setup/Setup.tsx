@@ -45,7 +45,6 @@ import {
   DEFAULT_MODEL,
   modelKey,
   parseModelKey,
-  parseUserIDs,
   providerOptions,
   type ProviderOption,
 } from "@/features/models/catalog";
@@ -573,7 +572,6 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   const setPage = useUiStore((state) => state.setPage);
   const [workerName, setWorkerName] = useState("deskwand-bot");
   const [bucketName, setBucketName] = useState("deskwand-files");
-  const [ownerIDs, setOwnerIDs] = useState("");
   const [channel, setChannel] = useState("");
   const [butler, setButler] = useState(modelKey(DEFAULT_MODEL));
   const [task, setTask] = useState(modelKey(DEFAULT_MODEL));
@@ -596,7 +594,6 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   const dirty =
     workerName !== initial.current.workerName ||
     bucketName !== initial.current.bucketName ||
-    ownerIDs.length > 0 ||
     channel.length > 0;
   useDirty(dirty && !result);
 
@@ -632,7 +629,8 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
         accountId: "",
         workerName: workerName.trim(),
         bucketName: bucketName.trim(),
-        telegramUserIds: channel === "telegram" ? parseUserIDs(ownerIDs) : [],
+        // 空数组 = 不写 owner 补丁，部署进入待认领。
+        telegramUserIds: [],
         butlerModel,
         taskModel,
         activeChannel: channel,
@@ -721,11 +719,7 @@ function DeployFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                 </RadioGroup>
               </fieldset>
 
-              {channel === "telegram" ? <div className="space-y-2">
-                <Label htmlFor="install-owners">{t("setup.ownersLabel")}</Label>
-                <Input id="install-owners" value={ownerIDs} onChange={(event) => setOwnerIDs(event.target.value)} placeholder={t("setup.ownersPlaceholder")} inputMode="numeric" aria-describedby="install-owner-hint" />
-                <p id="install-owner-hint" className="text-xs text-muted-foreground">{t("setup.ownersHint")}</p>
-              </div> : channel === "wechat" ? <p className="text-sm text-muted-foreground">{t("setup.wechatAfterDeploy")}</p> : null}
+              {channel === "wechat" ? <p className="text-sm text-muted-foreground">{t("setup.wechatAfterDeploy")}</p> : null}
 
               {parseModelKey(butler)?.provider === "workers-ai" || parseModelKey(task)?.provider === "workers-ai" ? (
                 <details className="text-xs text-muted-foreground">
@@ -827,7 +821,6 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   const [workers, setWorkers] = useState<WorkerDTO[]>([]);
   const [selected, setSelected] = useState("");
   const [preview, setPreview] = useState<ImportPreviewDTO | null>(null);
-  const [ownerIDs, setOwnerIDs] = useState("");
   const [butler, setButler] = useState(modelKey(DEFAULT_MODEL));
   const [task, setTask] = useState(modelKey(DEFAULT_MODEL));
   const [secrets, setSecrets] = useState<Record<string, string>>({});
@@ -836,7 +829,7 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
   const [error, setError] = useState<unknown>(null);
   const [submitError, setSubmitError] = useState<unknown>(null);
   const [result, setResult] = useState<ResultDTO | null>(null);
-  const dirty = Boolean(selected || ownerIDs || Object.values(secrets).some(Boolean));
+  const dirty = Boolean(selected || Object.values(secrets).some(Boolean));
   useDirty(dirty && !result);
 
   const loadWorkers = useCallback(async () => {
@@ -886,11 +879,8 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
         }
         models = { butlerModel, taskModel };
       }
-      const ownerVisible =
-        preview.legacy || preview.requiredInputs?.includes("telegramUserIds") === true;
       const confirmed = await client.confirmImport({
         baseFingerprint: "",
-        ...(ownerVisible ? { telegramUserIds: parseUserIDs(ownerIDs) } : {}),
         ...models,
         secrets: Object.entries(secrets)
           .filter(([, value]) => value.trim().length > 0)
@@ -1034,19 +1024,6 @@ function ImportFlow({ onBack, onReady }: { onBack: () => void; onReady: () => vo
                     />
                   </div>
                 ))}
-              </div>
-            ) : null}
-
-            {preview.requiredInputs?.includes("telegramUserIds") || preview.legacy ? (
-              <div className="space-y-2">
-                <Label htmlFor="import-owners">{t("setup.ownersLabel")}</Label>
-                <Input
-                  id="import-owners"
-                  value={ownerIDs}
-                  onChange={(event) => setOwnerIDs(event.target.value)}
-                  placeholder={t("setup.ownersPlaceholder")}
-                  inputMode="numeric"
-                />
               </div>
             ) : null}
 

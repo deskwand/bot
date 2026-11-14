@@ -14,7 +14,6 @@ import {
   DEFAULT_MODEL,
   modelKey,
   parseModelKey,
-  parseUserIDs,
   secretNameFor,
 } from "@/features/models/catalog";
 import { ModelSelect } from "@/features/models/ModelSelect";
@@ -90,7 +89,6 @@ export function ContainerFlow({
   const [secret, setSecret] = useState("");
   const [dir, setDir] = useState("~/deskwand");
 
-  const [ownerIDs, setOwnerIDs] = useState("");
   const [channel, setChannel] = useState("telegram");
   const [butler, setButler] = useState(modelKey(DEFAULT_MODEL));
   const [task, setTask] = useState(modelKey(DEFAULT_MODEL));
@@ -264,7 +262,8 @@ export function ContainerFlow({
     setSteps([]);
     try {
       const result = await client.installContainer({
-        telegramUserIds: channel === "telegram" ? parseUserIDs(ownerIDs) : [],
+        // 空数组 = 不写 owner 补丁，部署进入待认领（见 CLI 的 owner 语义）。
+        telegramUserIds: [],
         butlerModel,
         taskModel,
         activeChannel: channel,
@@ -654,7 +653,13 @@ export function ContainerFlow({
                     <dt className="text-xs text-muted-foreground">
                       {t("setup.containerOwner")}
                     </dt>
-                    <dd data-i18n-ignore>{existing.ownerUserIds.join(", ")}</dd>
+                    <dd data-i18n-ignore>
+                      {existing.ownerClaimMode
+                        ? t("setup.ownerClaimOrClosed")
+                        : existing.ownerUserIds.length > 0
+                          ? existing.ownerUserIds.join(", ")
+                          : t("setup.ownerClosed")}
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-xs text-muted-foreground">
@@ -747,20 +752,6 @@ export function ContainerFlow({
               </label>
             </RadioGroup>
           </fieldset>
-
-          {channel === "telegram" ? (
-            <div className="space-y-2">
-              <Label htmlFor="container-owners">{t("setup.ownersLabel")}</Label>
-              <Input
-                id="container-owners"
-                value={ownerIDs}
-                onChange={(event) => setOwnerIDs(event.target.value)}
-                placeholder={t("setup.ownersPlaceholder")}
-                inputMode="numeric"
-              />
-              <p className="text-xs text-muted-foreground">{t("setup.ownersHint")}</p>
-            </div>
-          ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">

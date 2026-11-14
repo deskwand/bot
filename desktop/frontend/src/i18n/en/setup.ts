@@ -31,10 +31,9 @@ export const setup: Messages["setup"] = {
   initialChannel: "Initial channel",
   initialChannelHint:
     "Choose a channel and connect it after deployment; switch manually if it fails.",
-  ownersLabel: "Allowed Telegram user IDs",
-  ownersPlaceholder: "e.g. 123456789",
-  ownersHint:
-    "Messages from Telegram are ignored when empty; configure the bot token after deployment.",
+  ownerClaimOrClosed:
+    "Waiting for a claim (whoever messages first after deploying becomes the owner)",
+  ownerClosed: "Closed (the configured list is empty)",
   wechatAfterDeploy: "Scan the code to connect WeChat after deployment.",
   quotaSummary: "Model quota and cost",
   resources: "Resources",

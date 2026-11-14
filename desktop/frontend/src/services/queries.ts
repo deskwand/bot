@@ -10,6 +10,7 @@ import {
 import { useApp } from "@/components/app-context";
 import { toClientError } from "@/services/errors";
 import type {
+  OwnerStatusDTO,
   ClientService,
   ConfigDTO,
   ContainerStatusDTO,
@@ -32,6 +33,7 @@ export const queryKeys = {
   lifeVitals: ["lifeVitals"],
   walletStatus: ["walletStatus"],
   containerStatus: ["containerStatus"],
+  ownerStatus: ["ownerStatus"],
 } as const;
 
 function isAuthLost(error: unknown): boolean {
@@ -174,6 +176,7 @@ export function useInvalidate(): {
   config: () => void;
   configAndStatus: () => void;
   mcp: () => void;
+  ownerStatus: () => void;
 } {
   const queryClient = useQueryClient();
   const config = useCallback(() => {
@@ -187,9 +190,12 @@ export function useInvalidate(): {
     void queryClient.invalidateQueries({ queryKey: queryKeys.config });
     void queryClient.invalidateQueries({ queryKey: queryKeys.mcpStatus });
   }, [queryClient]);
+  const ownerStatus = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.ownerStatus });
+  }, [queryClient]);
   return useMemo(
-    () => ({ config, configAndStatus, mcp }),
-    [config, configAndStatus, mcp],
+    () => ({ config, configAndStatus, mcp, ownerStatus }),
+    [config, configAndStatus, mcp, ownerStatus],
   );
 }
 
@@ -213,5 +219,13 @@ export function useBotQuery(id: string): UseQueryResult<BotDetailDTO> {
     queryKey: [...queryKeys.bots, id],
     queryFn: () => client.botDetail(id),
     staleTime: 30_000,
+  });
+}
+
+export function useOwnerStatusQuery(): UseQueryResult<OwnerStatusDTO> {
+  const { client } = useApp();
+  return useQuery({
+    queryKey: queryKeys.ownerStatus,
+    queryFn: () => client.ownerStatus(),
   });
 }

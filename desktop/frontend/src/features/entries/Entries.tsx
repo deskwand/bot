@@ -35,10 +35,11 @@ import {
 import { getT, useT, type MessageKey } from "@/i18n";
 import { SyncStatus } from "@/components/sync-status";
 import { useDirty } from "@/components/use-dirty";
-import { useConfigQuery, useInvalidate, useStatusQuery } from "@/services/queries";
+import { useConfigQuery, useInvalidate, useOwnerStatusQuery, useStatusQuery } from "@/services/queries";
 import type {
   EntryResultDTO,
   LoginStatusDTO,
+  OwnerStatusDTO,
   ResultDTO,
 } from "@/services/types";
 
@@ -69,6 +70,11 @@ export function Entries() {
   const configQuery = useConfigQuery();
   const statusQuery = useStatusQuery();
   const invalidate = useInvalidate();
+  const ownerQuery = useOwnerStatusQuery();
+  const ownerStatus = ownerQuery.data;
+  const [ownerBusy, setOwnerBusy] = useState<"open" | "revoke" | null>(null);
+  const [ownerError, setOwnerError] = useState<unknown>(null);
+  const [ownerConfirmOpen, setOwnerConfirmOpen] = useState(false);
   const config = configQuery.data;
   const status = statusQuery.data ?? [];
   const loading = !configQuery.data && configQuery.isFetching;
@@ -356,6 +362,21 @@ export function Entries() {
     }
   };
 
+  const runOwnerAction = async (action: "open" | "revoke") => {
+    setOwnerBusy(action);
+    setOwnerError(null);
+    try {
+      if (action === "open") await client.openOwnerClaim();
+      else await client.revokeOwner();
+      invalidate.ownerStatus();
+      setOwnerConfirmOpen(false);
+    } catch (cause) {
+      setOwnerError(cause);
+    } finally {
+      setOwnerBusy(null);
+    }
+  };
+
   const wechatStatus = status.find((item) => item.kind === "wechat");
   const telegramStatus = status.find((item) => item.kind === "telegram");
   const wechatConfigured =
@@ -483,8 +504,66 @@ export function Entries() {
             </div>
           ) : null}
           <ErrorAlert error={telegramError} onRetry={() => void connectTelegram()} retryLabel={t("entries.reconnect")} />
+
+          <div className="mt-4 space-y-2 rounded-md border border-border p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Label>{t("entries.ownerTitle")}</Label>
+              {ownerStatus ? (
+                <Badge variant="outline">{ownerModeLabel(t, ownerStatus.mode)}</Badge>
+              ) : null}
+            </div>
+            <p className="text-sm text-muted-foreground" data-i18n-ignore>
+              {ownerStatus?.ownerUserId
+                ? ownerStatus.ownerUserId
+                : t("entries.ownerNobody")}
+            </p>
+            {/* 静态/关闭模式下服务端是空操作，按钮留着只会误导。 */}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={ownerBusy !== null || !canManageOwner(ownerStatus)}
+                onClick={() => void runOwnerAction("open")}
+              >
+                {t("entries.ownerReopen")}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={ownerBusy !== null || !canManageOwner(ownerStatus)}
+                onClick={() => setOwnerConfirmOpen(true)}
+              >
+                {t("entries.ownerRevoke")}
+              </Button>
+            </div>
+            <ErrorAlert error={ownerError} />
+          </div>
         </CardContent>
       </Card>
+
+      <Dialog open={ownerConfirmOpen} onOpenChange={setOwnerConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("entries.ownerRevokeTitle")}</DialogTitle>
+            <DialogDescription>{t("entries.ownerRevokeDescription")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOwnerConfirmOpen(false)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={ownerBusy !== null}
+              onClick={() => void runOwnerAction("revoke")}
+            >
+              {t("entries.ownerRevoke")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card className="mt-4">
         <CardHeader>
@@ -768,4 +847,27 @@ function loginSteps(state: LoginState): LocalizedStep[] {
           : "planned",
     message: label,
   }));
+}
+
+function canManageOwner(status: OwnerStatusDTO | undefined): boolean {
+  if (!status) return false;
+  return status.mode !== "static" && status.mode !== "closed";
+}
+
+function ownerModeLabel(
+  t: (key: MessageKey) => string,
+  mode: OwnerStatusDTO["mode"],
+): string {
+  switch (mode) {
+    case "static":
+      return t("entries.ownerModeStatic");
+    case "closed":
+      return t("entries.ownerModeClosed");
+    case "claimed":
+      return t("entries.ownerModeClaimed");
+    case "claimable":
+      return t("entries.ownerModeClaimable");
+    case "expired":
+      return t("entries.ownerModeExpired");
+  }
 }

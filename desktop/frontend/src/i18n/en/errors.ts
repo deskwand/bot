@@ -71,6 +71,8 @@ export const errors: Messages["errors"] = {
   INSTALL_CONFLICT: "Another operation is running; handle it at the top first.",
   OPERATION_IN_PROGRESS: "Another operation is running on this deployment.",
   OWNER_REQUIRED: "Confirm the owner list (it can be empty).",
+  OWNER_UNSUPPORTED: "The cloud service is too old to manage the owner; upgrade it first.",
+  OWNER_FAILED: "Could not read the owner state. Try again later.",
   MODELS_REQUIRED: "Choose the butler and task models.",
   CONFIG_MISSING: "DESKWAND_CONFIG is missing in the cloud.",
   MODEL_SWITCH_REJECTED: "Model switch blocked; check the details.",

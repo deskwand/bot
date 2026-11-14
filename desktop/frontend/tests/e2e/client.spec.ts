@@ -183,7 +183,8 @@ test("welcome → token connect → preflight → interrupted deployment → res
 
   await page.getByRole("button", { name: "部署新服务" }).click();
   await page.locator("#install-channel-telegram").click();
-  await page.getByLabel("允许使用的 Telegram 用户 ID").fill("100000001");
+  // 认领取代了手填 ID：安装表单里不该再出现这个输入框。
+  await expect(page.getByLabel("允许使用的 Telegram 用户 ID")).toHaveCount(0);
   await page.getByRole("button", { name: "检查并部署" }).click();
 
   await expect(page.getByText("部署未完成")).toBeVisible();
@@ -387,7 +388,7 @@ test("import preview explains legacy schema, preserved secrets and plaintext mig
 
 
 
-test("importing a readable deployment keeps its models and owners", async ({ page }) => {
+test("importing a readable deployment keeps its models without asking for an owner", async ({ page }) => {
   await page.goto("/test.html");
   await connectCloudflare(page);
   await page.getByRole("button", { name: "连接已有服务" }).click();
@@ -1355,4 +1356,13 @@ test("overview service row reports how many services are connected", async ({ pa
   await page.goto("/test.html?fixture=mcp-many-tools");
   // 该 fixture 恰好接入一个服务；数字来自配置，不是写死的文案。
   await expect(page.getByText("已接入 1 个", { exact: true })).toBeVisible();
+});
+
+test("voice page shows the claim state with both actions", async ({ page }) => {
+  await page.goto("/test.html?fixture=configured");
+  await page.getByRole("button", { name: "声音", exact: true }).click();
+  await expect(page.getByText("主人", { exact: true })).toBeVisible();
+  await expect(page.getByText("已认领")).toBeVisible();
+  await expect(page.getByRole("button", { name: "重新开启认领" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "撤销主人" })).toBeVisible();
 });

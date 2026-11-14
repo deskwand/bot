@@ -33,7 +33,6 @@ test("未登录 Cloudflare 也能走完 SSH 部署", async ({ page }) => {
   await page.getByRole("button", { name: "下一步" }).click();
 
   await expect(page.getByTestId("container-configure")).toBeVisible();
-  await page.getByLabel("允许使用的 Telegram 用户 ID").fill("100000001");
   await page.getByTestId("container-model-key-opencode-go").fill("sk-test");
 
   await page.getByRole("button", { name: "开始部署" }).click();
@@ -372,7 +371,6 @@ test("本机：走完部署后进入主界面", async ({ page }) => {
   await preflight.getByRole("button", { name: "下一步" }).click();
 
   await expect(page.getByTestId("container-configure")).toBeVisible();
-  await page.getByLabel("允许使用的 Telegram 用户 ID").fill("100000001");
   await page.getByTestId("container-model-key-opencode-go").fill("sk-test");
   await page.getByRole("button", { name: "开始部署" }).click();
 

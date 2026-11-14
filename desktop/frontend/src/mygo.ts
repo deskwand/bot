@@ -197,6 +197,8 @@ export interface ConfigDTO {
   configPresent: boolean;
   activeChannel?: string;
   ownerUserIds: number[];
+  /** True when the deployment has no owner key: the first Telegram message claims it. */
+  ownerClaimMode: boolean;
   butlerModel: ModelDTO | null;
   taskModel: ModelDTO | null;
   customProviders: CustomProviderDTO[];
@@ -206,6 +208,14 @@ export interface ConfigDTO {
   searchProvider: string;
   exchangeAccounts: ExchangeAccountDTO[];
   secrets: SecretNameDTO[];
+}
+
+/** OwnerStatusDTO mirrors the Worker's /admin/owner/status response. */
+export interface OwnerStatusDTO {
+  mode: "static" | "closed" | "claimed" | "claimable" | "expired";
+  ownerUserId: string;
+  windowOpenedAt: number;
+  windowClosesAt: number;
 }
 
 /**
@@ -250,6 +260,8 @@ export interface ContainerCheckDTO {
  */
 export interface ContainerExistingDTO {
   ownerUserIds: number[];
+  /** True when the existing .env has no owner key: a first message claims it. */
+  ownerClaimMode: boolean;
   butlerModel: ModelDTO | null;
   taskModel: ModelDTO | null;
   activeChannel?: string;
@@ -951,6 +963,18 @@ export const Service = {
   /** LifeVitals reads the deployed life ledger's vitals. */
   lifeVitals(): Promise<LifeVitalsDTO> {
     return call("Service.LifeVitals");
+  },
+  /** OwnerStatus reads who currently owns the deployment, or why nobody does. */
+  ownerStatus(): Promise<OwnerStatusDTO> {
+    return call("Service.OwnerStatus");
+  },
+  /** OpenOwnerClaim reopens the 60-minute window so a new person can claim it. */
+  openOwnerClaim(): Promise<OwnerStatusDTO> {
+    return call("Service.OpenOwnerClaim");
+  },
+  /** RevokeOwner clears the claim and closes the window. */
+  revokeOwner(): Promise<OwnerStatusDTO> {
+    return call("Service.RevokeOwner");
   },
   /** ListBackups lists the backups in the configured folder, newest first. */
   listBackups(): Promise<BackupFileDTO[]> {
