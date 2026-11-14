@@ -112,6 +112,8 @@ export const errors: Messages["errors"] = {
   BACKUP_SETTINGS_INVALID: "Backup folder or settings are invalid.",
   BACKUP_VERSION_MISMATCH: "Backup version does not match the cloud.",
   BACKUP_OBJECT_TOO_LARGE: "The backup has an object over 100 MiB.",
+  BACKUP_OBJECT_TOO_LARGE_FOR_TARGET:
+    "The backup contains artifacts larger than the new residence can hold.",
   RESTORE_SNAPSHOT_FAILED: "Snapshot failed; the cloud was not changed.",
   RESTORE_PENDING: "A restore is still unfinished.",
   RESTORE_JOURNAL_CORRUPT: "The local restore record is corrupt.",

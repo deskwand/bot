@@ -308,3 +308,27 @@ func TestLocalInstallPreflightFailureIsInvalidRequest(t *testing.T) {
 		t.Errorf("wrote %d files during a refused install", len(host.files))
 	}
 }
+
+// The engines are never built directly in tests: every container flow reaches
+// them through Service and the fake Host that Options.Dial returns.
+func TestStopTargetRunsComposeStop(t *testing.T) {
+	host := &fakeHost{}
+	service := newService(host)
+	target := containerTarget()
+
+	if err := service.StopTarget(context.Background(), target); err != nil {
+		t.Fatalf("StopTarget: %v", err)
+	}
+	if err := service.StartTarget(context.Background(), target); err != nil {
+		t.Fatalf("StartTarget: %v", err)
+	}
+	if len(host.commands) != 2 {
+		t.Fatalf("commands = %v, want two", host.commands)
+	}
+	if !strings.Contains(host.commands[0], "docker compose stop") {
+		t.Fatalf("stop command = %q", host.commands[0])
+	}
+	if !strings.Contains(host.commands[1], "docker compose start") {
+		t.Fatalf("start command = %q", host.commands[1])
+	}
+}

@@ -97,7 +97,7 @@ const NAV_GROUPS: { group?: NavGroup; items: { page: Page; icon: LucideIcon }[] 
   },
 ];
 
-const CONTAINER_UNSUPPORTED: Page[] = ["backup", "updates"];
+const CONTAINER_UNSUPPORTED: Page[] = ["updates"];
 
 export function App({ client }: { client: ClientService }) {
   const t = useT();

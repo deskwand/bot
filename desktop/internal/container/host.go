@@ -71,6 +71,24 @@ func (s *Service) dial(target domain.Target) (Host, error) {
 	return s.options.Dial(target)
 }
 
+// StopTarget stops the container, keeping its volume and .env.
+func (s *Service) StopTarget(ctx context.Context, target domain.Target) error {
+	host, err := s.dial(target)
+	if err != nil {
+		return err
+	}
+	return s.engine(target).Stop(ctx, host, target.Host.Dir)
+}
+
+// StartTarget brings a stopped container back up.
+func (s *Service) StartTarget(ctx context.Context, target domain.Target) error {
+	host, err := s.dial(target)
+	if err != nil {
+		return err
+	}
+	return s.engine(target).Start(ctx, host, target.Host.Dir)
+}
+
 //go:embed env-allowlist.txt
 var allowlistData []byte
 

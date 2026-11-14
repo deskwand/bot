@@ -953,6 +953,21 @@ test("exports a backup and shows the sensitivity notice", async ({ page }) => {
   await expect(page.getByTestId("backup-file")).toHaveCount(1);
 });
 
+test("moves house from the residence card and offers the way back", async ({ page }) => {
+  await page.goto("/test.html?fixture=backup");
+  await page.getByRole("button", { name: "记忆存档", exact: true }).click();
+  const card = page.getByTestId("move-card");
+  await expect(card.getByText("换一个容器继续活。记忆、账本、任务和产物都跟着走。")).toBeVisible();
+
+  await card.getByRole("button", { name: "搬家", exact: true }).click();
+  await expect(card.getByText("搬家进行中")).toBeVisible();
+  // The outage notice is part of the design, not a tooltip.
+  await expect(card.getByText("从现在到安顿完成，没有任何一具身体会回消息。")).toBeVisible();
+
+  await card.getByRole("button", { name: "搬回旧屋", exact: true }).click();
+  await expect(card.getByText("旧屋的数据一直没动过。")).toBeVisible();
+});
+
 test("a background export refreshes the folder view", async ({ page }) => {
   await page.goto("/test.html?fixture=backup");
   await page.getByRole("button", { name: "记忆存档", exact: true }).click();

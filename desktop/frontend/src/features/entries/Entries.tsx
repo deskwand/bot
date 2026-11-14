@@ -82,7 +82,27 @@ export function Entries() {
     void configQuery.refetch();
     void statusQuery.refetch();
   }, [configQuery, statusQuery]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client
+      .moveStatus()
+      .then((move) => {
+        if (!cancelled) {
+          setMoveRunning(move !== null && move.phase !== "done" && move.phase !== "abandoned");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setMoveRunning(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
   const [channelRunning, setChannelRunning] = useState(false);
+  // A move mutes the old residence on purpose; letting the user pick an entry
+  // here would silently revive it and reopen the double-polling window.
+  const [moveRunning, setMoveRunning] = useState(false);
   const [channelError, setChannelError] = useState<unknown>(null);
   const [channelResult, setChannelResult] = useState<EntryResultDTO | null>(null);
   const [channelResumeRunning, setChannelResumeRunning] = useState(false);
@@ -481,7 +501,7 @@ export function Entries() {
               channelTouched.current = true;
               setChannel(next);
             }}
-            disabled={configQuery.isPlaceholder}
+            disabled={configQuery.isPlaceholder || moveRunning}
             aria-label={t("common.currentChannel")}
             className="grid gap-3 sm:grid-cols-2"
           >
@@ -504,6 +524,12 @@ export function Entries() {
               {wechatConfigured ? <Badge variant="secondary">{t("entries.configured")}</Badge> : <Badge variant="outline">{t("entries.notConfigured")}</Badge>}
             </label>
           </RadioGroup>
+          {moveRunning ? (
+            <Alert className="mt-3">
+              <AlertTitle>{t("backup.moveInProgressTitle")}</AlertTitle>
+              <AlertDescription>{t("backup.moveEntryLocked")}</AlertDescription>
+            </Alert>
+          ) : null}
           {channel === "wechat" && !wechatConfigured ? (
             <Alert className="mt-3">
               <AlertTitle>{t("entries.notReadyTitle")}</AlertTitle>
@@ -520,7 +546,7 @@ export function Entries() {
             <Button
               type="button"
               onClick={() => void publishChannel()}
-              disabled={channelRunning || !channel || channel === config?.activeChannel}
+              disabled={moveRunning || channelRunning || !channel || channel === config?.activeChannel}
             >
               {channelRunning ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
               {channelRunning ? t("entries.publishing") : t("entries.saveAndPublish")}

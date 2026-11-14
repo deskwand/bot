@@ -5,16 +5,46 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/deskwand/bot/desktop/internal/domain"
 )
 
 // backupFilePattern matches only the files this client writes, so pruning can
 // never touch a pre-restore snapshot or an unrelated file in the folder.
 const backupFilePattern = "deskwand-backup-*.zip"
 
-// backupFileName is the name the client writes for a deployment at now.
-func backupFileName(scriptName string, now time.Time) string {
-	return "deskwand-backup-" + scriptName + "-" + now.UTC().Format("20060102-150405") + ".zip"
+// backupFileName is the name the client writes for a residence at now.
+func backupFileName(target domain.Target, now time.Time) string {
+	return "deskwand-backup-" + residenceSlug(target) + "-" + now.UTC().Format("20060102-150405") + ".zip"
+}
+
+// residenceSlug names an archive after its residence. Worker names are already
+// URL-safe; a container falls back to the host address or "local", with
+// anything outside [A-Za-z0-9._-] replaced so the name stays one path element.
+func residenceSlug(target domain.Target) string {
+	name := target.ScriptName
+	if target.IsContainer() {
+		name = target.Host.Address
+		if target.Host.IsLocal() {
+			name = "local"
+		}
+	}
+	var out strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			out.WriteRune(r)
+		default:
+			out.WriteRune('-')
+		}
+	}
+	slug := strings.Trim(out.String(), "-")
+	if slug == "" {
+		return "residence"
+	}
+	return slug
 }
 
 // backupFiles lists the backup file names in dir, newest first. The timestamp

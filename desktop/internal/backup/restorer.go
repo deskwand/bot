@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
+	"github.com/deskwand/bot/desktop/internal/release"
 )
 
 // restorePageBytes bounds one restore request, matching the export page size.
@@ -25,9 +26,19 @@ func Inspect(path string) (Manifest, error) {
 	return reader.Manifest(), nil
 }
 
-// CheckVersion reports whether m may be restored onto snapshot. Both releases
-// must be known and equal, and the archive must not contain objects too large
-// for the Worker to accept back.
+// Warning codes returned by VersionWarnings. They reach the page as codes and
+// are rendered through its i18n catalog, like every other backend code.
+const (
+	CodeReleaseUnknownBackup = "BACKUP_RELEASE_UNKNOWN"
+	CodeReleaseUnknownTarget = "TARGET_RELEASE_UNKNOWN"
+	CodeReleaseUncomparable  = "RELEASE_UNCOMPARABLE"
+)
+
+// CheckVersion reports whether m may be restored onto snapshot. A backup older
+// than the target is allowed: the Worker adds missing columns when it opens the
+// restored tables. A backup newer than the target is refused, because older
+// code cannot know the newer shape. The archive must never contain objects too
+// large for the Worker to accept back.
 func CheckVersion(m Manifest, snapshot domain.Snapshot) error {
 	if len(m.R2.Oversized) > 0 {
 		return domain.Error{
@@ -38,16 +49,65 @@ func CheckVersion(m Manifest, snapshot domain.Snapshot) error {
 			),
 		}
 	}
-	if !knownRelease(m.Release) || !knownRelease(snapshot.ReleaseVersion) || m.Release != snapshot.ReleaseVersion {
+	if !knownRelease(m.Release) || !knownRelease(snapshot.ReleaseVersion) {
+		return nil
+	}
+	comparison, comparable := release.CompareVersions(m.Release, snapshot.ReleaseVersion)
+	if !comparable {
+		return nil
+	}
+	if comparison > 0 {
 		return domain.Error{
 			Code: CodeBackupVersionMismatch,
 			Message: fmt.Sprintf(
-				"backup release %q does not match deployment release %q",
+				"backup release %q is newer than deployment release %q",
 				m.Release, snapshot.ReleaseVersion,
 			),
 		}
 	}
 	return nil
+}
+
+// VersionWarnings reports version facts the user should see but that must not
+// block a restore: an unknown release on either side, or a release string that
+// cannot be compared.
+func VersionWarnings(m Manifest, snapshot domain.Snapshot) []string {
+	if !knownRelease(m.Release) {
+		return []string{CodeReleaseUnknownBackup}
+	}
+	if !knownRelease(snapshot.ReleaseVersion) {
+		return []string{CodeReleaseUnknownTarget}
+	}
+	if _, comparable := release.CompareVersions(m.Release, snapshot.ReleaseVersion); !comparable {
+		return []string{CodeReleaseUncomparable}
+	}
+	return nil
+}
+
+// CheckTargetLimits refuses a backup whose artifacts the target cannot store.
+// The container artifact store caps an object at 16 MiB while the backup
+// protocol allows 100 MiB, so an old backup can pass CheckVersion and still
+// fail halfway through a restore.
+func CheckTargetLimits(m Manifest, target domain.Target) error {
+	if !target.IsContainer() {
+		return nil
+	}
+	var oversized []string
+	for _, item := range m.R2.Objects {
+		if item.Size > ContainerMaxObjectBytes {
+			oversized = append(oversized, item.Key)
+		}
+	}
+	if len(oversized) == 0 {
+		return nil
+	}
+	return domain.Error{
+		Code: CodeBackupObjectTooLargeForTarget,
+		Message: fmt.Sprintf(
+			"backup contains %d artifacts larger than %d bytes: %s",
+			len(oversized), ContainerMaxObjectBytes, strings.Join(oversized, ", "),
+		),
+	}
 }
 
 func knownRelease(release string) bool {
@@ -81,14 +141,17 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 	// Establish the admin token before taking the shared target lock: the
 	// publish flow used by EnsureAdminToken/RepublishAdminToken takes the same
 	// non-reentrant lock.
-	client, snapshot, published, err := connect(ctx, deps, target, opID)
+	client, snapshot, err := connect(ctx, deps, target, opID)
 	if err != nil {
+		return err
+	}
+	if err := CheckTargetLimits(manifest, target); err != nil {
 		return err
 	}
 	if err := CheckVersion(manifest, snapshot); err != nil {
 		return err
 	}
-	client, err = acquireLease(ctx, deps, target, client, published, "restore")
+	client, err = acquireLease(ctx, deps, target, client, "restore")
 	if err != nil {
 		return err
 	}
@@ -139,7 +202,7 @@ func Restore(ctx context.Context, deps Deps, journal *RestoreJournal, target dom
 	// first destructive call. The shared lock stops this client's publish path,
 	// and the recheck closes the window where another device upgraded during
 	// the snapshot.
-	current, err := deps.Token.Snapshots.ReadSnapshot(ctx, target)
+	current, err := deps.Snapshots.ReadSnapshot(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -219,14 +282,17 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 			return err
 		}
 	}
-	client, snapshot, published, err := connect(ctx, deps, record.Target, opID)
+	client, snapshot, err := connect(ctx, deps, record.Target, opID)
 	if err != nil {
+		return err
+	}
+	if err := CheckTargetLimits(manifest, record.Target); err != nil {
 		return err
 	}
 	if err := CheckVersion(manifest, snapshot); err != nil {
 		return err
 	}
-	client, err = acquireLease(ctx, deps, record.Target, client, published, "restore")
+	client, err = acquireLease(ctx, deps, record.Target, client, "restore")
 	if err != nil {
 		return err
 	}
@@ -248,7 +314,7 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 	// Retry has no new snapshot, so the immediate pre-destructive recheck is
 	// the only guard against an upgrade that happened while this attempt was
 	// waiting for the lock.
-	current, err := deps.Token.Snapshots.ReadSnapshot(ctx, record.Target)
+	current, err := deps.Snapshots.ReadSnapshot(ctx, record.Target)
 	if err != nil {
 		return err
 	}

@@ -37,6 +37,7 @@ import type {
   McpCatalogEntryDTO,
   McpProbeDTO,
   McpToolDTO,
+  MoveDTO,
   ModelCatalogDTO,
   ModelDTO,
   OperationDTO,
@@ -191,6 +192,8 @@ interface MockState {
   localRuntimes: { apple: boolean; compose: boolean };
   target: string | null;
   targetAccountId: string;
+  // move is the residence the move card renders; null means no move has run.
+  move: MoveDTO | null;
   fingerprint: string;
   configPresent: boolean;
   activeChannel: string;
@@ -734,6 +737,7 @@ function initialState(): MockState {
             : null,
     targetAccountId:
       scenario === "target-other-account" ? "b".repeat(32) : "a".repeat(32),
+    move: null,
     fingerprint: scenario === "cloud-updated" ? "fp-1" : "fp-current",
     configPresent: shellScenario || containerReady,
     activeChannel: containerReady
@@ -1675,6 +1679,34 @@ export function createMockClient(): ClientService {
           : [],
       };
     },
+
+    async moveStatus(): Promise<MoveDTO | null> {
+      return state.move;
+    },
+
+    async startMove(): Promise<MoveDTO | null> {
+      state.move = {
+        phase: "homing",
+        archivePath: "/tmp/deskwand-backup.box-20261114-093000.zip",
+        from: { kind: "cloudflare", name: state.target ?? "deskwand-bot", reachable: true },
+        summary: { release: "0.1.51", exportedAt: "2026-11-14T09:30:00Z", bytes: 4096 },
+      };
+      return state.move;
+    },
+
+    async settleMove(): Promise<void> {
+      if (state.move) state.move = { ...state.move, phase: "done" };
+    },
+
+    async moveBack(): Promise<void> {
+      if (state.move) state.move = { ...state.move, phase: "done" };
+    },
+
+    async abandonMove(): Promise<void> {
+      if (state.move) state.move = { ...state.move, phase: "abandoned" };
+    },
+
+    async reviveOldHouse(): Promise<void> {},
 
     async mcpCatalog() {
       return MCP_CATALOG;

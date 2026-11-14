@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -779,5 +780,24 @@ func TestChooseBackupAtRejectsSymlink(t *testing.T) {
 	}
 	if f.backup.inspectCalls != 0 {
 		t.Fatal("symlink reached Inspect")
+	}
+}
+
+func TestExportDataAcceptsAContainerTarget(t *testing.T) {
+	f := newBackupFixture(t)
+	box := domain.Target{Kind: domain.TargetContainer, Host: domain.HostRef{
+		Transport: domain.TransportLocal, Engine: domain.EngineCompose, Dir: "/tmp/deskwand",
+	}}
+	f.store.target, f.store.ok = box, true
+	f.backup.exportManifest = backup.Manifest{Release: "0.1.51", ExportedAt: time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)}
+
+	if _, err := f.service.ExportData(); err != nil {
+		t.Fatalf("ExportData: %v", err)
+	}
+	if !f.backup.exportTarget.IsContainer() {
+		t.Fatalf("export target = %+v, want the container target", f.backup.exportTarget)
+	}
+	if !strings.Contains(f.backup.exportPath, "deskwand-backup-local-") {
+		t.Fatalf("export path = %q, want a local residence name", f.backup.exportPath)
 	}
 }

@@ -284,6 +284,28 @@ func (e *appleEngine) Apply(ctx context.Context, host Host, dir string) error {
 	return nil
 }
 
+// Stop boots the launchd agent out first: otherwise it would restart run.sh
+// while the container is still shutting down. The data volume and .env stay.
+func (e *appleEngine) Stop(ctx context.Context, host Host, dir string) error {
+	command := "launchctl bootout " + agentTarget + " >/dev/null 2>&1; container stop " + appleContainerName
+	stopCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	result, err := runOnHost(stopCtx, host, command)
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return domain.Error{Code: domain.LOCAL_AGENT_FAILED, Message: outputMessage(result)}
+	}
+	return nil
+}
+
+// Start re-runs the agent, which rebuilds the container from the same volume
+// (see appleRunScript).
+func (e *appleEngine) Start(ctx context.Context, host Host, dir string) error {
+	return e.Apply(ctx, host, dir)
+}
+
 // Status reports the container state, then probes health when it runs.
 func (e *appleEngine) Status(ctx context.Context, host Host, dir string) (RuntimeStatus, error) {
 	var status RuntimeStatus

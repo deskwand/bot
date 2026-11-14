@@ -29,7 +29,7 @@ export const server = {
   disconnectDescriptionLocal: "机器人会停止。配置和数据保留，以后可以重新添加。",
   confirmDisconnect: "断开",
   unsupportedTitle: "这个页面暂不支持当前运行方式",
-  unsupportedDescription: "备份恢复与镜像升级在下一期支持。",
+  unsupportedDescription: "镜像升级在下一期支持。",
   tunnel: "管理通道",
   tunnelOpen: "已建立",
   tunnelClosed: "未建立",

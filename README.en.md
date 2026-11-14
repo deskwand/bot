@@ -175,6 +175,12 @@ A custom provider's model must carry its own price; a model without `cost` is re
 }
 ```
 
+### Moving house
+
+A life can change residence: Cloudflare ↔ container, container ↔ container, either way. Pack, mute the old home, build the new one, settle in. The old home is only muted — its data and credentials are untouched, so you can always move back.
+
+Model keys, entry credentials, MCP authorizations and the wallet private key do not travel; you fill them in while building the new home. WeChat needs no new scan. When the move settles, the old home becomes "previous", with its data never touched.
+
 ### Backups
 
 Exports and restores include the ledger (spend, credits, running totals and the hourly rollup) and the last notified tier. Restoring a backup from before the ledger empties it: the deployment is ample and the metabolism has not started. A worker that has not been updated yet is exported without a ledger, and a restore leaves that worker's (nonexistent) ledger alone.

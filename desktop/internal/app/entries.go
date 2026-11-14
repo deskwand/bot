@@ -17,9 +17,14 @@ import (
 )
 
 const (
-	// EntryTelegram and EntryWeChat are the only accepted ACTIVE_CHANNEL values.
+	// EntryTelegram and EntryWeChat are the only entries the UI can select.
+	// EntryDisabled is reserved for the move flow.
 	EntryTelegram = "telegram"
 	EntryWeChat   = "wechat"
+	// EntryDisabled is written by a move to silence the old residence. The
+	// Worker treats any value outside the two entries as disabled
+	// (src/channels/route-identity.ts), so no Worker change is needed.
+	EntryDisabled = "none"
 
 	// StatePublished matches deployment.Service.StatePublished.
 	StatePublished = "published"
@@ -86,7 +91,7 @@ func NewActiveChannelSelector(publisher EntryPublisher, snapshots SnapshotReader
 // never changes secrets and never selects a different channel on failure.
 func (s *ActiveChannelSelector) SetActiveChannel(ctx context.Context, target domain.Target, channel string) (domain.Result, error) {
 	normalized := strings.ToLower(strings.TrimSpace(channel))
-	if normalized != EntryTelegram && normalized != EntryWeChat {
+	if normalized != EntryTelegram && normalized != EntryWeChat && normalized != EntryDisabled {
 		return domain.Result{}, ErrInvalidEntry
 	}
 	if s == nil || s.Publisher == nil {
@@ -301,6 +306,24 @@ type EntrySelection struct {
 	Channel    string
 	Configured bool
 	Warning    string
+}
+
+// MuteEntry silences the deployment's entry without touching credentials. It
+// is the move flow's own path; SelectEntry keeps rejecting EntryDisabled.
+func (s *EntryService) MuteEntry(ctx context.Context, target domain.Target) (domain.Result, error) {
+	if s == nil || s.selector == nil {
+		return domain.Result{}, ErrNotWired
+	}
+	return s.selector.SetActiveChannel(ctx, target, EntryDisabled)
+}
+
+// ReviveEntry puts the recorded entry back after a move was abandoned.
+func (s *EntryService) ReviveEntry(ctx context.Context, target domain.Target, channel string) (domain.Result, error) {
+	selection, err := s.SelectEntry(ctx, target, channel)
+	if err != nil {
+		return domain.Result{}, err
+	}
+	return selection.Result, nil
 }
 
 // SelectEntry validates the requested channel and writes ACTIVE_CHANNEL

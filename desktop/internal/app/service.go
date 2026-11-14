@@ -20,6 +20,7 @@ import (
 
 	"github.com/deskwand/bot/desktop/internal/adminendpoint"
 	"github.com/deskwand/bot/desktop/internal/auth"
+	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/cloudflare"
 	"github.com/deskwand/bot/desktop/internal/deployment"
 	"github.com/deskwand/bot/desktop/internal/diagnostics"
@@ -123,11 +124,16 @@ type OperationJournal interface {
 	Save(record deployment.OperationRecord) error
 }
 
-// TargetStore persists the non-secret managed deployment target.
+// TargetStore persists the non-secret managed deployment target and the old
+// residence a move left behind.
 type TargetStore interface {
 	Load() (domain.Target, bool, error)
 	Save(target domain.Target) error
 	Clear() error
+	Previous() (domain.Target, bool, error)
+	SetPrevious(target domain.Target) error
+	ClearPrevious() error
+	SwapResidence() error
 }
 
 // ReleaseSource supplies the verified embedded Worker release. Package returns
@@ -223,8 +229,13 @@ type ServiceOptions struct {
 	Tunnel TunnelState
 	// EmitContainerProgress defaults to ContainerProgressEvent.Broadcast.
 	EmitContainerProgress func(StepDTO)
-	NewOperationID        func() (string, error)
-	Now                   func() time.Time
+	// MoveJournal records an in-flight move across restarts. Nil makes every
+	// move operation report SERVICE_UNAVAILABLE.
+	MoveJournal    *backup.MoveJournal
+	MoveExporter   MoveExporter
+	MoveMuter      MoveMuter
+	NewOperationID func() (string, error)
+	Now            func() time.Time
 	// GOOS decides whether this Mac can host the container. Empty means
 	// runtime.GOOS; tests set it to exercise the other platforms.
 	GOOS string
@@ -269,6 +280,9 @@ type Service struct {
 	newOpID            func() (string, error)
 	now                func() time.Time
 	goos               string
+	moveJournal        *backup.MoveJournal
+	moveExporter       MoveExporter
+	moveMuter          MoveMuter
 
 	pendingMu   sync.Mutex
 	pendingHost *domain.HostRef
@@ -382,6 +396,9 @@ func NewService(options ServiceOptions) *Service {
 		newOpID:            newOpID,
 		goos:               goos,
 		now:                now,
+		moveJournal:        options.MoveJournal,
+		moveExporter:       options.MoveExporter,
+		moveMuter:          options.MoveMuter,
 		logins:             map[string]context.CancelFunc{},
 		exchangeStatus:     map[string]ExchangeSyncDTO{},
 	}
@@ -619,7 +636,7 @@ func (s *Service) CloudflareStatus() ConnectionDTO {
 // BootState reports what the app needs to choose its first screen. It reads
 // only local credentials, the target file and the journal; it never contacts
 // Cloudflare.
-func (s *Service) BootState() (BootStateDTO, error) {
+func (s *Service) bootState() (BootStateDTO, error) {
 	connection := s.CloudflareStatus()
 	state := BootStateDTO{Connection: connection, Pending: []OperationDTO{}, LocalSupported: s.localSupported()}
 	var stored domain.Target
@@ -662,6 +679,34 @@ func (s *Service) BootState() (BootStateDTO, error) {
 		}
 	}
 	return state, nil
+}
+
+// BootState reports what the app needs to choose its first screen and the two
+// residence facts the move page needs.
+func (s *Service) BootState() (BootStateDTO, error) {
+	state, err := s.bootState()
+	if err != nil {
+		return state, err
+	}
+	s.reportResidences(&state)
+	return state, nil
+}
+
+// reportResidences fills the previous residence and any move still running.
+// BootState calls it on every path, so a container target sees its move too.
+func (s *Service) reportResidences(state *BootStateDTO) {
+	if s.store != nil {
+		if previous, ok, err := s.store.Previous(); err == nil && ok {
+			residence := s.residenceDTO(previous)
+			state.PreviousTarget = &residence
+		}
+	}
+	if s.moveJournal != nil {
+		if record, err := s.moveJournal.Read(); err == nil && record != nil &&
+			record.Phase != backup.MoveDone && record.Phase != backup.MoveAbandoned {
+			state.MoveInProgress = s.moveDTO(*record)
+		}
+	}
 }
 
 // targetName is the user-facing name of target. A local target has no host
@@ -2182,6 +2227,9 @@ type targetSettings struct {
 	AccountID  string        `json:"accountId,omitempty"`
 	ScriptName string        `json:"scriptName,omitempty"`
 	Host       *hostSettings `json:"host,omitempty"`
+	// Previous is the old residence after a move. Absent in files written
+	// before the move feature existed.
+	Previous *targetSettings `json:"previous,omitempty"`
 }
 
 type hostSettings struct {
@@ -2224,17 +2272,31 @@ func NewFileTargetStore(dir string) (*FileTargetStore, error) {
 func (s *FileTargetStore) Load() (domain.Target, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	settings, ok, err := s.readSettings()
+	if err != nil || !ok {
+		return domain.Target{}, false, err
+	}
+	return s.decode(settings)
+}
+
+// readSettings reads and decodes settings.json; a missing file yields ok=false.
+func (s *FileTargetStore) readSettings() (targetSettings, bool, error) {
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return domain.Target{}, false, nil
+		return targetSettings{}, false, nil
 	}
 	if err != nil {
-		return domain.Target{}, false, fmt.Errorf("app: read settings: %w", err)
+		return targetSettings{}, false, fmt.Errorf("app: read settings: %w", err)
 	}
 	var settings targetSettings
 	if err := json.Unmarshal(data, &settings); err != nil {
-		return domain.Target{}, false, fmt.Errorf("app: decode settings: %w", err)
+		return targetSettings{}, false, fmt.Errorf("app: decode settings: %w", err)
 	}
+	return settings, true, nil
+}
+
+// decode turns one persisted residence into a target.
+func (s *FileTargetStore) decode(settings targetSettings) (domain.Target, bool, error) {
 	switch settings.Kind {
 	case "", domain.TargetCloudflare:
 		if settings.AccountID == "" && settings.ScriptName == "" {
@@ -2263,22 +2325,22 @@ func (s *FileTargetStore) Load() (domain.Target, bool, error) {
 	}
 }
 
-// Save writes the target atomically with owner-only permissions.
-func (s *FileTargetStore) Save(target domain.Target) error {
+// encode turns one residence into its persisted form.
+func (s *FileTargetStore) encode(target domain.Target) (targetSettings, error) {
 	settings := targetSettings{}
 	switch target.Kind {
 	case "", domain.TargetCloudflare:
 		if err := cloudflare.ValidateAccountID(target.AccountID); err != nil {
-			return domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.accountIDInvalid")}
+			return targetSettings{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.accountIDInvalid")}
 		}
 		if err := cloudflare.ValidateWorkerName(target.ScriptName); err != nil {
-			return domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.workerNameInvalid")}
+			return targetSettings{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: i18n.T(s.lang(), "app.workerNameInvalid")}
 		}
 		settings.AccountID = target.AccountID
 		settings.ScriptName = target.ScriptName
 	case domain.TargetContainer:
 		if err := target.Host.Validate(); err != nil {
-			return err
+			return targetSettings{}, err
 		}
 		settings.Kind = domain.TargetContainer
 		settings.Host = &hostSettings{
@@ -2292,17 +2354,93 @@ func (s *FileTargetStore) Save(target domain.Target) error {
 			Dir:       target.Host.Dir,
 		}
 	default:
-		return domain.Error{Code: deployment.CodeInvalidRequest, Message: "unknown target kind"}
+		return targetSettings{}, domain.Error{Code: deployment.CodeInvalidRequest, Message: "unknown target kind"}
 	}
+	return settings, nil
+}
+
+// write encodes settings atomically with owner-only permissions.
+func (s *FileTargetStore) write(settings targetSettings) error {
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return fmt.Errorf("app: encode settings: %w", err)
 	}
 	data = append(data, '\n')
+	return writeFileAtomic(s.path, data)
+}
 
+// Save writes the target atomically with owner-only permissions. The previous
+// residence, once recorded by a move, is preserved.
+func (s *FileTargetStore) Save(target domain.Target) error {
+	next, err := s.encode(target)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return writeFileAtomic(s.path, data)
+	existing, _, err := s.readSettings()
+	if err != nil {
+		return err
+	}
+	next.Previous = existing.Previous
+	return s.write(next)
+}
+
+// Previous returns the old residence recorded by the last move.
+func (s *FileTargetStore) Previous() (domain.Target, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings, ok, err := s.readSettings()
+	if err != nil || !ok || settings.Previous == nil {
+		return domain.Target{}, false, err
+	}
+	return s.decode(*settings.Previous)
+}
+
+// SetPrevious records target as the old residence.
+func (s *FileTargetStore) SetPrevious(target domain.Target) error {
+	encoded, err := s.encode(target)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings, _, err := s.readSettings()
+	if err != nil {
+		return err
+	}
+	settings.Previous = &encoded
+	return s.write(settings)
+}
+
+// ClearPrevious forgets the old residence.
+func (s *FileTargetStore) ClearPrevious() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings, ok, err := s.readSettings()
+	if err != nil || !ok || settings.Previous == nil {
+		return err
+	}
+	settings.Previous = nil
+	return s.write(settings)
+}
+
+// SwapResidence exchanges the current and previous residences in one write.
+func (s *FileTargetStore) SwapResidence() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings, ok, err := s.readSettings()
+	if err != nil {
+		return err
+	}
+	if !ok || settings.Previous == nil {
+		return domain.Error{Code: CodeMoveNoPrevious, Message: "no previous residence is recorded"}
+	}
+	current := settings
+	current.Previous = nil
+	next := *settings.Previous
+	next.Previous = &current
+	return s.write(next)
 }
 
 // Clear removes the persisted target.
