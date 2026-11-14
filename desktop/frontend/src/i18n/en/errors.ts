@@ -138,4 +138,7 @@ export const errors: Messages["errors"] = {
   MOVE_SOURCE_MUTE_FAILED: "The old home was not muted",
   MOVE_ARCHIVE_MISSING: "The packed archive is missing",
   MOVE_JOURNAL_CORRUPT: "The move record is unreadable",
+  BOTS_UNSUPPORTED: "Cloud version too old; upgrade to view",
+  BOTS_NOT_FOUND: "This bot has no record",
+  BOTS_READ_FAILED: "Could not read the bots; retry",
 };

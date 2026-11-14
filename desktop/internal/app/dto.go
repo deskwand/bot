@@ -476,3 +476,62 @@ type StatusItemDTO struct {
 	ObservedAt string `json:"observedAt"`
 	Detail     string `json:"detail"`
 }
+
+// BotMetaDTO is one bot's own state. Pointers keep "not set" distinct from a
+// zero value, which the page renders differently.
+type BotMetaDTO struct {
+	BotID               string   `json:"botId"`
+	Name                string   `json:"name"`
+	Mission             string   `json:"mission"`
+	Status              string   `json:"status"`
+	NextWakeAt          *int64   `json:"nextWakeAt"`
+	DefaultIntervalMs   int64    `json:"defaultIntervalMs"`
+	CurrentTaskID       *string  `json:"currentTaskId"`
+	ConsecutiveFailures int      `json:"consecutiveFailures"`
+	WakesDay            *string  `json:"wakesDay"`
+	WakesCount          int      `json:"wakesCount"`
+	PendingSteer        []string `json:"pendingSteer"`
+	Earner              bool     `json:"earner"`
+	ManualWakeAt        *int64   `json:"manualWakeAt"`
+	FinishReason        *string  `json:"finishReason"`
+}
+
+// BotRunDTO is one entry of a bot's run log.
+type BotRunDTO struct {
+	TaskID    string  `json:"taskId"`
+	StartedAt int64   `json:"startedAt"`
+	EndedAt   *int64  `json:"endedAt"`
+	Outcome   *string `json:"outcome"`
+	Summary   *string `json:"summary"`
+	Note      *string `json:"note"`
+}
+
+// BotDocDTO is one read-only document a bot keeps.
+type BotDocDTO struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// BotDTO is one row of the bot list: the butler's index row plus the bot's own
+// state. Meta is nil when the bot has no record, Unavailable when its read
+// failed; the page tells those apart.
+type BotDTO struct {
+	ID          string      `json:"id"`
+	Name        string      `json:"name"`
+	CreatedAt   int64       `json:"createdAt"`
+	Meta        *BotMetaDTO `json:"meta"`
+	LastRun     *BotRunDTO  `json:"lastRun"`
+	Unavailable bool        `json:"unavailable"`
+}
+
+// BotsDTO is the list payload. Bots is always an array, never null.
+type BotsDTO struct {
+	Bots []BotDTO `json:"bots"`
+}
+
+// BotDetailDTO is one bot's documents and recent runs.
+type BotDetailDTO struct {
+	Meta *BotMetaDTO `json:"meta"`
+	Docs []BotDocDTO `json:"docs"`
+	Runs []BotRunDTO `json:"runs"`
+}

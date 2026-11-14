@@ -7,6 +7,7 @@ export const shell: Messages["shell"] = {
   pages: {
     overview: "Vitals",
     models: "Brain",
+    bots: "Bots",
     search: "Sight",
     mcp: "Hands",
     exchange: "Exchanges",
@@ -28,6 +29,7 @@ export const shell: Messages["shell"] = {
   subtitles: {
     overview: "Balance, runway, tier and the health of each part",
     models: "The models used for thinking",
+    bots: "The long-running workers your butler keeps",
     search: "Web search",
     entries: "Message channels",
     mcp: "MCP services and tools",

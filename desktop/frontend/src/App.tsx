@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
   Archive,
+  Bot,
   Brain,
   Cloud,
   Eye,
@@ -43,6 +44,7 @@ import { Diagnostics } from "@/features/diagnostics/Diagnostics";
 import { Backup } from "@/features/backup/Backup";
 import { Mcp } from "@/features/mcp/Mcp";
 import { Models } from "@/features/models/Models";
+import { Bots } from "@/features/bots/Bots";
 import { Overview } from "@/features/overview/Overview";
 import { Exchanges } from "@/features/exchanges/Exchanges";
 import { Agent } from "@/features/agent/Agent";
@@ -70,7 +72,13 @@ type NavGroup = "mind" | "senses" | "action" | "livelihood" | "containers";
 
 const NAV_GROUPS: { group?: NavGroup; items: { page: Page; icon: LucideIcon }[] }[] = [
   { items: [{ page: "overview", icon: HeartPulse }] },
-  { group: "mind", items: [{ page: "models", icon: Brain }] },
+  {
+    group: "mind",
+    items: [
+      { page: "models", icon: Brain },
+      { page: "bots", icon: Bot },
+    ],
+  },
   {
     group: "senses",
     items: [
@@ -327,6 +335,7 @@ export function App({ client }: { client: ClientService }) {
                     <Button
                       key={target}
                       type="button"
+                      data-testid={`nav-${target}`}
                       variant={page === target ? "secondary" : "ghost"}
                       className="justify-start"
                       aria-current={page === target ? "page" : undefined}
@@ -409,6 +418,7 @@ export function App({ client }: { client: ClientService }) {
                 >
                   {page === "overview" ? <Overview /> : null}
                   {page === "models" ? <Models /> : null}
+                  {page === "bots" ? <Bots /> : null}
                   {page === "search" ? <Search /> : null}
                   {page === "exchange" ? <Exchanges /> : null}
                   {page === "agent" ? <Agent /> : null}

@@ -102,6 +102,7 @@ func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 		"TelemetryEnabled": true, "TestExchange": true, "Theme": true, "UpdateMcpServer": true, "Upgrade": true, "UpgradeAvailable": true,
 		"SyncExchange": true, "ExchangeSyncStatus": true,
 		"SaveWallet": true, "WalletStatus": true, "LifeVitals": true,
+		"Bots": true, "BotDetail": true,
 		"StartContainer": true,
 		"StartMove":      true, "SettleMove": true, "MoveStatus": true,
 		"MoveBack": true, "AbandonMove": true, "ReviveOldHouse": true,

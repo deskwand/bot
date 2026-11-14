@@ -7,6 +7,12 @@ import type {
   BackupSettingsDTO,
   BackupSettingsEditDTO,
   BackupSummaryDTO,
+  BotDetailDTO,
+  BotDocDTO,
+  BotDTO,
+  BotMetaDTO,
+  BotRunDTO,
+  BotsDTO,
   BootStateDTO,
   CachedConfigDTO,
   CachedStatusDTO,
@@ -69,6 +75,12 @@ export type {
   BackupSettingsDTO,
   BackupSettingsEditDTO,
   BackupSummaryDTO,
+  BotDetailDTO,
+  BotDocDTO,
+  BotDTO,
+  BotMetaDTO,
+  BotRunDTO,
+  BotsDTO,
   BootStateDTO,
   CachedConfigDTO,
   CachedStatusDTO,
@@ -239,6 +251,8 @@ export interface ClientService {
   exchangeSyncStatus(): Promise<ExchangeSyncDTO[]>;
   walletStatus(): Promise<WalletStatusDTO>;
   lifeVitals(): Promise<LifeVitalsDTO>;
+  bots(): Promise<BotsDTO>;
+  botDetail(id: string): Promise<BotDetailDTO>;
   saveWallet(input: WalletEditDTO): Promise<ResultDTO>;
   mcpStatus(): Promise<McpAuthDTO[]>;
   startMcpOAuth(name: string): Promise<void>;

@@ -64,6 +64,8 @@ export function createProductionClient(): ClientService {
     exchangeSyncStatus: () => Service.exchangeSyncStatus(),
     walletStatus: () => Service.walletStatus(),
     lifeVitals: () => Service.lifeVitals(),
+    bots: () => Service.bots(),
+    botDetail: (id) => Service.botDetail(id),
     saveWallet: (input) => Service.saveWallet(input),
     mcpStatus: () => Service.mcpStatus(),
     startMcpOAuth: (name) => Service.startMcpOAuth(name),

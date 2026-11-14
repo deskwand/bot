@@ -1,0 +1,33 @@
+export const bots = {
+  empty: "这个 bot 还没有定义任何机器人，它会按需自己创建。",
+  noRecord: "无记录",
+  unavailable: "读取失败",
+  earner: "赚钱中",
+  status: {
+    active: "运行中",
+    paused: "已暂停",
+    finished: "已结束",
+  },
+  outcome: {
+    completed: "完成",
+    failed: "失败",
+    cancelled: "已取消",
+  },
+  nextWake: "下次醒来",
+  nextWakeNever: "不会再自动醒来",
+  currentTask: "当前任务",
+  idle: "空闲",
+  minutes: "{value} 分钟",
+  failures: "连续失败",
+  interval: "默认间隔",
+  mission: "任务",
+  docs: "文档",
+  runs: "最近运行",
+  noRuns: "还没有运行记录",
+  finishReason: "结束原因",
+  sep: "：",
+  unsupported: {
+    cloudflare: "当前云端版本还没有这个页面，去「更新」页升级。",
+    container: "当前实例的镜像还没有这个页面；镜像升级这一版还不支持。",
+  },
+};

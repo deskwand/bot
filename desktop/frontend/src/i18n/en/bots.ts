@@ -1,0 +1,33 @@
+export const bots = {
+  empty: "This bot has not defined any bots yet. It creates them as it needs them.",
+  noRecord: "No record",
+  unavailable: "Unreadable",
+  earner: "Earning",
+  status: {
+    active: "Running",
+    paused: "Paused",
+    finished: "Finished",
+  },
+  outcome: {
+    completed: "Completed",
+    failed: "Failed",
+    cancelled: "Cancelled",
+  },
+  nextWake: "Next wake",
+  nextWakeNever: "Will not wake on its own again",
+  currentTask: "Current task",
+  idle: "Idle",
+  minutes: "{value} min",
+  failures: "Failures in a row",
+  interval: "Default interval",
+  mission: "Mission",
+  docs: "Documents",
+  runs: "Recent runs",
+  noRuns: "No runs yet",
+  finishReason: "Finish reason",
+  sep: ": ",
+  unsupported: {
+    cloudflare: "This cloud version does not have this page yet; upgrade on the Updates page.",
+    container: "This instance's image does not have this page yet; image upgrade is not supported in this version.",
+  },
+};

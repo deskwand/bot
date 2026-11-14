@@ -1,5 +1,6 @@
 import type { Messages } from "../types";
 import { backup } from "./backup";
+import { bots } from "./bots";
 import { common } from "./common";
 import { diagnostics } from "./diagnostics";
 import { exchange } from "./exchange";
@@ -33,6 +34,7 @@ export const en: Messages = {
   wallet,
   entries,
   backup,
+  bots,
   setup,
   server,
 };

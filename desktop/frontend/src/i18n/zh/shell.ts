@@ -5,6 +5,7 @@ export const shell = {
   pages: {
     overview: "生命体征",
     models: "头脑",
+    bots: "机器人",
     search: "视野",
     mcp: "双手",
     exchange: "交易所",
@@ -26,6 +27,7 @@ export const shell = {
   subtitles: {
     overview: "额度、可运行天数、档位与各部分健康",
     models: "用哪些模型思考",
+    bots: "管家手下的长期执行体",
     search: "联网搜索",
     entries: "消息入口",
     mcp: "MCP 服务与工具",

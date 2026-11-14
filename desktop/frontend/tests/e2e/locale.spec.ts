@@ -125,10 +125,9 @@ test("html lang follows the locale", async ({ page }) => {
 });
 
 test("formatDateTime follows the locale", async ({ page }) => {
-  // Index-based nav keeps working once the shell itself is translated.
-  // The Cloudflare page sits in the container group before Checkup and Memory.
-  const backupNav = () =>
-    page.locator("#primary-nav").getByRole("button").nth(9);
+  // Select by test id: the label is translated, and an index would break
+  // whenever a nav entry is added.
+  const backupNav = () => page.getByTestId("nav-backup");
 
   await page.goto("/test.html?fixture=backup");
   await backupNav().click();

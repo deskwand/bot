@@ -95,6 +95,69 @@ export interface BootStateDTO {
 }
 
 /**
+ * BotDTO is one row of the bot list: the butler's index row plus the bot's own
+ * state. Meta is nil when the bot has no record, Unavailable when its read
+ * failed; the page tells those apart.
+ */
+export interface BotDTO {
+  id: string;
+  name: string;
+  createdAt: number;
+  meta: BotMetaDTO | null;
+  lastRun: BotRunDTO | null;
+  unavailable: boolean;
+}
+
+/** BotDetailDTO is one bot's documents and recent runs. */
+export interface BotDetailDTO {
+  meta: BotMetaDTO | null;
+  docs: BotDocDTO[];
+  runs: BotRunDTO[];
+}
+
+/** BotDocDTO is one read-only document a bot keeps. */
+export interface BotDocDTO {
+  name: string;
+  content: string;
+}
+
+/**
+ * BotMetaDTO is one bot's own state. Pointers keep "not set" distinct from a
+ * zero value, which the page renders differently.
+ */
+export interface BotMetaDTO {
+  botId: string;
+  name: string;
+  mission: string;
+  status: string;
+  nextWakeAt: number | null;
+  defaultIntervalMs: number;
+  currentTaskId: string | null;
+  consecutiveFailures: number;
+  wakesDay: string | null;
+  wakesCount: number;
+  pendingSteer: string[];
+  earner: boolean;
+  manualWakeAt: number | null;
+  finishReason: string | null;
+}
+
+/** BotRunDTO is one entry of a bot's run log. */
+export interface BotRunDTO {
+  taskId: string;
+  startedAt: number;
+  endedAt: number | null;
+  outcome: string | null;
+  summary: string | null;
+  note: string | null;
+}
+
+/** BotsDTO is the list payload. Bots is always an array, never null. */
+export interface BotsDTO {
+  bots: BotDTO[];
+}
+
+/**
  * CachedConfigDTO is the last config written to the local snapshot cache. An
  * absent cache is a nil Data and an empty SavedAt.
  */
@@ -712,6 +775,17 @@ export const Service = {
    */
   bootState(): Promise<BootStateDTO> {
     return call("Service.BootState");
+  },
+  /** BotDetail reads one bot's documents and recent runs. */
+  botDetail(id: string): Promise<BotDetailDTO> {
+    return call("Service.BotDetail", id);
+  },
+  /**
+   * Bots lists the bots this deployment's butler keeps. A read failure is an
+   * error, never an empty list: the page must be able to tell the two apart.
+   */
+  bots(): Promise<BotsDTO> {
+    return call("Service.Bots");
   },
   /**
    * CachedConfig returns the last config this app wrote for the managed target.

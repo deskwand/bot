@@ -131,4 +131,7 @@ export const errors = {
   MOVE_SOURCE_MUTE_FAILED: "旧屋没能静音",
   MOVE_ARCHIVE_MISSING: "行李文件不见了",
   MOVE_JOURNAL_CORRUPT: "搬家记录损坏",
+  BOTS_UNSUPPORTED: "云端版本过旧，升级后可查看",
+  BOTS_NOT_FOUND: "这个机器人没有记录",
+  BOTS_READ_FAILED: "读取机器人失败，请重试",
 } as const;

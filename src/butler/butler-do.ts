@@ -15,9 +15,9 @@ import { BackupRpc } from "../admin/backup-rpc";
 import { artifactNameFromKey } from "../artifact";
 import { artifactStore } from "../artifact-store";
 import { DEFER_MS, MaintenanceStore, type Lease } from "../admin/maintenance";
-import type { BotDO, SpawnForBotResult } from "../bot/bot-do";
+import type { BotDO, BotSnapshot, SpawnForBotResult } from "../bot/bot-do";
 import type { BotChatInput } from "../bot/bot-chat-do";
-import type { RunOutcome } from "../bot/bot-store";
+import type { BotMeta, RunOutcome, RunRow } from "../bot/bot-store";
 import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { ensureEarnerBot, type EnsureEarnerResult } from "./earner";
 import { STALL_AFTER_MS } from "../task/stall";
@@ -161,6 +161,38 @@ const TASK_PROBE_FAILURES_PREFIX = "task_probe_failures:";
 /** First reminder a long-running owner task gets, and how often after that. */
 export const SLOW_FIRST_MS = 180_000;
 export const SLOW_REPEAT_MS = 900_000;
+
+/** One row of the read-only bot overview the desktop client lists. */
+export type BotOverviewRow = {
+  id: string;
+  name: string;
+  createdAt: number;
+  meta: BotMeta | null;
+  lastRun: RunRow | null;
+  unavailable: boolean;
+};
+
+/**
+ * One overview row. The seam is the read itself: a bot whose DO throws becomes
+ * an unavailable row, and its neighbours are untouched.
+ */
+export async function buildOverviewRow(
+  base: { id: string; name: string; createdAt: number },
+  read: () => Promise<BotSnapshot | null>,
+): Promise<BotOverviewRow> {
+  try {
+    const snapshot = await read();
+    return {
+      ...base,
+      meta: snapshot?.meta ?? null,
+      lastRun: snapshot?.runs[0] ?? null,
+      unavailable: false,
+    };
+  } catch (error) {
+    console.error("bot overview failed:", base.id, error);
+    return { ...base, meta: null, lastRun: null, unavailable: true };
+  }
+}
 
 /** The part of a bot chat stub the Butler uses. */
 type BotChatStub = {
@@ -540,6 +572,20 @@ export class ButlerDO extends Agent<Env> {
   /** The bots this Butler indexes (backup discovery and management). */
   listBotIds(): string[] {
     return this.bots.list().map((row) => row.id);
+  }
+
+  /**
+   * Read-only overview for the desktop client: the index row plus the bot's own
+   * state. The index owns existence and the name; the BotDO owns everything that
+   * changes on its own. A bot whose read throws is reported as unavailable
+   * instead of taking the whole list down, like healBots isolates failures.
+   */
+  async botsOverview(): Promise<BotOverviewRow[]> {
+    return Promise.all(
+      this.bots.list().map((row) =>
+        buildOverviewRow(row, () => this.botFor(row.id).snapshot()),
+      ),
+    );
   }
 
   /**

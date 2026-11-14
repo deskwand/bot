@@ -7,6 +7,11 @@ import type {
   BackupSettingsDTO,
   BackupSettingsEditDTO,
   BackupSummaryDTO,
+  BotDetailDTO,
+  BotDocDTO,
+  BotDTO,
+  BotRunDTO,
+  BotsDTO,
   BootStateDTO,
   CachedConfigDTO,
   CachedStatusDTO,
@@ -57,6 +62,11 @@ import type { ClientService } from "../services/types";
 
 type Scenario =
   | "default"
+  | "bots-empty"
+  | "bots-three"
+  | "bots-unreadable"
+  | "bots-unsupported"
+  | "bots-unsupported-container"
   | "cf-denied"
   | "cf-timeout"
   | "cf-slow-apply"
@@ -182,6 +192,9 @@ interface MockState {
   exchangeAccounts: ExchangeAccountDTO[];
   wallet: WalletStatusDTO;
   vitals: LifeVitalsDTO | "failed" | "unsupported";
+  bots: BotDTO[] | "unsupported";
+  botDocs: BotDocDTO[];
+  botRuns: BotRunDTO[];
   localeSaveFails: boolean;
   telemetry: boolean;
   connected: boolean;
@@ -405,6 +418,11 @@ const DEFAULT_VITALS: LifeVitalsDTO = {
 function scenarioFromLocation(): Scenario {
   const value = new URLSearchParams(window.location.search).get("fixture");
   switch (value) {
+    case "bots-empty":
+    case "bots-three":
+    case "bots-unreadable":
+    case "bots-unsupported":
+    case "bots-unsupported-container":
     case "cf-denied":
     case "cf-timeout":
     case "cf-slow-apply":
@@ -586,6 +604,11 @@ function initialState(): MockState {
     "vitals-critical",
     "vitals-failed",
     "vitals-unsupported",
+    "bots-empty",
+    "bots-three",
+    "bots-unreadable",
+    "bots-unsupported",
+    "bots-unsupported-container",
     "client-update-failed",
     "pending-operations",
     "pending-other-account",
@@ -697,11 +720,131 @@ function initialState(): MockState {
                   ...DEFAULT_VITALS,
                   ...(scenario === "vitals-unpriced" ? { unpriced: true } : {}),
                 },
+    bots:
+      scenario === "bots-unsupported" ||
+      scenario === "bots-unsupported-container"
+        ? "unsupported"
+        : scenario === "bots-three"
+          ? [
+              {
+                id: "b1",
+                name: "价格哨兵",
+                createdAt: Date.UTC(2026, 10, 14, 9, 0, 0),
+                meta: {
+                  botId: "b1",
+                  name: "价格哨兵",
+                  mission: "盯着 BTC 行情，跌破 6 万时汇报",
+                  status: "active",
+                  nextWakeAt: Date.UTC(2026, 10, 14, 10, 30, 0),
+                  defaultIntervalMs: 3_600_000,
+                  currentTaskId: "t-42",
+                  consecutiveFailures: 0,
+                  wakesDay: "2026-11-14",
+                  wakesCount: 3,
+                  pendingSteer: [],
+                  earner: true,
+                  manualWakeAt: null,
+                  finishReason: null,
+                },
+                lastRun: {
+                  taskId: "t-42",
+                  startedAt: Date.UTC(2026, 10, 14, 9, 30, 0),
+                  endedAt: Date.UTC(2026, 10, 14, 9, 31, 0),
+                  outcome: "completed",
+                  summary: "已检查 4 个交易对，未触发",
+                  note: null,
+                },
+                unavailable: false,
+              },
+              {
+                id: "b2",
+                name: "日报",
+                createdAt: Date.UTC(2026, 10, 13, 9, 0, 0),
+                meta: {
+                  botId: "b2",
+                  name: "日报",
+                  mission: "每晚写一份日报",
+                  status: "paused",
+                  nextWakeAt: null,
+                  defaultIntervalMs: 86_400_000,
+                  currentTaskId: null,
+                  consecutiveFailures: 2,
+                  wakesDay: "2026-11-13",
+                  wakesCount: 5,
+                  pendingSteer: [],
+                  earner: false,
+                  manualWakeAt: null,
+                  finishReason: null,
+                },
+                lastRun: null,
+                unavailable: false,
+              },
+              {
+                id: "b3",
+                name: "旧任务",
+                createdAt: Date.UTC(2026, 10, 10, 9, 0, 0),
+                meta: {
+                  botId: "b3",
+                  name: "旧任务",
+                  mission: "做完就收工",
+                  status: "finished",
+                  nextWakeAt: null,
+                  defaultIntervalMs: 3_600_000,
+                  currentTaskId: null,
+                  consecutiveFailures: 0,
+                  wakesDay: null,
+                  wakesCount: 1,
+                  pendingSteer: [],
+                  earner: false,
+                  manualWakeAt: null,
+                  finishReason: "主人要求结束",
+                },
+                lastRun: null,
+                unavailable: false,
+              },
+            ]
+          : scenario === "bots-unreadable"
+            ? [
+                {
+                  id: "b9",
+                  name: "孤儿",
+                  createdAt: Date.UTC(2026, 10, 1),
+                  meta: null,
+                  lastRun: null,
+                  unavailable: false,
+                },
+                {
+                  id: "b8",
+                  name: "读不到",
+                  createdAt: Date.UTC(2026, 10, 2),
+                  meta: null,
+                  lastRun: null,
+                  unavailable: true,
+                },
+              ]
+            : [],
+    botDocs: [
+      { name: "守则", content: "只汇报价格变化，不下单" },
+      { name: "记忆", content: "上次阈值：6 万" },
+    ],
+    botRuns: [
+      {
+        taskId: "t-42",
+        startedAt: Date.UTC(2026, 10, 14, 9, 30, 0),
+        endedAt: Date.UTC(2026, 10, 14, 9, 31, 0),
+        outcome: "completed",
+        summary: "已检查 4 个交易对，未触发",
+        note: null,
+      },
+    ],
     localeSaveFails: query.get("localeSaveFails") === "1",
     telemetry: true,
     connected: shellScenario || containerReady,
     accountId: "a".repeat(32),
-    targetKind: containerReady ? "container" : "",
+    targetKind:
+      containerReady || scenario === "bots-unsupported-container"
+        ? "container"
+        : "",
     containerScenario,
     containerStatus: localTarget
       ? {
@@ -1879,6 +2022,27 @@ export function createMockClient(): ClientService {
     async walletStatus(): Promise<WalletStatusDTO> {
       record("walletStatus");
       return { ...state.wallet };
+    },
+
+    async bots(): Promise<BotsDTO> {
+      record("bots");
+      if (state.bots === "unsupported") {
+        fail("BOTS_UNSUPPORTED", "当前部署还没有机器人页面的接口");
+      }
+      return { bots: state.bots };
+    },
+
+    async botDetail(id: string): Promise<BotDetailDTO> {
+      record("botDetail", id);
+      const bot =
+        state.bots === "unsupported"
+          ? undefined
+          : state.bots.find((entry) => entry.id === id);
+      return {
+        meta: bot?.meta ?? null,
+        docs: state.botDocs,
+        runs: state.botRuns,
+      };
     },
 
     async lifeVitals(): Promise<LifeVitalsDTO> {

@@ -335,3 +335,22 @@ describe("admin gateway", () => {
     expect(await response.json()).toEqual({ code: "ADMIN_UNAUTHORIZED" });
   });
 });
+
+describe("bot routes through the gateway", () => {
+  it("answers 404 without the admin token", async () => {
+    const gateway = createAdminGateway(deps("admin-bots-none", null));
+
+    const response = await call(gateway, "/admin/bots");
+
+    expect(response.status).toBe(404);
+  });
+
+  it("lists an empty index and needs no lease", async () => {
+    const gateway = createAdminGateway(deps("admin-bots-empty"));
+
+    const response = await call(gateway, "/admin/bots", { opId: "" });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ bots: [] });
+  });
+});

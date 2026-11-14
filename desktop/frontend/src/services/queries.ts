@@ -13,6 +13,8 @@ import type {
   ClientService,
   ConfigDTO,
   ContainerStatusDTO,
+  BotDetailDTO,
+  BotsDTO,
   LifeVitalsDTO,
   StatusItemDTO,
 } from "@/services/types";
@@ -26,6 +28,7 @@ export const queryKeys = {
   mcpCatalog: ["mcpCatalog"],
   mcpStatus: ["mcpStatus"],
   exchangeSyncStatus: ["exchangeSyncStatus"],
+  bots: ["bots"],
   lifeVitals: ["lifeVitals"],
   walletStatus: ["walletStatus"],
   containerStatus: ["containerStatus"],
@@ -188,4 +191,27 @@ export function useInvalidate(): {
     () => ({ config, configAndStatus, mcp }),
     [config, configAndStatus, mcp],
   );
+}
+
+export function useBotsQuery(): UseQueryResult<BotsDTO> {
+  const { client } = useApp();
+  return useQuery({
+    queryKey: queryKeys.bots,
+    queryFn: () => client.bots(),
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
+}
+
+/**
+ * One bot's documents and runs. The caller mounts this only while the row is
+ * expanded, so no separate enabled flag is needed.
+ */
+export function useBotQuery(id: string): UseQueryResult<BotDetailDTO> {
+  const { client } = useApp();
+  return useQuery({
+    queryKey: [...queryKeys.bots, id],
+    queryFn: () => client.botDetail(id),
+    staleTime: 30_000,
+  });
 }
