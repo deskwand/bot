@@ -877,5 +877,9 @@ function ownerModeLabel(
       return t("entries.ownerModeExpired");
     case "revoked":
       return t("entries.ownerModeRevoked");
+    // mode 在生成的类型里是 string，多于这份列表的取值直接显示原值，
+    // 而不是让整个页面编译不过。
+    default:
+      return mode;
   }
 }
