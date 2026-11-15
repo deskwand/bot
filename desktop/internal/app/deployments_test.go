@@ -104,8 +104,8 @@ func TestInstallDeploymentSummaryIsFrontendSafe(t *testing.T) {
 	if summary.OperationID != "op-1" || summary.PublicBaseURL == "" {
 		t.Fatalf("summary = %#v", summary)
 	}
-	if len(summary.Warnings) == 0 || !strings.Contains(summary.Warnings[0], "owner") {
-		t.Fatalf("empty owner warning = %#v", summary.Warnings)
+	if len(summary.Warnings) == 0 || !strings.Contains(summary.Warnings[0], "主人") {
+		t.Fatalf("owner claim warning = %#v", summary.Warnings)
 	}
 	encoded, _ := json.Marshal(summary)
 	if bytes.Contains(encoded, []byte(appDeploymentSecretSentinel)) {

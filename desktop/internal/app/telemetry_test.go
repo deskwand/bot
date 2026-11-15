@@ -91,6 +91,12 @@ func TestConfigReadyNeedsOwnerModelsAndAConfiguredChannel(t *testing.T) {
 		t.Fatal("a deployment without an owner was ready")
 	}
 
+	claimable := noOwner
+	claimable.OwnerClaimMode = true
+	if !configReady(claimable) {
+		t.Fatal("a deployment waiting for its first claimer was not ready")
+	}
+
 	noTask := ready
 	noTask.TaskModel = nil
 	if configReady(noTask) {

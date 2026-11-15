@@ -52,7 +52,7 @@ mv .env.container.example .env && chmod 600 .env    # 填下面四个必填项
 docker compose up -d && docker compose ps           # 等 STATUS 变成 healthy
 ```
 
-四样东西填进去，它就睁眼：`ADMIN_TOKEN`（`openssl rand -hex 32`）、`DESKWAND_CONFIG`（单行 JSON，`owner.telegramUserIds` 换成你的 Telegram 用户 ID）、至少一个 `MODEL_KEY_*`、入口的 `TELEGRAM_BOT_TOKEN` 或 `WECHAT_CREDENTIALS`。
+三样东西填进去，它就睁眼：`ADMIN_TOKEN`（`openssl rand -hex 32`）、`DESKWAND_CONFIG`（一行 JSON，`owner` 可以整段省略 —— 省略后给 bot 发第一句话的人就是主人）、至少一个 `MODEL_KEY_*`，再按入口填 `TELEGRAM_BOT_TOKEN` 或 `WECHAT_CREDENTIALS`。
 
 填法、沙箱、备份、起不来时看哪里：[docs/container-deploy.md](docs/container-deploy.md)。
 

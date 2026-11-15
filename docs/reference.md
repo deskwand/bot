@@ -370,9 +370,12 @@ cp .dev.vars.example .dev.vars
 }
 ```
 
-`100000001` 只是示例占位，请换成真实的 Telegram 用户 ID。
+`100000001` 只是示例占位；**整段 `owner` 也可以省略**，省略即「待认领」。
 
-- `owner.telegramUserIds`：允许使用该 bot 的 Telegram 用户 ID（正整数）。空数组是合法配置，表示不授权任何人；不存在仓库内置 owner，也不会回退到源码常量。
+- `owner.telegramUserIds`：允许使用该 bot 的 Telegram 用户 ID（正整数）。空数组是合法配置，表示不授权任何人，且**不进入认领**。
+- **省略整个 `owner` 键 = 待认领**：部署完成后 60 分钟内，第一个给 bot 发消息的人成为主人，bot 会回一条「已把你设为主人」。认领状态存在 ChannelDO 的 SQLite 里，不写回配置，也不需要重建容器或重新发布。
+- 换人 / 清空在桌面端「声音」页：「重新开启认领」重开 60 分钟窗口，「撤销主人」清空并关闭窗口。静态名单来自配置，那两种模式下这两个按钮是禁用的。
+- 不存在仓库内置 owner，也不会回退到源码常量。
 - `models`：按角色（`butler` / `task`）配置模型。`workers-ai` 是内置的免 key 厂商（默认）；其他内置厂商和 `models.customProviders` 里的自定义端点按 `MODEL_KEY_<ID>` 读取 key。
 - `mcpServers`：远程 MCP 服务器列表，推荐在桌面端"服务"页从目录添加（GitHub、Notion、Linear、Sentry、高德地图、瑞幸咖啡等），不必手写。只支持远程 MCP（Streamable HTTP / SSE），不支持 `npx` 启动的本地 stdio 服务。
   - 审批：桌面端添加的服务默认"读免审、写智能"（`approvalPolicy: "writes"`，依据工具的 `readOnlyHint`）：只读工具直接执行，其他写操作先交给审查模型判断，常规操作直接放行，只有涉及金钱、删除、权限、对外发送等高风险操作才发 ✅/❌ 审批按钮，卡片附审查理由。标了 `destructiveHint` 的工具始终要审。可逐个工具改为智能、免审、要审或停用（`autoApprove` / `requireApproval` / `disabledTools`）。
@@ -524,7 +527,7 @@ Telegram 由 Worker 主动长轮询收消息，本地调试不需要公网地址
 
 迁移顺序：
 
-1. 在 Cloudflare Dashboard 的 Worker 设置中新增普通变量（不是 secret）`DESKWAND_CONFIG`。值取自迁移前的源码常量：`owner.telegramUserIds`、`models.butler`、`models.task`、`mcpServers`，并补上 `"schemaVersion": 1`。只填实际值，不要用示例占位 ID。
+1. 在 Cloudflare Dashboard 的 Worker 设置中新增普通变量（不是 secret）`DESKWAND_CONFIG`。值取自迁移前的源码常量：`owner.telegramUserIds`、`models.butler`、`models.task`、`mcpServers`，并补上 `"schemaVersion": 1`。只填实际值，不要用示例占位 ID。若想改走认领，删掉 `owner` 键即可。
 2. 保存后在 Dashboard 重新打开该 Worker 的 Settings → Variables and Secrets 页面核对（变量类型选 Text 或 JSON 均可，解析器两种都接受）：`schemaVersion`、owner 列表、两个模型和 MCP 名称/URL 与旧值一致。核对时不要把 secret 或带凭据的 header 输出到终端。
 3. 确认远端值可读且正确后，再部署新代码。首次部署后发送一条测试消息，确认业务未因配置缺失而拒绝。
 4. 之后 CLI 与桌面客户端可以共存，但远端 `DESKWAND_CONFIG` 是唯一权威；在任一侧修改后都要重新发布才会生效。不要把同一份配置再写回 `src/config.ts`，也不要在两处各维护一份草稿。
@@ -609,7 +612,7 @@ tests/                  # 测试与测试专用 Worker 入口
 
 ## 安全与注意事项
 
-- 只响应 `owner.telegramUserIds` 中的用户；其他人发来的消息返回 200 并忽略。
+- 只响应主人：配置里的静态名单，或缺省 `owner` 时认领到的那个人。其他人发来的消息返回 200 并忽略。
 - 所有 secrets 只通过 `wrangler secret put` 或 `.dev.vars` 提供，切勿提交到仓库。`.dev.vars` 已加入 `.gitignore`。
 - 修改 `wrangler.jsonc` 后重新执行 `npx wrangler types` 更新 `worker-configuration.d.ts`；`CF_VERSION_METADATA` binding 是消息归属的一部分，发布配置不要删除。
 - 日志不包含 token、凭据、context 或消息正文；排查渠道问题时只核对版本与 `ACTIVE_CHANNEL`。

@@ -24,8 +24,17 @@ export type ModelsConfig = Record<Role, ModelRef> & {
 
 export type ApprovalMode = "autonomous" | "reviewed";
 
+export type OwnerConfig = {
+  /** 空数组 = 明确关闭 Telegram 访问；非空 = 静态白名单。 */
+  telegramUserIds: number[];
+};
+
 export type AppConfig = {
-  owner: { telegramUserIds: number[] };
+  /**
+   * 缺省 = 待认领（第一个发消息的人成为主人）；`[]` = 明确关闭；
+   * 非空 = 静态白名单，认领机制完全不参与。
+   */
+  owner?: OwnerConfig;
   models: ModelsConfig;
   mcpServers: McpServerConfig[];
   locale?: Locale;
@@ -51,7 +60,7 @@ export function configApprovalMode(cfg: AppConfig): ApprovalMode {
 }
 
 export function isOwner(cfg: AppConfig, telegramUserId: number): boolean {
-  return cfg.owner.telegramUserIds.includes(telegramUserId);
+  return (cfg.owner?.telegramUserIds ?? []).includes(telegramUserId);
 }
 
 export function needsApproval(

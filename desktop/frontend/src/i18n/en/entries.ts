@@ -71,4 +71,19 @@ export const entries: Messages["entries"] = {
   loginFailedFallback: "QR sign-in failed. Try again.",
   resumeState: "State after resuming: {state}.",
   publishedWaiting: "Published, waiting for the cloud to start.",
+  ownerTitle: "Owner",
+  ownerNobody: "No owner yet",
+  ownerReopen: "Reopen the claim window",
+  ownerRevoke: "Revoke the owner",
+  ownerRevokeTitle: "Revoke the owner?",
+  ownerRevokeDescription:
+    "The bot stops answering until the claim window is reopened and someone messages it. The previous owner is not notified.",
+  ownerModeStatic: "Fixed in the deployment config",
+  ownerModeClosed: "Closed",
+  ownerModeClaimed: "Claimed",
+  ownerModeClaimable: "Waiting for a claim",
+  ownerModeExpired: "Claim window expired",
+  ownerModeRevoked: "Revoked",
+  ownerReopenHandsOver:
+    "Reopening the claim window removes the current owner; the next person to message takes over.",
 };

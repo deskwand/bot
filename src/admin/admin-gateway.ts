@@ -24,6 +24,7 @@ import { createWalletRoutes, type WalletReads } from "./wallet-routes";
 import { createLifeRoutes } from "./life-routes";
 import { BOTS_PATH, createBotRoutes } from "./bot-routes";
 import { createMcpAdminRoutes } from "./mcp-routes";
+import { createOwnerRoutes, OWNER_STATUS_PATH } from "./owner-routes";
 import { createR2Routes } from "./r2-routes";
 import type {
   DbSchema,
@@ -237,6 +238,11 @@ export function createAdminGateway(deps: AdminDeps): {
   const wallet =
     deps.walletReads === undefined ? null : createWalletRoutes(deps.walletReads);
   const life = createLifeRoutes({ vitals: () => deps.life().vitals() });
+  const owner = createOwnerRoutes({
+    status: () => deps.channel().ownerStatus(),
+    open: () => deps.channel().openOwnerClaim(),
+    revoke: () => deps.channel().revokeOwner(),
+  });
   const bots = createBotRoutes({
     overview: () => deps.butler().botsOverview(),
     snapshot: (id) => deps.bot(id).snapshot(),
@@ -268,6 +274,13 @@ export function createAdminGateway(deps: AdminDeps): {
     // Vitals are a read-only health check and need no lease.
     if (url.pathname.startsWith("/admin/life/")) {
       return life.fetch(req);
+    }
+    // 读状态是只读的，不加锁；开窗/撤销会写认领表并清地址，必须持维护租约。
+    if (url.pathname === OWNER_STATUS_PATH) return owner.fetch(req);
+    if (url.pathname.startsWith("/admin/owner/")) {
+      const denied = await requireLease(deps, req);
+      if (denied !== null) return denied;
+      return owner.fetch(req);
     }
 
     // Bots are read-only and need no lease, so the page works during a backup.

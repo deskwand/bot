@@ -72,7 +72,7 @@ func (s *Service) reportConfigDone() {
 // needs to answer: an owner, both role models, and an active channel whose
 // credentials exist.
 func configReady(config ConfigDTO) bool {
-	if len(config.OwnerUserIDs) == 0 || config.ButlerModel == nil || config.TaskModel == nil {
+	if (len(config.OwnerUserIDs) == 0 && !config.OwnerClaimMode) || config.ButlerModel == nil || config.TaskModel == nil {
 		return false
 	}
 	var secret string

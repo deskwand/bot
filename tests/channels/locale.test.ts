@@ -21,7 +21,7 @@ const HAN = /\p{Script=Han}/u;
 const ENV = env as unknown as Record<string, unknown>;
 const OWNER_ID = readRuntimeConfig(
   env as unknown as Env,
-).owner.telegramUserIds[0]!;
+).owner!.telegramUserIds[0]!;
 
 function englishConfig(): Record<string, unknown> {
   return {

@@ -103,6 +103,7 @@ func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 		"SyncExchange": true, "ExchangeSyncStatus": true,
 		"SaveWallet": true, "WalletStatus": true, "LifeVitals": true,
 		"Bots": true, "BotDetail": true,
+		"OwnerStatus": true, "OpenOwnerClaim": true, "RevokeOwner": true,
 		"StartContainer": true,
 		"StartMove":      true, "SettleMove": true, "MoveStatus": true,
 		"MoveBack": true, "AbandonMove": true, "ReviveOldHouse": true,

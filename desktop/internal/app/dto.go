@@ -121,24 +121,27 @@ type SecretNameDTO struct {
 
 // ConfigDTO is the editable configuration summary.
 type ConfigDTO struct {
-	TargetKind         string               `json:"targetKind"`
-	AccountID          string               `json:"accountId"`
-	WorkerName         string               `json:"workerName"`
-	Fingerprint        string               `json:"fingerprint"`
-	ReleaseVersion     string               `json:"releaseVersion,omitempty"`
-	ActiveVersionCount int                  `json:"activeVersionCount"`
-	ConfigPresent      bool                 `json:"configPresent"`
-	ActiveChannel      string               `json:"activeChannel,omitempty"`
-	OwnerUserIDs       []int64              `json:"ownerUserIds"`
-	ButlerModel        *ModelDTO            `json:"butlerModel"`
-	TaskModel          *ModelDTO            `json:"taskModel"`
-	CustomProviders    []CustomProviderDTO  `json:"customProviders"`
-	McpServers         json.RawMessage      `json:"mcpServers"`
-	Locale             string               `json:"locale"`
-	ApprovalMode       string               `json:"approvalMode"`
-	SearchProvider     string               `json:"searchProvider"`
-	ExchangeAccounts   []ExchangeAccountDTO `json:"exchangeAccounts"`
-	Secrets            []SecretNameDTO      `json:"secrets"`
+	TargetKind         string  `json:"targetKind"`
+	AccountID          string  `json:"accountId"`
+	WorkerName         string  `json:"workerName"`
+	Fingerprint        string  `json:"fingerprint"`
+	ReleaseVersion     string  `json:"releaseVersion,omitempty"`
+	ActiveVersionCount int     `json:"activeVersionCount"`
+	ConfigPresent      bool    `json:"configPresent"`
+	ActiveChannel      string  `json:"activeChannel,omitempty"`
+	OwnerUserIDs       []int64 `json:"ownerUserIds"`
+	// OwnerClaimMode is true when DESKWAND_CONFIG has no owner key at all:
+	// the deployment is waiting for the first Telegram message to claim it.
+	OwnerClaimMode   bool                 `json:"ownerClaimMode"`
+	ButlerModel      *ModelDTO            `json:"butlerModel"`
+	TaskModel        *ModelDTO            `json:"taskModel"`
+	CustomProviders  []CustomProviderDTO  `json:"customProviders"`
+	McpServers       json.RawMessage      `json:"mcpServers"`
+	Locale           string               `json:"locale"`
+	ApprovalMode     string               `json:"approvalMode"`
+	SearchProvider   string               `json:"searchProvider"`
+	ExchangeAccounts []ExchangeAccountDTO `json:"exchangeAccounts"`
+	Secrets          []SecretNameDTO      `json:"secrets"`
 }
 
 // ExchangeProbeDTO is one account's health check from the deployed Worker.

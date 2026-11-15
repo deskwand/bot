@@ -64,4 +64,19 @@ export const entries = {
   loginFailedFallback: "扫码登录失败，请重试。",
   resumeState: "继续后状态：{state}。",
   publishedWaiting: "已发布，等待云端启动。",
+  ownerTitle: "主人",
+  ownerNobody: "还没有主人",
+  ownerReopen: "重新开启认领",
+  ownerRevoke: "撤销主人",
+  ownerRevokeTitle: "确认撤销主人？",
+  ownerRevokeDescription:
+    "撤销后 bot 会停止响应，直到重新开启认领并有人发消息。旧主人不会收到任何通知。",
+  ownerModeStatic: "配置里写死",
+  ownerModeClosed: "已关闭",
+  ownerModeClaimed: "已认领",
+  ownerModeClaimable: "待认领",
+  ownerModeExpired: "认领窗口已过期",
+  ownerModeRevoked: "已撤销",
+  ownerReopenHandsOver:
+    "「重新开启认领」会先移除当前主人，等下一个发消息的人接手。",
 } as const;

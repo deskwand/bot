@@ -18,6 +18,7 @@ import type {
   CachedStatusDTO,
   CloudflareLoginDTO,
   ConfigDTO,
+  OwnerStatusDTO,
   ConfigEditDTO as GeneratedConfigEditDTO,
   ConnectionDTO,
   ContainerCheckDTO,
@@ -117,6 +118,7 @@ export type {
   ModelProviderDTO,
   MoveDTO,
   OperationDTO,
+  OwnerStatusDTO,
   PendingRestoreDTO,
   PlaintextSecretDTO,
   Progress,
@@ -258,6 +260,9 @@ export interface ClientService {
   startMcpOAuth(name: string): Promise<void>;
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]>;
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO>;
+  ownerStatus(): Promise<OwnerStatusDTO>;
+  openOwnerClaim(): Promise<OwnerStatusDTO>;
+  revokeOwner(): Promise<OwnerStatusDTO>;
   resumeOperation(id: string): Promise<ResultDTO>;
   abandonOperation(id: string): Promise<ResultDTO>;
   pendingOperations(): Promise<OperationDTO[]>;

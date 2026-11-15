@@ -53,23 +53,6 @@ test("overview shows only unfinished configuration actions", async ({ page }) =>
   await expect(page.getByText("收发已验证", { exact: true })).toHaveCount(0);
 });
 
-test("install excludes hidden Telegram owner draft on WeChat", async ({ page }) => {
-  await page.goto("/test.html");
-  await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();
-  await page.getByRole("button", { name: "部署新服务", exact: true }).click();
-  await page.locator("#install-channel-telegram").click();
-  await page.getByLabel("允许使用的 Telegram 用户 ID").fill("100000001");
-  await page.locator("#install-channel-wechat").click();
-  await expect(page.getByLabel("允许使用的 Telegram 用户 ID")).toBeHidden();
-  await page.locator("#install-channel-telegram").click();
-  await expect(page.getByLabel("允许使用的 Telegram 用户 ID")).toHaveValue("100000001");
-  await page.locator("#install-channel-wechat").click();
-  await page.getByRole("button", { name: "检查并部署", exact: true }).click();
-  await expect.poll(() => page.evaluate(() =>
-    (window as unknown as { __configCalls: { install: { telegramUserIds?: number[] }[] } }).__configCalls.install.at(-1)?.telegramUserIds
-  )).toEqual([]);
-});
-
 test("empty resource name reveals the field without installing", async ({ page }) => {
   await page.goto("/test.html");
   await page.getByRole("button", { name: "使用 Cloudflare 登录" }).click();

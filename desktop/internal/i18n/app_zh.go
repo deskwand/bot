@@ -26,7 +26,7 @@ var zhApp = map[string]string{
 	"app.webViewMissingDownload": "打开下载页面",
 	"app.webViewMissingQuit":     "退出",
 	"app.configInvalidJSON":      "DESKWAND_CONFIG 不是有效的 JSON",
-	"app.ownerMissing":           "owner 列表为空：Worker 会忽略所有消息，直到在设置中发布 owner。",
+	"app.ownerMissing":           "还没设主人：部署完成后，第一个给 bot 发消息的人会成为主人（60 分钟内）。",
 	"app.activeChannelInvalid":   "ACTIVE_CHANNEL 必须是 telegram 或 wechat",
 	"app.containerEngineInvalid": "不支持的容器运行时",
 	"app.installAccountMismatch": "安装目标必须属于当前连接的 Cloudflare 账户",

@@ -260,7 +260,12 @@ func lifecycleLocale(l *Lifecycle) string {
 
 func installConfigJSON(request InstallRequest, locale string) ([]byte, error) {
 	ids := append([]int64(nil), request.Config.TelegramUserIDs...)
-	patch := domain.EditablePatch{TelegramUserIDs: &ids}
+	patch := domain.EditablePatch{}
+	// 没有 owner 键 = 待认领；空数组 = 明确关闭。两者语义不同，所以只有
+	// 非空才写补丁 —— 写空数组会把「待认领」变成「永久关闭」。
+	if len(ids) > 0 {
+		patch.TelegramUserIDs = &ids
+	}
 	if locale != "" {
 		patch.Locale = &locale
 	}

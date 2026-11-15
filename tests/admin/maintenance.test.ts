@@ -22,7 +22,7 @@ declare module "cloudflare:test" {
 const OWNER = "wx-owner";
 const TELEGRAM_OWNER = readRuntimeConfig(
   env as unknown as Env,
-).owner.telegramUserIds[0]!;
+).owner!.telegramUserIds[0]!;
 
 const CREDS = {
   token: "token-a",

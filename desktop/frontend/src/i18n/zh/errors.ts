@@ -69,6 +69,8 @@ export const errors = {
   INSTALL_CONFLICT: "已有操作在进行，请先处理顶部那条。",
   OPERATION_IN_PROGRESS: "同一部署已有操作在进行。",
   OWNER_REQUIRED: "需要确认 owner 列表（可留空）。",
+  OWNER_UNSUPPORTED: "云端版本过旧，升级后才能管理主人。",
+  OWNER_FAILED: "读取主人状态失败，请稍后重试。",
   MODELS_REQUIRED: "需要选择管家和任务模型。",
   CONFIG_MISSING: "云端缺少 DESKWAND_CONFIG。",
   MODEL_SWITCH_REJECTED: "模型切换受限，请查看详情。",

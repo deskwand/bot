@@ -13,6 +13,7 @@ export const CHANNEL_EVENTS = [
   "poll_error",
   "send_ok",
   "send_error",
+  "owner_claimed",
   "webhook_ok",
   "webhook_rejected",
 ] as const;

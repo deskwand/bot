@@ -25,7 +25,13 @@ describe("readRuntimeConfig", () => {
     const cfg = readRuntimeConfig(
       { DESKWAND_CONFIG: validConfig } as unknown as Env,
     );
-    expect(cfg.owner.telegramUserIds).toEqual([]);
+    expect(cfg.owner?.telegramUserIds ?? []).toEqual([]);
+  });
+
+  it("accepts a document with no owner key at all", () => {
+    const { owner: _omitOwner, ...withoutOwner } = validConfig;
+    const cfg = readRuntimeConfig(envWith(withoutOwner));
+    expect(cfg.owner).toBeUndefined();
   });
 
   it("accepts the JSON-string binding form used by CLI and dev", () => {

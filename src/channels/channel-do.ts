@@ -10,7 +10,6 @@ import type {
 import { MAX_ARTIFACT_BYTES, artifactKeySegments, artifactNameFromKey } from "../artifact";
 import { artifactStore } from "../artifact-store";
 import { actionHint } from "../butler/owner-copy";
-import { isOwner } from "../config";
 import { ownerLocale, t, type Locale } from "../i18n";
 import { readRuntimeConfig } from "../runtime-config";
 import { classifyFile, extensionForMime } from "../tools/file-content";
@@ -41,6 +40,15 @@ import {
   versionIdOf,
 } from "./route-identity";
 import { emitChannelEvent } from "./events";
+import {
+  decideOwner,
+  ownerStatusOf,
+  type OwnerClaimView,
+  type OwnerConfigView,
+  type OwnerDecision,
+  type OwnerStatus,
+} from "./owner-access";
+import { OwnerStore } from "./owner-store";
 import { inboxStore } from "./inbox";
 import { OutboundQueue } from "./outbound-queue";
 import { describeImageBytes, prepareInboundImage, sniffImageType } from "./media";
@@ -225,6 +233,8 @@ export class ChannelDO extends Agent<Env> {
 
   private readonly backup: BackupRpc;
 
+  private readonly owners: OwnerStore;
+
   private readonly outbound: OutboundQueue;
 
   /** Single-flight guard: an inbound drain and a send-time drain must not run twice. */
@@ -239,6 +249,7 @@ export class ChannelDO extends Agent<Env> {
     this.outbound = new OutboundQueue(this.db);
     this.lease = new MaintenanceStore(this.db);
     this.backup = new BackupRpc(ctx, this.lease);
+    this.owners = new OwnerStore(this.db);
 
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS owner_addresses (
@@ -277,6 +288,14 @@ export class ChannelDO extends Agent<Env> {
 
   override async onStart(props?: object): Promise<void> {
     await super.onStart(props);
+    // 认领窗口从 DO 第一次醒来开始计时（部署后几秒），而不是等有人打开桌面端
+    // 的状态页 —— 读状态不该启动计时，也不该让窗口被动延后。
+    try {
+      if (this.ownerConfig().telegramUserIds === undefined) this.owners.ensureWindow();
+    } catch (error) {
+      // 配置缺失时 readRuntimeConfig 会抛；不能因此卡住 DO 启动。
+      console.warn(`channel: claim window not opened: ${errorMessage(error)}`);
+    }
     // First wake (any existing RPC or the Cron) applies the selection early.
     try {
       await this.ensurePolling();
@@ -309,9 +328,13 @@ export class ChannelDO extends Agent<Env> {
       }
       if (!event) return "accepted";
 
-      if (!this.isOwner(event)) {
+      const access = this.ownerAccess(event);
+      if (access === "deny") {
         console.warn(`channel: ignoring event from non-owner ${event.userId}`);
         return "accepted";
+      }
+      if (access === "claim") {
+        await this.claimOwner(event);
       }
 
       this.rememberOwner(event);
@@ -386,6 +409,35 @@ export class ChannelDO extends Agent<Env> {
 
   async maintenanceActive(): Promise<boolean> {
     return this.lease.current() !== null;
+  }
+
+  async ownerStatus(): Promise<OwnerStatus> {
+    return ownerStatusOf({
+      config: this.ownerConfig(),
+      // 读状态不启动窗口（read 是纯的）；开窗只发生在 DO 启动、收到消息或显式 open。
+      claim:
+        this.ownerConfig().telegramUserIds === undefined
+          ? this.owners.read()
+          : { ownerUserId: null, windowOpenedAt: 0 },
+      now: Date.now(),
+    });
+  }
+
+  async openOwnerClaim(): Promise<OwnerStatus> {
+    // 名单来自 env，运行时无权改；静默返回现状而不是写一行认领记录。
+    if (this.ownerConfig().telegramUserIds !== undefined) {
+      return this.ownerStatus();
+    }
+    this.owners.openWindow();
+    return this.ownerStatus();
+  }
+
+  async revokeOwner(): Promise<OwnerStatus> {
+    if (this.ownerConfig().telegramUserIds !== undefined) {
+      return this.ownerStatus();
+    }
+    this.owners.revoke();
+    return this.ownerStatus();
   }
 
   async backupSchema(): Promise<DbSchema> {
@@ -552,8 +604,9 @@ export class ChannelDO extends Agent<Env> {
       return raw ? credentialsHash(raw) : sha256Hex("wechat:unconfigured");
     }
 
+    // 认领是运行时状态，不参与这个哈希：认领后不必迁移已有的消息引用。
     const ownerIds = [
-      ...new Set(readRuntimeConfig(this.env).owner.telegramUserIds),
+      ...new Set(readRuntimeConfig(this.env).owner?.telegramUserIds ?? []),
     ].sort((a, b) => a - b);
     return sha256Hex(
       `telegram:${this.env.TELEGRAM_BOT_TOKEN ?? ""}:${ownerIds.join(",")}`,
@@ -686,7 +739,7 @@ export class ChannelDO extends Agent<Env> {
     if (row) return row.conversation_id;
 
     if (channel === "telegram") {
-      const fallback = readRuntimeConfig(this.env).owner.telegramUserIds[0];
+      const fallback = readRuntimeConfig(this.env).owner?.telegramUserIds[0];
       if (fallback !== undefined) return String(fallback);
     }
 
@@ -1647,11 +1700,42 @@ export class ChannelDO extends Agent<Env> {
     }
   }
 
-  private isOwner(event: InboundEvent): boolean {
-    if (event.channel === "telegram") {
-      return isOwner(readRuntimeConfig(this.env), Number(event.userId));
+  private ownerConfig(): OwnerConfigView {
+    return {
+      telegramUserIds: readRuntimeConfig(this.env).owner?.telegramUserIds,
+    };
+  }
+
+  /** 静态配置下不碰认领表：那会把一个正常运行的部署写成待认领。 */
+  private claim(): OwnerClaimView {
+    return this.ownerConfig().telegramUserIds === undefined
+      ? this.owners.ensureWindow()
+      : { ownerUserId: null, windowOpenedAt: 0 };
+  }
+
+  private ownerAccess(event: InboundEvent): OwnerDecision {
+    // 只有 Telegram 有认领；微信的 userId 来自登录凭据，不走这里。
+    if (event.channel !== "telegram") return "deny";
+    return decideOwner({
+      config: this.ownerConfig(),
+      claim: this.claim(),
+      userId: event.userId,
+      now: Date.now(),
+    });
+  }
+
+  private async claimOwner(event: InboundEvent): Promise<void> {
+    this.owners.claim(event.userId);
+    emitChannelEvent(this.env, { channel: "telegram", event: "owner_claimed" });
+    try {
+      await this.adapter("telegram").send(event.chatId, {
+        text: t(ownerLocale(this.env), "channel.owner.claimed", {
+          id: event.userId,
+        }),
+      });
+    } catch (error) {
+      console.error(`channel: claim receipt failed: ${errorMessage(error)}`);
     }
-    return this.parseWeChatCredentials()?.userId === event.userId;
   }
 
   private rememberOwner(event: InboundEvent): void {

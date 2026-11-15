@@ -31,6 +31,10 @@ describe("isOwner", () => {
   it("rejects every id for an empty allowlist", () => {
     expect(isOwner({ ...cfg, owner: { telegramUserIds: [] } }, 111)).toBe(false);
   });
+
+  it("rejects every id when the owner key is omitted", () => {
+    expect(isOwner({ ...cfg, owner: undefined }, 111)).toBe(false);
+  });
 });
 
 describe("configApprovalMode", () => {

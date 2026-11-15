@@ -52,7 +52,7 @@ mv .env.container.example .env && chmod 600 .env    # fill in the four required 
 docker compose up -d && docker compose ps           # wait for STATUS to read healthy
 ```
 
-Four values go in and it opens its eyes: `ADMIN_TOKEN` (`openssl rand -hex 32`), `DESKWAND_CONFIG` (one line of JSON, `owner.telegramUserIds` set to your Telegram user id), at least one `MODEL_KEY_*`, and the channel's `TELEGRAM_BOT_TOKEN` or `WECHAT_CREDENTIALS`.
+Three values are enough: `ADMIN_TOKEN` (`openssl rand -hex 32`), `DESKWAND_CONFIG` (one line of JSON — omit `owner` entirely and whoever messages the bot first becomes the owner), and at least one `MODEL_KEY_*`, plus the channel's `TELEGRAM_BOT_TOKEN` or `WECHAT_CREDENTIALS`.
 
 Filling those in, the sandbox, backups, and what to check when it will not start: [docs/container-deploy.md](docs/container-deploy.md) (Chinese).
 

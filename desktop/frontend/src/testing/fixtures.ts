@@ -17,6 +17,7 @@ import type {
   CachedStatusDTO,
   CloudflareLoginDTO,
   ConfigDTO,
+  OwnerStatusDTO,
   ConfigEditDTO,
   ContainerInstallInputDTO,
   ContainerPreflightDTO,
@@ -215,6 +216,7 @@ interface MockState {
   configPresent: boolean;
   activeChannel: string;
   ownerUserIds: number[];
+  ownerMode: "static" | "closed" | "claimed" | "claimable" | "expired" | "revoked";
   butlerModel: ModelDTO | null;
   taskModel: ModelDTO | null;
   customProviders: CustomProviderDTO[];
@@ -903,6 +905,7 @@ function initialState(): MockState {
           ? "telegram"
           : "",
     ownerUserIds: configured || containerReady ? [100000001] : [],
+    ownerMode: configured || containerReady ? "claimed" : "claimable",
     butlerModel:
       shellScenario || containerReady
         ? { provider: "opencode-go", id: "deepseek-v4.1-flash" }
@@ -1188,6 +1191,7 @@ export function createMockClient(): ClientService {
     if (scenario === "existing") {
       report.existing = {
         ownerUserIds: [100000001],
+        ownerClaimMode: false,
         butlerModel: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
         taskModel: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
         activeChannel: "telegram",
@@ -1211,6 +1215,8 @@ export function createMockClient(): ClientService {
         configPresent: state.configPresent,
         activeChannel: state.activeChannel,
         ownerUserIds: [...state.ownerUserIds],
+        ownerClaimMode:
+          state.ownerUserIds.length === 0 && state.ownerMode !== "closed",
         butlerModel: state.butlerModel,
         taskModel: state.taskModel,
         customProviders: state.customProviders,
@@ -1243,6 +1249,8 @@ export function createMockClient(): ClientService {
       configPresent: state.configPresent,
       activeChannel: state.activeChannel,
       ownerUserIds: [...state.ownerUserIds],
+      ownerClaimMode:
+        state.ownerUserIds.length === 0 && state.ownerMode !== "closed",
       butlerModel: state.butlerModel,
       taskModel: state.taskModel,
       customProviders: state.customProviders,
@@ -2045,6 +2053,28 @@ export function createMockClient(): ClientService {
       };
     },
 
+    async ownerStatus(): Promise<OwnerStatusDTO> {
+      record("ownerStatus");
+      return {
+        mode: state.ownerMode,
+        ownerUserId:
+          state.ownerUserIds.length > 0 ? String(state.ownerUserIds[0]) : "",
+        windowOpenedAt: 0,
+        windowClosesAt: 0,
+      };
+    },
+    async openOwnerClaim(): Promise<OwnerStatusDTO> {
+      record("openOwnerClaim");
+      state.ownerMode = "claimable";
+      state.ownerUserIds = [];
+      return this.ownerStatus();
+    },
+    async revokeOwner(): Promise<OwnerStatusDTO> {
+      record("revokeOwner");
+      state.ownerMode = "closed";
+      state.ownerUserIds = [];
+      return this.ownerStatus();
+    },
     async lifeVitals(): Promise<LifeVitalsDTO> {
       record("lifeVitals");
       if (state.vitals === "failed") {
