@@ -10,6 +10,9 @@ const (
 	CodeBackupInvalid         = "BACKUP_INVALID"
 	CodeBackupVersionMismatch = "BACKUP_VERSION_MISMATCH"
 	CodeBackupObjectTooLarge  = "BACKUP_OBJECT_TOO_LARGE"
+	// CodeBackupQuota is the account's daily Durable Objects row-read quota.
+	// No retry today gets past it, but the saved checkpoint resumes tomorrow.
+	CodeBackupQuota           = "BACKUP_QUOTA"
 	CodeRestoreSnapshotFailed = "RESTORE_SNAPSHOT_FAILED"
 	CodeRestorePending        = "RESTORE_PENDING"
 	CodeRestoreJournalCorrupt = "RESTORE_JOURNAL_CORRUPT"

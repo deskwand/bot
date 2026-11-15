@@ -359,21 +359,31 @@ func Retry(ctx context.Context, deps Deps, journal *RestoreJournal, useSnapshot 
 // writeSnapshot exports the current deployment through an already-connected
 // client that holds the maintenance lease and the shared target lock.
 func writeSnapshot(ctx context.Context, deps Deps, client *AdminClient, snapshot domain.Snapshot, target domain.Target, path string) (Manifest, error) {
-	writer, err := NewWriter(path)
+	// The snapshot is throwaway: its checkpoint lives in a temporary directory
+	// and is removed whether it succeeds or fails, so a failed restore never
+	// leaves resumable state behind.
+	dir, err := os.MkdirTemp("", "deskwand-snapshot-")
 	if err != nil {
+		return Manifest{}, fmt.Errorf("backup: create snapshot checkpoint: %w", err)
+	}
+	_, targetKey := checkpointPath("", target)
+	checkpoint, err := OpenCheckpoint(dir, targetKey)
+	if err != nil {
+		_ = os.RemoveAll(dir)
 		return Manifest{}, err
 	}
-	defer writer.Abort()
+	defer func() { _ = checkpoint.Discard() }()
+
 	snapshotDeps := deps
 	snapshotDeps.Progress = func(progress Progress) {
 		progress.Op = "restore"
 		deps.report(progress)
 	}
-	manifest, err := exportData(ctx, snapshotDeps, client, snapshot, target, writer)
+	manifest, err := exportData(ctx, snapshotDeps, client, snapshot, target, checkpoint)
 	if err != nil {
 		return Manifest{}, err
 	}
-	if err := writer.Finish(manifest); err != nil {
+	if err := finalizeArchive(checkpoint, path, manifest); err != nil {
 		return Manifest{}, err
 	}
 	return manifest, nil

@@ -41,6 +41,7 @@ type fakeFailure struct {
 	id     string
 	nth    int
 	status int
+	body   string
 	calls  int
 }
 
@@ -185,6 +186,27 @@ func (f *fakeWorker) failAll(status int) {
 	f.failRoute("", "", "", "", 0, status)
 }
 
+// failRouteBody answers the nth call of a route with status and a plain-text
+// body, like the platform's own quota error rather than one of our codes.
+func (f *fakeWorker) failRouteBody(method, path string, nth, status int, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failures = append(f.failures, &fakeFailure{
+		method: method,
+		path:   path,
+		nth:    nth,
+		status: status,
+		body:   body,
+	})
+}
+
+// clearFailures drops the injected failures so a resumed run can succeed.
+func (f *fakeWorker) clearFailures() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failures = nil
+}
+
 func (f *fakeWorker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	query := r.URL.Query()
@@ -206,10 +228,13 @@ func (f *fakeWorker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "ADMIN_UNAUTHORIZED"})
 		return
 	}
-	if status := f.injectedStatus(record); status != 0 {
-		// Inject the status alone so the client maps it by HTTP status, as it
-		// would for a proxy error with no JSON body.
+	if status, text := f.injectedStatus(record); status != 0 {
+		// Inject the status alone unless a body was asked for, so the client
+		// maps it by HTTP status the way it would for a proxy error.
 		w.WriteHeader(status)
+		if text != "" {
+			_, _ = io.WriteString(w, text)
+		}
 		return
 	}
 
@@ -518,8 +543,9 @@ func (f *fakeWorker) doFor(record fakeRequest) *fakeDO {
 	return object
 }
 
-func (f *fakeWorker) injectedStatus(record fakeRequest) int {
+func (f *fakeWorker) injectedStatus(record fakeRequest) (int, string) {
 	status := 0
+	text := ""
 	for _, failure := range f.failures {
 		if failure.method != "" && failure.method != record.Method {
 			continue
@@ -538,9 +564,10 @@ func (f *fakeWorker) injectedStatus(record fakeRequest) int {
 		failure.calls++
 		if status == 0 && (failure.nth <= 0 || failure.calls == failure.nth) {
 			status = failure.status
+			text = failure.body
 		}
 	}
-	return status
+	return status, text
 }
 
 func (f *fakeWorker) writeJSON(w http.ResponseWriter, status int, body any) {

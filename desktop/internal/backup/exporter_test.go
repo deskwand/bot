@@ -680,7 +680,9 @@ func TestExportLogsOneLinePerRequest(t *testing.T) {
 	worker.taskIDs = []string{"t1"}
 	worker.setDO(
 		DORef{DO: "task", ID: "t1"},
-		DBSchema{Tables: []TableSchema{{Name: "notes"}}},
+		DBSchema{Tables: []TableSchema{
+			{Name: "notes", Create: `CREATE TABLE notes (id INTEGER)`},
+		}},
 		map[string][]json.RawMessage{
 			"notes": {json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2}`)},
 		},
@@ -923,4 +925,200 @@ func TestExportFallsBackOnAJSON404(t *testing.T) {
 	}
 	defer reader.Close()
 	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "task", ID: "t1"}, "a"), rows["a"])
+}
+
+func TestExportResumesWithoutRereadingFinishedTables(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.taskIDs = []string{"t1"}
+
+	schema := DBSchema{Tables: []TableSchema{
+		{Name: "a", Create: `CREATE TABLE a (n INTEGER)`},
+		{Name: "b", Create: `CREATE TABLE b (n INTEGER)`},
+		{Name: "c", Create: `CREATE TABLE c (n INTEGER)`},
+	}}
+	rows := map[string][]json.RawMessage{
+		"a": {json.RawMessage(`{"n":1}`)},
+		"b": {json.RawMessage(`{"n":2}`)},
+		"c": {json.RawMessage(`{"n":3}`)},
+	}
+	worker.setDO(DORef{DO: "task", ID: "t1"}, schema, rows)
+
+	previous := batchBytes
+	batchBytes = 1
+	t.Cleanup(func() { batchBytes = previous })
+	// The first run dies while reading the second table.
+	worker.failRoute("POST", chunkPath, "", "", 2, 500)
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	deps.ResumeDir = t.TempDir()
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	if _, err := Export(context.Background(), deps, backupTestTarget, path); err == nil {
+		t.Fatal("the first run should fail")
+	}
+
+	// The resumed run reads only b and c: one chunk each with batchBytes = 1.
+	worker.clearFailures()
+	before := worker.requestCount("POST", chunkPath)
+	manifest, err := Export(context.Background(), deps, backupTestTarget, path)
+	if err != nil {
+		t.Fatalf("resumed Export: %v", err)
+	}
+	if served := worker.requestCount("POST", chunkPath) - before; served != 2 {
+		t.Fatalf("the resumed run made %d chunk requests, want 2 (b and c)", served)
+	}
+	if !manifest.Resumed {
+		t.Fatal("the resumed run is not flagged in the manifest")
+	}
+	var task *DOManifest
+	for i := range manifest.DurableObjects {
+		if manifest.DurableObjects[i].DO == "task" {
+			task = &manifest.DurableObjects[i]
+		}
+	}
+	if task == nil || len(task.Rows) != 3 {
+		t.Fatalf("task manifest = %+v", task)
+	}
+
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer reader.Close()
+	for name, want := range rows {
+		assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "task", ID: "t1"}, name), want)
+	}
+}
+
+func TestExportWritesTheSameArchiveFromACheckpoint(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.taskIDs = []string{"t1"}
+	worker.setDO(DORef{DO: "task", ID: "t1"}, DBSchema{
+		Tables: []TableSchema{{Name: "notes", Create: `CREATE TABLE notes (n INTEGER)`}},
+	}, map[string][]json.RawMessage{"notes": {json.RawMessage(`{"n":1}`)}})
+	worker.addObject("a/1.bin", "application/octet-stream", []byte{1, 2, 3})
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	deps.ResumeDir = t.TempDir()
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	if _, err := Export(context.Background(), deps, backupTestTarget, path); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	entries, err := os.ReadDir(deps.ResumeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("resume directory = %+v, want empty", entries)
+	}
+
+	reader, err := Open(path) // rejects a duplicate entry
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer reader.Close()
+	if reader.Manifest().Format != FormatVersion {
+		t.Fatalf("format = %d", reader.Manifest().Format)
+	}
+	if len(reader.Manifest().R2.Objects) != 1 {
+		t.Fatalf("objects = %+v", reader.Manifest().R2.Objects)
+	}
+}
+
+func TestExportReportsAQuotaExhaustionAndKeepsItsProgress(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.taskIDs = []string{"t1"}
+
+	schema := DBSchema{Tables: []TableSchema{
+		{Name: "a", Create: `CREATE TABLE a (n INTEGER)`},
+		{Name: "b", Create: `CREATE TABLE b (n INTEGER)`},
+	}}
+	rows := map[string][]json.RawMessage{
+		"a": {json.RawMessage(`{"n":1}`)},
+		"b": {json.RawMessage(`{"n":2}`)},
+	}
+	worker.setDO(DORef{DO: "task", ID: "t1"}, schema, rows)
+
+	previous := batchBytes
+	batchBytes = 1
+	t.Cleanup(func() { batchBytes = previous })
+	worker.failRouteBody("POST", chunkPath, 2, 500,
+		"Exceeded allowed rows read in Durable Objects free tier")
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	deps.ResumeDir = t.TempDir()
+	path := filepath.Join(t.TempDir(), "backup.zip")
+
+	_, err := Export(context.Background(), deps, backupTestTarget, path)
+	if code := errorCode(err); code != CodeBackupQuota {
+		t.Fatalf("code = %q, want %q (err: %v)", code, CodeBackupQuota, err)
+	}
+	if !strings.Contains(err.Error(), "00:00 UTC") {
+		t.Fatalf("message = %q, want the reset hint", err.Error())
+	}
+	entries, err := os.ReadDir(deps.ResumeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("the checkpoint was discarded after a quota failure")
+	}
+}
+
+func TestExportRereadsTablesWhoseShapeChanged(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.taskIDs = []string{"t1"}
+	worker.pageRows = 10
+
+	schema := functionTablesSchema("n INTEGER")
+	rows := map[string][]json.RawMessage{
+		"a": {json.RawMessage(`{"n":1}`)},
+		"b": {json.RawMessage(`{"n":2}`)},
+	}
+	worker.setDO(DORef{DO: "task", ID: "t1"}, schema, rows)
+
+	previous := batchBytes
+	batchBytes = 1
+	t.Cleanup(func() { batchBytes = previous })
+	worker.failRoute("POST", chunkPath, "", "", 2, 500)
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
+	deps.ResumeDir = t.TempDir()
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	if _, err := Export(context.Background(), deps, backupTestTarget, path); err == nil {
+		t.Fatal("the first run should fail")
+	}
+
+	// The deployment migrates table a before the next attempt.
+	worker.setDO(DORef{DO: "task", ID: "t1"}, functionTablesSchema("n INTEGER, extra TEXT"), rows)
+	worker.clearFailures()
+
+	before := worker.requestCount("POST", chunkPath)
+	manifest, err := Export(context.Background(), deps, backupTestTarget, path)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	// Both tables are read again: the shape changed, so nothing may be reused.
+	if served := worker.requestCount("POST", chunkPath) - before; served != 2 {
+		t.Fatalf("the second run made %d chunk requests, want 2 (a and b re-read)", served)
+	}
+	if manifest.Resumed {
+		t.Fatal("a run after a schema change reports itself as resumed")
+	}
+}
+
+// functionTablesSchema is the two-table fixture above with a given column list.
+func functionTablesSchema(columns string) DBSchema {
+	tables := make([]TableSchema, 0, 2)
+	for _, name := range []string{"a", "b"} {
+		tables = append(tables, TableSchema{
+			Name:   name,
+			Create: fmt.Sprintf(`CREATE TABLE %s (%s)`, name, columns),
+		})
+	}
+	return DBSchema{Tables: tables}
 }

@@ -78,7 +78,13 @@ type R2Manifest struct {
 
 // Manifest is the archive's manifest.json document.
 type Manifest struct {
-	Format         int          `json:"format"`
+	Format int `json:"format"`
+	// StartedAt is when the first run of this export began. It only differs
+	// from ExportedAt when a run resumed an unfinished one.
+	StartedAt time.Time `json:"startedAt"`
+	// Resumed records that this archive was assembled from more than one run,
+	// so it is not a snapshot of a single moment.
+	Resumed        bool         `json:"resumed,omitempty"`
 	ExportedAt     time.Time    `json:"exportedAt"`
 	Release        string       `json:"release"`
 	VersionID      string       `json:"versionId"`
@@ -189,6 +195,28 @@ func (w *Writer) Object(item R2Item, body io.Reader) error {
 	}
 	if written != item.Size {
 		return fmt.Errorf("backup: object %s has %d bytes, manifest says %d", item.Entry, written, item.Size)
+	}
+	return nil
+}
+
+// Entry copies a prepared body into one archive entry and closes the current
+// table entry. It is how a finalized checkpoint becomes an archive.
+func (w *Writer) Entry(name string, body io.Reader) error {
+	if w.closed {
+		return fmt.Errorf("backup: archive is closed")
+	}
+	if name == "" {
+		return fmt.Errorf("backup: entry name is empty")
+	}
+	if err := w.closeTable(); err != nil {
+		return err
+	}
+	entry, err := w.zip.Create(name)
+	if err != nil {
+		return fmt.Errorf("backup: create entry %s: %w", name, err)
+	}
+	if _, err := io.Copy(entry, body); err != nil {
+		return fmt.Errorf("backup: write entry %s: %w", name, err)
 	}
 	return nil
 }
@@ -315,6 +343,43 @@ func (t *TableWriter) close() error {
 		return nil
 	}
 	t.closed = true
+	return nil
+}
+
+// verifyArchiveEntries checks that the archive holds exactly the entries the
+// manifest describes: every table and artifact present, none duplicated. It is
+// the cheap half of Open — no rows are replayed through SQLite — which is what
+// an export needs, because it just wrote those rows itself.
+func verifyArchiveEntries(path string, manifest Manifest) error {
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		return invalidBackupf("open archive: %v", err)
+	}
+	defer func() { _ = archive.Close() }()
+
+	seen := make(map[string]bool, len(archive.File))
+	for _, file := range archive.File {
+		if seen[file.Name] {
+			return invalidBackupf("duplicate zip entry %s", file.Name)
+		}
+		seen[file.Name] = true
+	}
+	if !seen[manifestEntry] {
+		return invalidBackupf("manifest.json is missing")
+	}
+	for _, object := range manifest.DurableObjects {
+		for _, table := range object.Schema.Tables {
+			entry := TableEntry(object.DORef, table.Name)
+			if !seen[entry] {
+				return invalidBackupf("table entry %s is missing", entry)
+			}
+		}
+	}
+	for _, item := range manifest.R2.Objects {
+		if !seen[item.Entry] {
+			return invalidBackupf("object entry %s is missing", item.Entry)
+		}
+	}
 	return nil
 }
 

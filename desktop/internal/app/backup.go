@@ -567,9 +567,12 @@ func NewBackupRunner(deps backup.Deps, journal *backup.RestoreJournal, snapshotD
 	return &BackupRunner{Deps: deps, Journal: journal, SnapshotDir: snapshotDir}
 }
 
-// Export writes every Durable Object table and artifact to path.
+// Export writes every Durable Object table and artifact to path, resuming an
+// earlier run that ran out of quota or wall time.
 func (r *BackupRunner) Export(ctx context.Context, target domain.Target, path string) (backup.Manifest, error) {
-	return backup.Export(ctx, r.Deps, target, path)
+	deps := r.Deps
+	deps.ResumeDir = filepath.Dir(path)
+	return backup.Export(ctx, deps, target, path)
 }
 
 // Inspect validates a backup file and returns its manifest.
@@ -582,9 +585,12 @@ func (r *BackupRunner) CheckVersion(m backup.Manifest, snapshot domain.Snapshot)
 	return backup.CheckVersion(m, snapshot)
 }
 
-// Restore overwrites the deployment after snapshotting its current data.
+// Restore overwrites the deployment after snapshotting its current data. The
+// pre-restore snapshot must not leave resumable state behind.
 func (r *BackupRunner) Restore(ctx context.Context, target domain.Target, path string) error {
-	return backup.Restore(ctx, r.Deps, r.Journal, target, path, r.SnapshotDir)
+	deps := r.Deps
+	deps.ResumeDir = ""
+	return backup.Restore(ctx, deps, r.Journal, target, path, r.SnapshotDir)
 }
 
 // Retry finishes the unfinished restore in the journal.

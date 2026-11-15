@@ -113,6 +113,7 @@ export const errors = {
   BACKUP_SETTINGS_INVALID: "备份目录或设置无效。",
   BACKUP_VERSION_MISMATCH: "备份版本与云端不一致。",
   BACKUP_OBJECT_TOO_LARGE: "备份中有超过 100 MiB 的对象。",
+  BACKUP_QUOTA: "读取额度用尽，进度已保存。",
   RESTORE_SNAPSHOT_FAILED: "快照失败，云端未改动。",
   RESTORE_PENDING: "还有未完成的恢复。",
   RESTORE_JOURNAL_CORRUPT: "本机恢复记录已损坏。",

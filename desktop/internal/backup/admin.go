@@ -372,6 +372,23 @@ func (c *AdminClient) statusError(response *http.Response) error {
 	// A 404 means the route itself is absent: a deployment older than this
 	// client. Trust the status over the body, so a Worker that later wraps its
 	// 404s in a code cannot stop the export from falling back.
+	// A Durable Object that hits its daily rows-read quota answers with a 5xx
+	// and the platform's message, not with one of this client's codes. Only the
+	// backup and artifact routes read rows, so a restore failure keeps its own
+	// explanation.
+	if response.StatusCode >= 500 {
+		lower := strings.ToLower(string(raw))
+		path := response.Request.URL.Path
+		if (strings.HasPrefix(path, "/admin/backup/") || strings.HasPrefix(path, "/admin/r2/")) &&
+			strings.Contains(lower, "rows read") && strings.Contains(lower, "exceed") {
+			return domain.Error{
+				Code: CodeBackupQuota,
+				Message: "the deployment has used its daily Durable Objects row-read quota; " +
+					"the progress is saved and the backup continues after the quota resets at 00:00 UTC",
+			}
+		}
+	}
+
 	code := payload.Code
 	if response.StatusCode == http.StatusNotFound {
 		code = ""
