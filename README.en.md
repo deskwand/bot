@@ -38,7 +38,7 @@ It answers: okay.
 
 From that reply onward there is a first entry in its ledger and a first wake-up on its schedule. You can close the laptop.
 
-The left column is its body: the ledger under Life signs, models under Mind, channels under Sight and Voice, tasks, tools and bots under Hands.
+The left column is its body: the ledger under Life signs, models under Mind, channels under Sight and Voice, tasks, tools and bots under Hands. One of those hands is a browser: it logs in once and remembers, and it hands you a screenshot when something went wrong.
 
 ## Or born on your own machine
 

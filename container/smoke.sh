@@ -116,6 +116,31 @@ if [ -n "$sandbox" ]; then
   got=$(curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" \
     "http://127.0.0.1:18080/files?path=%2Fsandbox%2Froundtrip.txt")
   [ "$got" = "binary payload" ] || fail "沙箱往返内容不一致"
+
+  # The browser must really render: a stub PNG is the failure this pins down.
+  # The page is served over http rather than file://: the endpoint only accepts
+  # http(s), and smoke should exercise what the product actually allows.
+  printf '<!doctype html><meta charset="utf-8"><h1>冒烟 smoke</h1><button>确认</button>' \
+    > "$sandbox_dir/probe.html"
+  curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
+    -H 'content-type: application/json' \
+    --data '{"command":"cd /sandbox && (python3 -m http.server 8099 >/dev/null 2>&1 &)","timeoutMs":5000}' \
+    http://127.0.0.1:18080/exec >/dev/null || fail "启不了探针页面服务"
+  sleep 1
+
+  curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
+    -H 'content-type: application/json' \
+    --data '{"session":"smoke","url":"http://127.0.0.1:8099/probe.html"}' \
+    http://127.0.0.1:18080/browser/open >/dev/null || fail "浏览器打不开本地页面"
+
+  curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
+    -H 'content-type: application/json' --data '{"session":"smoke"}' \
+    http://127.0.0.1:18080/browser/shot > "$sandbox_dir/shot.png" || fail "截图失败"
+
+  size=$(wc -c < "$sandbox_dir/shot.png" | tr -d ' ')
+  [ "$size" -gt 4000 ] || fail "截图只有 $size 字节，不像是真的渲染结果"
+  magic=$(od -An -tx1 -N8 "$sandbox_dir/shot.png" | tr -d ' \n')
+  [ "$magic" = "89504e470d0a1a0a" ] || fail "截图不是 PNG（前 8 字节 $magic）"
 fi
 
 echo "smoke ok"

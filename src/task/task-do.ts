@@ -75,7 +75,8 @@ import { walletConfigured, walletStub } from "../wallet/wallet-do";
 import { createR2WorkspaceEnv } from "../env/r2-env";
 import { webFetchTool } from "../tools/web-fetch";
 import { webSearchTool } from "../tools/web-search";
-import { sandboxExtension } from "../sandbox/install";
+import { browserExtension } from "../sandbox/browser-install";
+import { sandboxExtension, sandboxFetch } from "../sandbox/install";
 import { readSandboxTimeoutMs } from "../sandbox/config";
 import { clearWorkspace, workspaceTools } from "../tools/workspace";
 import { withProgress } from "../tools/wrap";
@@ -482,7 +483,15 @@ export class TaskDO extends Agent<Env> {
       progress: (body) => this.emitProgress(body),
       guard: () => this.assertNoMaintenance(),
     });
-    if (sandbox !== null) this.registry.install(sandbox);
+    if (sandbox !== null) {
+      this.registry.install(sandbox);
+      // The browser rides on the sandbox: same host, same token, same absence.
+      const browser = browserExtension(this.env, {
+        taskId: () => this.currentTaskId() ?? "",
+        fetchImpl: sandboxFetch(this.env),
+      });
+      if (browser !== null) this.registry.install(browser);
+    }
 
     // Model selection happens in `start` once the spec is available. Keeping
     // the constructor config-free lets alarms and control RPCs run without a

@@ -63,13 +63,26 @@ export type SandboxFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export type SandboxEndpoint = { url: string; token: string };
+
+/** The one place that decides whether a deployment has a usable sandbox. */
+export function sandboxEndpoint(env: {
+  SANDBOX_URL?: string;
+  SANDBOX_TOKEN?: string;
+}): SandboxEndpoint | null {
+  const url = (env.SANDBOX_URL ?? "").trim().replace(/\/+$/, "");
+  const token = (env.SANDBOX_TOKEN ?? "").trim();
+  if (url === "" || token === "") return null;
+  return { url, token };
+}
+
 export function httpSandboxProvider(
   env: { SANDBOX_URL?: string; SANDBOX_TOKEN?: string },
   fetchImpl: SandboxFetch = fetch,
 ): SandboxProvider | null {
-  const url = (env.SANDBOX_URL ?? "").trim().replace(/\/+$/, "");
-  const token = (env.SANDBOX_TOKEN ?? "").trim();
-  if (url === "" || token === "") return null;
+  const endpoint = sandboxEndpoint(env);
+  if (endpoint === null) return null;
+  const { url, token } = endpoint;
   const auth = { authorization: `Bearer ${token}` };
 
   return {

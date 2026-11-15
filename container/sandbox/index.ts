@@ -1,4 +1,6 @@
 import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { createBrowserManager } from "./browser.js";
 import { parseDiskLimitMb, startSandboxd } from "./server.js";
 
 const token = process.env.SANDBOX_TOKEN ?? "";
@@ -17,6 +19,12 @@ mkdirSync(sandboxDir, { recursive: true });
 
 const diskLimitBytes = parseDiskLimitMb(process.env.SANDBOX_DISK_MB);
 
+// One profile for the whole machine: whatever the owner logs into, the bot
+// stays logged into across tasks and restarts. It lives on the volume.
+const profileDir = join(sandboxDir, "browser", "profile");
+mkdirSync(profileDir, { recursive: true });
+const browser = createBrowserManager({ userDataDir: profileDir });
+
 const daemon = await startSandboxd(
   {
     token,
@@ -25,6 +33,7 @@ const daemon = await startSandboxd(
     diskLimitBytes,
     defaultTimeoutMs: 600_000,
     maxTimeoutMs: 3_600_000,
+    browser,
   },
   port,
 );

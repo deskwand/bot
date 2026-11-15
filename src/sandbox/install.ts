@@ -25,7 +25,7 @@ export type SandboxInstallDeps = {
  * sandbox host whatever the URL says, so it must only ever carry sandbox
  * traffic. `deps.fetchImpl` wins when a caller supplies one.
  */
-function sandboxFetch(env: Env): SandboxFetch | undefined {
+export function sandboxFetch(env: Env): SandboxFetch | undefined {
   const binding = env.SANDBOX;
   if (binding === undefined) return undefined;
   return (url, init) => binding.fetch(url, init);

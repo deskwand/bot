@@ -23,6 +23,16 @@ RUN apt-get update \
 RUN mkdir -p /app /sandbox /tmp
 COPY --from=build /src/dist/container/sandbox/index.mjs /app/index.mjs
 
+# playwright-core is installed beside the bundle (not globally): /app/index.mjs
+# resolves node_modules from /app. It stays out of the bundle on purpose.
+# The version must match the chromium-headless-shell build installed with it.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npm install --prefix /app playwright-core@1.56.1 \
+ && /app/node_modules/.bin/playwright install --only-shell --with-deps chromium-headless-shell \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends fonts-wqy-zenhei \
+ && rm -rf /var/lib/apt/lists/*
+
 ENV SANDBOX_DIR=/sandbox \
     SANDBOX_PORT=8080
 

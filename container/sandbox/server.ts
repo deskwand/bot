@@ -4,6 +4,9 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+// Type-only: importing the manager at runtime would drag playwright-core into
+// this module, and the endpoint tests must not need it.
+import type { ActAction, BrowserManager } from "./browser.js";
 import { createDiskProbe, type DiskUsage } from "./disk.js";
 import { runCommand, type ExecLimits } from "./exec.js";
 import {
@@ -29,6 +32,8 @@ export type SandboxdConfig = ExecLimits & {
   token: string;
   version: string;
   diskLimitBytes: number;
+  /** Absent when the image has no browser; every /browser/* call then 503s. */
+  browser?: BrowserManager;
 };
 
 export type Sandboxd = {
@@ -116,7 +121,88 @@ export function createSandboxdHandler(config: SandboxdConfig) {
         version: config.version,
         uptimeSec: Math.round(process.uptime()),
         disk: usage,
+        features: config.browser === undefined ? [] : ["browser"],
       });
+    }
+
+    if (req.method === "POST" && url.pathname.startsWith("/browser/")) {
+      const browser = config.browser;
+      if (browser === undefined) {
+        return fail(res, 503, "UNAVAILABLE", "browser is not configured");
+      }
+      const body = (await readJson(req)) as Record<string, unknown>;
+      const session = typeof body.session === "string" ? body.session : "";
+      if (session === "") return fail(res, 400, "BAD_REQUEST", "session is required");
+
+      try {
+        if (url.pathname === "/browser/open") {
+          const target = typeof body.url === "string" ? body.url : "";
+          if (!/^https?:/i.test(target)) {
+            return fail(res, 400, "BAD_REQUEST", "url must be http(s)");
+          }
+          const timeoutMs =
+            typeof body.timeoutMs === "number" && Number.isFinite(body.timeoutMs)
+              ? body.timeoutMs
+              : undefined;
+          return json(res, 200, await browser.open(session, target, timeoutMs));
+        }
+
+        if (url.pathname === "/browser/act") {
+          const action = body.action;
+          if (
+            action !== "click" &&
+            action !== "fill" &&
+            action !== "press" &&
+            action !== "back" &&
+            action !== "read"
+          ) {
+            return fail(res, 400, "BAD_REQUEST", "unknown action");
+          }
+          return json(
+            res,
+            200,
+            await browser.act(session, action as ActAction, {
+              target: typeof body.target === "string" ? body.target : undefined,
+              text: typeof body.text === "string" ? body.text : undefined,
+              key: typeof body.key === "string" ? body.key : undefined,
+            }),
+          );
+        }
+
+        if (url.pathname === "/browser/shot") {
+          const bytes = await browser.shot(session, body.fullPage === true);
+          res.writeHead(200, {
+            "content-type": "image/png",
+            "content-length": bytes.byteLength,
+          });
+          res.end(Buffer.from(bytes));
+          return;
+        }
+
+        if (url.pathname === "/browser/close") {
+          await browser.close(session);
+          return json(res, 200, { ok: true });
+        }
+
+        return fail(res, 404, "NOT_FOUND", "no such browser endpoint");
+      } catch (error) {
+        // BrowserError carries the status; anything else is a real 500.
+        const { code } = error as { code?: string };
+        const message = error instanceof Error ? error.message : "browser failure";
+        switch (code) {
+          case "STALE_REF":
+          case "NO_SESSION":
+            return fail(res, 409, code, message);
+          case "TOO_LARGE":
+            return fail(res, 413, code, message);
+          case "BAD_REQUEST":
+            return fail(res, 400, code, message);
+          case "BROWSER_DEAD":
+            return fail(res, 502, code, message);
+          default:
+            return fail(res, 500, "INTERNAL", message);
+        }
+      }
     }
 
     if (req.method === "POST" && url.pathname === "/exec") {
@@ -218,6 +304,12 @@ export function startSandboxd(
   port = 8080,
 ): Promise<Sandboxd> {
   const handle = createSandboxdHandler(config);
+  // Idle reuse lives here, not in the manager: the manager stays timer-free and
+  // therefore testable. No `unref()`: the listening server already holds the
+  // process, and workers' `setInterval` typing has no unref.
+  const sweeper: ReturnType<typeof setInterval> = setInterval(() => {
+    void config.browser?.sweep();
+  }, 60_000);
   const server = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {
       if (error instanceof HttpError) {
@@ -238,7 +330,13 @@ export function startSandboxd(
         port: bound,
         close: () =>
           new Promise<void>((done) => {
-            server.close(() => done());
+            clearInterval(sweeper);
+            // `?.()` would leave `undefined` and `.finally` would throw inside
+            // the promise executor, hanging every close() forever.
+            const stopping = config.browser?.shutdown() ?? Promise.resolve();
+            void stopping.finally(() => {
+              server.close(() => done());
+            });
           }),
       });
     });

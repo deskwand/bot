@@ -231,6 +231,7 @@ async function buildService(
   entry: string,
   target: string,
   platform: "browser" | "node" = "browser",
+  external: string[] = [],
 ): Promise<void> {
   await build({
     entryPoints: [join(root, entry)],
@@ -239,7 +240,9 @@ async function buildService(
     // A node platform keeps `node:*` imports out of the bundle; workerd's
     // workers resolve their own builtins instead.
     platform,
-    external: ["cloudflare:*"],
+    // `playwright-core` resolves its own files at runtime; bundling it breaks
+    // that, so the image installs it and this leaves the import alone.
+    external: ["cloudflare:*", ...external],
     outfile: target,
   });
 }
@@ -282,6 +285,7 @@ async function main(): Promise<void> {
     "container/sandbox/index.ts",
     join(outDir, "sandbox/index.mjs"),
     "node",
+    ["playwright-core"],
   );
 
   const config = readWranglerConfig(root) as {

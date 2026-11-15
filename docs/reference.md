@@ -470,6 +470,23 @@ npx wrangler r2 object delete my-artifacts/skills/weekly-report/SKILL.md --remot
 
 - `/admin/r2/*` 是桌面端的备份接口（需要维护租约）：技能会进入备份，恢复备份也会带回已删除的技能。它不是日常删除入口。
 
+## 浏览器
+
+沙箱镜像里带一个 `chromium-headless-shell`。任务通过一个工具用它：
+
+- `browse`：`open` 打开页面，`click` / `fill` / `press` / `back` 按**快照里的元素编号**（`e4`）操作，`read` 只重读，`shot` 截图。截图存成产物，主人在桌面端能看到；模型支持图片时同一张也进它的上下文。
+- 一个任务最多 3 个页面；同一任务里的 `browse` 调用串行执行。
+- **登录态是整机的**：cookies 与 localStorage 存在沙箱卷的 `/sandbox/browser/profile`，跨任务、跨重启都在。删卷（`docker compose down --volumes`）才会丢。
+- 沙箱镜像太旧时工具会出现一次，然后自报 `sandbox image has no browser` 并在本任务内停用；升级 `sandbox` 镜像即可。bot 与沙箱镜像可以分别升级。
+- 浏览器只在被调用时才启动，闲置 10 分钟后退出，空闲时不占内存。
+- 只接受 http/https 链接，内网地址一律拒绝；页面下载被禁用（要文件走 `web_fetch` / `http_request`）。
+
+首次部署后的手动检查：让它打开 `example.com` 截一张，桌面端应该能看到图。想单独确认浏览器版本：
+
+```bash
+docker compose exec sandbox npx playwright --version
+```
+
 ## 自托管兜底
 
 Cloudflare 是唯一的主路径。为防止供应商锁定，可以退到本机的 Miniflare（同一份构建产物、同一个 workerd 运行时）降级运行，数据通过现有的 `/admin/backup/*` 与 `/admin/r2/*` 协议搬运。资源需求、已知的版本坑、切换纪律与 RPO 见 `docs/self-host-fallback.md`。
@@ -601,10 +618,18 @@ src/
   channels/             # ChannelDO、Telegram 与微信 iLink 适配器
   butler/               # Butler DO：对话、记忆、任务索引、定时任务、通知节流
   task/                 # Task DO：执行、事件 outbox、审批、控制指令
-  tools/                # web_search、web_fetch、R2 产物、MCP 包装
+  tools/                # web_search、web_fetch、browse（浏览器）、R2 产物、MCP 包装
+  tools/browser.ts      # browse 工具：动作、快照渲染、截图落产物
+  sandbox/              # 沙箱工具、provider
+  sandbox/browser-http.ts    # 浏览器端点客户端
+  sandbox/browser-install.ts # 浏览器扩展与提示词段
   llm/                  # 按角色解析模型
   config.ts             # 配置类型与 isOwner/needsApproval 纯函数
   runtime-config.ts     # 从 DESKWAND_CONFIG 校验并读取运行时配置
+container/sandbox/      # 沙箱容器里的 HTTP 执行器
+  server.ts             # /exec、/files、/browser/*、/healthz
+  browser-snapshot.ts   # 快照、元素指纹与编号（纯函数）
+  browser.ts            # Chromium 进程、profile、tab 池
 contracts/              # Go/TS 共用的部署配置 schema 与 fixtures
 scripts/wechat-login.ts # 微信扫码登录并写入 Cloudflare secret
 tests/                  # 测试与测试专用 Worker 入口
@@ -617,3 +642,4 @@ tests/                  # 测试与测试专用 Worker 入口
 - 修改 `wrangler.jsonc` 后重新执行 `npx wrangler types` 更新 `worker-configuration.d.ts`；`CF_VERSION_METADATA` binding 是消息归属的一部分，发布配置不要删除。
 - 日志不包含 token、凭据、context 或消息正文；排查渠道问题时只核对版本与 `ACTIVE_CHANNEL`。
 - 修改 Durable Object 类或迁移后需重新部署；已部署的 migration 不可重写。
+- 浏览器登录态（沙箱里的 `/sandbox/browser/profile`）明文等于主人的会话，能进沙箱的人就能冒充主人；这一卷不进备份，也不做加密。细节见 `SECURITY.md`。
