@@ -24,7 +24,7 @@ export function workspacePrefix(taskId: string): string {
 }
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
-const ARTIFACT_TASK_SEGMENT = /^t\d+$/;
+const ARTIFACT_TASK_SEGMENT = /^(?:t\d+|m[0-9a-f]{32}-t\d+)$/;
 
 function invalid(message: string, path: string): FileError {
   return new FileError("invalid", message, path);

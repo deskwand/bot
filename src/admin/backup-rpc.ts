@@ -104,6 +104,16 @@ export class BackupRpc {
     this.ctx.abort("data restored");
   }
 
+  /**
+   * Keys that must never leave the deployment in a backup: WeChat tokens,
+   * QR challenges, login tickets and connection context tokens. Filtering
+   * happens per row, but the cursor still follows what was actually scanned,
+   * so a page of excluded keys neither ends the dump nor skips later rows.
+   */
+  private isExcludedKv(key: string): boolean {
+    return key.startsWith("private:wechat:");
+  }
+
   private async readKvPage(cursor: string | null): Promise<DumpPage> {
     const entries = await this.ctx.storage.list({
       ...(cursor === null ? {} : { startAfter: cursor }),
@@ -113,6 +123,10 @@ export class BackupRpc {
     let bytes = 0;
     let last = cursor;
     for (const [key, value] of entries) {
+      if (this.isExcludedKv(key)) {
+        last = key;
+        continue;
+      }
       let encoded: string | undefined;
       try {
         encoded = JSON.stringify(value);

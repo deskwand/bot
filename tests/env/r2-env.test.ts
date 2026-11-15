@@ -28,7 +28,11 @@ describe("createR2WorkspaceEnv", () => {
   });
 
   it("points artifact and inbox keys to get_artifact", async () => {
-    for (const path of ["t3/abc/report.md", "inbox/tg:1/a.pdf"]) {
+    for (const path of [
+      "t3/abc/report.md",
+      "inbox/tg:1/a.pdf",
+      `m${"a".repeat(32)}-t3/abc/report.md`,
+    ]) {
       const result = await envFor().absolutePath(path, ctx);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.message).toContain("get_artifact");

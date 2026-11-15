@@ -1,4 +1,5 @@
 import { t, type Locale } from "../i18n";
+import { TASK_ID_SOURCE } from "../members/principal";
 import type { ActionKind } from "../protocol";
 
 export type TextTarget =
@@ -33,7 +34,8 @@ function caseInsensitive(word: string): string {
 
 const COMMAND_PATTERN = new RegExp(
   `^(${Object.keys(COMMANDS).map(caseInsensitive).join("|")})` +
-    `(?:\\s+(?:#?(\\d+)|(t\\d+)))?(?:\\s+(ap\\d+))?$`,
+    // Task ids: the owner's legacy `tN`, or a member's `<memberId>-tN`.
+    `(?:\\s+(?:#?(\\d+)|(${TASK_ID_SOURCE})))?(?:\\s+(ap\\d+))?$`,
 );
 
 /** Quote pairs the owner may leave around a copied hint. */

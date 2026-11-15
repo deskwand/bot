@@ -42,7 +42,8 @@ import type {
 export type AdminDeps = {
   token: string | undefined;
   versionId: string;
-  butler(): DurableObjectStub<ButlerDO>;
+  /** `id` selects a member Butler; absent means the owner. */
+  butler(id?: string): DurableObjectStub<ButlerDO>;
   channel(): DurableObjectStub<ChannelDO>;
   task(id: string): DurableObjectStub<TaskDO>;
   bot(id: string): DurableObjectStub<BotDO>;
@@ -127,7 +128,9 @@ function backupStub(deps: AdminDeps, url: URL): BackupStub | Response {
   const id = url.searchParams.get("id") ?? "";
   switch (kind) {
     case "butler":
-      return deps.butler();
+      // A member Butler id must reach that member's object: serving the owner
+      // here would mix private conversations into the wrong archive segment.
+      return deps.butler(id === "" ? undefined : id);
     case "channel":
       return deps.channel();
     case "task":
@@ -171,7 +174,7 @@ export async function requireLease(
     return errorCode("MAINTENANCE_REQUIRED", 409);
   }
   const [butler, channel] = await Promise.all([
-    deps.butler().renewMaintenance(opId),
+    deps.butler(undefined).renewMaintenance(opId),
     deps.channel().renewMaintenance(opId),
   ]);
   if (!butler || !channel) {
@@ -191,7 +194,7 @@ async function acquire(deps: AdminDeps, req: Request): Promise<Response> {
     return invalid("acquire needs { op, opId }");
   }
 
-  const butler = deps.butler();
+  const butler = deps.butler(undefined);
   const channel = deps.channel();
   const first = await butler.acquireMaintenance(body.op, body.opId);
   if (first === "busy") return errorCode("MAINTENANCE_BUSY", 409);
@@ -222,7 +225,7 @@ async function release(deps: AdminDeps, req: Request): Promise<Response> {
   // the matching opId, so a stale client cannot cancel someone else's run.
   if (opId !== null && opId !== "") {
     await Promise.all([
-      deps.butler().releaseMaintenance(opId),
+      deps.butler(undefined).releaseMaintenance(opId),
       deps.channel().releaseMaintenance(opId),
     ]);
   }
@@ -251,7 +254,7 @@ export function createAdminGateway(deps: AdminDeps): {
     revoke: () => deps.channel().revokeOwner(),
   });
   const bots = createBotRoutes({
-    overview: () => deps.butler().botsOverview(),
+    overview: () => deps.butler(undefined).botsOverview(),
     snapshot: (id) => deps.bot(id).snapshot(),
   });
 
@@ -318,8 +321,11 @@ export function createAdminGateway(deps: AdminDeps): {
     if (req.method === "GET" && url.pathname === INFO_PATH) {
       return json({
         versionId: deps.versionId,
-        taskIds: await deps.butler().listTaskIds(),
-        botIds: await deps.butler().listBotIds(),
+        taskIds: await deps.butler(undefined).listTaskIds(),
+        botIds: await deps.butler(undefined).listBotIds(),
+        // Non-owner members, including revoked ones: a backup that skipped
+        // them would silently drop their history.
+        memberIds: await deps.channel().memberIds(),
       });
     }
 

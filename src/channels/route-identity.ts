@@ -59,3 +59,29 @@ export async function routeIdentity(input: {
   );
   return { channel: input.channel, routeKey };
 }
+
+/**
+ * Ownership key for one member connection. It mixes the connection id and the
+ * credential generation into the deployment identity, so the same credential
+ * presented under another connection — or an earlier generation of this one —
+ * can never reuse the key a message reference was issued under.
+ *
+ * This is deliberately a separate function: member routes never read the
+ * owner's cached `routePromise`.
+ */
+export async function memberRouteIdentity(input: {
+  versionId: string;
+  channel: ChannelId | null;
+  connectionId: string;
+  generation: number;
+  credentialHash: string;
+}): Promise<RouteSnapshot> {
+  if (input.channel === null) {
+    return { channel: null, routeKey: DISABLED_ROUTE_KEY };
+  }
+
+  const routeKey = await sha256Hex(
+    `member-route/v1|${input.versionId}|${input.channel}|${input.connectionId}|${input.generation}|${input.credentialHash}`,
+  );
+  return { channel: input.channel, routeKey };
+}

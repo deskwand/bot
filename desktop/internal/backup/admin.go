@@ -66,6 +66,10 @@ type Info struct {
 	VersionID string   `json:"versionId"`
 	TaskIDs   []string `json:"taskIds"`
 	BotIDs    []string `json:"botIds"`
+	// MemberIDs lists non-owner members, including revoked ones. Their Butler
+	// objects hold private conversations and tasks, so an archive that skipped
+	// them would silently drop member history.
+	MemberIDs []string `json:"memberIds"`
 }
 
 // ObjectInfo describes one artifact listed through the admin routes.

@@ -31,6 +31,9 @@ const (
 
 var objectEntryPattern = regexp.MustCompile(`^r2/[0-9]{6}$`)
 
+// memberIDPattern matches the Worker's member id: `m` plus 32 lowercase hex.
+var memberIDPattern = regexp.MustCompile(`^m[0-9a-f]{32}$`)
+
 // TableSchema describes one exported SQLite table. Create is empty for the
 // DO KV pseudo-table.
 type TableSchema struct {
@@ -97,6 +100,9 @@ type Manifest struct {
 func TableEntry(ref DORef, table string) string {
 	switch ref.DO {
 	case "butler":
+		if ref.ID != "" {
+			return "do/member/" + ref.ID + "/" + table + ".jsonl"
+		}
 		return "do/butler/" + table + ".jsonl"
 	case "channel":
 		return "do/channel/" + table + ".jsonl"
@@ -582,7 +588,14 @@ func readManifestFile(file *zip.File) ([]byte, error) {
 
 func validateDORef(ref DORef) error {
 	switch ref.DO {
-	case "butler", "channel", "life", "wallet":
+	case "butler":
+		// An empty id is the owner; a member id must be a member id, never a
+		// path fragment.
+		if ref.ID != "" && !memberIDPattern.MatchString(ref.ID) {
+			return fmt.Errorf("invalid member id %q", ref.ID)
+		}
+		return nil
+	case "channel", "life", "wallet":
 		return nil
 	case "task":
 		if ref.ID == "" {

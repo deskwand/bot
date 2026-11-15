@@ -11,6 +11,8 @@ export const task = {
     download: "下载 {url}",
   },
   invalidUrl: "[无效 URL]",
+  profileDenied:
+    "这次任务的委托人未能通过核验，任务没有开始。",
   skillsUnavailable:
     "读取技能目录失败，本次任务未开始执行。请稍后重新发起任务。",
   state: {
@@ -34,6 +36,7 @@ export const task = {
     continueNotCompleted: "任务 {taskId} {state}，只有已完成的任务可以继续",
     continueOk: "任务 {taskId} 已在原有上下文中继续",
     missingApprovalId: "缺少审批编号",
+    denied: "这次任务不属于当前会话，无法操作",
   },
   notice: {
     parked: "任务反复中断，已暂停",

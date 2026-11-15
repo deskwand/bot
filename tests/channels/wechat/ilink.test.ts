@@ -8,6 +8,7 @@ import {
   isTrustedBaseUrl,
   parseCredentials,
   splitWeChatText,
+  transportFailureOf,
   type WeChatCredentials,
 } from "../../../src/channels/wechat/ilink";
 import ilinkQRFixture from "../../../contracts/fixtures/ilink-qr.json";
@@ -509,10 +510,11 @@ describe("errors", () => {
     expect(isSessionExpired(error)).toBe(true);
     expect((error as ILinkError).code).toBe(-14);
     expect((error as ILinkError).status).toBe(200);
-    expect((error as ILinkError).message).toBe("expired");
+    expect((error as ILinkError).message).toBe("WECHAT_ILINK_API_ERROR");
+    expect(transportFailureOf(error)).toBe("protocol");
   });
 
-  it("uses errmsg and status for HTTP failures", async () => {
+  it("uses a fixed message and the status for HTTP failures", async () => {
     const { fetchImpl } = fakeFetch([jsonResponse({ errmsg: "boom" }, 500)]);
 
     const error = await client(fetchImpl)
@@ -522,8 +524,44 @@ describe("errors", () => {
     expect(error).toBeInstanceOf(ILinkError);
     expect((error as ILinkError).status).toBe(500);
     expect((error as ILinkError).code).toBeUndefined();
-    expect((error as ILinkError).message).toBe("boom");
+    expect((error as ILinkError).message).toBe("WECHAT_ILINK_HTTP_500");
     expect(isSessionExpired(error)).toBe(false);
+    expect(transportFailureOf(error)).toBe("transient");
+  });
+
+  it("不把上游 errmsg 里的 PIN、ticket 或 token 复制进错误", async () => {
+    const secrets = ["424242", "spam-ticket-1", "qr-1", "bot-token"];
+    const echo = `verify_code ${secrets[0]} ${secrets.slice(1).join(" ")}`;
+    for (const response of [
+      jsonResponse({ errcode: 7, errmsg: echo }),
+      jsonResponse({ errmsg: echo }, 500),
+    ]) {
+      const { fetchImpl } = fakeFetch([response]);
+
+      const error = await client(fetchImpl)
+        .getQrStatus("qr-1", undefined, { verifyCode: "424242" })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ILinkError);
+      const text = `${(error as Error).message}\n${(error as Error).stack}`;
+      for (const secret of secrets) expect(text).not.toContain(secret);
+    }
+  });
+
+  it("把 fetch 拒绝与中止区分为可重试", async () => {
+    const offline = new TypeError("network down");
+    const aborted = new DOMException("cancelled", "AbortError");
+    const { fetchImpl } = fakeFetch([offline, aborted]);
+    const clientImpl = client(fetchImpl);
+
+    const first = await clientImpl.getQrStatus("qr-1").catch((e: unknown) => e);
+    const second = await clientImpl.getQrStatus("qr-1").catch((e: unknown) => e);
+
+    expect(first).toBe(offline);
+    expect(second).toBe(aborted);
+    expect(transportFailureOf(first)).toBe("transient");
+    expect(transportFailureOf(second)).toBe("abort");
+    expect(transportFailureOf(new Error("unexpected"))).toBe("transient");
   });
 
   it("falls back to an HTTP code for non-JSON HTTP failures", async () => {
@@ -547,6 +585,7 @@ describe("errors", () => {
     expect(error).toBeInstanceOf(ILinkError);
     expect((error as ILinkError).message).toBe("WECHAT_ILINK_RESPONSE_INVALID");
     expect((error as ILinkError).status).toBe(200);
+    expect(transportFailureOf(error)).toBe("protocol");
   });
 
   it("treats a non-zero ret as an API error", async () => {
@@ -563,12 +602,18 @@ describe("errors", () => {
 });
 
 describe("QR login", () => {
-  it("returns the QR code and image content", async () => {
+  it("取码使用POST且保留原signal参数位置", async () => {
     const { calls, fetchImpl } = fakeFetch([
-      jsonResponse({ qrcode: "qr-1", qrcode_img_content: "data:image/png;base64,AA==" }),
+      jsonResponse({
+        qrcode: "qr-1",
+        qrcode_img_content: "data:image/png;base64,AA==",
+      }),
     ]);
+    const controller = new AbortController();
 
-    const result = await client(fetchImpl).getBotQrCode();
+    const result = await client(fetchImpl).getBotQrCode(controller.signal, {
+      localTokens: [],
+    });
 
     expect(result).toEqual({
       qrcode: "qr-1",
@@ -577,7 +622,26 @@ describe("QR login", () => {
     expect(calls[0].url).toBe(
       "https://ilinkai.weixin.qq.com/ilink/bot/get_bot_qrcode?bot_type=3",
     );
-    expect(calls[0].method).toBe("GET");
+    expect(calls[0].method).toBe("POST");
+    expect(calls[0].signal).toBe(controller.signal);
+    expect(calls[0].body).toEqual({ local_token_list: [] });
+  });
+
+  it("取码携带最近的本地 token 与实名 ticket，最多十份", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      jsonResponse({ qrcode: "qr-1", qrcode_img_content: "https://weixin.qq.com/qr" }),
+    ]);
+    const localTokens = Array.from({ length: 12 }, (_, i) => `token-${i}`);
+
+    await client(fetchImpl).getBotQrCode(undefined, {
+      localTokens,
+      spamTicket: "spam-ticket",
+    });
+
+    expect(calls[0].body).toEqual({
+      local_token_list: localTokens.slice(-10),
+      bot_spam_ticket: "spam-ticket",
+    });
   });
 
   it("sends the client version header and returns raw status", async () => {
@@ -592,6 +656,133 @@ describe("QR login", () => {
     );
     expect(calls[0].method).toBe("GET");
     expect(calls[0].headers["iLink-App-ClientVersion"]).toBe("1");
+  });
+
+  it("把 PIN 放进状态请求且不放进实名请求", async () => {
+    const { calls, fetchImpl } = fakeFetch([jsonResponse({ status: "scaned" })]);
+    const controller = new AbortController();
+
+    await client(fetchImpl).getQrStatus("qr-1", controller.signal, {
+      verifyCode: "12 34/56",
+      baseUrl: "https://ilinkai.weixin.qq.com/",
+    });
+
+    expect(calls[0].url).toBe(
+      "https://ilinkai.weixin.qq.com/ilink/bot/get_qrcode_status?qrcode=qr-1&verify_code=12%2034%2F56",
+    );
+    expect(calls[0].signal).toBe(controller.signal);
+  });
+
+  it("PIN 请求中断后重试不带 PIN", async () => {
+    const abort = new Error("aborted");
+    const { calls, fetchImpl } = fakeFetch([
+      abort,
+      jsonResponse({ status: "wait" }),
+    ]);
+    const clientImpl = client(fetchImpl);
+
+    await expect(
+      clientImpl.getQrStatus("qr-1", undefined, { verifyCode: "123456" }),
+    ).rejects.toBe(abort);
+    expect(calls[0].url).toContain("verify_code=123456");
+
+    await clientImpl.getQrStatus("qr-1");
+    expect(calls[1].url).not.toContain("verify_code");
+  });
+
+  it("拒绝扫描重定向到非微信主机", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({ status: "scaned_but_redirect", baseurl: "https://evil.example.com" }),
+    ]);
+
+    const error = await client(fetchImpl)
+      .getQrStatus("qr-1")
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ILinkError);
+    expect((error as ILinkError).message).toBe("WECHAT_ILINK_UNTRUSTED_REDIRECT");
+    expect(transportFailureOf(error)).toBe("security");
+  });
+
+  it("接受可信扫描重定向并返回规范化主机", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({ status: "scaned_but_redirect", baseurl: "https://ilinkai.weixin.qq.com" }),
+    ]);
+
+    const result = await client(fetchImpl).getQrStatus("qr-1");
+
+    expect(result.redirectBaseUrl).toBe("https://ilinkai.weixin.qq.com");
+  });
+
+  it("解析新的绑定状态", async () => {
+    for (const status of [
+      "need_verifycode",
+      "scaned_but_redirect",
+      "binded_redirect",
+      "verify_code_blocked",
+      "verify_code_expired",
+    ]) {
+      const { fetchImpl } = fakeFetch([
+        jsonResponse({ status, baseurl: "https://ilinkai.weixin.qq.com" }),
+      ]);
+      const result = await client(fetchImpl).getQrStatus("qr-1");
+      expect(result.status).toBe(status);
+    }
+  });
+});
+
+describe("realname verification", () => {
+  it("使用固定实名 CGI 获取授权链接与 ticket", async () => {
+    const { calls, fetchImpl } = fakeFetch([
+      jsonResponse({
+        auth_url: "https://weixin110.qq.com/auth/1",
+        bot_spam_ticket: "spam-ticket",
+        expire_time: 1_700_000_000,
+      }),
+    ]);
+    const controller = new AbortController();
+
+    const result = await client(fetchImpl).getRealnameAuthUrl(controller.signal);
+
+    expect(calls[0].method).toBe("GET");
+    expect(calls[0].signal).toBe(controller.signal);
+    const url = new URL(calls[0].url);
+    expect(url.origin).toBe("https://weixin110.qq.com");
+    expect(url.pathname).toBe("/security/acct/botrealnameverifycgi");
+    expect(url.searchParams.get("step")).toBe("get_auth_url");
+    expect(url.searchParams.get("plugin_version")).toBe("3.0.1/deskwand");
+    expect(result).toEqual({
+      authUrl: "https://weixin110.qq.com/auth/1",
+      ticket: "spam-ticket",
+      expiresAt: 1_700_000_000_000,
+    });
+  });
+
+  it("查询实名结果并映射状态", async () => {
+    const cases = [
+      { status: 0, expected: "wait" },
+      { status: 1, expected: "ok" },
+      { status: 2, expected: "denied" },
+      { status: 3, expected: "refresh" },
+    ] as const;
+    for (const testCase of cases) {
+      const { calls, fetchImpl } = fakeFetch([
+        jsonResponse({ status: testCase.status, bot_spam_ticket: "spam-ticket-2" }),
+      ]);
+      const result = await client(fetchImpl).queryRealnameResult("spam-ticket");
+      expect(result.status).toBe(testCase.expected);
+      expect(calls[0].url).toContain("step=query_auth_result");
+      expect(calls[0].url).toContain("bot_spam_ticket=spam-ticket");
+    }
+  });
+
+  it("未知实名状态按响应错误失败", async () => {
+    const { fetchImpl } = fakeFetch([jsonResponse({ status: 9 })]);
+    const error = await client(fetchImpl)
+      .queryRealnameResult("spam-ticket")
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ILinkError);
+    expect((error as ILinkError).message).toBe("WECHAT_REALNAME_RESPONSE_INVALID");
   });
 });
 

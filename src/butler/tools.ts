@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import type { Principal } from "../members/principal";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { t, type Locale } from "../i18n";
 import type { InboundFile, TaskSpec } from "../protocol";
@@ -61,13 +62,25 @@ const ListSchedules = Type.Object({});
 /** The Task DO operations the control tools call. */
 export type TaskControl = {
   start(spec: TaskSpec): Promise<void>;
-  status(): Promise<{ state: string; title: string }>;
-  steer(text: string): Promise<{ ok: boolean; message: string }>;
-  cancel(): Promise<{ ok: boolean; message: string }>;
-  retryTask(): Promise<{ ok: boolean; message: string }>;
-  continueTask(text: string): Promise<{ ok: boolean; message: string }>;
-  liveness(): Promise<{ state: string; reattached: boolean }>;
-  pendingApprovals(): Promise<
+  /**
+   * Every control call states who is asking. The adapter a Butler passes to its
+   * tools injects that Butler's own verified principal, and the TaskDO refuses
+   * a caller that does not match the task's stored delegator.
+   */
+  status(
+    actor?: Principal,
+  ): Promise<{ state: string; title: string; denied?: true }>;
+  steer(text: string, actor?: Principal): Promise<{ ok: boolean; message: string }>;
+  cancel(actor?: Principal): Promise<{ ok: boolean; message: string }>;
+  retryTask(actor?: Principal): Promise<{ ok: boolean; message: string }>;
+  continueTask(
+    text: string,
+    actor?: Principal,
+  ): Promise<{ ok: boolean; message: string }>;
+  liveness(
+    actor?: Principal,
+  ): Promise<{ state: string; reattached: boolean; denied?: true }>;
+  pendingApprovals(actor?: Principal): Promise<
     {
       approvalId: string;
       tool: string;

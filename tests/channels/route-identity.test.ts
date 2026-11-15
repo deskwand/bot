@@ -5,6 +5,7 @@ import { setWeChatCredentialsOverride } from "../../src/channels/override";
 import type { RouteSnapshot } from "../../src/protocol";
 import {
   DISABLED_ROUTE_KEY,
+  memberRouteIdentity,
   parseActiveChannel,
   routeIdentity,
   versionIdOf,
@@ -40,6 +41,67 @@ describe("versionIdOf", () => {
 
   it("uses the deployed version id when present", () => {
     expect(versionIdOf({ id: "v1" })).toBe("v1");
+  });
+});
+
+describe("memberRouteIdentity", () => {
+  const member = {
+    versionId: "v1",
+    channel: "wechat" as const,
+    connectionId: "c-a",
+    generation: 1,
+    credentialHash: "hash-a",
+  };
+
+  it("is deterministic per deployment, connection and generation", async () => {
+    const first = await memberRouteIdentity(member);
+    const repeated = await memberRouteIdentity({ ...member });
+
+    expect(first.channel).toBe("wechat");
+    expect(first.routeKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(repeated.routeKey).toBe(first.routeKey);
+  });
+
+  it("changes with the deployment, the generation and the credential", async () => {
+    const base = (await memberRouteIdentity(member)).routeKey;
+    const redeployed = (
+      await memberRouteIdentity({ ...member, versionId: "v2" })
+    ).routeKey;
+    const rebound = (
+      await memberRouteIdentity({ ...member, generation: 2 })
+    ).routeKey;
+    const rotated = (
+      await memberRouteIdentity({ ...member, credentialHash: "hash-b" })
+    ).routeKey;
+
+    expect(new Set([base, redeployed, rebound, rotated]).size).toBe(4);
+  });
+
+  it("gives two connections holding the same credential distinct routes", async () => {
+    const a = await memberRouteIdentity({ ...member, connectionId: "c-a" });
+    const b = await memberRouteIdentity({ ...member, connectionId: "c-b" });
+
+    expect(b.routeKey).not.toBe(a.routeKey);
+  });
+
+  it("never reuses the owner route key", async () => {
+    const owner = await routeIdentity({
+      versionId: "v1",
+      channel: "wechat",
+      targetIdentityHash: "hash-a",
+    });
+    const memberKey = await memberRouteIdentity(member);
+
+    expect(memberKey.routeKey).not.toBe(owner.routeKey);
+  });
+
+  it("disables member traffic when no channel is active", async () => {
+    const disabled = await memberRouteIdentity({ ...member, channel: null });
+
+    expect(disabled).toEqual({
+      channel: null,
+      routeKey: DISABLED_ROUTE_KEY,
+    });
   });
 });
 

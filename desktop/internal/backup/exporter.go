@@ -533,7 +533,7 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 			return Manifest{}, err
 		}
 	}
-	refs := exportRefs(info.TaskIDs, info.BotIDs)
+	refs := exportRefs(info.TaskIDs, info.BotIDs, info.MemberIDs)
 	// A changed table shape voids the checkpoint. Deciding this before reading
 	// anything keeps a reset from discarding tables this run already finished.
 	if resumed {
@@ -598,13 +598,16 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 // TaskDO with delivered = 0 (which the Butler dedupes on restore). A bot is
 // archived after the tasks it points at, and the Butler is never archived
 // before the task and bot copies it indexes.
-func exportRefs(taskIDs, botIDs []string) []DORef {
-	refs := make([]DORef, 0, len(taskIDs)+len(botIDs)+4)
+func exportRefs(taskIDs, botIDs, memberIDs []string) []DORef {
+	refs := make([]DORef, 0, len(taskIDs)+len(botIDs)+len(memberIDs)+4)
 	for _, id := range taskIDs {
 		refs = append(refs, DORef{DO: "task", ID: id})
 	}
 	for _, id := range botIDs {
 		refs = append(refs, DORef{DO: "bot", ID: id})
+	}
+	for _, id := range memberIDs {
+		refs = append(refs, DORef{DO: "butler", ID: id})
 	}
 	refs = append(refs, DORef{DO: "life"})
 	refs = append(refs, DORef{DO: "wallet"})

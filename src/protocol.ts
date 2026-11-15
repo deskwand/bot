@@ -1,4 +1,5 @@
 import type { ModelRef } from "./llm/models";
+import type { ConnectionRef, Principal } from "./members/principal";
 import type { TaskActivity } from "./task/stall";
 
 export type ChannelId = "telegram" | "wechat";
@@ -35,6 +36,12 @@ export type MessageEvent = {
   /** 这条消息引用（回复）的那条消息的文本；渠道取不到时缺省。 */
   quotedText?: string;
   eventId: string;
+  /**
+   * 已验证的委托主体与连接。只在渠道门禁之后由受信任代码填入；
+   * 模型参数与用户文本都不能提供这些字段。
+   */
+  actor?: Principal;
+  connectionRef?: ConnectionRef | null;
 };
 
 /** An inbound message that passed the active-channel admission check. */
@@ -113,6 +120,11 @@ export type TaskSpec = {
   botId?: string;
   /** inbox 里的入站文件引用；任务只读这些引用，不接收字节。 */
   attachments?: InboundFile[];
+  /**
+   * 委托人。新任务必填；历史存储记录可能没有，只能在 owner 索引核验后
+   * 一次性补全。
+   */
+  actor?: Principal;
 };
 
 const ACTION_KINDS: readonly ActionKind[] = ["approve", "reject", "cancel"];

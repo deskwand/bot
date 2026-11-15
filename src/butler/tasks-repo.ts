@@ -57,6 +57,11 @@ export class TasksRepo {
    * survives restarts and never reuses an id.
    */
   nextId(): string {
+    return `t${this.nextCounter()}`;
+  }
+
+  /** The next counter value, for callers that build their own task id. */
+  nextCounter(): number {
     const row = this.sql
       .exec<{ value: string }>(
         `SELECT value FROM meta WHERE key = ?`,
@@ -70,7 +75,7 @@ export class TasksRepo {
       COUNTER_KEY,
       String(next),
     );
-    return `t${next}`;
+    return next;
   }
 
   insert(row: {

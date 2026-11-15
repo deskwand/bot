@@ -5,7 +5,10 @@ import { ingestSnapshot } from "./exchange/ingest";
 import { probeExchange } from "./exchange/probe";
 import { ChannelDO } from "./channels/channel-do";
 import { createGateway } from "./gateway";
-import { ownerLocale } from "./i18n";
+import { createMemberBindRoutes } from "./members/bind-routes";
+import { bindPageHtml, renderQrSvg } from "./members/bind-page";
+import { en, ownerLocale, zh } from "./i18n";
+import { butlerName } from "./members/principal";
 import { lifeStub } from "./life/client";
 import { walletConfigured, walletStub } from "./wallet/wallet-do";
 
@@ -35,7 +38,11 @@ function admin(env: Env) {
   return createAdminGateway({
     token: env.ADMIN_TOKEN,
     versionId: env.CF_VERSION_METADATA.id,
-    butler: () => butler(env),
+    // Backup and admin routes address the owner by default and a member by id.
+    butler: (id?: string) =>
+      id === undefined || id === "owner"
+        ? butler(env)
+        : env.BUTLER.get(env.BUTLER.idFromName(`member:${id}`)),
     channel: () => channels(env),
     task: (id) => env.TASK.get(env.TASK.idFromName(id)),
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
@@ -52,7 +59,17 @@ function admin(env: Env) {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    const copy = (ownerLocale(env) === "en" ? en : zh).member.bindPage;
     const gateway = createGateway({
+      bind: createMemberBindRoutes({
+        channel: channels(env) as unknown as Parameters<
+          typeof createMemberBindRoutes
+        >[0]["channel"],
+        publicBaseUrl: env.PUBLIC_BASE_URL,
+        title: copy.title,
+        page: bindPageHtml(copy, env.PUBLIC_BASE_URL),
+        renderQr: (text) => renderQrSvg(text, copy.qrLabel),
+      }),
       artifacts: artifactStore(env),
       admin: admin(env),
       mcpAuth: () => mcpAuth(env),
@@ -135,6 +152,33 @@ export default {
       await butler(env).healSlowTasks();
     } catch (error) {
       console.error("slow task reminder failed:", error);
+    }
+
+    // Every member Butler gets the same repair sweep, bounded per member so one
+    // broken member cannot stop the rest or the owner's cron.
+    try {
+      const ids = await hub.memberIds();
+      for (const memberId of ids) {
+        const member = env.BUTLER.get(env.BUTLER.idFromName(butlerName(memberId)));
+        try {
+          const actor = await hub.memberPrincipal(memberId);
+          if (actor === null || actor.role !== "member") continue;
+          // A revoked member no longer owns a route or a sweepable session.
+          if ((await hub.assertMemberActive(actor).then(() => true, () => false)) === false) {
+            continue;
+          }
+          await member.reconcileChannel(
+            (await hub.routeForMember(actor)).routeKey,
+          );
+          await member.healTurns();
+          await member.healTasks();
+          await member.healSlowTasks();
+        } catch (error) {
+          console.error("member heal failed:", error);
+        }
+      }
+    } catch (error) {
+      console.error("member sweep failed:", error);
     }
   },
 } satisfies ExportedHandler<Env>;

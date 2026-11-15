@@ -1,3 +1,5 @@
+import { butlerName } from "../members/principal";
+import type { ButlerDO } from "../butler/butler-do";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -22,6 +24,9 @@ import {
 } from "@earendil-works/pi-durable";
 import { BackupRpc } from "../admin/backup-rpc";
 import { artifactStore } from "../artifact-store";
+import type { ArtifactStore } from "../artifact-store";
+import { OWNER_ID, type Principal } from "../members/principal";
+import { memberArtifactStore, memberTaskTools } from "./member-tools";
 import { DEFER_MS } from "../admin/maintenance";
 import { parseActiveChannel } from "../channels/route-identity";
 import type {
@@ -122,6 +127,15 @@ export type TaskState =
   | "completed"
   | "failed"
   | "cancelled";
+
+/** The execution surface a verified spec may install. */
+export type ExecutionProfile = "owner" | "member" | "denied";
+
+/**
+ * A task id namespaced for one member (`m<32 hex>-tN`). The shape never
+ * authorizes anything by itself: an actor-less row with this shape is denied.
+ */
+const MEMBER_TASK_ID = /^m[0-9a-f]{32}-t\d+$/;
 
 type ControlResult = { ok: boolean; message: string };
 
@@ -259,6 +273,7 @@ export class TaskDO extends Agent<Env> {
     this.db = ctx.storage.sql;
     // Task objects have no maintenance lease of their own; the Butler holds it.
     this.backup = new BackupRpc(ctx, null);
+    this.convert = documentConverterFromAi(this.env.AI);
 
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS meta (
@@ -345,12 +360,17 @@ export class TaskDO extends Agent<Env> {
         return { output: [{ type: "text", text: "Task finished." }] };
       },
     };
+    // The profile decides whether a member or the owner gets it; the tool
+    // itself resolves artifacts through the profile's store.
+    this.finishTaskTool = finishTask;
 
     // Installed once, at construction: Pi may re-run the harness factory after
-    // a storage error, so registry changes must not depend on it.
+    // a storage error, so registry changes must not depend on it. Only the
+    // lifecycle hooks and prompt sections live here; tools are per profile.
     this.registry.install({
       name: "task",
-      tools: [finishTask],
+      tools: [],
+
       hooks: [
         hook(ToolTask, {
           beforeTool: (call) => {
@@ -397,9 +417,194 @@ export class TaskDO extends Agent<Env> {
       ],
     });
 
-    // One converter shared by every file-reading tool in this task.
-    const convert = documentConverterFromAi(this.env.AI);
+    // Execution tools are installed per profile, once the spec's actor is
+    // known and verified; see ensureExecutionProfile.
+
+    // Model selection happens in `start` once the spec is available. Keeping
+    // the constructor config-free lets alarms and control RPCs run without a
+    // readable DESKWAND_CONFIG.
+    this.harness = new PiHarness({
+      harness: async ({ storage, context, onWake }) => {
+        const harness = await Harness.open(
+          storage,
+          {
+            models: createModelsForEnv(this.env, this.meter),
+            registry: this.registry,
+            onWake,
+            settings: { progress: PI_PROGRESS },
+            env: () => {
+              const id = this.currentTaskId();
+              return id
+                ? createR2WorkspaceEnv(this.executionStore(), id)
+                : undefined;
+            },
+            onReport: (report) => {
+              this.handleReport(report);
+            },
+          },
+          context,
+        );
+        dropPiSecondaryIndexes(this.db);
+        return harness;
+      },
+    });
+
+    // `Agent` already installed the lifecycle; adding to it is required.
+    this.lifecycle.use(this.harness);
+  }
+
+  /** Which execution surface this object installed: owner, member, or nothing. */
+  private executionProfile: ExecutionProfile | null = null;
+  private executionProfilePromise?: Promise<ExecutionProfile>;
+  private executionInstalled = false;
+  private finishTaskTool: ToolRegistration | null = null;
+  private readonly convert: ReturnType<typeof documentConverterFromAi>;
+
+  /**
+   * Verifies the persisted delegator and installs exactly one execution
+   * surface. Startup, a retry and a follow-up all call it; the registry must
+   * gain that profile's tools once and never the other profile's.
+   */
+  async ensureExecutionProfile(): Promise<ExecutionProfile> {
+    // A denied result is not cached: a fresh object asks before its spec is
+    // persisted, and the later start must be able to verify for real.
+    if (this.executionProfile === "owner" || this.executionProfile === "member") {
+      return this.executionProfile;
+    }
+    this.executionProfilePromise ??= this.installExecutionProfile();
+    const profile = await this.executionProfilePromise;
+    if (profile === "denied") this.executionProfilePromise = undefined;
+    return profile;
+  }
+
+  private async installExecutionProfile(): Promise<ExecutionProfile> {
+    const profile = await this.verifyExecutionProfile();
+    this.executionProfile = profile;
+    if (!this.executionInstalled && profile !== "denied") {
+      this.executionInstalled = true;
+      if (profile === "owner") this.installOwnerExecution();
+      else this.installMemberExecution();
+    }
+    if (profile === "denied") {
+      console.warn(
+        `task ${this.spec?.taskId ?? "unknown"}: execution profile denied`,
+      );
+    }
+    return profile;
+  }
+
+  /**
+   * The spec's actor decides the surface. A member is re-checked against the
+   * directory, because a revocation must stop a task that was already stored.
+   * An actor-less row is a legacy owner task, unless its id is namespaced for a
+   * member: that shape without an actor is never owner work.
+   */
+  private async verifyExecutionProfile(): Promise<ExecutionProfile> {
+    const spec = this.spec;
+    if (spec === null) return "denied";
+    const actor = spec.actor;
+    if (actor === undefined) {
+      return MEMBER_TASK_ID.test(spec.taskId) ? "denied" : "owner";
+    }
+    if (actor.role === "owner") {
+      return actor.memberId === OWNER_ID ? "owner" : "denied";
+    }
+    if (actor.role !== "member") return "denied";
+    // A member's task lives under its own id, so a mismatched prefix is a
+    // stored row that was tampered with or moved.
+    if (!spec.taskId.startsWith(`${actor.memberId}-t`)) return "denied";
+    try {
+      await this.channels().assertMemberActive(actor);
+      return "member";
+    } catch (error) {
+      console.warn(
+        `task ${spec.taskId}: member actor is not active`,
+        error instanceof Error ? error.message : String(error),
+      );
+      return "denied";
+    }
+  }
+
+  private channels() {
+    return this.env.CHANNELS.get(this.env.CHANNELS.idFromName("channels"));
+  }
+
+  /**
+   * True when the caller may control this task. A member must match the stored
+   * delegator and still be active; a legacy actor-less row is owner-only. A
+   * denial is logged and answered quietly, never thrown across an RPC.
+   */
+  private async controlDenied(actor: Principal | undefined): Promise<boolean> {
+    const spec = this.spec;
+    if (spec === null) return false;
+    const stored = spec.actor;
+    if (stored === undefined) {
+      if (actor === undefined) return false;
+      return actor.role !== "owner" || actor.memberId !== OWNER_ID;
+    }
+    // The owner's own internal callers (cron, adapters) predate actor
+    // plumbing; an owner task still refuses anyone who is not the owner.
+    if (stored.role === "owner" && stored.memberId === OWNER_ID) {
+      if (actor === undefined) return false;
+      return actor.role !== "owner" || actor.memberId !== OWNER_ID;
+    }
+    if (actor === undefined || actor.memberId !== stored.memberId) {
+      this.logControlDenied(spec.taskId, actor);
+      return true;
+    }
+    if (actor.role !== stored.role) {
+      this.logControlDenied(spec.taskId, actor);
+      return true;
+    }
+    if (actor.role === "member") {
+      try {
+        await this.channels().assertMemberActive(actor);
+      } catch {
+        console.warn(`task ${spec.taskId}: control denied for a revoked member`);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private logControlDenied(taskId: string, actor?: Principal): void {
+    console.warn(
+      `task ${taskId}: control denied for ${actor?.memberId ?? "no actor"}`,
+    );
+  }
+
+  private controlDeniedResult(): ControlResult {
+    return {
+      ok: false,
+      message: t(ownerLocale(this.env), "task.control.denied"),
+    };
+  }
+
+  /**
+   * The store a task's execution may read. Owner tasks get the real bucket;
+   * member tasks get a view bounded to their own keys and attachments.
+   */
+  private executionStore(): ArtifactStore {
+    const base = artifactStore(this.env);
+    if (this.executionProfile !== "member") return base;
+    return memberArtifactStore(base, {
+      taskId: () => this.currentTaskId() ?? "",
+      attachments: () => this.attachments(),
+    });
+  }
+
+  private attachments(): string[] {
+    return (this.spec?.attachments ?? []).map((file) => file.key);
+  }
+
+  private installOwnerExecution(): void {
+    const convert = this.convert;
     const emitProgress = (body: TaskEventBody) => this.emitProgress(body);
+    const finish = this.finishTaskTool;
+    this.registry.install({
+      name: "task-tools",
+      tools: finish === null ? [] : [finish],
+    });
     this.registry.install({
       name: "execution",
       tools: [
@@ -411,7 +616,7 @@ export class TaskDO extends Agent<Env> {
         withProgress(
           getArtifactTool(artifactStore(this.env), this.env.PUBLIC_BASE_URL, {
             taskId: () => this.currentTaskId() ?? "",
-            attachments: () => (this.spec?.attachments ?? []).map((file) => file.key),
+            attachments: () => this.attachments(),
             convert,
           }),
           emitProgress,
@@ -468,9 +673,8 @@ export class TaskDO extends Agent<Env> {
     // per tool call so a restarted sandbox never keeps a stale task id.
     this.registry.install({
       name: "workspace",
-      tools: workspaceTools(
-        artifactStore(this.env),
-        () => this.currentTaskId() ?? "",
+      tools: workspaceTools(artifactStore(this.env), () =>
+        this.currentTaskId() ?? "",
       ),
     });
 
@@ -492,36 +696,23 @@ export class TaskDO extends Agent<Env> {
       });
       if (browser !== null) this.registry.install(browser);
     }
+  }
 
-    // Model selection happens in `start` once the spec is available. Keeping
-    // the constructor config-free lets alarms and control RPCs run without a
-    // readable DESKWAND_CONFIG.
-    this.harness = new PiHarness({
-      harness: async ({ storage, context, onWake }) => {
-        const harness = await Harness.open(
-          storage,
-          {
-            models: createModelsForEnv(this.env, this.meter),
-            registry: this.registry,
-            onWake,
-            settings: { progress: PI_PROGRESS },
-            env: () => {
-              const id = this.currentTaskId();
-              return id ? createR2WorkspaceEnv(artifactStore(this.env), id) : undefined;
-            },
-            onReport: (report) => {
-              this.handleReport(report);
-            },
-          },
-          context,
-        );
-        dropPiSecondaryIndexes(this.db);
-        return harness;
-      },
+  private installMemberExecution(): void {
+    const finish = this.finishTaskTool;
+    if (finish === null) return;
+    this.registry.install({
+      name: "member",
+      tools: memberTaskTools({
+        env: this.env,
+        taskId: () => this.currentTaskId() ?? "",
+        attachments: () => this.attachments(),
+        store: this.executionStore(),
+        guard: () => this.assertNoMaintenance(),
+        convert: this.convert,
+        finish,
+      }),
     });
-
-    // `Agent` already installed the lifecycle; adding to it is required.
-    this.lifecycle.use(this.harness);
   }
 
   override async onStart(props?: object): Promise<void> {
@@ -542,6 +733,8 @@ export class TaskDO extends Agent<Env> {
     if (this.readMeta("startup_deferred") === "1") return;
 
     const state = this.readMeta("state");
+    // A restarted object re-verifies before it may install anything.
+    await this.ensureExecutionProfile();
     if (state === "queued" || state === "running") {
       await this.ensureMcpTools();
       await this.ensureBotTools();
@@ -655,6 +848,22 @@ export class TaskDO extends Agent<Env> {
       });
     }
 
+    // An object created before its row existed (or restored) has the spec in
+    // storage but not in memory; adopt it, never overwrite it.
+    if (this.spec === null) {
+      const storedSpec = this.readMeta("spec");
+      if (storedSpec !== undefined) {
+        this.spec = JSON.parse(storedSpec) as TaskSpec;
+      }
+    }
+
+    // Refuse before any tool setup or model work: a spec whose actor no longer
+    // verifies must not run with the owner's tools, nor with any tools.
+    if ((await this.ensureExecutionProfile()) === "denied") {
+      await this.failWith(t(ownerLocale(this.env), "task.profileDenied"), false);
+      return;
+    }
+
     const effective = this.spec ?? spec;
     const operationId = `task:${effective.taskId}`;
     this.setMeta("operation_id", operationId);
@@ -747,7 +956,7 @@ export class TaskDO extends Agent<Env> {
   }
 
   /** Read-only projection used by the Butler to re-present approvals. */
-  async pendingApprovals(): Promise<
+  async pendingApprovals(actor?: Principal): Promise<
     {
       approvalId: string;
       tool: string;
@@ -755,6 +964,7 @@ export class TaskDO extends Agent<Env> {
       reason?: string;
     }[]
   > {
+    if (await this.controlDenied(actor)) return [];
     return this.approvals.pending();
   }
 
@@ -764,8 +974,13 @@ export class TaskDO extends Agent<Env> {
    * instance that could not, so the next probe can tell whether the run is
    * still being watched.
    */
-  async liveness(): Promise<{ state: TaskState; reattached: boolean }> {
+  async liveness(
+    actor?: Principal,
+  ): Promise<{ state: TaskState; reattached: boolean; denied?: true }> {
     await this.flushOutbox();
+    if (await this.controlDenied(actor)) {
+      return { state: this.currentState(), reattached: false, denied: true };
+    }
     const state = this.currentState();
     // Repair a chain whose scheduled check was lost with an eviction.
     if (state === "running" && this.spec?.botId === undefined) {
@@ -796,16 +1011,22 @@ export class TaskDO extends Agent<Env> {
     return { state, reattached: true };
   }
 
-  async status(): Promise<{ state: TaskState; title: string }> {
+  async status(
+    actor?: Principal,
+  ): Promise<{ state: TaskState; title: string; denied?: true }> {
     await this.flushOutbox();
+    if (await this.controlDenied(actor)) {
+      return { state: this.currentState(), title: "", denied: true };
+    }
     return {
       state: this.currentState(),
       title: this.readMeta("title") ?? "",
     };
   }
 
-  async steer(text: string): Promise<ControlResult> {
+  async steer(text: string, actor?: Principal): Promise<ControlResult> {
     await this.flushOutbox();
+    if (await this.controlDenied(actor)) return this.controlDeniedResult();
     const taskId = this.currentTaskId();
     const state = this.currentState();
     const locale = ownerLocale(this.env);
@@ -821,8 +1042,9 @@ export class TaskDO extends Agent<Env> {
     return { ok: true, message: steerOkText(locale, taskId) };
   }
 
-  async cancel(): Promise<ControlResult> {
+  async cancel(actor?: Principal): Promise<ControlResult> {
     await this.flushOutbox();
+    if (await this.controlDenied(actor)) return this.controlDeniedResult();
     const taskId = this.currentTaskId();
     const state = this.currentState();
     const locale = ownerLocale(this.env);
@@ -846,8 +1068,10 @@ export class TaskDO extends Agent<Env> {
     return { ok: true, message: cancelOkText(locale, taskId) };
   }
 
-  async retryTask(): Promise<ControlResult> {
+  async retryTask(actor?: Principal): Promise<ControlResult> {
     await this.flushOutbox();
+    if (await this.controlDenied(actor)) return this.controlDeniedResult();
+    await this.ensureExecutionProfile();
     const taskId = this.currentTaskId();
     const state = this.currentState();
     const locale = ownerLocale(this.env);
@@ -1123,8 +1347,10 @@ export class TaskDO extends Agent<Env> {
    * model keeps everything the earlier rounds read and decided. Each round is
    * a fresh `started` … `completed` pair in the outbox.
    */
-  async continueTask(text: string): Promise<ControlResult> {
+  async continueTask(text: string, actor?: Principal): Promise<ControlResult> {
     await this.flushOutbox();
+    if (await this.controlDenied(actor)) return this.controlDeniedResult();
+    await this.ensureExecutionProfile();
     const taskId = this.currentTaskId();
     const state = this.currentState();
     const locale = ownerLocale(this.env);
@@ -1166,9 +1392,12 @@ export class TaskDO extends Agent<Env> {
     return { ok: true, message: continueOkText(locale, taskId) };
   }
 
-  async handleAction(evt: ActionEvent): Promise<string> {
+  async handleAction(evt: ActionEvent, actor?: Principal): Promise<string> {
     await this.flushOutbox();
-    if (evt.action === "cancel") return (await this.cancel()).message;
+    if (await this.controlDenied(actor)) {
+      return t(ownerLocale(this.env), "task.control.denied");
+    }
+    if (evt.action === "cancel") return (await this.cancel(actor)).message;
     if (evt.approvalId === undefined) {
       return missingApprovalIdText(ownerLocale(this.env));
     }
@@ -1187,6 +1416,20 @@ export class TaskDO extends Agent<Env> {
    */
   private ensureMcpTools(): Promise<void> {
     this.mcpTools ??= (async () => {
+      // Reading the config and reporting a bad deployment is not a tool
+      // install: it stays observable for every object. Only the verified owner
+      // surface actually gains MCP and codemode tools.
+      if (this.executionProfile !== "owner") {
+        try {
+          readRuntimeConfig(this.env);
+        } catch (error) {
+          console.error(
+            "task: MCP tools skipped:",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        return;
+      }
       await this.installMcpTools();
       this.installCodemode();
     })();
@@ -1212,6 +1455,7 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async installExchangeTools(): Promise<void> {
+    if (this.executionProfile !== "owner") return;
     const ext = exchangeExtension(this.env, {
       locale: () => ownerLocale(this.env),
       progress: (body) => this.emitProgress(body),
@@ -1220,6 +1464,7 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async installMailTools(): Promise<void> {
+    if (this.executionProfile !== "owner") return;
     const ext = mailExtension(this.env, {
       locale: () => ownerLocale(this.env),
       progress: (body) => this.emitProgress(body),
@@ -1238,6 +1483,7 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async installBotTools(): Promise<void> {
+    if (this.executionProfile !== "owner") return;
     const botId = this.spec?.botId;
     if (!botId) return;
 
@@ -1482,7 +1728,7 @@ export class TaskDO extends Agent<Env> {
       if (segments === null || segments[0] !== taskId) {
         return { error: `产物 key 不合法：${key}` }; // i18n-ignore: model-facing
       }
-      const object = await artifactStore(this.env).head(key);
+      const object = await this.executionStore().head(key);
       if (!object) return { error: `产物不存在：${key}` }; // i18n-ignore: model-facing
       if (object.size > MAX_ARTIFACT_BYTES) {
         return { error: `产物超过 15 MB：${key}` }; // i18n-ignore: model-facing
@@ -1628,13 +1874,21 @@ export class TaskDO extends Agent<Env> {
     return (row?.count ?? 0) > 0;
   }
 
+  /**
+   * The Butler that owns this task's conversation: the delegator, never a
+   * deployment-wide default. A member task reports only to its member.
+   */
+  private reportingButler(): DurableObjectStub<ButlerDO> {
+    const memberId = this.spec?.actor?.memberId ?? OWNER_ID;
+    return this.env.BUTLER.get(this.env.BUTLER.idFromName(butlerName(memberId)));
+  }
+
   private async emitProgress(body: TaskEventBody): Promise<void> {
     const taskId = this.currentTaskId();
     if (!taskId) return;
     if (body.type === "progress") {
       // Display-only: bypass the outbox so tool steps write no event rows.
-      const butler = this.env.BUTLER.get(this.env.BUTLER.idFromName("owner"));
-      await butler.reportTaskProgress(taskId, body.text);
+      await this.reportingButler().reportTaskProgress(taskId, body.text);
       return;
     }
     await this.outboxFor(taskId).emit(body);
@@ -1876,8 +2130,7 @@ export class TaskDO extends Agent<Env> {
   }
 
   private async deliver(event: TaskEvent): Promise<void> {
-    const butler = this.env.BUTLER.get(this.env.BUTLER.idFromName("owner"));
-    await butler.report(event);
+    await this.reportingButler().report(event);
   }
 
   private async butlerMaintenanceActive(): Promise<boolean> {

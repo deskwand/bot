@@ -13,6 +13,8 @@ export const task: Messages["task"] = {
     sandboxGet: "Out of the sandbox: {path}",
   },
   invalidUrl: "[invalid URL]",
+  profileDenied:
+    "The task's delegator could not be verified, so the task did not start.",
   skillsUnavailable:
     "The skill library could not be read. No model work started; please create a new task later.",
   state: {
@@ -36,6 +38,7 @@ export const task: Messages["task"] = {
     continueNotCompleted: "Task {taskId} is {state}; only a completed task can be continued",
     continueOk: "Task {taskId} continues in its earlier context",
     missingApprovalId: "Missing approval ID",
+    denied: "This task does not belong to this session; it cannot be controlled",
   },
   notice: {
     parked: "The task kept getting interrupted and is paused",

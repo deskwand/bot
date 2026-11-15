@@ -63,6 +63,7 @@ import {
   type ChannelMessageRef,
   type InboundFile,
   type OutboundMessage,
+  type RouteSnapshot,
   type TaskEvent,
   type TaskEventBody,
 } from "../protocol";
@@ -124,6 +125,15 @@ import {
 } from "./schedules";
 import { TasksRepo, taskLabel, type TaskRow } from "./tasks-repo";
 import {
+  butlerName,
+  newTaskId,
+  ownerPrincipal,
+  OWNER_ID,
+  type Principal,
+} from "../members/principal";
+import { MEMBER_ACCESS_DENIED, MemberError } from "../members/store";
+import { MemberBindingStore, type MemberBinding, memberIdOfButlerName } from "./member-binding";
+import {
   resolveTextAction as resolveAgainstCandidates,
   type PendingApproval,
   type Resolution,
@@ -131,11 +141,14 @@ import {
 import {
   createButlerTools,
   SpawnFailedError,
+  type ButlerToolDeps,
   type ScheduleSpec,
   type TaskControl,
 } from "./tools";
 import { SelfStore } from "./self-store";
 import { SelfWakeStore, guardSelfTool, isSelfWake, SELF_WAKE_PREFIX, type SelfWakeState } from "./self-wake";
+import { createMemberTools } from "../members/tools";
+import { createShareTools } from "../members/shares";
 import { createSelfWakeTools } from "./self-tools";
 import { createSelfTools } from "./self-tools";
 import { boundedSelfData, createSelfSourceReader } from "./self-sources";
@@ -282,6 +295,21 @@ export class ButlerDO extends Agent<Env> {
   /** The address of the message being answered (source of spawned tasks). */
   private origin: Address | null = null;
 
+  /**
+   * `null` means this is the owner's Butler. A member id means this object
+   * was addressed as `member:<id>` and may only ever act for that member.
+   */
+  private readonly memberId: string | null;
+
+  /** The persisted member binding; `null` on the owner's Butler. */
+  private readonly member: MemberBindingStore;
+
+  /** Installed once, after verification, never in a member constructor. */
+  private memberToolsInstalled = false;
+
+  /** The principal proven by `initializeMember` / `ensurePrincipal`. */
+  private principalValue: Principal | null = null;
+
   /** Single-flight guard for reconciling pending approvals on this instance. */
   private reconcilePromise: Promise<void> | null = null;
 
@@ -377,40 +405,106 @@ export class ButlerDO extends Agent<Env> {
     this.schedules = new ScheduleStore(this.db);
     this.lease = new MaintenanceStore(this.db);
     this.backup = new BackupRpc(ctx, this.lease);
+    this.member = new MemberBindingStore(this.db);
+    this.memberId = memberIdOfButlerName(this.ctx.id.name ?? "");
 
-    // Installed once, at construction: Pi may re-run the harness factory after
-    // a storage error, so registry changes must not depend on it.
+    // Only the owner's Butler installs owner tools at construction. A member
+    // object installs its own subset after `initializeMember` proved the actor
+    // against the directory, so a fresh member object carries no
+    // permission-bearing tool at all.
+    if (this.memberId === null) this.installOwnerTools();
+  // The default is a getter: pi only evaluates it when it opens the session,
+    // so a missing DESKWAND_CONFIG does not make this object unconstructable.
+    // A failure leaves the session without a model until `ensureModel` runs.
+    const butler = this;
+    const defaults = {
+      get model(): PiModel | undefined {
+        try {
+          const model = resolveModel(
+            readRuntimeConfig(butler.env).models.butler,
+            butler.env,
+          );
+          return model;
+        } catch (error) {
+          if (error instanceof RuntimeConfigError) return undefined;
+          throw error;
+        }
+      },
+    };
+
+    this.harness = new PiHarness({
+      harness: ({ storage, context, onWake }) =>
+        Harness.open(
+          storage,
+          {
+            models: createModelsForEnv(this.env, this.meter),
+            registry: this.registry,
+            onWake,
+            settings: {
+              progress: PI_PROGRESS,
+              followUpMode: "all",
+              afterFailedRun: "continue",
+            },
+          },
+          context,
+        ),
+      defaults,
+    });
+
+    // `Agent` already installed the lifecycle; adding to it is required.
+    this.lifecycle.use(this.harness);
+  }
+
+  /** Task-tool dependencies shared by the owner and the member registries. */
+  private butlerToolDeps(): ButlerToolDeps {
+    return {
+      repo: this.repo,
+      task: (id) => this.controlTask(id),
+      spawn: (title, instructions, attachments) =>
+        this.spawn(title, instructions, undefined, attachments),
+      resolveAttachment: (key) => this.resolveAttachment(key),
+      memory: this.memory,
+      createSchedule: (spec, title, instructions) =>
+        this.createSchedule(spec, title, instructions),
+      listSchedules: () => this.schedules.list(),
+      removeSchedule: (id) => this.removeSchedule(id),
+      lookup: (question, queries) =>
+        quickLookup(
+          { question, queries },
+          {
+            search: (query, signal) => searchWeb(this.env, query, 5, signal),
+            complete: this.completeLookup,
+            locale: ownerLocale(this.env),
+          },
+        ),
+      locale: ownerLocale(this.env),
+    };
+  }
+
+  /**
+   * Installed once, at construction: Pi may re-run the harness factory after
+   * a storage error, so registry changes must not depend on it.
+   */
+  private installOwnerTools(): void {
     this.registry.install({
       name: "butler",
       tools: [
-        ...createButlerTools({
-          repo: this.repo,
-          task: (id) => this.taskFor(id),
-          spawn: (title, instructions, attachments) =>
-            this.spawn(title, instructions, undefined, attachments),
-          resolveAttachment: (key) => this.resolveAttachment(key),
-          memory: this.memory,
-          createSchedule: (spec, title, instructions) =>
-            this.createSchedule(spec, title, instructions),
-          listSchedules: () => this.schedules.list(),
-          removeSchedule: (id) => this.removeSchedule(id),
-          lookup: (question, queries) =>
-            quickLookup(
-              { question, queries },
-              {
-                search: (query, signal) =>
-                  searchWeb(this.env, query, 5, signal),
-                complete: this.completeLookup,
-                locale: ownerLocale(this.env),
-              },
-            ),
-          locale: ownerLocale(this.env),
-        }),
+        ...createButlerTools(this.butlerToolDeps()),
         ...createBotTools({
           bots: this.bots,
           bot: (id) => this.botFor(id),
           botChat: (id) => this.botChatFor(id),
-          task: (id) => this.taskFor(id),
+          task: (id) => this.controlTask(id),
+          locale: ownerLocale(this.env),
+        }),
+        ...createMemberTools({
+          actor: ownerPrincipal(),
+          channel: this.channels(),
+          locale: ownerLocale(this.env),
+        }),
+        ...createShareTools({
+          resolveActor: () => ownerPrincipal(),
+          channel: this.channels(),
           locale: ownerLocale(this.env),
         }),
         ...createSelfWakeTools({
@@ -539,46 +633,166 @@ export class ButlerDO extends Agent<Env> {
       });
     }
 
-    // The default is a getter: pi only evaluates it when it opens the session,
-    // so a missing DESKWAND_CONFIG does not make this object unconstructable.
-    // A failure leaves the session without a model until `ensureModel` runs.
-    const butler = this;
-    const defaults = {
-      get model(): PiModel | undefined {
-        try {
-          const model = resolveModel(
-            readRuntimeConfig(butler.env).models.butler,
-            butler.env,
-          );
-          return model;
-        } catch (error) {
-          if (error instanceof RuntimeConfigError) return undefined;
-          throw error;
-        }
-      },
-    };
+  }
 
-    this.harness = new PiHarness({
-      harness: ({ storage, context, onWake }) =>
-        Harness.open(
-          storage,
-          {
-            models: createModelsForEnv(this.env, this.meter),
-            registry: this.registry,
-            onWake,
-            settings: {
-              progress: PI_PROGRESS,
-              followUpMode: "all",
-              afterFailedRun: "continue",
-            },
-          },
-          context,
-        ),
-      defaults,
+  /**
+   * A member's own registry: the ordinary task tools, its own memory and the
+   * clock. Bots, self-editing, self-wake, the earner, life, wallet and MCP
+   * services stay with the owner's Butler.
+   */
+  private installMemberTools(): void {
+    if (this.memberToolsInstalled) return;
+    this.memberToolsInstalled = true;
+    const locale = ownerLocale(this.env);
+    this.registry.install({
+      name: "butler",
+      tools: [
+        ...createButlerTools(this.butlerToolDeps()),
+        // A member may share its own files with the owner or another member;
+        // the ACL row, not the role, decides which files those are.
+        ...createShareTools({
+          resolveActor: () => this.ensurePrincipal(),
+          channel: this.channels(),
+          locale,
+        }),
+        nowTool(() => new Date(getClock().now())),
+      ],
+      sections: [
+        {
+          key: "butler",
+          render: () =>
+            butlerSystemPrompt(
+              locale,
+              enabledServices(this.env),
+              parseActiveChannel(this.env.ACTIVE_CHANNEL),
+            ),
+        },
+        {
+          key: "memory",
+          render: () => renderMemorySection(this.memory.all()),
+        },
+      ],
     });
+  }
 
-    // `Agent` already installed the lifecycle; adding to it is required.
-    this.lifecycle.use(this.harness);
+  /**
+   * Binds this object to one member, once. The actor is trusted server code
+   * (never a model argument) and is proven three ways before anything is
+   * written: this object's address must be the address derived from the
+   * member id, the directory must still report the same role, status and
+   * epoch, and any existing binding must be identical.
+   */
+  async initializeMember(actor: Principal): Promise<MemberBinding> {
+    const memberId = this.memberId;
+    if (
+      memberId === null ||
+      actor.memberId !== memberId ||
+      actor.role !== "member"
+    ) {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+    const expected = this.env.BUTLER.idFromName(butlerName(memberId));
+    if (!this.ctx.id.equals(expected)) {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+    try {
+      await this.channels().assertMemberActive(actor);
+    } catch {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+    const stored = this.member.put({
+      memberId,
+      role: "member",
+      epoch: actor.epoch,
+    });
+    this.installMemberTools();
+    this.principalValue = {
+      memberId: stored.memberId,
+      role: stored.role,
+      epoch: stored.epoch,
+    };
+    return stored;
+  }
+
+  /**
+   * The actor every business path runs as. The owner's Butler is the owner by
+   * construction; a member object re-reads its persisted binding and re-checks
+   * the directory on every call, so a revoke or an epoch bump stops it without
+   * a restart, and an object that was never initialised denies everything.
+   */
+  async ensurePrincipal(): Promise<Principal> {
+    const memberId = this.memberId;
+    if (memberId === null) {
+      const actor = ownerPrincipal();
+      this.principalValue = actor;
+      return actor;
+    }
+    const binding = this.member.get();
+    if (binding === null || binding.memberId !== memberId) {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+    const actor: Principal = {
+      memberId,
+      role: "member",
+      epoch: binding.epoch,
+    };
+    try {
+      await this.channels().assertMemberActive(actor);
+    } catch {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+    this.installMemberTools();
+    this.principalValue = actor;
+    return actor;
+  }
+
+  /** The last proven actor; owner when nothing was proven yet. */
+  private principal(): Principal {
+    return this.principalValue ?? ownerPrincipal();
+  }
+
+  /**
+   * The actor an outbound message is attributed to. A member object may only
+   * ever deliver as that member: an uninitialised or mismatched member object
+   * denies instead of falling back to the owner's channel.
+   */
+  private deliveryActor(): Principal {
+    if (this.memberId === null) return this.principalValue ?? ownerPrincipal();
+    const actor = this.principalValue;
+    if (actor === null || actor.memberId !== this.memberId) {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+    return actor;
+  }
+
+  /**
+   * The route this instance delivers on: the owner's deployment-wide route, or
+   * the member's own connection route.
+   */
+  private async deliveryRoute(): Promise<RouteSnapshot> {
+    const actor = this.deliveryActor();
+    return actor.memberId === OWNER_ID
+      ? await this.channels().currentRoute()
+      : await this.channels().routeForMember(actor);
+  }
+
+  /** Refuses an actor that is not this object's own principal. */
+  private assertOwnActor(actor: Principal): void {
+    const expectedId = this.memberId ?? OWNER_ID;
+    const expectedRole = this.memberId === null ? "owner" : "member";
+    if (actor.memberId !== expectedId || actor.role !== expectedRole) {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+  }
+
+  /**
+   * The verified actor, or a denial. Business paths call this after
+   * `ensurePrincipal()` instead of falling back to the owner.
+   */
+  private requirePrincipal(): Principal {
+    const actor = this.principalValue;
+    if (actor === null) throw new MemberError(MEMBER_ACCESS_DENIED);
+    return actor;
   }
 
   /**
@@ -702,7 +916,7 @@ export class ButlerDO extends Agent<Env> {
       const failureKey = `${TASK_PROBE_FAILURES_PREFIX}${row.id}`;
       let probeFailed = false;
       try {
-        const probed = await this.taskFor(row.id).liveness();
+        const probed = await this.taskFor(row.id).liveness(this.principalValue ?? undefined);
         // `liveness` flushes the outbox first, so a run that finished would
         // already have reported and flipped the row. A row still `running`
         // while the probe says otherwise is as dead as a thrown probe.
@@ -772,6 +986,19 @@ export class ButlerDO extends Agent<Env> {
     if (this.lease.current() !== null) {
       await this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
       return;
+    }
+    // A member object proves its binding before any scheduled business runs;
+    // an object that was never initialised (or was revoked) does nothing.
+    if (this.memberId !== null) {
+      try {
+        await this.ensurePrincipal();
+      } catch (error) {
+        console.warn(
+          "butler: member alarm denied:",
+          error instanceof Error ? error.name : "Error",
+        );
+        return;
+      }
     }
     await super.alarm();
   }
@@ -954,6 +1181,14 @@ export class ButlerDO extends Agent<Env> {
   }
 
   override async onStart(props?: object): Promise<void> {
+    if (this.memberId !== null) {
+      try {
+        await this.ensurePrincipal();
+      } catch {
+        // Uninitialised or revoked: start the object but never install tools.
+        return;
+      }
+    }
     await super.onStart(props);
     // Do not block startup: the sweep talks to pi.
     this.ctx.waitUntil(this.resumeTurns().then(() => this.armSelfWake()).catch((error) => console.error("butler self wake resume failed:", error)));
@@ -1017,7 +1252,8 @@ export class ButlerDO extends Agent<Env> {
     origin: Address | null = this.origin,
     attachments: InboundFile[] = [],
   ): Promise<string> {
-    const id = this.repo.nextId();
+    const actor = await this.ensurePrincipal();
+    const id = newTaskId(actor, this.repo.nextCounter());
     this.repo.insert({
       id,
       title,
@@ -1029,6 +1265,7 @@ export class ButlerDO extends Agent<Env> {
         taskId: id,
         title,
         instructions,
+        actor,
         ...(attachments.length === 0 ? {} : { attachments }),
       });
     } catch (error) {
@@ -1057,6 +1294,34 @@ export class ButlerDO extends Agent<Env> {
         object.httpMetadata?.contentType ?? "application/octet-stream",
       size: object.size,
     };
+  }
+
+  /**
+   * Narrow ownership lookup for the channel's member ACL boundary. Tasks do
+   * not carry a member yet (member-spawned tasks arrive in Task 4/5), so every
+   * existing task is the owner's and anything unknown is not a task at all.
+   * This is the authoritative index; a model never supplies the owner.
+   */
+  async memberTaskScope(taskId: string): Promise<{
+    taskId: string;
+    memberId: string;
+    keyPrefix: string;
+  } | null> {
+    const task = this.repo.get(taskId);
+    if (!task) return null;
+    // The scope is this Butler's own identity: a member Butler index never
+    // claims owner work, and the owner's Butler keeps the owner scope.
+    return { taskId, memberId: this.memberId ?? OWNER_ID, keyPrefix: `${taskId}/` };
+  }
+
+  /**
+   * Whether a task id is in this Butler's own index. The channel asks before
+   * it lets a member name an explicit id, so another member's task is denied
+   * here rather than inside the Task DO.
+   */
+  async hasTask(taskId: string, actor?: Principal): Promise<boolean> {
+    if (actor !== undefined) this.assertOwnActor(actor);
+    return this.repo.get(taskId) !== null;
   }
 
   /**
@@ -1149,6 +1414,7 @@ export class ButlerDO extends Agent<Env> {
 
   /** Callback registered through `Agent.schedule`. */
   async runSchedule(payload: SchedulePayload): Promise<void> {
+    const actor = await this.ensurePrincipal();
     const row = this.schedules.get(payload.scheduleId);
     if (!row) {
       // A one-shot row is deleted before its work starts, so a retry after a
@@ -1199,6 +1465,44 @@ export class ButlerDO extends Agent<Env> {
     // webhooks and polling, but an in-flight dispatch can still arrive.
     if (this.lease.current() !== null) {
       throw new Error("maintenance lease active");
+    }
+    // The channel hub resolved the sender; this object only accepts work for
+    // the identity it was initialised with. A denial is a quiet stop: there is
+    // nothing to answer and no owner fallback.
+    let actor: Principal;
+    try {
+      actor = await this.ensurePrincipal();
+      if (
+        evt.actor !== undefined &&
+        actor.memberId !== OWNER_ID &&
+        (evt.actor.memberId !== actor.memberId ||
+          evt.actor.epoch !== actor.epoch ||
+            actor.memberId !== this.memberId)
+      ) {
+        throw new MemberError(MEMBER_ACCESS_DENIED);
+      }
+      if (actor.memberId !== OWNER_ID) {
+        const ref = evt.connectionRef ?? null;
+        const connection = await this.channels().routeForMember(actor);
+        if (
+          ref === null ||
+          connection.channel !== "wechat" ||
+          !(await this.channels().isMemberAdmissionCurrent(
+            actor,
+            evt.channel,
+            ref,
+            evt.routeKey,
+          ))
+        ) {
+          throw new MemberError(MEMBER_ACCESS_DENIED);
+        }
+      }
+    } catch (error) {
+      console.warn(
+        "butler: member message denied:",
+        error instanceof Error ? error.name : "Error",
+      );
+      return;
     }
     try {
       await this.handleInboundMessage(evt);
@@ -1510,8 +1814,17 @@ export class ButlerDO extends Agent<Env> {
    * Resolves a text command to a concrete action, a candidate list, or chat.
    * The legacy `t<n>` form already names the task and bypasses resolution.
    */
-  async resolveTextAction(action: TextAction): Promise<Resolution> {
+  async resolveTextAction(
+    action: TextAction,
+    actor?: Principal,
+  ): Promise<Resolution> {
     const locale = ownerLocale(this.env);
+    if (actor !== undefined) {
+      // Only this instance's own actor may resolve against its own tasks, and a
+      // member is re-checked against the directory before any lookup.
+      this.assertOwnActor(actor);
+      if (actor.memberId !== OWNER_ID) await this.channels().assertMemberActive(actor);
+    }
     if (this.lease.current() !== null) {
       return { kind: "reply", text: maintenanceRetryText(locale) };
     }
@@ -1545,7 +1858,7 @@ export class ButlerDO extends Agent<Env> {
    * presentation failed. The Worker's Cron calls this after channel keepalive.
    */
   async reconcileChannel(routeKey: string): Promise<void> {
-    const route = await this.channels().currentRoute();
+    const route = await this.deliveryRoute();
     if (route.channel === null || route.routeKey !== routeKey) return;
     await this.reconcileOnce(route.routeKey);
   }
@@ -1561,7 +1874,7 @@ export class ButlerDO extends Agent<Env> {
   private kickReconcile(): void {
     this.ctx.waitUntil(
       (async () => {
-        const route = await this.channels().currentRoute();
+        const route = await this.deliveryRoute();
         if (route.channel === null) return;
         await this.reconcileOnce(route.routeKey);
       })().catch((error) => {
@@ -1579,7 +1892,7 @@ export class ButlerDO extends Agent<Env> {
         reason?: string;
       }[];
       try {
-        pending = await this.taskFor(task.id).pendingApprovals();
+        pending = await this.taskFor(task.id).pendingApprovals(this.principalValue ?? undefined);
       } catch (error) {
         console.error(
           `butler reconcile skipped task ${task.id}: ${errorText(error)}`,
@@ -1797,9 +2110,16 @@ export class ButlerDO extends Agent<Env> {
     artifacts: Artifact[],
     locale: Locale,
   ): Promise<void> {
+    const actor = this.deliveryActor();
     for (const artifact of artifacts) {
       try {
-        await this.channels().sendArtifact(artifact.key);
+        if (actor.memberId === OWNER_ID) {
+          await this.channels().sendArtifact(artifact.key);
+        } else {
+          // A member receives only what its own ACL admits, on its own
+          // connection; the owner's artifact route is never borrowed.
+          await this.channels().sendArtifactToMember(actor, artifact.key);
+        }
       } catch (error) {
         console.error("butler artifact send failed:", error);
         await this.sendBestEffort({
@@ -2226,11 +2546,20 @@ export class ButlerDO extends Agent<Env> {
     await this.schedule(Math.max(nextAt - now, 1_000) / 1000, "checkTurn");
   }
 
+  /**
+   * Sends on the actor's own route: the owner's selected channel for the owner,
+   * the member's own connection for a member. A member object that was never
+   * initialised fails closed instead of borrowing the owner's session.
+   */
   private async sendBestEffort(
     message: OutboundMessage,
   ): Promise<ChannelMessageRef | null> {
     try {
-      return await this.channels().sendCurrent(message);
+      const actor = this.deliveryActor();
+      if (actor.memberId === OWNER_ID) {
+        return await this.channels().sendCurrent(message);
+      }
+      return await this.channels().sendToMember(actor, message);
     } catch (error) {
       console.error("butler channel send failed:", error);
       return null;
@@ -2242,6 +2571,9 @@ export class ButlerDO extends Agent<Env> {
     message: OutboundMessage,
   ): Promise<EditOutcome> {
     if (ref === null) return "unsupported";
+    // A member conversation is WeChat-only and carries no editable message id,
+    // and the owner's route must never be used for a member's message.
+    if (this.memberId !== null) return "unsupported";
     try {
       const edited = await this.channels().editCurrent(ref, message);
       if (edited) return "edited";
@@ -2402,11 +2734,22 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private async admissionHolds(evt: AdmittedMessage): Promise<boolean> {
-    if (
-      await this.channels().isAdmissionCurrent(evt.channel, evt.routeKey)
-    ) {
-      return true;
-    }
+    // A member's route key is namespaced by its connection; the owner's
+    // deployment-wide key can never match it. Each side is checked with the
+    // authority that describes it.
+    const actor = this.memberId === null ? null : await this.ensurePrincipal();
+    const current =
+      actor === null
+        ? await this.channels().isAdmissionCurrent(evt.channel, evt.routeKey)
+        : evt.connectionRef === undefined || evt.connectionRef === null
+          ? false
+          : await this.channels().isMemberAdmissionCurrent(
+              actor,
+              evt.channel,
+              evt.connectionRef,
+              evt.routeKey,
+            );
+    if (current) return true;
     console.warn("butler: dropped input from an old channel route");
     return false;
   }
@@ -2466,6 +2809,25 @@ export class ButlerDO extends Agent<Env> {
 
   private channels() {
     return this.env.CHANNELS.get(this.env.CHANNELS.idFromName("channels"));
+  }
+
+  /**
+   * The task adapter handed to this Butler's tools: it carries the verified
+   * principal so a task can refuse a caller from another identity.
+   */
+  private controlTask(id: string): TaskControl {
+    const inner = this.taskFor(id);
+    const actor = this.principalValue;
+    return {
+      start: (spec) => inner.start(spec),
+      status: () => inner.status(actor ?? undefined),
+      steer: (text) => inner.steer(text, actor ?? undefined),
+      cancel: () => inner.cancel(actor ?? undefined),
+      retryTask: () => inner.retryTask(actor ?? undefined),
+      continueTask: (text) => inner.continueTask(text, actor ?? undefined),
+      liveness: () => inner.liveness(actor ?? undefined),
+      pendingApprovals: () => inner.pendingApprovals(actor ?? undefined),
+    };
   }
 
   private taskFor(id: string): TaskControl {

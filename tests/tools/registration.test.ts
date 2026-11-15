@@ -100,8 +100,34 @@ describe("Butler wallet tools", () => {
 });
 
 describe("TaskDO execution tools", () => {
-  it("installs web_search, web_fetch and save_artifact", async () => {
+  it("installs execution tools only after a verified owner start", async () => {
     const stub = env.TASK.get(env.TASK.idFromName("t-tools-registry"));
+    const before = await runInDurableObject(stub, (instance) =>
+      instance.registry
+        .snapshot()
+        .tools()
+        .map(({ tool }) => tool.name),
+    );
+    // A task object with no persisted delegator installs no execution surface.
+    expect(before).toEqual([]);
+    // A verified owner task gets the full owner suite, as before.
+    await runInDurableObject(stub, async (instance, state) => {
+      state.storage.sql.exec(
+        `INSERT OR REPLACE INTO meta (key, value) VALUES ('spec', ?)`,
+        JSON.stringify({
+          taskId: "t-tools-registry",
+          title: "registry",
+          instructions: "noop",
+          actor: { memberId: "owner", role: "owner", epoch: 1 },
+        }),
+      );
+      (instance as unknown as { spec: unknown }).spec = JSON.parse(
+        state.storage.sql
+          .exec<{ value: string }>(`SELECT value FROM meta WHERE key = 'spec'`)
+          .toArray()[0]!.value,
+      );
+      await instance.ensureExecutionProfile();
+    });
 
     const names = await runInDurableObject(stub, (instance) =>
       instance.registry

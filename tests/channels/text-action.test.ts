@@ -217,6 +217,30 @@ describe("bilingual commands", () => {
     });
   });
 
+  it("accepts a member task id in its own namespace", () => {
+    const memberTask = `m${"a".repeat(32)}-t7`;
+    expect(parseTextAction(`批准 ${memberTask} ap1`)).toEqual({
+      action: "approve",
+      target: { kind: "taskId", taskId: memberTask },
+      approvalId: "ap1",
+    });
+    expect(parseTextAction(`取消 ${memberTask}`)).toEqual({
+      action: "cancel",
+      target: { kind: "taskId", taskId: memberTask },
+    });
+  });
+
+  it("rejects task ids outside the two known prefixes", () => {
+    for (const text of [
+      "取消 m1-t1",
+      `取消 m${"a".repeat(32)}-t1x`,
+      `取消 x${`m${"a".repeat(32)}`}-t1`,
+      "取消 t1-t2",
+    ]) {
+      expect(parseTextAction(text)).toBeNull();
+    }
+  });
+
   it("does not accept partial words", () => {
     expect(parseTextAction("approved")).toBeNull();
     expect(parseTextAction("cancellation")).toBeNull();

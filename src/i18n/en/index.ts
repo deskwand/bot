@@ -1,4 +1,5 @@
 import type { Messages } from "../messages";
+import { member } from "./member";
 import { bot } from "./bot";
 import { butler } from "./butler";
 import { channel } from "./channel";
@@ -13,6 +14,7 @@ import { task } from "./task";
 import { wallet } from "./wallet";
 
 export const en: Messages = {
+  member,
   bot,
   butler,
   channel,

@@ -871,3 +871,16 @@ func TestOpenRejectsTaggedNaNReal(t *testing.T) {
 	_, err := Open(path)
 	requireCode(t, err, CodeBackupInvalid)
 }
+
+func TestMemberButlerArchivePath(t *testing.T) {
+	member := "m" + strings.Repeat("a", 32)
+	if got := TableEntry(DORef{DO: "butler", ID: member}, "memories"); got != "do/member/"+member+"/memories.jsonl" {
+		t.Fatalf("member butler path = %s", got)
+	}
+	if got := TableEntry(DORef{DO: "butler"}, "memories"); got != "do/butler/memories.jsonl" {
+		t.Fatalf("owner butler path = %s", got)
+	}
+	if err := validateDORef(DORef{DO: "butler", ID: "../etc"}); err == nil {
+		t.Fatal("a path-shaped member id must be refused")
+	}
+}

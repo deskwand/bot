@@ -28,12 +28,15 @@ import {
 import {
   getChannelOverride,
   getILinkFetchOverride,
+  getMemberButlerOverride,
   getPollTimingOverride,
   getTelegramFetchOverride,
   getWeChatCredentialsOverride,
+  type MemberButlerRpc,
 } from "./override";
 import {
   DISABLED_ROUTE_KEY,
+  memberRouteIdentity,
   parseActiveChannel,
   routeIdentity,
   sha256Hex,
@@ -49,6 +52,41 @@ import {
   type OwnerStatus,
 } from "./owner-access";
 import { OwnerStore } from "./owner-store";
+import {
+  AttachmentAccess,
+  migrateLegacyInbox,
+} from "../members/artifact-access";
+import {
+  CredentialStaging,
+  CredentialVault,
+  inviteTokenKey,
+  stageCredentialAndActivate,
+} from "../members/credentials";
+import { MemberAccessClient } from "../members/client";
+import {
+  ShareService,
+  parseShareCommand,
+  shareErrorText,
+  type ShareCommand,
+  type SharePreview,
+  type ShareResult,
+} from "../members/shares";
+import {
+  OWNER_ID,
+  butlerName,
+  ownerPrincipal,
+  type ConnectionRef,
+  type Principal,
+} from "../members/principal";
+import {
+  INVITE_NOT_FOUND,
+  MEMBER_ACCESS_DENIED,
+  MemberError,
+  MemberStore,
+  type CreateInviteOptions,
+  type MemberInviteLink,
+  type MemberView,
+} from "../members/store";
 import { inboxStore } from "./inbox";
 import { OutboundQueue } from "./outbound-queue";
 import { describeImageBytes, prepareInboundImage, sniffImageType } from "./media";
@@ -60,7 +98,14 @@ import {
 import { parseTextAction, textHint, type TextAction } from "./text-action";
 import { ChannelError, type ChannelAdapter, type OutboundArtifact } from "./types";
 import { withRetry } from "./retry";
+import { ConnectionStore, contextKey } from "./wechat/connections";
+import { PRIVATE_WECHAT_PREFIX } from "../members/credentials";
 import { toWeChatText } from "./wechat/markdown";
+import {
+  SqlLoginStateStore,
+  VaultLoginSecretStore,
+  WeChatLogin,
+} from "./wechat/login";
 import {
   createILinkClient,
   ILinkError,
@@ -115,6 +160,14 @@ type TelegramWebhookRetry = {
   attempted: boolean;
 };
 
+/**
+ * The member a media download is admitted for. Present only on the member
+ * path: the owner path passes nothing and keeps its legacy behaviour. The CDN
+ * object is unauthenticated, so what the download needs is exactly this —
+ * whose admission decides whether the bytes may be stored or dispatched.
+ */
+type MediaTrust = { actor: Principal; ref: ConnectionRef };
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -123,8 +176,42 @@ function credentialsHash(json: string): Promise<string> {
   return sha256Hex(json);
 }
 
+/**
+ * A one-time binding token: 32 random bytes, base64url without padding. It is
+ * handed over only inside the link fragment and kept in the vault; SQL stores
+ * its SHA-256 digest.
+ */
+function inviteToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** The link the owner forwards; the token lives in the fragment, never a query. */
+function memberBindUrl(baseUrl: string, token: string): string {
+  return `${baseUrl.replace(/\/$/, "")}/members/bind/#${token}`;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The `{connectionId, generation}` payload every member poll carries. */
+function connectionPayload(
+  payload: unknown,
+): { connectionId: string; generation: number } | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const record = payload as Record<string, unknown>;
+  const connectionId = record.connectionId;
+  const generation = record.generation;
+  if (typeof connectionId !== "string" || connectionId.length === 0) {
+    return null;
+  }
+  if (typeof generation !== "number" || !Number.isInteger(generation)) {
+    return null;
+  }
+  return { connectionId, generation };
 }
 
 export function channelDisabledText(locale: Locale): string {
@@ -235,6 +322,18 @@ export class ChannelDO extends Agent<Env> {
 
   private readonly owners: OwnerStore;
 
+  private readonly members: MemberStore;
+
+  private readonly attachments: AttachmentAccess;
+
+  private readonly vault: CredentialVault;
+
+  private readonly staging: CredentialStaging;
+
+  private accessClientCache: MemberAccessClient | null = null;
+
+  private shareServiceCache: ShareService | null = null;
+
   private readonly outbound: OutboundQueue;
 
   /** Single-flight guard: an inbound drain and a send-time drain must not run twice. */
@@ -243,6 +342,28 @@ export class ChannelDO extends Agent<Env> {
   /** A row was added while a drain was running, so one more pass is due. */
   private outboundAgain = false;
 
+  /** Per-connection runtime state (address, poll clock, context pointer). */
+  private readonly connections: ConnectionStore;
+
+  /** One queue per member connection; a generation bump retires the old one. */
+  private readonly memberQueues = new Map<
+    string,
+    { generation: number; queue: OutboundQueue }
+  >();
+
+  /** Per-connection drains: A's backlog or failure never joins B's drain. */
+  private readonly memberOutboundFlush = new Map<string, Promise<void>>();
+
+  private readonly memberOutboundAgain = new Set<string>();
+
+  /** One live poll step per connection, so a chain is never doubled. */
+  private readonly activeMemberWeChatRuns = new Map<
+    string,
+    { generation: number }
+  >();
+
+  private readonly memberWeChatBackoffMs = new Map<string, number>();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.db = ctx.storage.sql;
@@ -250,6 +371,21 @@ export class ChannelDO extends Agent<Env> {
     this.lease = new MaintenanceStore(this.db);
     this.backup = new BackupRpc(ctx, this.lease);
     this.owners = new OwnerStore(this.db);
+    // The directory tables exist from the first boot, Telegram-only and empty
+    // stores included. The owner row grants nothing by itself: every legacy
+    // ingress still passes through its own owner gate.
+    // Directory writes that span statements run in one synchronous storage
+    // transaction, so a failed SQL write rolls the whole activation back.
+    this.members = new MemberStore(this.db, undefined, (fn) =>
+      ctx.storage.transactionSync(fn),
+    );
+    this.members.ensureOwner();
+    this.attachments = new AttachmentAccess(this.db);
+    this.vault = new CredentialVault(ctx.storage);
+    this.staging = new CredentialStaging(this.db, this.vault);
+    // Member runtime state lives next to the directory; the context token is
+    // written only to the vault behind this store.
+    this.connections = new ConnectionStore(this.db, this.vault);
 
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS owner_addresses (
@@ -288,6 +424,21 @@ export class ChannelDO extends Agent<Env> {
 
   override async onStart(props?: object): Promise<void> {
     await super.onStart(props);
+    // A process that died between the vault write and the pointer move leaves
+    // an unreferenced candidate. Drop those; a live pointer is never touched.
+    try {
+      const orphans = await this.staging.reconcile();
+      if (orphans.length > 0) {
+        console.warn(
+          `channel: discarded ${orphans.length} orphaned credential(s)`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `channel: credential reconciliation failed: ${errorMessage(error)}`,
+      );
+    }
+    await this.migrateLegacyAttachments();
     // 认领窗口从 DO 第一次醒来开始计时（部署后几秒），而不是等有人打开桌面端
     // 的状态页 —— 读状态不该启动计时，也不该让窗口被动延后。
     try {
@@ -337,7 +488,7 @@ export class ChannelDO extends Agent<Env> {
         await this.claimOwner(event);
       }
 
-      this.rememberOwner(event);
+      this.rememberOwner(event, ownerPrincipal());
 
       // The other channel's input must not reach the Butler or a task.
       const route = await this.currentRoute();
@@ -369,7 +520,7 @@ export class ChannelDO extends Agent<Env> {
         const task = this.env.TASK.get(
           this.env.TASK.idFromName(event.taskId),
         );
-        text = await task.handleAction(event);
+        text = await task.handleAction(event, ownerPrincipal());
       } catch (error) {
         console.error(`channel: action failed: ${errorMessage(error)}`);
       }
@@ -409,6 +560,1350 @@ export class ChannelDO extends Agent<Env> {
 
   async maintenanceActive(): Promise<boolean> {
     return this.lease.current() !== null;
+  }
+
+  /**
+   * Member ACL boundary used by the server on behalf of a tool caller. The
+   * actor comes from trusted code; task ownership comes from the Butler's task
+   * index over RPC, never from a model-supplied owner.
+   */
+  async resolveMemberAttachment(
+    actor: Principal,
+    key: string,
+  ): Promise<string> {
+    return this.accessClient().resolveMemberAttachment(actor, key);
+  }
+
+  async registerTaskArtifact(
+    actor: Principal,
+    taskId: string,
+    key: string,
+  ): Promise<void> {
+    return this.accessClient().registerTaskArtifact(actor, taskId, key);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sharing (Task 9). Both the owner's Butler and a member's Butler call these
+  // with an actor built by trusted code; the label is resolved here, and the
+  // attachments are only ever the sender's own ACL rows.
+  // ---------------------------------------------------------------------------
+
+  async prepareShare(
+    actor: Principal,
+    recipientLabel: string,
+    text: string,
+    attachmentKeys: string[],
+  ): Promise<SharePreview> {
+    return this.shares().prepareByLabel(
+      actor,
+      recipientLabel,
+      text,
+      attachmentKeys,
+    );
+  }
+
+  async confirmShare(actor: Principal, shareId: string): Promise<ShareResult> {
+    return this.shares().confirm(actor, shareId);
+  }
+
+  async cancelShare(actor: Principal, shareId: string): Promise<boolean> {
+    return this.shares().cancel(actor, shareId);
+  }
+
+  /**
+   * Sharing reads and writes the same artifact store the channels use, and
+   * delivers through this object's own member send paths: a member copy is
+   * sent on that member's connection and credential only.
+   */
+  private shares(): ShareService {
+    this.shareServiceCache ??= new ShareService({
+      sql: this.db,
+      members: this.members,
+      access: this.attachments,
+      read: async (key) => {
+        const object = await artifactStore(this.env).get(key);
+        if (!object) return null;
+        return {
+          bytes: new Uint8Array(await object.arrayBuffer()),
+          mime:
+            object.httpMetadata?.contentType ?? "application/octet-stream",
+        };
+      },
+      write: async (key, bytes, mime) => {
+        await artifactStore(this.env).put(key, bytes, {
+          httpMetadata: { contentType: mime },
+        });
+      },
+      deliver: {
+        text: async (actor, text) => {
+          await this.sendToMember(actor, { text });
+        },
+        file: async (actor, key) => {
+          await this.sendArtifactToMember(actor, key);
+        },
+      },
+    });
+    return this.shareServiceCache;
+  }
+
+  private accessClient(): MemberAccessClient {
+    this.accessClientCache ??= new MemberAccessClient(
+      this.members,
+      this.attachments,
+      async (taskId) => {
+        const butler = this.env.BUTLER.get(
+          this.env.BUTLER.idFromName("owner"),
+        );
+        return (await butler.memberTaskScope(taskId)) ?? null;
+      },
+    );
+    return this.accessClientCache;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Member runtime (Task 4B): authoritative internal RPC.
+  //
+  // The actor is always built by trusted code, never by a model argument, and
+  // is re-read from the directory on every call. Each route is recomputed from
+  // the connection's live generation and credential hash, so the cached owner
+  // `routePromise` is never reused for a member. No member path falls back to
+  // the owner credential, the owner address book or the owner's Butler.
+  // ---------------------------------------------------------------------------
+
+  /** Liveness gate: stored role, status and epoch, checked at call time. */
+  async assertMemberActive(actor: Principal): Promise<void> {
+    this.members.assertActive(actor);
+  }
+
+  async memberPrincipal(memberId: string): Promise<Principal | null> {
+    return this.members.principal(memberId);
+  }
+
+  /** Every non-owner member id, revoked members included. Never a secret. */
+  async memberIds(): Promise<string[]> {
+    return this.members
+      .list()
+      .filter((member) => member.role === "member")
+      .map((member) => member.memberId);
+  }
+
+  /** The whole directory; only a proven owner may read it. */
+  async listMembers(actor: Principal): Promise<MemberView[]> {
+    this.assertOwnerActor(actor);
+    return this.members.list();
+  }
+
+  /**
+   * Owner gate for the management surface: the claimed role must be the
+   * owner's id and role, and the directory must still agree on the epoch.
+   */
+  private assertOwnerActor(actor: Principal): void {
+    if (actor.memberId !== OWNER_ID || actor.role !== "owner") {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+    this.members.assertActive(actor);
+  }
+
+  /**
+   * Owner-only: a fresh member invitation. The token exists in three places
+   * only — this return value, the vault and the digest in SQL — and no
+   * credential, qrcode or bot token is ever part of the answer.
+   */
+  async createMemberInvite(
+    actor: Principal,
+    label: string,
+  ): Promise<MemberInviteLink> {
+    this.assertOwnerActor(actor);
+    return await this.issueInvite(label, {});
+  }
+
+  /**
+   * Owner-only: a replacement invitation for one member. The directory
+   * derives the expected userId from the member's live connection, so a
+   * different WeChat identity can never inherit the member's history.
+   */
+  async rebindMember(
+    actor: Principal,
+    memberId: string,
+  ): Promise<MemberInviteLink> {
+    this.assertOwnerActor(actor);
+    const member = this.members.getMember(memberId);
+    if (member === null || member.role !== "member") {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+    return await this.issueInvite(member.label, {
+      kind: "rebind",
+      targetMemberId: memberId,
+    });
+  }
+
+  /** Plan name for the same operation; keeps the fixed contract callable. */
+  async createMemberRebind(
+    actor: Principal,
+    memberId: string,
+  ): Promise<MemberInviteLink> {
+    return await this.rebindMember(actor, memberId);
+  }
+
+  /** Owner-only: invalidates a pending invite and its entry token. */
+  async cancelMemberInvite(
+    actor: Principal,
+    inviteId: string,
+  ): Promise<void> {
+    this.assertOwnerActor(actor);
+    if (this.members.getInvite(inviteId) === null) {
+      throw new MemberError(INVITE_NOT_FOUND);
+    }
+    this.members.cancelInvite(inviteId);
+    // Stop the login machine and drop its challenge material with the link.
+    const login = this.weChatLogin(inviteId, 1);
+    await login.load();
+    await login.cancel();
+    await this.vault.delete(inviteTokenKey(inviteId));
+  }
+
+  /**
+   * Owner-only: revokes a member and drops the connection's credential from
+   * the vault. The rows stay: history, artifacts and audit remain readable,
+   * while the epoch bump makes every Principal minted earlier fail closed.
+   */
+  async revokeMember(actor: Principal, memberId: string): Promise<void> {
+    this.assertOwnerActor(actor);
+    // Read everything the revoke retires before the directory changes: the
+    // access epoch is persisted first, so cleanup can never restore access.
+    const credentialKey = this.members.credentialKeyOf(memberId);
+    const connection = this.members.getConnection(memberId);
+    const pendingRebind = this.members
+      .listInvites()
+      .filter(
+        (invite) =>
+          invite.kind === "rebind" &&
+          invite.targetMemberId === memberId &&
+          invite.status === "pending",
+      );
+    this.members.revoke(memberId);
+    // Chat noise stops with the access: nothing queued for this connection is
+    // delivered after a revoke, and the login machine cannot resume it.
+    for (const invite of pendingRebind) {
+      this.members.cancelInvite(invite.inviteId);
+      await this.vault.delete(inviteTokenKey(invite.inviteId));
+    }
+    if (connection !== null) {
+      this.memberQueue(connection.connectionId, connection.generation).clear();
+      await this.vault.delete(
+        contextKey(connection.connectionId, connection.generation),
+      );
+    }
+    if (credentialKey !== null) await this.vault.delete(credentialKey);
+  }
+
+  /** Mints the token, records only its digest, then files it in the vault. */
+  private async issueInvite(
+    label: string,
+    options: CreateInviteOptions,
+  ): Promise<MemberInviteLink> {
+    const token = inviteToken();
+    const invite = this.members.createInvite(label, {
+      ...options,
+      tokenHash: await sha256Hex(token),
+    });
+    try {
+      await this.vault.put(inviteTokenKey(invite.inviteId), token);
+    } catch (error) {
+      // No link means nothing can ever present this invite: retire it instead
+      // of leaving a pending row whose token nobody holds.
+      this.members.cancelInvite(invite.inviteId);
+      throw error;
+    }
+    // The invite is usable only once its login driver is armed; an expired or
+    // cancelled invite stops that driver at its next step.
+    await this.schedule(0, "pollMemberLogin", {
+      inviteId: invite.inviteId,
+      generation: 1,
+    });
+    return {
+      inviteId: invite.inviteId,
+      expiresAt: invite.expiresAt,
+      bindUrl: memberBindUrl(this.env.PUBLIC_BASE_URL, token),
+    };
+  }
+
+  /**
+   * The invite's login state machine, driven by the scheduler instead of the
+   * page: a closed browser must not strand an invite mid-flow.
+   */
+  async pollMemberLogin(payload: {
+    inviteId: string;
+    generation: number;
+  }): Promise<void> {
+    if (this.lease.current() !== null) return;
+    const invite = this.members.getInvite(payload.inviteId);
+    if (invite === null || invite.status !== "pending") return;
+    const login = this.weChatLogin(payload.inviteId, payload.generation);
+    await login.load();
+    const stage = login.view().stage;
+    if (stage === "idle") await login.startOtherOwner();
+    else if (stage === "realname" || stage === "scan") await login.advance();
+    const next = login.view().stage;
+    if (next === "confirmed" || next === "failed" || next === "denied") {
+      await this.vault.delete(inviteTokenKey(payload.inviteId));
+      return;
+    }
+    if (next === "expired" || next === "cancelled") return;
+    if (next === "saving") {
+      await this.schedule(2, "pollMemberLogin", payload);
+      return;
+    }
+    if (this.members.getInvite(payload.inviteId)?.status !== "pending") return;
+    if (Date.now() >= login.view().expiresAt) return;
+    await this.schedule(2, "pollMemberLogin", payload);
+  }
+
+  /**
+   * One login state machine bound to this DO's storage. Credentials only leave
+   * it through `onConfirmed`, which activates the invite's connection.
+   */
+  private weChatLogin(inviteId: string, generation: number): WeChatLogin {
+    const invite = this.members.getInvite(inviteId);
+    const expiresAt = invite?.expiresAt ?? Date.now();
+    const store = this.members;
+    return new WeChatLogin({
+      inviteId,
+      generation,
+      expiresAt,
+      state: new SqlLoginStateStore(this.db),
+      secrets: new VaultLoginSecretStore(this.ctx.storage),
+      transport: createILinkClient({
+        fetch: getILinkFetchOverride() ?? undefined,
+      }),
+      inviteLive: async () => {
+        const current = store.getInvite(inviteId);
+        return (
+          current !== null &&
+          current.status === "pending" &&
+          Date.now() < current.expiresAt
+        );
+      },
+      activationStatus: async () =>
+        store.getInvite(inviteId)?.status === "consumed"
+          ? "committed"
+          : "pending",
+      onConfirmed: async (credentials: WeChatCredentials) => {
+        const raw = JSON.stringify(credentials);
+        const binding = {
+          connectionId: inviteId,
+          accountId: credentials.accountId,
+          userId: credentials.userId,
+          credentialHash: await sha256Hex(raw),
+        };
+        await stageCredentialAndActivate(
+          this.staging,
+          `credential-${inviteId}`,
+          raw,
+          (credentialKey) =>
+            this.members.completeInvite(inviteId, {
+              ...binding,
+              credentialKey,
+            }),
+        );
+      },
+    });
+  }
+
+  /** Resolves the invite by bearer token; wrong or expired tokens are 401/410. */
+  private async inviteByToken(
+    token: string,
+  ): Promise<
+    { ok: true; inviteId: string } | { ok: false; status: 401 | 410 }
+  > {
+    if (!/^[A-Za-z0-9_-]{20,}$/.test(token)) return { ok: false, status: 401 };
+    const invite = this.members.findInviteByTokenHash(await sha256Hex(token));
+    if (invite === null) return { ok: false, status: 401 };
+    if (invite.status !== "pending" || Date.now() >= invite.expiresAt) {
+      return { ok: false, status: 410 };
+    }
+    return { ok: true, inviteId: invite.inviteId };
+  }
+
+  /** The page's read-only view: no ticket, no token, no bot credential. */
+  async memberBindState(
+    token: string,
+  ): Promise<
+    | { ok: true; view: import("./wechat/login").InviteView }
+    | { ok: false; status: 401 | 403 | 404 | 410 }
+  > {
+    const found = await this.inviteByToken(token);
+    if (!found.ok) return found;
+    const login = this.weChatLogin(found.inviteId, 1);
+    await login.load();
+    return { ok: true, view: login.view() };
+  }
+
+  /** PIN submission runs the poll in this request; the PIN is never stored. */
+  async submitMemberBindPin(
+    token: string,
+    pin: string,
+  ): Promise<
+    | { ok: true; view: import("./wechat/login").InviteView }
+    | { ok: false; status: 401 | 403 | 404 | 410 }
+  > {
+    const found = await this.inviteByToken(token);
+    if (!found.ok) return found;
+    // A 6-digit PIN is small enough to brute-force by whoever holds the link;
+    // the server-side verify-code block is not the only line of defence.
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS member_bind_attempts (
+         invite_id TEXT PRIMARY KEY,
+         attempts INTEGER NOT NULL DEFAULT 0
+       )`,
+    );
+    const attempts =
+      this.db
+        .exec<{ attempts: number }>(
+          `SELECT attempts FROM member_bind_attempts WHERE invite_id = ?`,
+          found.inviteId,
+        )
+        .toArray()[0]?.attempts ?? 0;
+    if (attempts >= 5) {
+      return { ok: true, view: this.weChatLogin(found.inviteId, 1).view() };
+    }
+    this.db.exec(
+      `INSERT INTO member_bind_attempts (invite_id, attempts) VALUES (?, 1)
+       ON CONFLICT(invite_id) DO UPDATE SET attempts = attempts + 1`,
+      found.inviteId,
+    );
+    const login = this.weChatLogin(found.inviteId, 1);
+    await login.load();
+    await login.submitPin(pin);
+    return { ok: true, view: login.view() };
+  }
+
+  /**
+   * The member's own route. A member route is namespaced by connection and
+   * generation under its own domain separator, so it never equals the owner's
+   * key and an owner route cached at boot cannot keep a member out.
+   */
+  async routeForMember(actor: Principal): Promise<RouteSnapshot> {
+    this.members.assertActive(actor);
+    // Owner compatibility: the owner keeps the deployment-wide route.
+    if (actor.memberId === OWNER_ID) return this.currentRoute();
+
+    const connection = this.members.getConnection(actor.memberId);
+    if (!connection) throw new MemberError(MEMBER_ACCESS_DENIED);
+
+    const versionId = versionIdOf(this.env.CF_VERSION_METADATA);
+    const channel = parseActiveChannel(this.env.ACTIVE_CHANNEL);
+    if (versionId === null || channel !== "wechat") {
+      // Members are WeChat-only: another selection disables their route
+      // instead of lending them the owner's channel.
+      return { channel: null, routeKey: DISABLED_ROUTE_KEY };
+    }
+    return memberRouteIdentity({
+      versionId,
+      channel,
+      connectionId: connection.connectionId,
+      generation: connection.generation,
+      credentialHash: connection.credentialHash,
+    });
+  }
+
+  /**
+   * Full admission for one inbound or outbound member action: actor liveness,
+   * ref ownership, connection id and generation, the directory's live
+   * credential hash and the deployment's active channel.
+   */
+  async isMemberAdmissionCurrent(
+    actor: Principal,
+    channel: ChannelId,
+    ref: ConnectionRef,
+    routeKey: string,
+  ): Promise<boolean> {
+    try {
+      this.members.assertActive(actor);
+    } catch {
+      return false;
+    }
+    if (channel !== "wechat") return false;
+    // A ref that names another member is never admitted, even when that
+    // member's connection and key would otherwise check out.
+    if (ref.memberId !== actor.memberId) return false;
+
+    const connection = this.members.getConnection(actor.memberId);
+    if (!connection) return false;
+    if (connection.connectionId !== ref.connectionId) return false;
+    if (connection.generation !== ref.generation) return false;
+
+    let route: RouteSnapshot;
+    try {
+      route = await this.routeForMember(actor);
+    } catch {
+      return false;
+    }
+    return route.channel === channel && route.routeKey === routeKey;
+  }
+
+  /**
+   * Sends to the member's own connection only. The queue is scoped by
+   * connection and generation, so A's backlog, retries and failures never
+   * touch B's.
+   */
+  async sendToMember(
+    actor: Principal,
+    message: OutboundMessage,
+  ): Promise<ChannelMessageRef> {
+    this.members.assertActive(actor);
+    // Owner compatibility: the legacy path is unchanged for the owner actor.
+    if (actor.memberId === OWNER_ID) return this.sendCurrent(message);
+
+    const connection = this.members.getConnection(actor.memberId);
+    if (!connection) throw new MemberError(MEMBER_ACCESS_DENIED);
+    const ref: ConnectionRef = {
+      memberId: connection.memberId,
+      connectionId: connection.connectionId,
+      generation: connection.generation,
+    };
+    const route = await this.routeForMember(actor);
+    if (route.channel !== "wechat") {
+      throw new ChannelError("channel selection disabled", 0);
+    }
+    // Re-verified after the awaits above: a revoke or rebind in between must
+    // stop the send instead of queueing to a replaced connection.
+    if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, route.routeKey))) {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+
+    const state = this.connections.read(connection.connectionId);
+    const conversationId = state?.conversationId ?? "";
+    const outbound = forWechat(message, ownerLocale(this.env));
+    const { dropped } = this.memberQueue(
+      connection.connectionId,
+      connection.generation,
+    ).enqueue({
+      conversationId,
+      text: outbound.text,
+      buttons: outbound.buttons ?? null,
+      priority: message.priority,
+    });
+    if (dropped > 0) {
+      console.error(
+        `channel: member outbound queue dropped ${dropped} oldest rows`,
+      );
+    }
+
+    await this.flushMemberOutbound(
+      connection.connectionId,
+      connection.generation,
+    );
+    return {
+      channel: "wechat",
+      conversationId,
+      routeKey: route.routeKey,
+      messageId: null,
+    };
+  }
+
+  /** Sends an artifact to the member's own conversation and credential only. */
+  async sendArtifactToMember(actor: Principal, key: string): Promise<void> {
+    this.members.assertActive(actor);
+    if (actor.memberId === OWNER_ID) return this.sendArtifact(key);
+
+    if (artifactKeySegments(key) === null) {
+      throw new ChannelError("invalid artifact key", 400);
+    }
+    const connection = this.members.getConnection(actor.memberId);
+    if (!connection) throw new MemberError(MEMBER_ACCESS_DENIED);
+    const ref: ConnectionRef = {
+      memberId: connection.memberId,
+      connectionId: connection.connectionId,
+      generation: connection.generation,
+    };
+    const route = await this.routeForMember(actor);
+    if (route.channel !== "wechat") {
+      throw new ChannelError("channel selection disabled", 0);
+    }
+
+    const object = await artifactStore(this.env).get(key);
+    if (!object) throw new ChannelError("artifact missing", 404);
+    if (object.size > MAX_ARTIFACT_BYTES) {
+      throw new ChannelError("artifact too large", 413);
+    }
+    const file: OutboundArtifact = {
+      name: artifactNameFromKey(key),
+      contentType:
+        object.httpMetadata?.contentType ?? "application/octet-stream",
+      bytes: await object.arrayBuffer(),
+    };
+
+    // The copy above is the last await before the network call, so admission
+    // is checked again here: a revoke during the download must win.
+    if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, route.routeKey))) {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+
+    const credentials = await this.loadMemberCredentials(
+      ref.connectionId,
+      ref.generation,
+    );
+    const conversationId =
+      this.connections.read(ref.connectionId)?.conversationId ?? "";
+    const context = await this.connections.readContext(
+      ref.connectionId,
+      ref.generation,
+    );
+    if (!credentials || conversationId === "" || context === null) {
+      throw new ChannelError("wechat context missing", 0);
+    }
+    if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, route.routeKey))) {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+
+    try {
+      await withRetry(async () => {
+        await createILinkClient({
+          fetch: getILinkFetchOverride() ?? undefined,
+        }).sendMedia(credentials, conversationId, context, file);
+      });
+      emitChannelEvent(this.env, { channel: "wechat", event: "send_ok" });
+    } catch (error) {
+      emitChannelEvent(this.env, {
+        channel: "wechat",
+        event: "send_error",
+        errorCode: channelErrorCode(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Loads one connection's credential from the private vault. The pointer is
+   * read by trusted SQL only, the parsed identity must still match the
+   * directory row, and the generation is re-checked after every await.
+   */
+  private async loadMemberCredentials(
+    connectionId: string,
+    generation: number,
+  ): Promise<WeChatCredentials | null> {
+    const row = this.db
+      .exec<{
+        credential_key: string;
+        account_id: string;
+        user_id: string;
+        credentials_hash: string;
+        generation: number;
+        status: string;
+      }>(
+        `SELECT credential_key, account_id, user_id, credentials_hash,
+                generation, status
+         FROM member_connections WHERE id = ?`,
+        connectionId,
+      )
+      .toArray()[0];
+    if (!row || row.status === "retired" || row.generation !== generation) {
+      return null;
+    }
+
+    const stored = await this.vault.get<unknown>(row.credential_key);
+    const raw =
+      typeof stored === "string"
+        ? stored
+        : stored === undefined
+          ? null
+          : JSON.stringify(stored);
+    if (raw === null) return null;
+
+    const credentials = parseCredentials(raw);
+    if (!credentials) return null;
+    // The stored identity is the authority: a credential for someone else is
+    // never admitted for this connection.
+    if (
+      credentials.accountId !== row.account_id ||
+      credentials.userId !== row.user_id
+    ) {
+      return null;
+    }
+    if ((await credentialsHash(raw)) !== row.credentials_hash) return null;
+    // A rebind may have completed while the vault was reading.
+    if (this.connections.read(connectionId)?.generation !== generation) {
+      return null;
+    }
+    return credentials;
+  }
+
+  /**
+   * One bounded poll step for one member connection. The payload names the
+   * connection and generation, so a callback from a replaced credential can
+   * neither read nor advance its successor's cursor.
+   */
+  async pollMemberWeChat(
+    payload?: unknown,
+    _schedule?: Schedule<unknown>,
+  ): Promise<void> {
+    if (this.lease.current() !== null) return;
+    const target = connectionPayload(payload);
+    if (target === null) return;
+    if (parseActiveChannel(this.env.ACTIVE_CHANNEL) !== "wechat") return;
+
+    const state = this.connections.read(target.connectionId);
+    if (
+      state === null ||
+      state.status !== "active" ||
+      state.generation !== target.generation ||
+      // The owner connection has its own chain, keyed by the deployed secret.
+      state.memberId === OWNER_ID
+    ) {
+      return;
+    }
+    if (this.activeMemberWeChatRuns.has(target.connectionId)) return;
+
+    const actor = this.members.principal(state.memberId);
+    if (actor === null || actor.role !== "member") return;
+    const ref: ConnectionRef = {
+      memberId: state.memberId,
+      connectionId: state.connectionId,
+      generation: state.generation,
+    };
+
+    let route: RouteSnapshot;
+    let credentials: WeChatCredentials | null;
+    try {
+      route = await this.routeForMember(actor);
+      credentials = await this.loadMemberCredentials(
+        ref.connectionId,
+        ref.generation,
+      );
+    } catch (error) {
+      console.warn(`channel: member poll skipped: ${errorMessage(error)}`);
+      return;
+    }
+    if (route.channel !== "wechat" || credentials === null) return;
+
+    const run = { generation: ref.generation };
+    this.activeMemberWeChatRuns.set(ref.connectionId, run);
+    const ownsRun = async () => {
+      const current = this.connections.read(ref.connectionId);
+      return (
+        this.activeMemberWeChatRuns.get(ref.connectionId) === run &&
+        this.lease.current() === null &&
+        current !== null &&
+        current.status === "active" &&
+        current.generation === ref.generation &&
+        (await this.isMemberAdmissionCurrent(
+          actor,
+          "wechat",
+          ref,
+          route.routeKey,
+        ))
+      );
+    };
+
+    try {
+      const timing = getPollTimingOverride() ?? {
+        runMs: WECHAT_POLL_RUN_MS,
+        baseBackoffMs: WECHAT_POLL_BACKOFF_MS,
+      };
+      const client = createILinkClient({
+        fetch: getILinkFetchOverride() ?? undefined,
+      });
+      // Heartbeat before the long poll, so ensurePolling does not mistake a
+      // live chain for a dead one and start a second.
+      this.connections.update(
+        ref.connectionId,
+        { lastPollAt: Date.now(), pollStatus: "polling" },
+        ref.generation,
+      );
+
+      let batch: { cursor: string; updates: WeChatUpdate[] };
+      try {
+        // Exactly one bounded getUpdates per callback: the next alarm
+        // continues the chain, so a deploy never leaves a long call running.
+        batch = await client.getUpdates(
+          credentials,
+          this.memberCursor(ref.connectionId, ref.generation),
+          AbortSignal.timeout(WECHAT_GET_UPDATES_TIMEOUT_MS),
+        );
+      } catch (error) {
+        if (!(await ownsRun())) return;
+        if (isSessionExpired(error)) {
+          emitChannelEvent(this.env, {
+            channel: "wechat",
+            event: "poll_expired",
+            errorCode: "session_expired",
+          });
+          // This connection only: the deployment's owner state is untouched.
+          this.connections.update(
+            ref.connectionId,
+            { pollStatus: "expired", expiryNotified: true, lastPollAt: Date.now() },
+            ref.generation,
+          );
+          console.warn("channel: member wechat session expired");
+          return;
+        }
+        emitChannelEvent(this.env, {
+          channel: "wechat",
+          event: "poll_error",
+          errorCode: channelErrorCode(error),
+        });
+        console.error(
+          `channel: member wechat poll failed: ${errorMessage(error)}`,
+        );
+        const backoffMs =
+          this.memberWeChatBackoffMs.get(ref.connectionId) ??
+          timing.baseBackoffMs;
+        await sleep(backoffMs);
+        this.memberWeChatBackoffMs.set(
+          ref.connectionId,
+          Math.min(backoffMs * 2, WECHAT_POLL_MAX_BACKOFF_MS),
+        );
+        await this.scheduleMemberPoll(ref);
+        return;
+      }
+
+      if (!(await ownsRun())) return;
+      emitChannelEvent(this.env, { channel: "wechat", event: "poll_ok" });
+      this.connections.update(
+        ref.connectionId,
+        { lastPollAt: Date.now() },
+        ref.generation,
+      );
+
+      const outcome = await this.dispatchMemberWeChatUpdates(
+        credentials,
+        batch,
+        ref,
+        actor,
+        route.routeKey,
+      );
+      if (outcome === "maintenance") return;
+      // Cursor last: a crash mid-batch makes iLink resend it rather than lose
+      // everything this connection already received.
+      this.updateMemberCursor(ref.connectionId, ref.generation, batch.cursor);
+      this.memberWeChatBackoffMs.delete(ref.connectionId);
+      if (!(await ownsRun())) return;
+      await this.scheduleMemberPoll(ref);
+    } finally {
+      if (this.activeMemberWeChatRuns.get(ref.connectionId) === run) {
+        this.activeMemberWeChatRuns.delete(ref.connectionId);
+      }
+    }
+  }
+
+  private async scheduleMemberPoll(ref: ConnectionRef): Promise<void> {
+    // Tests drive pollMemberWeChat explicitly. Scheduling here would start a
+    // live chain that fires before the test installs its scripted fetch.
+    if (getPollTimingOverride()?.manualStart) return;
+    await this.schedule(
+      0,
+      "pollMemberWeChat",
+      { connectionId: ref.connectionId, generation: ref.generation },
+      { idempotent: true },
+    );
+  }
+
+  /** Schedules every live member connection that has no pending poll. */
+  private async startMemberWeChatPolling(): Promise<void> {
+    if (getPollTimingOverride()?.manualStart) return;
+    const now = Date.now();
+    const pending = await this.listSchedules();
+
+    for (const connection of this.connections.listActive()) {
+      if (connection.memberId === OWNER_ID) continue;
+      if (
+        connection.lastPollAt !== null &&
+        now - connection.lastPollAt < WECHAT_HEARTBEAT_MAX_AGE_MS
+      ) {
+        continue;
+      }
+      const scheduled = pending.some(
+        (schedule) =>
+          schedule.callback === "pollMemberWeChat" &&
+          connectionPayload(schedule.payload)?.connectionId ===
+            connection.connectionId,
+      );
+      if (scheduled) continue;
+      await this.schedule(
+        0,
+        "pollMemberWeChat",
+        { connectionId: connection.connectionId, generation: connection.generation },
+        { idempotent: true },
+      );
+    }
+  }
+
+  /** Stops every member chain without touching the owner chain or cursors. */
+  private async stopMemberWeChatPolling(): Promise<void> {
+    this.activeMemberWeChatRuns.clear();
+    for (const schedule of await this.listSchedules()) {
+      if (schedule.callback === "pollMemberWeChat") {
+        await this.cancelSchedule(schedule.id);
+      }
+    }
+  }
+
+  private dispatchMemberWeChatUpdates(
+    credentials: WeChatCredentials,
+    batch: { cursor: string; updates: WeChatUpdate[] },
+    ref: ConnectionRef,
+    actor: Principal,
+    routeKey: string,
+  ): Promise<"accepted" | "maintenance"> {
+    return (async () => {
+      // A lease can land while getUpdates is in flight: do not admit the batch
+      // or write connection state into a database that is being restored.
+      if (this.lease.current() !== null) return "maintenance" as const;
+
+      for (let index = 0; index < batch.updates.length; index += 1) {
+        const update = batch.updates[index];
+        if (update.messageType !== 1) continue;
+        // Only this account's own messages are admitted: the sender id comes
+        // from the credential, never from the message body.
+        if (update.fromUserId !== credentials.userId) continue;
+
+        // The connection id is generated here and namespaced per connection,
+        // so two members' identical message ids never collide.
+        const eventId = `wx:${ref.connectionId}:${
+          update.messageId ?? `${batch.cursor}:${index}`
+        }`;
+
+        if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey))) {
+          return "accepted" as const;
+        }
+
+        if (update.contextToken) {
+          // The token goes to the vault, keyed by connection and generation.
+          const written = await this.connections.writeContext(
+            ref.connectionId,
+            ref.generation,
+            update.contextToken,
+          );
+          if (written) {
+            this.ctx.waitUntil(
+              this.flushMemberOutbound(ref.connectionId, ref.generation).catch(
+                (error: unknown) => {
+                  console.error(
+                    `channel: member outbound flush failed: ${errorMessage(error)}`,
+                  );
+                },
+              ),
+            );
+          }
+        }
+
+        // A member's conversation is its own row; the owner address book is
+        // written only by proven owner ingress.
+        this.connections.setConversation(ref.connectionId, update.fromUserId);
+
+        const event: MessageEvent = {
+          type: "message",
+          channel: "wechat",
+          chatId: update.fromUserId,
+          userId: update.fromUserId,
+          text: update.text,
+          ...(update.quotedText ? { quotedText: update.quotedText } : {}),
+          ...(update.voice && !update.text ? { voiceFailed: true } : {}),
+          eventId,
+        };
+
+        if (update.media.length > 0) {
+          // 一条消息可以带多个图片或文件，每个 item 单独下发。文字只跟第一个
+          // item 走，其余 item 只带附件，与主人路径一致。存储与派发都在这个
+          // 成员的受信上下文里进行：附件归属成员的 member id，事件 id 也在
+          // 连接命名空间内，A 的字节永远到不了 B 或主人。
+          const trust: MediaTrust = { actor, ref };
+          for (let i = 0; i < update.media.length; i += 1) {
+            const item = update.media[i];
+            const itemEvent: MessageEvent = {
+              ...event,
+              ...(i === 0 ? {} : { text: null }),
+              eventId: update.media.length === 1 ? eventId : `${eventId}:${i}`,
+            };
+            // The previous item's download may have spanned a revoke or a
+            // rebind: re-admit before touching the next one.
+            if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey))) {
+              return "accepted" as const;
+            }
+            if (item.kind === "image") {
+              await this.dispatchWeChatImage(
+                itemEvent,
+                item.image,
+                routeKey,
+                trust,
+              );
+            } else {
+              await this.dispatchWeChatFile(
+                itemEvent,
+                item.file,
+                routeKey,
+                trust,
+              );
+            }
+          }
+          continue;
+        }
+
+        // A member's text command is resolved by the member's own Butler and
+        // answered on the member's own connection; anything that is not a
+        // command stays an ordinary message.
+        const shareCommand =
+          update.text === null ? null : parseShareCommand(update.text);
+        if (shareCommand !== null) {
+          await this.handleMemberShareCommand(
+            shareCommand,
+            actor,
+            ref,
+            routeKey,
+          );
+          continue;
+        }
+        if (update.text !== null && parseTextAction(update.text) !== null) {
+          const handled = await this.handleMemberTextAction(
+            event,
+            eventId,
+            routeKey,
+            actor,
+            ref,
+          );
+          if (handled) continue;
+        }
+        this.dispatchMessage(event, routeKey, { actor, ref });
+      }
+      return "accepted" as const;
+    })();
+  }
+
+  /**
+   * One member text command (批准/拒绝/取消). The resolver, the task index and
+   * the answer all belong to the sending member: an explicit task id from
+   * another member's namespace never reaches its Task DO.
+   */
+  /**
+   * A member's own `确认分享 shN` / `取消分享 shN`. The share row is looked up
+   * against the sending member, so one member can never confirm or cancel
+   * another member's share; the answer goes to the same connection.
+   */
+  private async handleMemberShareCommand(
+    command: ShareCommand,
+    actor: Principal,
+    ref: ConnectionRef,
+    routeKey: string,
+  ): Promise<void> {
+    if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey))) {
+      return;
+    }
+    const text = await this.shareReplyText(actor, command);
+    if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey))) {
+      return;
+    }
+    await this.sendToMember(actor, { text });
+  }
+
+  /** Runs one share command for its own sender and returns the reply copy. */
+  private async shareReplyText(
+    actor: Principal,
+    command: ShareCommand,
+  ): Promise<string> {
+    const locale = ownerLocale(this.env);
+    try {
+      if (command.action === "confirm") {
+        const result = await this.confirmShare(actor, command.shareId);
+        return t(locale, "member.share.confirmed", {
+          shareId: result.shareId,
+          count: result.delivered,
+        });
+      }
+      const cancelled = await this.cancelShare(actor, command.shareId);
+      return cancelled
+        ? t(locale, "member.share.cancelled", { shareId: command.shareId })
+        : t(locale, "member.share.notFound");
+    } catch (error) {
+      return shareErrorText(locale, error);
+    }
+  }
+
+  private async handleMemberTextAction(
+    event: MessageEvent,
+    eventId: string,
+    routeKey: string,
+    actor: Principal,
+    ref: ConnectionRef,
+  ): Promise<boolean> {
+    const parsed = event.text === null ? null : parseTextAction(event.text);
+    if (parsed === null) return false;
+    const deny = async (text: string): Promise<boolean> => {
+      if (await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey)) {
+        await this.sendToMember(actor, { text });
+      }
+      return true;
+    };
+    if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey))) {
+      return true;
+    }
+    const butler = this.env.BUTLER.get(
+      this.env.BUTLER.idFromName(butlerName(actor.memberId)),
+    ) as unknown as Partial<MemberButlerRpc>;
+    if (
+      typeof butler.resolveTextAction !== "function" ||
+      typeof butler.hasTask !== "function"
+    ) {
+      return deny(channelErrorText(ownerLocale(this.env)));
+    }
+
+    let target: { taskId: string; label: string; approvalId?: string } | null = null;
+    if (parsed.target.kind === "taskId" || parsed.target.kind === "handle") {
+      try {
+        const resolution = await butler.resolveTextAction(parsed, actor);
+        if (resolution.kind === "chat") return false;
+        if (resolution.kind === "reply") return deny(resolution.text);
+        target = {
+          taskId: resolution.taskId,
+          label: resolution.label,
+          ...(resolution.approvalId === undefined
+            ? {}
+            : { approvalId: resolution.approvalId }),
+        };
+      } catch (error) {
+        console.error(
+          `channel: member action resolution failed: ${errorMessage(error)}`,
+        );
+        return deny(channelErrorText(ownerLocale(this.env)));
+      }
+    }
+
+    if (target === null) {
+      // An implicit target is one of the member's own active tasks.
+      try {
+        const resolution = await butler.resolveTextAction(parsed, actor);
+        if (resolution.kind === "chat") return false;
+        if (resolution.kind === "reply") return deny(resolution.text);
+        target = {
+          taskId: resolution.taskId,
+          label: resolution.label,
+          ...(resolution.approvalId === undefined
+            ? {}
+            : { approvalId: resolution.approvalId }),
+        };
+      } catch (error) {
+        console.error(
+          `channel: member action resolution failed: ${errorMessage(error)}`,
+        );
+        return deny(channelErrorText(ownerLocale(this.env)));
+      }
+    }
+
+    if (!(await butler.hasTask(target.taskId, actor))) {
+      return deny(t(ownerLocale(this.env), "task.control.denied"));
+    }
+
+    const action: ActionEvent = {
+      type: "action",
+      channel: "wechat",
+      chatId: event.chatId,
+      userId: event.userId,
+      actionId: eventId,
+      messageId: eventId,
+      action: parsed.action,
+      taskId: target.taskId,
+      ...(target.approvalId === undefined
+        ? {}
+        : { approvalId: target.approvalId }),
+      eventId,
+    };
+    let text = channelErrorText(ownerLocale(this.env));
+    try {
+      const task = this.env.TASK.get(this.env.TASK.idFromName(action.taskId));
+      text = await task.handleAction(action, actor);
+      if (target.label !== target.taskId) {
+        text = replaceTaskId(text, target.taskId, target.label);
+      }
+    } catch (error) {
+      console.error(`channel: member action failed: ${errorMessage(error)}`);
+    }
+    return deny(text);
+  }
+
+  private updateMemberCursor(
+    connectionId: string,
+    generation: number,
+    cursor: string,
+  ): void {
+    this.db.exec(
+      `UPDATE member_connections SET cursor = ?
+       WHERE id = ? AND generation = ? AND status <> 'retired'`,
+      cursor,
+      connectionId,
+      generation,
+    );
+  }
+
+  /** The connection's own cursor; never the deployment-wide owner cursor. */
+  private memberCursor(connectionId: string, generation: number): string {
+    return (
+      this.db
+        .exec<{ cursor: string }>(
+          `SELECT cursor FROM member_connections
+           WHERE id = ? AND generation = ? AND status <> 'retired'`,
+          connectionId,
+          generation,
+        )
+        .toArray()[0]?.cursor ?? ""
+    );
+  }
+
+  private memberQueue(
+    connectionId: string,
+    generation: number,
+  ): OutboundQueue {
+    const cached = this.memberQueues.get(connectionId);
+    if (cached !== undefined && cached.generation === generation) {
+      return cached.queue;
+    }
+    const queue = new OutboundQueue(this.db, { connectionId, generation });
+    this.memberQueues.set(connectionId, { generation, queue });
+    return queue;
+  }
+
+  /** Single-flight per connection; A's drain never waits on B's. */
+  private async flushMemberOutbound(
+    connectionId: string,
+    generation: number,
+  ): Promise<void> {
+    const key = `${connectionId}:${generation}`;
+    const running = this.memberOutboundFlush.get(key);
+    if (running !== undefined) {
+      // A row may be added while the running drain lists them: ask for one
+      // more pass instead of leaving it for the next caller.
+      this.memberOutboundAgain.add(key);
+      await running;
+      return;
+    }
+    const flush = this.drainMemberOutbound(connectionId, generation).finally(
+      () => {
+        this.memberOutboundFlush.delete(key);
+      },
+    );
+    this.memberOutboundFlush.set(key, flush);
+    await flush;
+    if (this.memberOutboundAgain.delete(key)) {
+      await this.flushMemberOutbound(connectionId, generation);
+    }
+  }
+
+  /**
+   * Drains one connection's queue. Only rows this connection owns are read, so
+   * another connection's backlog, retries and failures are invisible here.
+   */
+  private async drainMemberOutbound(
+    connectionId: string,
+    generation: number,
+  ): Promise<void> {
+    const queue = this.memberQueue(connectionId, generation);
+    const state = this.connections.read(connectionId);
+    if (
+      state === null ||
+      state.status !== "active" ||
+      state.generation !== generation
+    ) {
+      return;
+    }
+    // No address yet: the rows wait for the member's first inbound message.
+    if (state.conversationId === "") return;
+
+    const actor = this.members.principal(state.memberId);
+    if (actor === null || actor.role !== "member") return;
+    const ref: ConnectionRef = {
+      memberId: state.memberId,
+      connectionId,
+      generation,
+    };
+
+    let route: RouteSnapshot;
+    try {
+      route = await this.routeForMember(actor);
+    } catch {
+      return;
+    }
+    if (route.channel !== "wechat") return;
+
+    const credentials = await this.loadMemberCredentials(connectionId, generation);
+    if (credentials === null) return;
+    const context = await this.connections.readContext(connectionId, generation);
+    if (context === null) return;
+
+    const client = createILinkClient({
+      fetch: getILinkFetchOverride() ?? undefined,
+    });
+
+    for (const row of queue.listCurrent()) {
+      // A row written for a replaced credential can never be delivered.
+      if (row.generation !== generation) {
+        queue.remove(row.id);
+        continue;
+      }
+      const current = this.connections.read(connectionId);
+      if (current === null || current.conversationId === "") return;
+      if (row.conversationId !== current.conversationId) {
+        queue.remove(row.id);
+        console.error("channel: dropped a queued message for a former account");
+        continue;
+      }
+      if (row.attempts >= OUTBOUND_MAX_ATTEMPTS) {
+        queue.remove(row.id);
+        console.error(
+          `channel: gave up on a queued message after ${row.attempts} attempts`,
+        );
+        emitChannelEvent(this.env, {
+          channel: "wechat",
+          event: "send_error",
+          errorCode: row.lastError ?? "api_error",
+        });
+        continue;
+      }
+      // Re-checked immediately before every actual send: the actor may have
+      // been revoked or the connection rebound during the copy above.
+      if (
+        !(await this.isMemberAdmissionCurrent(
+          actor,
+          "wechat",
+          ref,
+          route.routeKey,
+        ))
+      ) {
+        return;
+      }
+      try {
+        await client.sendText(
+          credentials,
+          current.conversationId,
+          context,
+          row.text,
+        );
+        queue.remove(row.id);
+      } catch (error) {
+        // Order matters: later messages wait behind this one, and this failure
+        // ends only this connection's drain.
+        const code = channelErrorCode(error);
+        queue.markError(row.id, code);
+        emitChannelEvent(this.env, {
+          channel: "wechat",
+          event: "send_error",
+          errorCode: code,
+        });
+        console.error(`channel: member send failed: ${errorMessage(error)}`);
+        return;
+      }
+    }
+  }
+
+  private registerInboundFiles(event: MessageEvent, memberId: string): void {
+    for (const file of event.files ?? []) {
+      try {
+        this.attachments.record(memberId, file.key);
+      } catch (error) {
+        console.error(
+          `channel: attachment registration failed (${event.eventId}): ` +
+            errorMessage(error),
+        );
+      }
+    }
   }
 
   async ownerStatus(): Promise<OwnerStatus> {
@@ -461,6 +1956,48 @@ export class ChannelDO extends Agent<Env> {
 
   async restoreCommit(schema: DbSchema): Promise<void> {
     await this.backup.restoreCommit(schema);
+    await this.resetMemberAccessAfterRestore();
+  }
+
+  /**
+   * A backup never carries WeChat credentials, so every restored member
+   * connection is unbound until its own WeChat account scans a rebind
+   * invite again. Pending invites and login challenges from before the
+   * restore die with the old deployment; queued chat would otherwise be sent
+   * under credentials the archive never contained.
+   */
+  private async resetMemberAccessAfterRestore(): Promise<void> {
+    const keys = await this.ctx.storage.list({
+      prefix: PRIVATE_WECHAT_PREFIX,
+    });
+    if (keys.size > 0) {
+      await this.ctx.storage.delete([...keys.keys()]);
+    }
+    for (const invite of this.members.listInvites()) {
+      if (invite.status === "pending") this.members.cancelInvite(invite.inviteId);
+    }
+    // Restored connections have no credential in this deployment: mark them
+    // paused so polling does not re-arm a chain that cannot load one, and so
+    // the owner can see a member needs to scan again.
+    this.db.exec(
+      `UPDATE member_connections
+       SET poll_status = 'paused', credential_key = ''
+       WHERE member_id <> 'owner'`,
+    );
+    try {
+      this.db.exec(`DELETE FROM wechat_login`);
+    } catch {
+      // A database restored from an older release has no login rows yet.
+    }
+    this.db.exec(`DELETE FROM outbound_queue WHERE connection_id <> 'owner'`);
+    try {
+      this.db.exec(
+        `UPDATE member_shares SET status = 'expired'
+         WHERE status IN ('pending', 'sending')`,
+      );
+    } catch {
+      // Restored from a release without shares: nothing to invalidate.
+    }
   }
 
   async restoreReset(): Promise<void> {
@@ -753,6 +2290,7 @@ export class ChannelDO extends Agent<Env> {
 
     if (route.channel === "telegram") {
       await this.stopWeChatPolling();
+      await this.stopMemberWeChatPolling();
       await this.startTelegramPolling();
       return;
     }
@@ -760,10 +2298,14 @@ export class ChannelDO extends Agent<Env> {
     if (route.channel === "wechat") {
       await this.stopTelegramPolling();
       await this.startWeChatPolling();
+      // Each member connection polls on its own chain; the owner chain above
+      // stays keyed by the deployed secret.
+      await this.startMemberWeChatPolling();
       return;
     }
 
     await this.stopWeChatPolling();
+    await this.stopMemberWeChatPolling();
     await this.stopTelegramPolling();
   }
 
@@ -781,6 +2323,71 @@ export class ChannelDO extends Agent<Env> {
     // selecting WeChat again resumes where it left off.
     if (this.readWeChatState().status === "running") {
       this.updateWeChatState({ status: "stopped" });
+    }
+  }
+
+  /**
+   * One-time adoption of the pre-members inbox. After the first pass the
+   * marker turns this into a single SELECT, and a database that already has
+   * members refuses to re-claim anything.
+   */
+  private async migrateLegacyAttachments(): Promise<void> {
+    try {
+      const artifacts = artifactStore(this.env);
+      await migrateLegacyInbox({
+        sql: this.db,
+        access: this.attachments,
+        list: async (cursor) => {
+          const page = await artifacts.list({
+            prefix: "inbox/",
+            cursor,
+            limit: 100,
+          });
+          return {
+            keys: page.objects.map((object) => object.key),
+            cursor: page.truncated ? page.cursor : undefined,
+          };
+        },
+      });
+    } catch (error) {
+      // Not swallowed: the migration stays pending, so member activation keeps
+      // failing closed until the backfill actually completes.
+      console.error(
+        `channel: legacy inbox migration failed: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Points the owner connection at the trusted credential. The credential is
+   * saved in the private vault before the pointer moves; a failure here only
+   * skips the metadata update, so single-owner polling is unchanged.
+   */
+  private async importWeChatOwner(
+    credentials: WeChatCredentials,
+    hash: string,
+  ): Promise<void> {
+    // Same credential after a redeploy: nothing to stage, nothing to advance.
+    if (this.members.credentialHashOf(OWNER_ID) === hash) return;
+    const previousKey = this.members.credentialKeyOf(OWNER_ID);
+    const candidate = await stageCredentialAndActivate(
+      this.staging,
+      `wechat-owner-${hash.slice(0, 16)}`,
+      credentials,
+      (credentialKey) => {
+        this.members.importOwner({
+          connectionId: `wechat-owner-${credentials.accountId}`,
+          credentialKey,
+          accountId: credentials.accountId,
+          userId: credentials.userId,
+          credentialHash: hash,
+        });
+        return credentialKey;
+      },
+    );
+    if (previousKey !== null && previousKey !== candidate) {
+      // The pointer moved; the old key is unreachable now.
+      await this.vault.delete(previousKey);
     }
   }
 
@@ -804,6 +2411,22 @@ export class ChannelDO extends Agent<Env> {
     }
 
     const hash = await credentialsHash(raw);
+    try {
+      await this.importWeChatOwner(credentials, hash);
+    } catch (error) {
+      if (error instanceof MemberError && error.code === "MEMBER_ACCESS_DENIED") {
+        // A member already holds this account/user: the legacy owner path must
+        // not admit the rejected identity. Leave stored metadata untouched and
+        // do not install this hash or start polling with it.
+        console.error(
+          "channel: owner binding rejected: identity belongs to a member",
+        );
+        return;
+      }
+      console.warn(
+        `channel: owner binding not imported: ${errorMessage(error)}`,
+      );
+    }
     let state = this.readWeChatState();
     if (state.credentials_hash !== hash) {
       this.activeWeChatRun = null;
@@ -1256,9 +2879,15 @@ export class ChannelDO extends Agent<Env> {
         ...(update.voice && !update.text ? { voiceFailed: true } : {}),
         eventId,
       };
-      this.rememberOwner(event);
+      this.rememberOwner(event, ownerPrincipal());
 
       // Deterministic owner commands replace the missing WeChat buttons.
+      const shareCommand =
+        update.text === null ? null : parseShareCommand(update.text);
+      if (shareCommand !== null) {
+        this.ctx.waitUntil(this.handleOwnerShareCommand(shareCommand, routeKey));
+        return;
+      }
       const textAction =
         update.text === null ? null : parseTextAction(update.text);
       if (textAction !== null) {
@@ -1309,18 +2938,24 @@ export class ChannelDO extends Agent<Env> {
     event: MessageEvent,
     image: WeChatImageRef,
     routeKey: string,
+    trust?: MediaTrust,
   ): Promise<void> {
     const client = createILinkClient({
       fetch: getILinkFetchOverride() ?? undefined,
     });
     const bytes = await client.downloadImage(image);
+    // A member download is only admitted while its own principal, ref and
+    // route are still live: a revoke mid-download must not store bytes or
+    // reach a Butler.
+    if (!(await this.mediaAdmissionCurrent(trust, routeKey))) return;
     if (!bytes) {
       console.warn(`channel: wechat image download failed (${event.eventId})`);
-      this.dispatchMessage({ ...event, imageFailed: true }, routeKey);
+      this.dispatchMediaEvent({ ...event, imageFailed: true }, routeKey, trust);
       return;
     }
 
     const prepared = await prepareInboundImage(bytes);
+    if (!(await this.mediaAdmissionCurrent(trust, routeKey))) return;
     if (!prepared.ok) {
       // The CDN answers 200 even when the body is not the image the item
       // promised, so name what arrived: key present, header bytes, format.
@@ -1337,7 +2972,7 @@ export class ChannelDO extends Agent<Env> {
         `channel: wechat image unusable (${event.eventId})` +
           ` reason=${prepared.reason} key=${key} ${describeImageBytes(bytes)}${detail}`,
       );
-      this.dispatchMessage({ ...event, imageFailed: true }, routeKey);
+      this.dispatchMediaEvent({ ...event, imageFailed: true }, routeKey, trust);
       return;
     }
 
@@ -1370,10 +3005,44 @@ export class ChannelDO extends Agent<Env> {
       }
     }
 
-    this.dispatchMessage(
+    this.dispatchMediaEvent(
       { ...event, images: [prepared.image], ...(files.length > 0 ? { files } : {}) },
       routeKey,
+      trust,
     );
+  }
+
+  /**
+   * Re-checks a member media action's admission. The owner path has no trust
+   * context and is never gated here, so its behaviour is unchanged.
+   */
+  private async mediaAdmissionCurrent(
+    trust: MediaTrust | undefined,
+    routeKey: string,
+  ): Promise<boolean> {
+    if (trust === undefined) return true;
+    return await this.isMemberAdmissionCurrent(
+      trust.actor,
+      "wechat",
+      trust.ref,
+      routeKey,
+    );
+  }
+
+  /** Dispatches with the member's own actor/ref, or on the legacy owner path. */
+  private dispatchMediaEvent(
+    event: MessageEvent,
+    routeKey: string,
+    trust: MediaTrust | undefined,
+  ): void {
+    if (trust === undefined) {
+      this.dispatchMessage(event, routeKey);
+      return;
+    }
+    this.dispatchMessage(event, routeKey, {
+      actor: trust.actor,
+      ref: trust.ref,
+    });
   }
 
   /**
@@ -1384,9 +3053,11 @@ export class ChannelDO extends Agent<Env> {
     event: MessageEvent,
     file: WeChatFileRef,
     routeKey: string,
+    trust?: MediaTrust,
   ): Promise<void> {
     if (file.size !== undefined && file.size > MAX_ARTIFACT_BYTES) {
-      this.dispatchMessage({ ...event, fileFailed: "too_large" }, routeKey);
+      if (!(await this.mediaAdmissionCurrent(trust, routeKey))) return;
+      this.dispatchMediaEvent({ ...event, fileFailed: "too_large" }, routeKey, trust);
       return;
     }
 
@@ -1394,13 +3065,16 @@ export class ChannelDO extends Agent<Env> {
       fetch: getILinkFetchOverride() ?? undefined,
     });
     const bytes = await client.downloadFile(file);
+    // Same rule as images: the bytes belong to whoever is still admitted
+    // after the download, so a revoke in between wins.
+    if (!(await this.mediaAdmissionCurrent(trust, routeKey))) return;
     if (!bytes) {
       console.warn(`channel: wechat file download failed (${event.eventId})`);
-      this.dispatchMessage({ ...event, fileFailed: "download" }, routeKey);
+      this.dispatchMediaEvent({ ...event, fileFailed: "download" }, routeKey, trust);
       return;
     }
     if (bytes.byteLength > MAX_ARTIFACT_BYTES) {
-      this.dispatchMessage({ ...event, fileFailed: "too_large" }, routeKey);
+      this.dispatchMediaEvent({ ...event, fileFailed: "too_large" }, routeKey, trust);
       return;
     }
 
@@ -1412,12 +3086,14 @@ export class ChannelDO extends Agent<Env> {
         bytes,
         mimeType,
       );
-      this.dispatchMessage({ ...event, files: [stored] }, routeKey);
+      if (!(await this.mediaAdmissionCurrent(trust, routeKey))) return;
+      this.dispatchMediaEvent({ ...event, files: [stored] }, routeKey, trust);
     } catch (error) {
       console.error(
         `channel: wechat inbox store failed (${event.eventId}): ${errorMessage(error)}`,
       );
-      this.dispatchMessage({ ...event, fileFailed: "download" }, routeKey);
+      if (!(await this.mediaAdmissionCurrent(trust, routeKey))) return;
+      this.dispatchMediaEvent({ ...event, fileFailed: "download" }, routeKey, trust);
     }
   }
 
@@ -1434,6 +3110,20 @@ export class ChannelDO extends Agent<Env> {
         },
       ),
     );
+  }
+
+  /**
+   * The owner confirms a share from its own WeChat session. The same code path
+   * as a member's, with the owner actor and the owner's own send.
+   */
+  private async handleOwnerShareCommand(
+    command: ShareCommand,
+    routeKey: string,
+  ): Promise<void> {
+    if (!(await this.isAdmissionCurrent("wechat", routeKey))) return;
+    const text = await this.shareReplyText(ownerPrincipal(), command);
+    if (!(await this.isAdmissionCurrent("wechat", routeKey))) return;
+    await this.sendCurrent({ text });
   }
 
   private async handleWeChatAction(
@@ -1511,7 +3201,9 @@ export class ChannelDO extends Agent<Env> {
       const task = this.env.TASK.get(
         this.env.TASK.idFromName(action.taskId),
       );
-      text = await task.handleAction(action);
+      // This legacy action path is the owner's WeChat session; member text
+      // commands are routed through their own Butler and stay denied here.
+      text = await task.handleAction(action, ownerPrincipal());
       if (target.label !== target.taskId) {
         text = replaceTaskId(text, target.taskId, target.label);
       }
@@ -1674,10 +3366,34 @@ export class ChannelDO extends Agent<Env> {
     };
   }
 
-  private dispatchMessage(event: MessageEvent, routeKey: string): boolean {
+  private dispatchMessage(
+    event: MessageEvent,
+    routeKey: string,
+    context?: { actor: Principal; ref: ConnectionRef },
+  ): boolean {
     // Fail closed for a poll or webhook already in flight when the lease was
     // acquired: the Butler must not start new work against half-saved data.
     if (this.lease.current() !== null) return false;
+
+    // The owner actor wrapper delegates to the legacy path only after the
+    // directory confirms the principal is still the owner.
+    if (context !== undefined && context.actor.memberId === OWNER_ID) {
+      try {
+        this.members.assertActive(context.actor);
+      } catch {
+        return false;
+      }
+    }
+
+    // Admitted inbound files become ACL rows immediately, so a key stored
+    // after the one-time backfill still resolves. The subject is the actor's
+    // member id; legacy ingress is the owner.
+    this.registerInboundFiles(event, context?.actor.memberId ?? OWNER_ID);
+
+    if (context !== undefined && context.actor.memberId !== OWNER_ID) {
+      return this.dispatchMemberMessage(event, routeKey, context);
+    }
+
     try {
       const admitted: AdmittedMessage = { ...event, routeKey };
       const butler = this.env.BUTLER.get(
@@ -1698,6 +3414,64 @@ export class ChannelDO extends Agent<Env> {
       );
       return false;
     }
+  }
+
+  /**
+   * Member dispatch boundary. Task 5 owns the Butler side; this runtime only
+   * depends on the narrow contract `initializeMember` then `handleMessage`, on
+   * the member's own Butler name. A Butler build without it fails closed: a
+   * member message is never handed to the owner's Butler.
+   */
+  private dispatchMemberMessage(
+    event: MessageEvent,
+    routeKey: string,
+    context: { actor: Principal; ref: ConnectionRef },
+  ): boolean {
+    const butler: Partial<MemberButlerRpc> =
+      getMemberButlerOverride() ??
+      (this.env.BUTLER.get(
+        this.env.BUTLER.idFromName(butlerName(context.actor.memberId)),
+      ) as unknown as Partial<MemberButlerRpc>);
+    if (
+      typeof butler.initializeMember !== "function" ||
+      typeof butler.handleMessage !== "function"
+    ) {
+      // Fail closed: no owner fallback and no uninitialised member session.
+      console.error("channel: member dispatch unavailable, message dropped");
+      return false;
+    }
+
+    const admitted: AdmittedMessage = {
+      ...event,
+      routeKey,
+      actor: context.actor,
+      connectionRef: context.ref,
+    };
+    this.ctx.waitUntil(
+      (async () => {
+        try {
+          // The member Butler must know its actor before it reads any state.
+          await butler.initializeMember?.(context.actor);
+          // Re-check after the await: a revoke during initialisation wins.
+          if (
+            !(await this.isMemberAdmissionCurrent(
+              context.actor,
+              "wechat",
+              context.ref,
+              routeKey,
+            ))
+          ) {
+            return;
+          }
+          await butler.handleMessage?.(admitted);
+        } catch (error) {
+          console.error(
+            `channel: member message dispatch failed: ${errorMessage(error)}`,
+          );
+        }
+      })(),
+    );
+    return true;
   }
 
   private ownerConfig(): OwnerConfigView {
@@ -1738,7 +3512,16 @@ export class ChannelDO extends Agent<Env> {
     }
   }
 
-  private rememberOwner(event: InboundEvent): void {
+  private rememberOwner(event: InboundEvent, actor: Principal): void {
+    // The owner address book belongs to the owner only. A member's inbound
+    // writes its own connection row instead, and an unproven actor writes
+    // nothing at all.
+    if (actor.memberId !== OWNER_ID || actor.role !== "owner") return;
+    try {
+      this.members.assertActive(actor);
+    } catch {
+      return;
+    }
     this.db.exec(
       `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
        VALUES (?, ?, ?)

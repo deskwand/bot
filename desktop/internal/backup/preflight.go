@@ -38,7 +38,7 @@ func validateManifestStructure(manifest Manifest) error {
 		if err := validateDORef(object.DORef); err != nil {
 			return err
 		}
-		if object.DO == "butler" || object.DO == "channel" || object.DO == "life" || object.DO == "wallet" {
+		if object.DO == "channel" || object.DO == "life" || object.DO == "wallet" {
 			if object.ID != "" {
 				return fmt.Errorf("%s id must be empty", object.DO)
 			}
@@ -50,7 +50,9 @@ func validateManifestStructure(manifest Manifest) error {
 		seenDO[key] = true
 		switch object.DO {
 		case "butler":
-			butlers++
+			if object.ID == "" {
+				butlers++
+			}
 		case "channel":
 			channels++
 		}

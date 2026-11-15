@@ -1,4 +1,5 @@
 import { bot } from "./bot";
+import { member } from "./member";
 import { butler } from "./butler";
 import { channel } from "./channel";
 import { life } from "./life";
@@ -14,6 +15,7 @@ import { wallet } from "./wallet";
 // Baseline dictionary. Every user-facing string lives here; the English table
 // is typed against it so a missing key fails `tsc`.
 export const zh = {
+  member,
   bot,
   butler,
   channel,

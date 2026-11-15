@@ -276,12 +276,13 @@ func TestExportWritesEveryDOAndObject(t *testing.T) {
 }
 
 func TestExportRefsOrdersBotsAfterTasks(t *testing.T) {
-	refs := exportRefs([]string{"t1", "t2"}, []string{"b1", "b2"})
+	refs := exportRefs([]string{"t1", "t2"}, []string{"b1", "b2"}, []string{"m" + "a" + strings.Repeat("0", 31)})
 	var got []string
 	for _, ref := range refs {
 		got = append(got, ref.DO+"/"+ref.ID)
 	}
-	want := []string{"task/t1", "task/t2", "bot/b1", "bot/b2", "life/", "wallet/", "channel/", "butler/"}
+	member := "m" + "a" + strings.Repeat("0", 31)
+	want := []string{"task/t1", "task/t2", "bot/b1", "bot/b2", "butler/" + member, "life/", "wallet/", "channel/", "butler/"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("export order = %v, want %v", got, want)
 	}

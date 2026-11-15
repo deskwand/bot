@@ -39,6 +39,47 @@ export function isSessionExpired(e: unknown): boolean {
   return e instanceof ILinkError && e.code === -14;
 }
 
+/**
+ * How a transport failure may be retried.
+ *
+ * - `protocol` / `security`: the peer answered something we must not act on.
+ *   Retrying with the same secret only repeats the violation, so the caller
+ *   has to stop and persist a terminal failure.
+ * - `transient`: no usable answer yet (timeout, 5xx, network). Safe to retry
+ *   later with the same state.
+ * - `abort`: the request was cancelled. Retryable, but any secret it carried
+ *   (a PIN) must not be replayed.
+ */
+export type TransportFailure = "protocol" | "security" | "transient" | "abort";
+
+/** Fixed wire codes that mean the peer is not trustworthy. */
+const SECURITY_FAILURES: readonly string[] = [
+  "WECHAT_ILINK_UNTRUSTED_BASE_URL",
+  "WECHAT_ILINK_UNTRUSTED_REDIRECT",
+  "WECHAT_REALNAME_UNTRUSTED_BASE_URL",
+];
+
+/** Cancellation surfaces as a DOMException or as the reason's name. */
+export function isAbortError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const name = (error as { name?: unknown }).name;
+  return name === "AbortError" || name === "TimeoutError";
+}
+
+/**
+ * Classifies anything a transport call can throw, including the raw `fetch`
+ * rejections the real client lets through. Unknown errors are transient: a
+ * bug is not evidence that the invite is unusable.
+ */
+export function transportFailureOf(error: unknown): TransportFailure {
+  if (error instanceof ILinkError) {
+    if (SECURITY_FAILURES.includes(error.message)) return "security";
+    if (error.status === 408 || error.status === 429) return "transient";
+    return error.status >= 500 ? "transient" : "protocol";
+  }
+  return isAbortError(error) ? "abort" : "transient";
+}
+
 export function parseCredentials(json: string): WeChatCredentials | null {
   let value: unknown;
   try {
@@ -108,14 +149,57 @@ export type WeChatUpdate = {
   quotedText?: string;
 };
 
-type QrStatus = "wait" | "scaned" | "confirmed" | "expired";
+export type QrStatus =
+  | "wait"
+  | "scaned"
+  | "scaned_but_redirect"
+  | "need_verifycode"
+  | "verify_code_blocked"
+  | "verify_code_expired"
+  | "binded_redirect"
+  | "confirmed"
+  | "expired";
 
 const QR_STATUSES: readonly QrStatus[] = [
   "wait",
   "scaned",
+  "scaned_but_redirect",
+  "need_verifycode",
+  "verify_code_blocked",
+  "verify_code_expired",
+  "binded_redirect",
   "confirmed",
   "expired",
 ];
+
+/**
+ * `signal` stays the first argument: existing callers pass an AbortSignal
+ * positionally and must keep compiling.
+ */
+export type QrCodeOptions = {
+  /** Bot tokens already present on this instance; the server caps the list. */
+  localTokens?: readonly string[];
+  /** Real-name ticket that lets the server accept another binding. */
+  spamTicket?: string;
+};
+
+export type QrStatusOptions = {
+  /** PIN entered on the invite page, sent only on the next status poll. */
+  verifyCode?: string;
+  /** Trusted base returned by `scaned_but_redirect`. */
+  baseUrl?: string;
+};
+
+const LOCAL_TOKEN_LIMIT = 10;
+
+const REALNAME_BASE_URL = "https://weixin110.qq.com";
+const REALNAME_PATH = "/security/acct/botrealnameverifycgi";
+const REALNAME_PLUGIN_VERSION = "3.0.1/deskwand";
+
+export type RealnameResultStatus = "wait" | "ok" | "denied" | "refresh";
+
+export const REALNAME_WAIT_MS = 480_000;
+export const REALNAME_TICKET_MIN_MS = 60_000;
 
 export function createILinkClient(opts: {
   fetch?: typeof fetch;
@@ -142,6 +226,40 @@ export function createILinkClient(opts: {
     return parseResponse(response);
   }
 
+  async function postJson(
+    baseUrl: string,
+    path: string,
+    body: unknown,
+    headers: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    if (!isTrustedBaseUrl(baseUrl)) {
+      throw new ILinkError("WECHAT_ILINK_UNTRUSTED_BASE_URL", undefined, 0);
+    }
+    const response = await fetchImpl(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+      redirect: "manual",
+      signal,
+    });
+    return parseResponse(response);
+  }
+
+  async function getRealname(
+    query: string,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    if (!isTrustedRealnameUrl(REALNAME_BASE_URL)) {
+      throw new ILinkError("WECHAT_REALNAME_UNTRUSTED_BASE_URL", undefined, 0);
+    }
+    const response = await fetchImpl(
+      `${REALNAME_BASE_URL}${REALNAME_PATH}?${query}`,
+      { method: "GET", headers: {}, redirect: "manual", signal },
+    );
+    return parseResponse(response);
+  }
+
   async function post(
     creds: WeChatCredentials,
     path: string,
@@ -149,34 +267,26 @@ export function createILinkClient(opts: {
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     const targetBaseUrl = normalizeBaseUrl(creds.baseUrl || publicBaseUrl);
-    if (!isTrustedBaseUrl(targetBaseUrl)) {
-      throw new ILinkError("WECHAT_ILINK_UNTRUSTED_BASE_URL", undefined, 0);
-    }
-    const response = await fetchImpl(
-      `${targetBaseUrl}${path}`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          AuthorizationType: "ilink_bot_token",
-          Authorization: `Bearer ${creds.token}`,
-          "X-WECHAT-UIN": createUin(),
-        },
-        body: JSON.stringify(body),
-        redirect: "manual",
-        signal,
-      },
-    );
-    return parseResponse(response);
+    return postJson(targetBaseUrl, path, body, {
+      AuthorizationType: "ilink_bot_token",
+      Authorization: `Bearer ${creds.token}`,
+      "X-WECHAT-UIN": createUin(),
+    }, signal);
   }
 
   return {
     async getBotQrCode(
       signal?: AbortSignal,
+      options?: QrCodeOptions,
     ): Promise<{ qrcode: string; imageContent: string }> {
-      const raw = await get(
+      const body: Record<string, unknown> = {
+        local_token_list: (options?.localTokens ?? []).slice(-LOCAL_TOKEN_LIMIT),
+      };
+      if (options?.spamTicket) body.bot_spam_ticket = options.spamTicket;
+      const raw = await postJson(
         publicBaseUrl,
         "/ilink/bot/get_bot_qrcode?bot_type=3",
+        body,
         {},
         signal,
       );
@@ -191,10 +301,21 @@ export function createILinkClient(opts: {
     async getQrStatus(
       qrcode: string,
       signal?: AbortSignal,
-    ): Promise<{ status: QrStatus; raw: Record<string, unknown> }> {
+      options?: QrStatusOptions,
+    ): Promise<{
+      status: QrStatus;
+      raw: Record<string, unknown>;
+      redirectBaseUrl?: string;
+    }> {
+      const baseUrl = options?.baseUrl
+        ? normalizeBaseUrl(options.baseUrl)
+        : publicBaseUrl;
+      const pin = options?.verifyCode
+        ? `&verify_code=${encodeURIComponent(options.verifyCode)}`
+        : "";
       const raw = await get(
-        publicBaseUrl,
-        `/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcode)}`,
+        baseUrl,
+        `/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcode)}${pin}`,
         { "iLink-App-ClientVersion": "1" },
         signal,
       );
@@ -202,7 +323,59 @@ export function createILinkClient(opts: {
       if (typeof status !== "string" || !QR_STATUSES.includes(status as QrStatus)) {
         throw new ILinkError("WECHAT_ILINK_RESPONSE_INVALID", undefined, 200);
       }
-      return { status: status as QrStatus, raw };
+      const redirectBaseUrl =
+        status === "scaned_but_redirect"
+          ? readRedirectBaseUrl(raw)
+          : undefined;
+      return {
+        status: status as QrStatus,
+        raw,
+        ...(redirectBaseUrl === undefined ? {} : { redirectBaseUrl }),
+      };
+    },
+
+    async getRealnameAuthUrl(
+      signal?: AbortSignal,
+    ): Promise<{ authUrl: string; ticket: string; expiresAt?: number }> {
+      const raw = await getRealname(
+        `step=get_auth_url&plugin_version=${REALNAME_PLUGIN_VERSION}`,
+        signal,
+      );
+      const authUrl = readString(raw, "auth_url");
+      const ticket = readString(raw, "bot_spam_ticket");
+      if (!authUrl || !ticket || !isTrustedRealnameAuthUrl(authUrl)) {
+        throw new ILinkError("WECHAT_REALNAME_RESPONSE_INVALID", undefined, 200);
+      }
+      const expiresAt = readEpochMs(raw, "expire_time");
+      return { authUrl, ticket, ...(expiresAt === undefined ? {} : { expiresAt }) };
+    },
+
+    async queryRealnameResult(
+      ticket: string,
+      signal?: AbortSignal,
+    ): Promise<{
+      status: RealnameResultStatus;
+      ticket?: string;
+      expiresAt?: number;
+    }> {
+      if (!ticket) {
+        throw new ILinkError("WECHAT_REALNAME_RESPONSE_INVALID", undefined, 200);
+      }
+      const raw = await getRealname(
+        `step=query_auth_result&bot_spam_ticket=${encodeURIComponent(ticket)}`,
+        signal,
+      );
+      const status = readRealnameStatus(raw);
+      if (!status) {
+        throw new ILinkError("WECHAT_REALNAME_RESPONSE_INVALID", undefined, 200);
+      }
+      const nextTicket = readString(raw, "bot_spam_ticket");
+      const expiresAt = readEpochMs(raw, "expire_time");
+      return {
+        status,
+        ...(nextTicket === undefined ? {} : { ticket: nextTicket }),
+        ...(expiresAt === undefined ? {} : { expiresAt }),
+      };
     },
 
     async getUpdates(
@@ -392,9 +565,13 @@ async function parseResponse(
     throw new ILinkError("WECHAT_ILINK_REDIRECT", undefined, response.status);
   }
   const raw = parseRecord(await response.text());
+  // The upstream `errmsg` is never copied into an error: a QR/real-name
+  // failure can echo the submitted PIN, the spam ticket, the QR token or a
+  // bot token, and error text is logged by callers. Code and status are the
+  // only safe, actionable parts.
   if (!response.ok) {
     throw new ILinkError(
-      readString(raw, "errmsg") ?? `WECHAT_ILINK_HTTP_${response.status}`,
+      `WECHAT_ILINK_HTTP_${response.status}`,
       readNumericCode(raw),
       response.status,
     );
@@ -404,11 +581,7 @@ async function parseResponse(
   }
   const code = readNumericCode(raw);
   if (code !== undefined && code !== 0) {
-    throw new ILinkError(
-      readString(raw, "errmsg") ?? "WECHAT_ILINK_API_ERROR",
-      code,
-      response.status,
-    );
+    throw new ILinkError("WECHAT_ILINK_API_ERROR", code, response.status);
   }
   return raw;
 }
@@ -595,4 +768,85 @@ function createUin(): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
+}
+
+/** The scan redirect must stay on an origin allowed to receive credentials. */
+function readRedirectBaseUrl(
+  raw: Record<string, unknown>,
+): string {
+  const value =
+    readString(raw, "baseurl") ??
+    readString(raw, "redirect_baseurl") ??
+    readString(raw, "redirect_host");
+  if (!value) {
+    throw new ILinkError("WECHAT_ILINK_UNTRUSTED_REDIRECT", undefined, 0);
+  }
+  const candidate = /^https?:\/\//i.test(value)
+    ? value
+    : `https://${value}`;
+  if (!isTrustedBaseUrl(candidate)) {
+    throw new ILinkError("WECHAT_ILINK_UNTRUSTED_REDIRECT", undefined, 0);
+  }
+  return normalizeBaseUrl(candidate);
+}
+
+/** The real-name CGI is a single fixed origin, not a configurable base URL. */
+export function isTrustedRealnameUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  if (parsed.username || parsed.password) return false;
+  if (parsed.port && parsed.port !== "443") return false;
+  if (parsed.search || parsed.hash) return false;
+  return parsed.hostname.toLowerCase().replace(/\.$/, "") === "weixin110.qq.com";
+}
+
+/**
+ * The auth URL is opened in the operator's browser, so it must be a plain
+ * HTTPS WeChat URL. It is never used to carry the bot token.
+ */
+export function isTrustedRealnameAuthUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  if (parsed.username || parsed.password) return false;
+  if (parsed.port && parsed.port !== "443") return false;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  return host === "qq.com" || host.endsWith(".qq.com");
+}
+
+/** `status` is numeric in the real-name CGI; map only the known four. */
+function readRealnameStatus(
+  raw: Record<string, unknown>,
+): RealnameResultStatus | null {
+  const value = raw.status;
+  if (value === 0 || value === "0") return "wait";
+  if (value === 1 || value === "1") return "ok";
+  if (value === 2 || value === "2") return "denied";
+  if (value === 3 || value === "3") return "refresh";
+  return null;
+}
+
+/** Epoch seconds from the CGI, normalised to milliseconds. */
+function readEpochMs(
+  value: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const raw = value[key];
+  const parsed =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && /^\d+$/.test(raw)
+        ? Number(raw)
+        : NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed < 1_000_000_000_000 ? parsed * 1000 : parsed;
 }
