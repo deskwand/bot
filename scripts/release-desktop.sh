@@ -369,21 +369,44 @@ aws_key_id="$(printf '%s\n' "$r2_credentials" | sed -n '1p')"
 aws_secret="$(printf '%s\n' "$r2_credentials" | sed -n '2p')"
 unset r2_credentials
 
+# 构建与上传在同一次 mygo 调用里完成，所以上传断线会连同已经花掉的构建一起作废。
+# 上传失败（write tcp / broken pipe / timeout / use of closed network connection）
+# 是网络问题，重试值得；编译或打包失败重跑一遍只会再慢一遍，所以只对前者重试。
+upload_failure_is_network() {
+  grep -qiE "Uploading .*✗|✗ Uploading|write tcp|broken pipe|use of closed network connection|i/o timeout|connection reset|TLS handshake timeout" "$1"
+}
+
 for target in "${targets[@]}"; do
   t="$(target_of "$target")"
   files_of "$t"
   echo "--> ${t}：构建并上传 ${installer}、${archive}、${install_script}、SHA256SUMS、update-${t}.json"
-  (
-    export AWS_ACCESS_KEY_ID="$aws_key_id" AWS_SECRET_ACCESS_KEY="$aws_secret" AWS_REGION=auto
-    export MYGO_UPDATER_PRIVATE_KEY="$(cat "$client_key_file")"
-    if [ "$target" = "windows" ]; then
-      # NSIS 在 C locale（LC_ALL=C / LANG=""）下会 std::bad_alloc 崩溃。
-      export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+  attempt=1
+  while true; do
+    log="$(mktemp)"
+    if (
+      export AWS_ACCESS_KEY_ID="$aws_key_id" AWS_SECRET_ACCESS_KEY="$aws_secret" AWS_REGION=auto
+      export MYGO_UPDATER_PRIVATE_KEY="$(cat "$client_key_file")"
+      if [ "$target" = "windows" ]; then
+        # NSIS 在 C locale（LC_ALL=C / LANG=""）下会 std::bad_alloc 崩溃。
+        export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+      fi
+      unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+      export NO_PROXY='*'
+      bash "$root/scripts/build-desktop.sh" --platform "$target" --upload
+    ) 2>&1 | tee "$log"; then
+      rm -f "$log"
+      break
     fi
-    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
-    export NO_PROXY='*'
-    bash "$root/scripts/build-desktop.sh" --platform "$target" --upload
-  )
+    if [ "$attempt" -ge 3 ] || ! upload_failure_is_network "$log"; then
+      echo "构建或上传 ${t} 失败（第 ${attempt} 次），停止发布；完整日志见上方输出" >&2
+      rm -f "$log"
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    echo "上传 ${t} 因网络失败，重试第 ${attempt} 次（会重新构建，约一分钟）" >&2
+    rm -f "$log"
+    sleep "$((attempt * 5))"
+  done
 done
 
 echo "==> 4/6 公网核验"
