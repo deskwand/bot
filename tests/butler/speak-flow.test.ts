@@ -367,3 +367,53 @@ describe("butler speak flow", () => {
     expect(ended).toHaveLength(1);
   });
 });
+
+describe("evolving speech identity", () => {
+  it("uses the latest shared identity on each event without changing factual fallback", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    const systems: string[] = [];
+    setModelOverride(
+      scriptedModel([
+        {
+          text: "price missing",
+          observe: (c) => systems.push(JSON.stringify(c.messages)),
+        },
+        {
+          text: "still missing",
+          observe: (c) => systems.push(JSON.stringify(c.messages)),
+        },
+      ]),
+    );
+    const stub = butler("speech-self-latest");
+    await seedTask(stub, { id: "t1" });
+    await seedTask(stub, { id: "t2" });
+    await runInDurableObject(stub, (i) => {
+      i.self.writeDoc("identity", "carefully curious", 0, 1);
+    });
+    await stub.report({
+      taskId: "t1",
+      seq: 1,
+      type: "completed",
+      summary: "123 dollars",
+      artifacts: [],
+    });
+    await runInDurableObject(stub, (i) => {
+      i.self.writeDoc("identity", "patiently curious", 1, 2);
+    });
+    await stub.report({
+      taskId: "t2",
+      seq: 1,
+      type: "completed",
+      summary: "456 dollars",
+      artifacts: [],
+    });
+    expect(systems[0]).toContain("carefully curious");
+    expect(systems[1]).toContain("patiently curious");
+    expect(systems[1]).not.toContain("carefully curious");
+    expect(channel.sent.map((s) => s.text)).toEqual([
+      "123 dollars",
+      "456 dollars",
+    ]);
+  });
+});

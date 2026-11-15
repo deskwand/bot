@@ -1553,3 +1553,43 @@ describe("butler chat", () => {
     );
   });
 });
+
+describe("shared evolving self", () => {
+  it("writes identity through tools and reads the new version next owner turn", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    let second = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          toolCalls: [
+            {
+              name: "write_self",
+              args: {
+                kind: "identity",
+                content: "I verify before reminding",
+                expectedVersion: 0,
+              },
+            },
+          ],
+        },
+        { text: "saved" },
+        {
+          text: "next",
+          observe: (c) => {
+            second = systemPromptText(c);
+          },
+        },
+      ]),
+    );
+    const stub = butler("chat-shared-self");
+    await stub.handleMessage(
+      message({ text: "learn this", eventId: "self-first" }),
+    );
+    await stub.handleMessage(
+      message({ text: "hello again", eventId: "self-second" }),
+    );
+    expect(second).toContain("I verify before reminding");
+    expect(channel.sent.some((s) => s.text === "next")).toBe(true);
+  });
+});

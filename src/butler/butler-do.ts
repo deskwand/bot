@@ -6,6 +6,7 @@ import { PiHarness, type PiModel, type PiOperationResult } from "agents/harness/
 import {
   createRegistry,
   Harness,
+  ConversationBusy,
   LiveDoc,
   type LiveState,
   type Storage,
@@ -133,6 +134,13 @@ import {
   type ScheduleSpec,
   type TaskControl,
 } from "./tools";
+import { SelfStore } from "./self-store";
+import { SelfWakeStore, guardSelfTool, isSelfWake, SELF_WAKE_PREFIX, type SelfWakeState } from "./self-wake";
+import { createSelfWakeTools } from "./self-tools";
+import { createSelfTools } from "./self-tools";
+import { boundedSelfData, createSelfSourceReader } from "./self-sources";
+import type { LedgerRow } from "./ledger";
+import { renderSelfSection, renderSelfVoice } from "./self-prompt";
 import { nowTool } from "../tools/now";
 import { searchWeb } from "../tools/web-search";
 
@@ -259,6 +267,12 @@ export class ButlerDO extends Agent<Env> {
 
   private readonly memory: MemoryStore;
 
+  readonly self: SelfStore;
+
+  private readonly selfWake: SelfWakeStore;
+
+  private selfWakeArming: Promise<unknown> = Promise.resolve();
+
   private readonly schedules: ScheduleStore;
 
   private readonly lease: MaintenanceStore;
@@ -358,6 +372,8 @@ export class ButlerDO extends Agent<Env> {
     this.ledger = new LedgerStore(this.db);
     this.bots = new BotsRepo(this.db);
     this.memory = new MemoryStore(this.db);
+    this.self = new SelfStore(this.db);
+    this.selfWake = new SelfWakeStore(this.db);
     this.schedules = new ScheduleStore(this.db);
     this.lease = new MaintenanceStore(this.db);
     this.backup = new BackupRpc(ctx, this.lease);
@@ -397,8 +413,31 @@ export class ButlerDO extends Agent<Env> {
           task: (id) => this.taskFor(id),
           locale: ownerLocale(this.env),
         }),
+        ...createSelfWakeTools({
+          locale: ownerLocale(this.env),
+          now: () => getClock().now(),
+          setWake: (at) => this.setSelfWake(at),
+          notify: async (text) => {
+            const ref = await this.sendBestEffort({ text });
+            if (ref === null) return false;
+            this.ledger.add("butler.said", "self", t(ownerLocale(this.env), "phone.ledgerSaid", { snippet: snippet(text, 100) }), getClock().now());
+            return true;
+          },
+        }),
+        ...createSelfTools({
+          store: this.self,
+          locale: ownerLocale(this.env),
+          now: () => getClock().now(),
+          ...createSelfSourceReader({
+            messages: () => this.harness.messages(),
+            tasks: () => this.repo.list(),
+            botMessages: () => this.db.exec<LedgerRow>(
+              "SELECT id, at, kind, ref_id AS refId, line FROM butler_ledger WHERE kind='bot.message' ORDER BY at DESC,id DESC LIMIT 5",
+            ).toArray(),
+          }),
+        }),
         nowTool(() => new Date(getClock().now())),
-      ],
+      ].map((tool) => this.guardSelfTool(tool)),
       sections: [
         {
           key: "butler",
@@ -408,6 +447,11 @@ export class ButlerDO extends Agent<Env> {
               enabledServices(this.env),
               parseActiveChannel(this.env.ACTIVE_CHANNEL),
             ),
+        },
+        {
+          key: "self",
+          tag: false,
+          render: () => renderSelfSection(this.self, ownerLocale(this.env)),
         },
         {
           key: "memory",
@@ -471,7 +515,7 @@ export class ButlerDO extends Agent<Env> {
           };
         },
         locale: ownerLocale(this.env),
-      }),
+      }).map((tool) => this.guardSelfTool(tool)),
     });
 
     if (walletConfigured(this.env)) {
@@ -491,7 +535,7 @@ export class ButlerDO extends Agent<Env> {
             resume: () => walletStub(this.env).resumeTrading(),
             locale: walletLocale,
           }),
-        ],
+        ].map((tool) => this.guardSelfTool(tool)),
       });
     }
 
@@ -732,10 +776,187 @@ export class ButlerDO extends Agent<Env> {
     await super.alarm();
   }
 
+  private guardSelfTool(
+    tool: import("@earendil-works/pi-durable").ToolRegistration,
+  ) {
+    return guardSelfTool(
+      tool,
+      async () =>
+        (await this.harness.pending()).some(
+          (op) => op.status === "running" && isSelfWake(op.operationId),
+        ),
+      ownerLocale(this.env),
+    );
+  }
+
+  private async setSelfWake(at: number | null): Promise<SelfWakeState> {
+    const state = this.selfWake.set(at, getClock().now());
+    // A scheduler failure is reported to the tool; the durable intent survives.
+    await this.armSelfWake();
+    return state;
+  }
+
+  private async armSelfWake(): Promise<void> {
+    const run = this.selfWakeArming.then(async () => {
+      const state = this.selfWake.get();
+      const pending = (await this.listSchedules()).filter(
+        (s) => s.callback === "wakeSelf",
+      );
+      const maintenance = this.lease.current() !== null;
+      const now = getClock().now();
+      const target =
+        state.at === null ? null : Math.max(state.at, state.retryAt ?? 0);
+      // A submitted generation belongs to normal turn recovery, not a new timer.
+      if (
+        !maintenance &&
+        target !== null &&
+        (await this.submissionOf(`${SELF_WAKE_PREFIX}${state.generation}`))
+      ) {
+        this.turns().insertIfAbsent({
+          operationId: `${SELF_WAKE_PREFIX}${state.generation}`,
+          submittedAt: now,
+        });
+        for (const timer of pending) await this.cancelSchedule(timer.id);
+        await this.ensureTurnCheck();
+        return;
+      }
+      let kept = false;
+      for (const timer of pending) {
+        const payload = timer.payload as
+          | { generation?: number; targetAt?: number }
+          | undefined;
+        if (
+          !kept &&
+          target !== null &&
+          payload?.generation === state.generation &&
+          payload.targetAt === target &&
+          timer.time * 1000 > Date.now()
+        )
+          kept = true;
+        else await this.cancelSchedule(timer.id);
+      }
+      if (target !== null && !kept) {
+        await this.schedule(Math.max(target - now, 1000) / 1000, "wakeSelf", {
+          generation: state.generation,
+          targetAt: target,
+        });
+      }
+    });
+    this.selfWakeArming = run.catch(() => {});
+    await run;
+  }
+
+  private async deferSelfWake(generation: number, at: number): Promise<void> {
+    this.selfWake.deferIfGeneration(generation, at);
+    await this.armSelfWake();
+  }
+
+  /** A separate, quiet input to the same butler; never a worker schedule. */
+  async wakeSelf({ generation }: { generation: number }): Promise<void> {
+    if (!Number.isSafeInteger(generation) || generation < 0) return;
+    const operationId = `${SELF_WAKE_PREFIX}${generation}`;
+    const admitted = this.admitting.then(async () => {
+      const now = getClock().now();
+      if (this.lease.current() !== null) {
+        await this.deferSelfWake(generation, now + 60_000);
+        return false;
+      }
+      if (await this.submissionOf(operationId)) {
+        this.turns().insertIfAbsent({ operationId, submittedAt: now });
+        return true;
+      }
+      const state = this.selfWake.get();
+      if (
+        state.generation !== generation ||
+        state.at === null ||
+        state.at > now ||
+        (state.retryAt !== null && state.retryAt > now)
+      )
+        return false;
+      try {
+        const route = await this.channels().currentRoute();
+        if (route.channel === null || turnBlocker(this.env, false)) {
+          await this.deferSelfWake(generation, now + 3_600_000);
+          return false;
+        }
+        const vitals = await readVitals(this.env);
+        if (vitals === null || vitals.tier === "dormant") {
+          await this.deferSelfWake(generation, now + 3_600_000);
+          return false;
+        }
+        await this.ensureAgent();
+      } catch (error) {
+        console.warn("butler self wake unavailable:", error);
+        await this.deferSelfWake(generation, now + 3_600_000);
+        return false;
+      }
+      if (!this.selfWake.reserve(generation, now)) {
+        const tomorrow = new Date(now);
+        tomorrow.setUTCHours(24, 0, 0, 0);
+        await this.deferSelfWake(generation, tomorrow.getTime());
+        return false;
+      }
+      const day = new Date(now).toISOString().slice(0, 10);
+      try {
+        const locale = ownerLocale(this.env);
+        const ledger = this.ledger.pending();
+        const receipt = await this.harness.submit(
+          t(locale, "butler.self.wakeInput") +
+            "\n" +
+            renderLedgerPrefix(ledger.rows, ledger.omitted, locale),
+          {
+            operationId,
+            whenBusy: "reject",
+            entry: { kind: "butler.self_wake", data: { generation } },
+          },
+        );
+        if (!receipt.accepted) this.selfWake.refund(day);
+        this.turns().insertIfAbsent({ operationId, submittedAt: now });
+        return true;
+      } catch (error) {
+        if (error instanceof ConversationBusy) this.selfWake.refund(day);
+        else console.error("butler self wake submit failed:", error);
+        await this.deferSelfWake(generation, now + 60_000);
+        return false;
+      }
+    });
+    this.admitting = admitted.catch(() => {});
+    if (!(await admitted)) return;
+    // Never hold the admission chain while waiting: owners must be able to enter.
+    await this.ensureTurnCheck();
+    try {
+      await this.deliverResult(
+        operationId,
+        await this.harness.wait(operationId),
+      );
+    } catch (error) {
+      console.error("butler self wake failed:", error);
+      await this.abortTurn(operationId);
+      await this.sendTerminal(operationId, "", true);
+    }
+  }
+
+  private async settleSelfWake(
+    operationId: string,
+    unanswered: boolean,
+    keep = false,
+  ): Promise<void> {
+    const row = this.turns().get(operationId);
+    const generation = Number(operationId.slice(SELF_WAKE_PREFIX.length));
+    if (unanswered && row?.supersededAt != null) {
+      this.selfWake.rearmInterrupted(generation, getClock().now() + 60_000);
+    } else {
+      this.selfWake.clearIfGeneration(generation);
+    }
+    if (keep) this.turns().abandon(operationId, getClock().now());
+    else this.turns().remove(operationId);
+    await this.armSelfWake();
+  }
+
   override async onStart(props?: object): Promise<void> {
     await super.onStart(props);
     // Do not block startup: the sweep talks to pi.
-    this.ctx.waitUntil(this.resumeTurns());
+    this.ctx.waitUntil(this.resumeTurns().then(() => this.armSelfWake()).catch((error) => console.error("butler self wake resume failed:", error)));
   }
 
   /** Re-attach every undelivered turn, then keep one check armed. */
@@ -760,6 +981,7 @@ export class ButlerDO extends Agent<Env> {
     await this.sweepTurns(getClock().now());
     const outstanding = this.turns().list().length;
     if (outstanding > 0) await this.ensureTurnCheck();
+    await this.armSelfWake();
     return { outstanding };
   }
 
@@ -1058,6 +1280,12 @@ export class ButlerDO extends Agent<Env> {
   async notifyFromBot(botId: string, text: string): Promise<boolean> {
     const bot = this.bots.get(botId);
     if (!bot) return false;
+    // Keep the attributed original even if delivery fails. It is already
+    // handled by this notification path, not an unread owner-turn update.
+    this.db.exec(
+      "INSERT INTO butler_ledger (at, kind, ref_id, line, consumed) VALUES (?, 'bot.message', ?, ?, 1)",
+      getClock().now(), botId, boundedSelfData(text, 400),
+    );
     return this.say(
       { kind: "bot.message", botName: bot.name, body: text },
       { refId: botId },
@@ -1124,6 +1352,7 @@ export class ButlerDO extends Agent<Env> {
         locale,
         channelName: channelName(parseActiveChannel(this.env.ACTIVE_CHANNEL)),
         recent,
+        identity: renderSelfVoice(this.self, locale),
       });
       const ref = await this.sendBestEffort({
         text: clampMessage(text),
@@ -1590,13 +1819,11 @@ export class ButlerDO extends Agent<Env> {
     retryable: boolean,
     now: number,
   ): Promise<void> {
-    this.repo.update(taskId, { status: "failed", updatedAt: now });
+    this.repo.update(taskId, { status: "failed", summary: reason, updatedAt: now });
 
     const row = this.repo.get(taskId);
     if (!row) return;
     if (row.botId !== null) {
-      // Keep the reason for the watchdog path (`botTaskOutcome`).
-      this.repo.update(taskId, { summary: reason, updatedAt: now });
       await this.forwardToBot(row.botId, taskId, "failed", reason);
       return;
     }
@@ -1657,6 +1884,10 @@ export class ButlerDO extends Agent<Env> {
     text: string,
     keep = false,
   ): Promise<void> {
+    if (isSelfWake(operationId)) {
+      await this.settleSelfWake(operationId, false, keep);
+      return;
+    }
     const store = this.turns();
     const row = store.get(operationId);
     if (
@@ -1714,6 +1945,10 @@ export class ButlerDO extends Agent<Env> {
     operationId: string,
     result: PiOperationResult,
   ): Promise<void> {
+    if (isSelfWake(operationId)) {
+      await this.settleSelfWake(operationId, result.status !== "done");
+      return;
+    }
     // A superseded turn settles `unanswered` by design: it never had an answer
     // to deliver, so drop the row without a message. A `done` result settled
     // before the abort landed and must still reach the owner.
@@ -1783,6 +2018,11 @@ export class ButlerDO extends Agent<Env> {
       if (usedTool) return;
 
       const store = this.turns();
+      for (const operation of running) {
+        if (isSelfWake(operation.operationId)) {
+          store.insertIfAbsent({ operationId: operation.operationId, submittedAt: getClock().now() });
+        }
+      }
       const rows = running
         .map((operation) => store.get(operation.operationId))
         .filter((row): row is TurnRow => row !== undefined);
@@ -1945,7 +2185,7 @@ export class ButlerDO extends Agent<Env> {
         noticeAt: current.noticeAt,
       });
       nextAt = Math.min(nextAt ?? Number.POSITIVE_INFINITY, plan.nextAt);
-      if (plan.send?.kind === "stall") {
+      if (plan.send?.kind === "stall" && !isSelfWake(row.operationId)) {
         const ref = await this.sendBestEffort({
           text: turnStalledText(locale, plan.send.activity, plan.send.idleMs),
           priority: "alert",
@@ -2116,7 +2356,12 @@ export class ButlerDO extends Agent<Env> {
             "\n";
       const text = `${prefix}${quoteLine}${evt.text ?? ""}`;
       const input = toUserInput(text, images, files);
-      const receipt = await this.harness.submit(input, { operationId });
+      const receipt = await this.harness.submit(input, {
+        operationId,
+        // The model input also carries host ledger/quote/attachment context.
+        // Preserve the actual owner's words separately for source attribution.
+        entry: { kind: "butler.owner_message", data: { ownerText: evt.text } },
+      });
       if (receipt.accepted) this.ledger.consume(ledger.ids);
       return receipt;
     });

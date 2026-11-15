@@ -736,3 +736,133 @@ describe("wallet ledger backup and restore", () => {
     expect(await rows()).toHaveLength(1);
   });
 });
+
+import { SelfWakeStore } from "../../src/butler/self-wake";
+import { renderSelfSection } from "../../src/butler/self-prompt";
+import { setModelOverride } from "../../src/llm/models";
+import { scriptedModel } from "../helpers/scripted-model";
+
+describe("growth backup lifecycle", () => {
+  afterEach(() => setModelOverride(null));
+  it("round-trips revisions, evidence, intent and retry quota, then restores old backups as empty growth", async () => {
+    const target = { do: "butler", id: "" };
+    let stub = env.BUTLER.get(env.BUTLER.idFromName("owner"));
+    const now = Date.now();
+    const future = now + 86400000;
+    const before = await runInDurableObject(stub, (i, s) => {
+      i.self.writeDoc("identity", "saved identity A", 0, now);
+      i.self.writeDoc("identity", "saved identity B", 1, now);
+      i.self.writeDoc("situation", "waiting for an outcome", 0, now);
+      const input = {
+        id: "erestore",
+        facts: "reported result",
+        interpretation: "uncertain",
+        source: { kind: "task" as const, ref: "t1", excerpt: "host result" },
+        occurredAt: now - 100,
+      };
+      i.self.recordExperience(input, 0, now);
+      i.self.recordExperience({ ...input, facts: "corrected report" }, 1, now);
+      const wake = new SelfWakeStore(s.storage.sql);
+      const state = wake.set(now, now);
+      wake.reserve(state.generation, now);
+      wake.deferIfGeneration(state.generation, future);
+      return {
+        identity: i.self.doc("identity"),
+        situation: i.self.doc("situation"),
+        history: i.self.read({
+          kind: "experience",
+          id: "erestore",
+          history: true,
+        }),
+        docs: i.self.read({ kind: "identity", history: true }),
+        wake: wake.get(),
+      };
+    });
+    await acquire("export");
+    const dump = await dumpDo(target);
+    await release();
+    expect(
+      dump.schema.tables.some((t) => t.name === "butler_self_records"),
+    ).toBe(true);
+    expect(dump.schema.tables.some((t) => t.name === "butler_self_wake")).toBe(
+      true,
+    );
+    setModelOverride(
+      scriptedModel([{ text: "later reply" }], { contextWindow: 1000000 }),
+    );
+    await runInDurableObject(stub, async (i) => {
+      i.self.writeDoc("identity", "unwanted later identity", 2, now);
+      await (i as unknown as { ensureAgent(): Promise<void> }).ensureAgent();
+      await i.harness.submit("message not in the backup", {
+        operationId: "tg:after-snapshot",
+      });
+      await i.harness.wait("tg:after-snapshot");
+    });
+    await acquire("restore");
+    await restoreDo(target, dump);
+    await release();
+    stub = env.BUTLER.get(env.BUTLER.idFromName("owner"));
+    const after = await runInDurableObject(stub, async (i, s) => {
+      const wake = new SelfWakeStore(s.storage.sql);
+      await (i as unknown as { armSelfWake(): Promise<void> }).armSelfWake();
+      await (i as unknown as { armSelfWake(): Promise<void> }).armSelfWake();
+      const tool = i.registry
+        .snapshot()
+        .tools()
+        .find((e) => e.tool.name === "read_self")!.tool;
+      const sources = await tool.execute(
+        { kind: "sources" } as never,
+        {} as never,
+        {} as never,
+      );
+      return {
+        identity: i.self.doc("identity"),
+        situation: i.self.doc("situation"),
+        history: i.self.read({
+          kind: "experience",
+          id: "erestore",
+          history: true,
+        }),
+        docs: i.self.read({ kind: "identity", history: true }),
+        wake: wake.get(),
+        section: renderSelfSection(i.self, "en"),
+        sources: JSON.stringify(sources),
+        timers: (await i.listSchedules()).filter(
+          (s) => s.callback === "wakeSelf",
+        ).length,
+      };
+    });
+    expect(after).toMatchObject(before);
+    expect(after.section).toContain("saved identity B");
+    expect(after.section).not.toContain("unwanted later identity");
+    expect(after.sources).not.toContain("message not in the backup");
+    expect(after.timers).toBe(1);
+    // Simulate a pre-growth schema. RestoreReset must rebuild empty tables, not reuse stale records.
+    const oldNames = new Set(["butler_self_records", "butler_self_wake"]);
+    const legacy = {
+      schema: {
+        ...dump.schema,
+        tables: dump.schema.tables.filter((t) => !oldNames.has(t.name)),
+      },
+      tables: dump.tables.filter((t) => !oldNames.has(t.table.name)),
+    };
+    await acquire("restore");
+    await restoreDo(target, legacy);
+    await release();
+    stub = env.BUTLER.get(env.BUTLER.idFromName("owner"));
+    const empty = await runInDurableObject(stub, (i, s) => ({
+      identity: i.self.doc("identity"),
+      experiences: i.self.recentExperiences(),
+      wake: new SelfWakeStore(s.storage.sql).get(),
+      section: renderSelfSection(i.self, "en"),
+    }));
+    expect(empty.identity).toEqual({
+      kind: "identity",
+      version: 0,
+      content: "",
+    });
+    expect(empty.experiences).toEqual([]);
+    expect(empty.wake.at).toBeNull();
+    expect(empty.section).not.toContain("saved identity B");
+  });
+});
