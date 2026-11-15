@@ -311,4 +311,42 @@ describe("sandboxExtension", () => {
     );
     expect(extension).toBeNull();
   });
+
+  it("prefers the SANDBOX binding over global fetch", async () => {
+    const calls: string[] = [];
+    const result: SandboxExecResult = {
+      exitCode: 0,
+      stdout: "bound",
+      stderr: "",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+      pid: 1,
+      durationMs: 1,
+      error: null,
+      disk: { usedBytes: 0, limitBytes: 100 },
+    };
+    const extension = install(
+      makeEnv({
+        SANDBOX_URL: "http://sandbox:8080",
+        SANDBOX_TOKEN: "t",
+        SANDBOX: {
+          fetch: async (url: string) => {
+            calls.push(url);
+            return new Response(JSON.stringify(result), {
+              headers: { "content-type": "application/json" },
+            });
+          },
+        },
+      }),
+    );
+    const tool = extension?.tools?.find((entry) => entry.name === "sandbox_run");
+
+    const output = textOf(
+      await tool!.execute({ command: "echo hi" }, {} as never, context()),
+    );
+
+    expect(calls).toEqual(["http://sandbox:8080/exec"]);
+    expect(output).toContain("bound");
+  });
 });

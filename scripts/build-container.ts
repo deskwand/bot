@@ -168,6 +168,7 @@ const config :Workerd.Config = (
     (name = "store", worker = .store),
     (name = "data", disk = (path = "@@DATA_DIR@@", writable = true)),
     (name = "internet", network = (allow = ["public"], tlsOptions = (trustBrowserCas = true))),
+    # @@SANDBOX_SERVICE@@
   ],
   sockets = [(name = "http", address = "@@LISTEN@@", http = (), service = "front")],
   extensions = [

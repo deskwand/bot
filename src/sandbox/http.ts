@@ -58,9 +58,14 @@ function deadline(signal: AbortSignal | undefined, ms: number): AbortSignal {
   return controller.signal;
 }
 
+export type SandboxFetch = (
+  url: string,
+  init?: RequestInit,
+) => Promise<Response>;
+
 export function httpSandboxProvider(
   env: { SANDBOX_URL?: string; SANDBOX_TOKEN?: string },
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: SandboxFetch = fetch,
 ): SandboxProvider | null {
   const url = (env.SANDBOX_URL ?? "").trim().replace(/\/+$/, "");
   const token = (env.SANDBOX_TOKEN ?? "").trim();

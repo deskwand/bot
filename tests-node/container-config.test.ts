@@ -87,6 +87,13 @@ describe("durable object bindings", () => {
 });
 
 describe("renderTemplate", () => {
+  it("keeps only public egress and leaves a slot for the sandbox service", () => {
+    const output = render();
+
+    expect(output).toContain('network = (allow = ["public"]');
+    expect(output).toContain("# @@SANDBOX_SERVICE@@");
+  });
+
   it("declares neither AI nor ARTIFACTS", () => {
     expect(render()).not.toMatch(/name = "(AI|ARTIFACTS)"/);
   });

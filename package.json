@@ -44,6 +44,7 @@
     "qrcode-terminal": "^0.12.0",
     "typescript": "7.0.2",
     "vitest": "4.1.12",
+    "workerd": "1.20261101.1",
     "wrangler": "4.156.0"
   },
   "overrides": {

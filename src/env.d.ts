@@ -18,6 +18,13 @@ declare namespace Cloudflare {
     SANDBOX_URL?: string;
     /** Shared bearer token for the sandbox executor. */
     SANDBOX_TOKEN?: string;
+    /**
+     * Reachability for the sandbox host. Container deployments get this from a
+     * dedicated workerd `external` service, because global fetch() may not
+     * connect to private addresses. Every request on it lands on that one
+     * host regardless of the URL, so it carries sandbox traffic only.
+     */
+    SANDBOX?: Fetcher;
     /** Local artifact store (container deployments only); absent on Cloudflare. */
     ARTIFACT_STORE?: DurableObjectNamespace<
       import("../container/store/store-do").StoreDO

@@ -19,6 +19,7 @@ const allowlist = join(repoRoot, "container", "env-allowlist.txt");
 const TEMPLATE = `listen = "@@LISTEN@@"
 data = "@@DATA_DIR@@"
 # @@ENV_BINDINGS@@
+# @@SANDBOX_SERVICE@@
 `;
 
 let root = "";
@@ -218,5 +219,62 @@ describe("container entrypoint", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(`serve ${join(appDir, "config.capnp")}`);
+  });
+
+  it("points a dedicated service at the sandbox", () => {
+    const result = run({ SANDBOX_URL: "http://sandbox:8080" });
+
+    expect(result.status).toBe(0);
+    expect(result.config).toContain(
+      '(name = "sandbox", external = (address = "sandbox:8080", http = ()))',
+    );
+    expect(result.config).toContain('(name = "SANDBOX", service = "sandbox")');
+    expect(result.config).not.toContain("@@SANDBOX_SERVICE@@");
+  });
+
+  it("skips the binding when the template has no slot for it", () => {
+    writeFileSync(
+      join(appDir, "config.capnp.template"),
+      'listen = "@@LISTEN@@"\n# @@ENV_BINDINGS@@\n',
+    );
+
+    const result = run({ SANDBOX_URL: "http://sandbox:8080" });
+
+    expect(result.status).toBe(0);
+    expect(result.config).not.toContain('service = "sandbox"');
+    expect(result.stderr).toContain("@@SANDBOX_SERVICE@@");
+  });
+
+  it("tolerates whitespace around SANDBOX_URL", () => {
+    // The bot trims its own copy; a binding skipped over a stray space would
+    // put the sandbox back on the global fetch that cannot reach it.
+    const result = run({ SANDBOX_URL: " http://sandbox:8080 " });
+
+    expect(result.status).toBe(0);
+    expect(result.config).toContain('(address = "sandbox:8080", http = ())');
+    expect(result.stderr).not.toContain("SANDBOX_URL");
+  });
+
+  it("declares no sandbox service when SANDBOX_URL is unset", () => {
+    const result = run();
+
+    expect(result.status).toBe(0);
+    expect(result.config).not.toContain('service = "sandbox"');
+    expect(result.config).not.toContain("SANDBOX");
+    expect(result.config).not.toContain("@@SANDBOX_SERVICE@@");
+  });
+
+  it("skips the sandbox service for a URL it cannot use", () => {
+    for (const value of [
+      "https://sandbox:8080",
+      "http://sandbox",
+      'http://sand"box:8080',
+    ]) {
+      const result = run({ SANDBOX_URL: value });
+
+      expect(result.status).toBe(0);
+      expect(result.config).not.toContain('service = "sandbox"');
+      expect(result.stderr).toContain("不生成沙箱出站绑定");
+    }
   });
 });
