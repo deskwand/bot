@@ -365,7 +365,7 @@ func TestRestoreRefusesIncompleteSnapshot(t *testing.T) {
 func TestRestoreStopsWhenSnapshotFails(t *testing.T) {
 	worker := seedRestoreWorker(t)
 	path := makeRestoreBackup(t, worker, "1.2.3")
-	worker.failRoute("POST", pagePath, "", "", 1, 500)
+	worker.failRoute("POST", chunkPath, "", "", 1, 500)
 
 	journal := newRestoreJournal(t)
 	deps := restoreTestDeps(t, worker, "1.2.3")

@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,7 +300,12 @@ func TestExportReleasesLeaseOnFailure(t *testing.T) {
 		"memories":  {json.RawMessage(`{"__rowid":1,"id":"m1"}`)},
 		"schedules": {json.RawMessage(`{"__rowid":1,"id":"s1"}`)},
 	})
-	worker.failRoute("POST", pagePath, "", "", 2, 500)
+	// Fail the second chunk read, so one table entry already exists when the
+	// export dies: the archive must still be discarded.
+	previous := batchBytes
+	batchBytes = 1
+	t.Cleanup(func() { batchBytes = previous })
+	worker.failRoute("POST", chunkPath, "", "", 2, 500)
 
 	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", time.Second)
 	path := filepath.Join(t.TempDir(), "backup.zip")
@@ -415,8 +422,8 @@ func TestExportPaginatesTablesAndObjects(t *testing.T) {
 	if len(manifest.R2.Objects) != 5 {
 		t.Fatalf("objects = %d, want 5", len(manifest.R2.Objects))
 	}
-	if got := worker.requestCount("POST", pagePath); got < 3 {
-		t.Fatalf("page calls = %d, want at least 3", got)
+	if got := worker.requestCount("POST", chunkPath); got < 3 {
+		t.Fatalf("chunk calls = %d, want at least 3", got)
 	}
 	if got := worker.requestCount("GET", objectListPath); got < 3 {
 		t.Fatalf("list calls = %d, want at least 3", got)
@@ -665,4 +672,255 @@ func TestExportSkipsWalletBeforeTheWorkerIsUpdated(t *testing.T) {
 			t.Fatal("the archive contains a wallet object")
 		}
 	}
+}
+
+func TestExportLogsOneLinePerRequest(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.taskIDs = []string{"t1"}
+	worker.setDO(
+		DORef{DO: "task", ID: "t1"},
+		DBSchema{Tables: []TableSchema{{Name: "notes"}}},
+		map[string][]json.RawMessage{
+			"notes": {json.RawMessage(`{"id":1}`), json.RawMessage(`{"id":2}`)},
+		},
+	)
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", 50*time.Millisecond)
+
+	var lines []string
+	deps.Logf = func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	if _, err := Export(context.Background(), deps, backupTestTarget, path); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	want := "chunk do=task id=t1 chunks=1 rows=2"
+	found := false
+	for _, line := range lines {
+		if strings.Contains(line, want) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("log lines = %q, want one containing %q", lines, want)
+	}
+}
+
+func TestExportReadsTablesInBatches(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.taskIDs = []string{"t1"}
+	worker.pageRows = 10
+
+	schema := DBSchema{}
+	rows := map[string][]json.RawMessage{}
+	for i := 0; i < 6; i++ {
+		name := fmt.Sprintf("t%d", i)
+		schema.Tables = append(schema.Tables, TableSchema{
+			Name:   name,
+			Create: fmt.Sprintf(`CREATE TABLE %s (n INTEGER)`, name),
+		})
+		rows[name] = []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"n":%d}`, i))}
+	}
+	worker.setDO(DORef{DO: "task", ID: "t1"}, schema, rows)
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", 50*time.Millisecond)
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	manifest, err := Export(context.Background(), deps, backupTestTarget, path)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	pageCalls, chunkCalls := 0, 0
+	for _, request := range worker.requests {
+		switch request.Path {
+		case pagePath:
+			pageCalls++
+		case chunkPath:
+			chunkCalls++
+		}
+	}
+	if pageCalls != 0 {
+		t.Fatalf("page requests = %d, want 0: the export should batch", pageCalls)
+	}
+	if chunkCalls > 2 {
+		t.Fatalf("chunk requests = %d, want <= 2 for six small tables", chunkCalls)
+	}
+
+	var recorded map[string]int64
+	for _, object := range manifest.DurableObjects {
+		if object.DO == "task" && object.ID == "t1" {
+			recorded = object.Rows
+		}
+	}
+	if len(recorded) != 6 {
+		t.Fatalf("rows recorded for %d tables, want 6", len(recorded))
+	}
+
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer reader.Close()
+	for i := 0; i < 6; i++ {
+		name := fmt.Sprintf("t%d", i)
+		assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "task", ID: "t1"}, name), rows[name])
+	}
+}
+
+func TestExportFallsBackWhenChunkRouteIsMissing(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.taskIDs = []string{"t1"}
+	worker.noChunk = true
+
+	schema := DBSchema{Tables: []TableSchema{
+		{Name: "a", Create: `CREATE TABLE a (n INTEGER)`},
+		{Name: "b", Create: `CREATE TABLE b (n INTEGER)`},
+	}}
+	rows := map[string][]json.RawMessage{
+		"a": {json.RawMessage(`{"n":1}`)},
+		"b": {json.RawMessage(`{"n":2}`), json.RawMessage(`{"n":3}`)},
+	}
+	worker.setDO(DORef{DO: "task", ID: "t1"}, schema, rows)
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", 50*time.Millisecond)
+	var lines []string
+	deps.Logf = func(format string, args ...any) {
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	if _, err := Export(context.Background(), deps, backupTestTarget, path); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	pageCalls := 0
+	for _, request := range worker.requests {
+		if request.Path == pagePath {
+			pageCalls++
+		}
+	}
+	if pageCalls == 0 {
+		t.Fatal("the fallback did not use the page route")
+	}
+	var logged bool
+	for _, line := range lines {
+		if strings.Contains(line, "page do=task id=t1 table=a rows=1") {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Fatalf("log lines = %q, want one for the paged fallback", lines)
+	}
+
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer reader.Close()
+	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "task", ID: "t1"}, "b"), rows["b"])
+}
+
+func TestExportKeepsOneEntryPerTableAcrossBatches(t *testing.T) {
+	previous := batchBytes
+	batchBytes = 1
+	t.Cleanup(func() { batchBytes = previous })
+
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.taskIDs = []string{"t1"}
+	worker.pageRows = 1
+
+	schema := DBSchema{Tables: []TableSchema{
+		{Name: "big", Create: `CREATE TABLE big (n INTEGER)`},
+	}}
+	rows := map[string][]json.RawMessage{
+		"big": {json.RawMessage(`{"n":1}`), json.RawMessage(`{"n":2}`), json.RawMessage(`{"n":3}`)},
+	}
+	worker.setDO(DORef{DO: "task", ID: "t1"}, schema, rows)
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", 50*time.Millisecond)
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	if _, err := Export(context.Background(), deps, backupTestTarget, path); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	defer archive.Close()
+	counts := map[string]int{}
+	for _, file := range archive.File {
+		counts[file.Name]++
+	}
+	if got := counts[TableEntry(DORef{DO: "task", ID: "t1"}, "big")]; got != 1 {
+		t.Fatalf("entries for table big = %d, want 1 (names: %v)", got, counts)
+	}
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer reader.Close()
+	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "task", ID: "t1"}, "big"), rows["big"])
+}
+
+func TestExportFailsWhenTheServerClaimsDoneEarly(t *testing.T) {
+	previous := batchBytes
+	batchBytes = 1
+	t.Cleanup(func() { batchBytes = previous })
+
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.taskIDs = []string{"t1"}
+	worker.chunkDoneEarly = true
+
+	schema := DBSchema{Tables: []TableSchema{
+		{Name: "a", Create: `CREATE TABLE a (n INTEGER)`},
+		{Name: "b", Create: `CREATE TABLE b (n INTEGER)`},
+	}}
+	rows := map[string][]json.RawMessage{
+		"a": {json.RawMessage(`{"n":1}`)},
+		"b": {json.RawMessage(`{"n":2}`)},
+	}
+	worker.setDO(DORef{DO: "task", ID: "t1"}, schema, rows)
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", 50*time.Millisecond)
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	if _, err := Export(context.Background(), deps, backupTestTarget, path); err == nil {
+		t.Fatal("export succeeded with a table missing from the archive")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("archive exists after a failure: %v", err)
+	}
+}
+
+func TestExportFallsBackOnAJSON404(t *testing.T) {
+	worker := newFakeWorker(t)
+	worker.token = "tok"
+	worker.taskIDs = []string{"t1"}
+	worker.noChunk = true
+	worker.chunkNotFoundJSON = true
+
+	schema := DBSchema{Tables: []TableSchema{
+		{Name: "a", Create: `CREATE TABLE a (n INTEGER)`},
+	}}
+	rows := map[string][]json.RawMessage{"a": {json.RawMessage(`{"n":1}`)}}
+	worker.setDO(DORef{DO: "task", ID: "t1"}, schema, rows)
+
+	deps, _ := exportDeps(t, exportSnapshot(worker.URL(), "1.2.3", true), "tok", 50*time.Millisecond)
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	if _, err := Export(context.Background(), deps, backupTestTarget, path); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer reader.Close()
+	assertRowsEqual(t, readTableRows(t, reader, DORef{DO: "task", ID: "t1"}, "a"), rows["a"])
 }

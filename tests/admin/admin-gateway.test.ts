@@ -385,3 +385,56 @@ describe("bot routes through the gateway", () => {
     expect(await response.json()).toEqual({ bots: [] });
   });
 });
+
+describe("backup chunk route", () => {
+  // The pseudo table carries KV rows, so the route can be exercised without
+  // creating a real table in the Durable Object.
+  const kvTable = { name: "__kv", create: "", withoutRowid: true };
+
+  it("requires the maintenance lease", async () => {
+    const gateway = createAdminGateway(deps("chunk-no-lease"));
+    const res = await call(gateway, "/admin/backup/chunk?do=butler", {
+      method: "POST",
+      body: { tables: [kvTable], state: { index: 0, cursor: null } },
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "MAINTENANCE_REQUIRED" });
+  });
+
+  it("rejects an empty table list", async () => {
+    const gateway = createAdminGateway(deps("chunk-empty"));
+    await acquire(gateway);
+    const res = await call(gateway, "/admin/backup/chunk?do=butler", {
+      method: "POST",
+      body: { tables: [], state: { index: 0, cursor: null } },
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "BACKUP_INVALID" });
+  });
+
+  it("rejects a state index outside the table list", async () => {
+    const gateway = createAdminGateway(deps("chunk-index"));
+    await acquire(gateway);
+    const res = await call(gateway, "/admin/backup/chunk?do=butler", {
+      method: "POST",
+      body: { tables: [kvTable], state: { index: 3, cursor: null } },
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "BACKUP_INVALID" });
+  });
+
+  it("accepts a budget above the maximum", async () => {
+    const gateway = createAdminGateway(deps("chunk-budget"));
+    await acquire(gateway);
+    const res = await call(gateway, "/admin/backup/chunk?do=butler", {
+      method: "POST",
+      body: {
+        tables: [kvTable],
+        state: { index: 0, cursor: null },
+        budgetBytes: 1 << 30,
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ done: true, state: { index: 1 } });
+  });
+});

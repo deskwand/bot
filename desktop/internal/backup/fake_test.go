@@ -85,6 +85,18 @@ type fakeWorker struct {
 	// every do=wallet request answers 400 BACKUP_INVALID as an unknown kind.
 	noWallet bool
 
+	// noChunk makes the fake behave like a Worker deployed before the chunk
+	// route: POST /admin/backup/chunk answers 404.
+	noChunk bool
+
+	// chunkDoneEarly makes every chunk response claim done, like a Worker
+	// that loses track of the remaining tables.
+	chunkDoneEarly bool
+
+	// chunkNotFoundJSON answers the missing chunk route with a JSON body, like
+	// a Worker that later wraps its 404s in a code.
+	chunkNotFoundJSON bool
+
 	dos     map[string]*fakeDO
 	objects map[string]*fakeObject
 
@@ -214,8 +226,17 @@ func (f *fakeWorker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if f.noChunk && record.Path == chunkPath {
+		if f.chunkNotFoundJSON {
+			f.writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+
 	switch record.Path {
-	case infoPath, schemaPath, pagePath, restoreBeginPath, restorePagePath, restoreCommitPath, restoreResetPath, objectListPath, objectPath:
+	case infoPath, schemaPath, pagePath, chunkPath, restoreBeginPath, restorePagePath, restoreCommitPath, restoreResetPath, objectListPath, objectPath:
 	default:
 		// Unknown paths answer 404 before the lease check, like the real gateway.
 		http.NotFound(w, r)
@@ -322,6 +343,62 @@ func (f *fakeWorker) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case objectListPath:
 		f.listObjects(w, record)
+	case chunkPath:
+		var payload struct {
+			Tables      []TableSchema `json:"tables"`
+			State       BatchState    `json:"state"`
+			BudgetBytes int           `json:"budgetBytes"`
+		}
+		if !decodeFakeBody(w, body, &payload) {
+			return
+		}
+		object := f.doFor(record)
+		chunks := []BatchChunk{}
+		state := payload.State
+		budget := payload.BudgetBytes
+		if budget <= 0 {
+			budget = 1 << 22
+		}
+		total := 0
+		for state.Index < len(payload.Tables) {
+			if len(chunks) > 0 && total >= budget {
+				break
+			}
+			table := payload.Tables[state.Index]
+			rows := object.rows[table.Name]
+			cursor := ""
+			if state.Cursor != nil {
+				cursor = *state.Cursor
+			}
+			offset, ok := fakeOffset(w, cursor, len(rows))
+			if !ok {
+				return
+			}
+			end := offset + f.pageLimit()
+			if end > len(rows) {
+				end = len(rows)
+			}
+			var next *string
+			if end < len(rows) {
+				value := strconv.Itoa(end)
+				next = &value
+			}
+			page := append([]json.RawMessage(nil), rows[offset:end]...)
+			chunks = append(chunks, BatchChunk{Table: table.Name, Rows: page, Next: next})
+			for _, row := range page {
+				total += len(row)
+			}
+			state.Cursor = next
+			if next != nil {
+				break
+			}
+			state.Index++
+		}
+		f.writeJSON(w, http.StatusOK, map[string]any{
+			"chunks": chunks,
+			"state":  state,
+			"done":   f.chunkDoneEarly || state.Index >= len(payload.Tables),
+		})
 	case objectPath:
 		f.objectRoute(w, record, body)
 	default:

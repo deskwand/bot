@@ -37,7 +37,12 @@ export type TableSchema = {
 
 export type DbSchema = { tables: TableSchema[]; indexes: string[] };
 
-export type DumpPage = { rows: DumpRow[]; next: string | null };
+export type DumpPage = {
+  rows: DumpRow[];
+  next: string | null;
+  /** JSON.stringify length of `rows`, the byte budget the caller spends. */
+  bytes: number;
+};
 
 /** Rows fetched from SQLite per query; a page may need several batches. */
 const ROW_BATCH = 500;
@@ -248,7 +253,7 @@ export function readPage(
   maxBytes: number = PAGE_BYTES,
 ): DumpPage {
   if ((ROWLESS_TABLES as readonly string[]).includes(table.name)) {
-    return { rows: [], next: null };
+    return { rows: [], next: null, bytes: 0 };
   }
   const cols = columns(sql, table.name);
   // Read each value twice: quote() is lossless for numbers and blobs, while
@@ -281,19 +286,19 @@ export function readPage(
           offset,
         )
         .toArray();
-      if (batch.length === 0) return { rows, next: null };
+      if (batch.length === 0) return { rows, next: null, bytes };
 
       for (let i = 0; i < batch.length; i += 1) {
         const row = decodeRow(batch[i]!, cols, false);
         const size = JSON.stringify(row).length;
         if (rows.length > 0 && bytes + size > maxBytes) {
-          return { rows, next: String(offset + i) };
+          return { rows, next: String(offset + i), bytes };
         }
         rows.push(row);
         bytes += size;
       }
       offset += batch.length;
-      if (batch.length < ROW_BATCH) return { rows, next: null };
+      if (batch.length < ROW_BATCH) return { rows, next: null, bytes };
     }
   }
 
@@ -317,19 +322,19 @@ export function readPage(
               ROW_BATCH,
             )
             .toArray();
-    if (batch.length === 0) return { rows, next: null };
+    if (batch.length === 0) return { rows, next: null, bytes };
 
     for (let i = 0; i < batch.length; i += 1) {
       const row = decodeRow(batch[i]!, cols, true);
       const size = JSON.stringify(row).length;
       if (rows.length > 0 && bytes + size > maxBytes) {
-        return { rows, next: position };
+        return { rows, next: position, bytes };
       }
       rows.push(row);
       bytes += size;
       position = encodeRowid(row.__rowid);
     }
-    if (batch.length < ROW_BATCH) return { rows, next: null };
+    if (batch.length < ROW_BATCH) return { rows, next: null, bytes };
   }
 }
 

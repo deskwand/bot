@@ -275,7 +275,7 @@ describe("sql-dump", () => {
     });
 
     expect(result.table).toBeDefined();
-    expect(result.page).toEqual({ rows: [], next: null });
+    expect(result.page).toEqual({ rows: [], next: null, bytes: 0 });
   });
 
   it("skips FTS virtual tables and their shadow tables", async () => {
@@ -414,7 +414,7 @@ describe("sql-dump", () => {
       return readPage(sql, table, null);
     });
 
-    expect(page).toEqual({ rows: [], next: null });
+    expect(page).toEqual({ rows: [], next: null, bytes: 0 });
   });
 });
 
@@ -442,5 +442,62 @@ describe("sql-dump text fidelity", () => {
         .toArray()[0]?.s;
     });
     expect(restored).toBe("a\0b");
+  });
+});
+
+describe("DumpPage byte accounting", () => {
+  it("reports the JSONL byte count of the rows it returns", async () => {
+    const { page } = await runInDurableObject(
+      harness("page-bytes"),
+      async (_instance, state) => {
+        state.storage.sql.exec(
+          `CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);`,
+        );
+        state.storage.sql.exec(
+          `INSERT INTO notes (body) VALUES ('a'), ('b'), ('c');`,
+        );
+        const schema = readSchema(state.storage.sql);
+        const table = schema.tables.find((t) => t.name === "notes")!;
+        return { page: readPage(state.storage.sql, table, null) };
+      },
+    );
+
+    const want = page.rows.reduce(
+      (total, row) => total + JSON.stringify(row).length,
+      0,
+    );
+    expect(page.bytes).toBe(want);
+  });
+});
+
+describe("DumpPage byte accounting on a truncated page", () => {
+  it("counts only the rows it returns", async () => {
+    const page = await runInDurableObject(
+      harness("page-bytes-truncated"),
+      async (_instance, state) => {
+        state.storage.sql.exec(
+          `CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT NOT NULL);`,
+        );
+        for (let i = 0; i < 5; i += 1) {
+          state.storage.sql.exec(
+            `INSERT INTO notes (body) VALUES (?);`,
+            "x".repeat(20),
+          );
+        }
+        const schema = readSchema(state.storage.sql);
+        const table = schema.tables.find((t) => t.name === "notes")!;
+        const size = JSON.stringify(readPage(state.storage.sql, table, null).rows[0]).length;
+        // Two rows fit; the third would overflow the page.
+        return readPage(state.storage.sql, table, null, size * 2 + 5);
+      },
+    );
+
+    expect(page.rows.length).toBe(2);
+    expect(page.next).not.toBeNull();
+    const returned = page.rows.reduce(
+      (total, row) => total + JSON.stringify(row).length,
+      0,
+    );
+    expect(page.bytes).toBe(returned);
   });
 });

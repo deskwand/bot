@@ -193,6 +193,9 @@ func main() {
 		Progress: func(progress backup.Progress) {
 			_ = app.BackupProgressEvent.Broadcast(progress)
 		},
+		Logf: func(format string, args ...any) {
+			log.Printf("backup: "+format, args...)
+		},
 	}, restoreJournal, filepath.Join(dataDir, "backups"))
 
 	options := app.ServiceOptions{

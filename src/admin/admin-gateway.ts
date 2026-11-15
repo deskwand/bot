@@ -21,6 +21,12 @@ import {
   type ExchangeProbeResult,
 } from "./exchange-routes";
 import { createWalletRoutes, type WalletReads } from "./wallet-routes";
+import {
+  CHUNK_BYTES,
+  MAX_CHUNK_BYTES,
+  readBatch,
+  type BatchState,
+} from "./backup-batch";
 import { createLifeRoutes } from "./life-routes";
 import { BOTS_PATH, createBotRoutes } from "./bot-routes";
 import { createMcpAdminRoutes } from "./mcp-routes";
@@ -70,6 +76,7 @@ const RELEASE_PATH = "/admin/maintenance/release";
 const INFO_PATH = "/admin/backup/info";
 const SCHEMA_PATH = "/admin/backup/schema";
 const PAGE_PATH = "/admin/backup/page";
+const CHUNK_PATH = "/admin/backup/chunk";
 const RESTORE_BEGIN_PATH = "/admin/restore/begin";
 const RESTORE_PAGE_PATH = "/admin/restore/page";
 const RESTORE_COMMIT_PATH = "/admin/restore/commit";
@@ -298,6 +305,7 @@ export function createAdminGateway(deps: AdminDeps): {
       url.pathname === INFO_PATH ||
       url.pathname === SCHEMA_PATH ||
       url.pathname === PAGE_PATH ||
+      url.pathname === CHUNK_PATH ||
       url.pathname === RESTORE_BEGIN_PATH ||
       url.pathname === RESTORE_PAGE_PATH ||
       url.pathname === RESTORE_COMMIT_PATH ||
@@ -337,6 +345,38 @@ export function createAdminGateway(deps: AdminDeps): {
       }
       const page = await target.backupPage(body.table, body.cursor ?? null);
       return json(page);
+    }
+
+    if (req.method === "POST" && url.pathname === CHUNK_PATH) {
+      const target = backupStub(deps, url);
+      if (target instanceof Response) return target;
+      const body = await readBody<{
+        tables?: TableSchema[];
+        state?: BatchState;
+        budgetBytes?: number;
+      }>(req);
+      if (
+        body === null ||
+        !Array.isArray(body.tables) ||
+        body.tables.length === 0
+      ) {
+        return invalid("chunk needs { tables, state, budgetBytes }");
+      }
+      const state = body.state ?? { index: 0, cursor: null };
+      if (
+        typeof state.index !== "number" ||
+        !Number.isInteger(state.index) ||
+        state.index < 0 ||
+        state.index >= body.tables.length ||
+        (state.cursor !== null && typeof state.cursor !== "string")
+      ) {
+        return invalid("chunk state index out of range");
+      }
+      const budget =
+        typeof body.budgetBytes === "number" && body.budgetBytes > 0
+          ? Math.min(body.budgetBytes, MAX_CHUNK_BYTES)
+          : CHUNK_BYTES;
+      return json(await readBatch(target, body.tables, state, budget));
     }
 
     if (req.method === "POST" && url.pathname === RESTORE_BEGIN_PATH) {

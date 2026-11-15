@@ -21,6 +21,7 @@ const (
 	infoPath          = "/admin/backup/info"
 	schemaPath        = "/admin/backup/schema"
 	pagePath          = "/admin/backup/page"
+	chunkPath         = "/admin/backup/chunk"
 	restoreBeginPath  = "/admin/restore/begin"
 	restorePagePath   = "/admin/restore/page"
 	restoreCommitPath = "/admin/restore/commit"
@@ -122,6 +123,41 @@ func (c *AdminClient) Page(ctx context.Context, ref DORef, table TableSchema, cu
 		return nil, nil, err
 	}
 	return page.Rows, page.Next, nil
+}
+
+// BatchState is where a chunked read resumes: a table index and that table's
+// cursor.
+type BatchState struct {
+	Index  int     `json:"index"`
+	Cursor *string `json:"cursor"`
+}
+
+// BatchChunk is one table's rows inside a chunked read.
+type BatchChunk struct {
+	Table string            `json:"table"`
+	Rows  []json.RawMessage `json:"rows"`
+	Next  *string           `json:"next"`
+}
+
+// BatchResult is one chunked read response.
+type BatchResult struct {
+	Chunks []BatchChunk `json:"chunks"`
+	State  BatchState   `json:"state"`
+	Done   bool         `json:"done"`
+}
+
+// Batch reads several tables in one request. budgetBytes caps the response.
+func (c *AdminClient) Batch(ctx context.Context, ref DORef, tables []TableSchema, state BatchState, budgetBytes int) (BatchResult, error) {
+	payload := struct {
+		Tables      []TableSchema `json:"tables"`
+		State       BatchState    `json:"state"`
+		BudgetBytes int           `json:"budgetBytes"`
+	}{Tables: tables, State: state, BudgetBytes: budgetBytes}
+	var result BatchResult
+	if err := c.call(ctx, http.MethodPost, chunkPath, doQuery(ref), payload, &result); err != nil {
+		return BatchResult{}, err
+	}
+	return result, nil
 }
 
 // RestoreBegin empties one Durable Object and recreates its tables.
@@ -333,7 +369,13 @@ func (c *AdminClient) statusError(response *http.Response) error {
 	}
 	_ = json.Unmarshal(raw, &payload)
 
+	// A 404 means the route itself is absent: a deployment older than this
+	// client. Trust the status over the body, so a Worker that later wraps its
+	// 404s in a code cannot stop the export from falling back.
 	code := payload.Code
+	if response.StatusCode == http.StatusNotFound {
+		code = ""
+	}
 	if code == "" {
 		switch response.StatusCode {
 		case http.StatusUnauthorized:

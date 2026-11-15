@@ -197,7 +197,8 @@ describe("MaintenanceStore", () => {
         let now = 0;
         const store = new MaintenanceStore(state.storage.sql, () => now);
         store.acquire("export", "a");
-        now = 1000;
+        // Renew near expiry, where renew() still rewrites the lease.
+        now = LEASE_MS - 30_000;
         const wrong = store.renew("b");
         const right = store.renew("a");
         return { wrong, right, current: store.current() };
@@ -207,7 +208,7 @@ describe("MaintenanceStore", () => {
     expect(result.wrong).toBe(false);
     expect(result.right).toBe(true);
     expect(result.current).toEqual({
-      until: 1000 + LEASE_MS,
+      until: LEASE_MS - 30_000 + LEASE_MS,
       op: "export",
       opId: "a",
     });
@@ -534,5 +535,60 @@ describe("maintenance lease pauses", () => {
     await worker.scheduled({} as ScheduledController, env);
 
     expect(await healStamp(stub)).not.toBeNull();
+  });
+});
+
+describe("MaintenanceStore renew slack", () => {
+  it("skips the write while the lease has plenty of time left", async () => {
+    const db = env.TEST_HARNESS.get(env.TEST_HARNESS.idFromName("renew-slack"));
+    await runInDurableObject(db, async (_instance, state) => {
+      let now = 1_000_000;
+      const store = new MaintenanceStore(state.storage.sql, () => now);
+      const lease = store.acquire("export", "op-1");
+      if (lease === "busy") throw new Error("unexpected busy");
+
+      now += 1_000;
+      expect(store.renew("op-1")).toBe(true);
+      expect(store.current()?.until).toBe(1_000_000 + LEASE_MS);
+    });
+  });
+
+  it("rewrites the lease once it is close to expiring", async () => {
+    const db = env.TEST_HARNESS.get(env.TEST_HARNESS.idFromName("renew-near"));
+    await runInDurableObject(db, async (_instance, state) => {
+      let now = 2_000_000;
+      const store = new MaintenanceStore(state.storage.sql, () => now);
+      store.acquire("export", "op-1");
+
+      now += LEASE_MS - 30_000;
+      expect(store.renew("op-1")).toBe(true);
+      expect(store.current()?.until).toBe(now + LEASE_MS);
+    });
+  });
+
+  it("rewrites the lease while two heartbeats of margin remain", async () => {
+    const db = env.TEST_HARNESS.get(
+      env.TEST_HARNESS.idFromName("renew-margin"),
+    );
+    await runInDurableObject(db, async (_instance, state) => {
+      // The client renews once a minute, so the slack must exceed one
+      // heartbeat or a single late tick can let the lease lapse.
+      let now = 4_000_000;
+      const store = new MaintenanceStore(state.storage.sql, () => now);
+      store.acquire("export", "op-1");
+
+      now += LEASE_MS - 120_000;
+      expect(store.renew("op-1")).toBe(true);
+      expect(store.current()?.until).toBe(now + LEASE_MS);
+    });
+  });
+
+  it("still refuses a different operation id", async () => {
+    const db = env.TEST_HARNESS.get(env.TEST_HARNESS.idFromName("renew-other"));
+    await runInDurableObject(db, async (_instance, state) => {
+      const store = new MaintenanceStore(state.storage.sql, () => 3_000_000);
+      store.acquire("export", "op-1");
+      expect(store.renew("op-2")).toBe(false);
+    });
   });
 });

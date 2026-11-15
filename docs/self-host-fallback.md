@@ -30,7 +30,7 @@
 
 1. **同一运行时**。Miniflare 底下就是 workerd——生产用的那个。DO 请求串行、alarm 到期与重放、崩溃后的 SQLite 恢复，全在运行时里，不用自己实现。
 2. **备份一直在被验证**。`vitest-pool-workers` 底座就是 Miniflare，`tests/` 下 86 个文件、25,596 行每天在它上面跑。换别的宿主，这批测试就失去意义。
-3. **数据搬迁已经有实现**。`src/admin/backup-rpc.ts` 与 `src/admin/sql-dump.ts` 提供 `/admin/backup/{info,schema,page}`、`/admin/r2/<key>`、`/admin/restore/{begin,page,commit,reset}`，且 `BackupRpc` 只依赖 `DurableObjectState`，不碰业务代码也不碰 Agents SDK——**同一套协议在 Cloudflare 与本地都能跑**，导入导出是同一份代码。
+3. **数据搬迁已经有实现**。`src/admin/backup-rpc.ts` 与 `src/admin/sql-dump.ts` 提供 `/admin/backup/{info,schema,page,chunk}`、`/admin/r2/<key>`、`/admin/restore/{begin,page,commit,reset}`（`chunk` 按字节预算一次返回多张表的页，请求体 `{ tables, state, budgetBytes }`、响应 `{ chunks, state, done }`；跨页的表一定是该批的最后一块，旧桌面客户端不会调用它），且 `BackupRpc` 只依赖 `DurableObjectState`，不碰业务代码也不碰 Agents SDK——**同一套协议在 Cloudflare 与本地都能跑**，导入导出是同一份代码。
 
 覆盖范围：`ButlerDO`、`TaskDO`、`BotDO`、`ChannelDO`、`LifeDO`、`WalletDO` 的 SQLite 与 KV，以及 R2 对象。`McpAuthDO` 不参与备份，切到本地后 MCP 授权需要重新走一遍。
 

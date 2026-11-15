@@ -28,6 +28,10 @@ const (
 // maintenance lease. Tests lower it to avoid allocating a large object.
 var renewEveryBytes int64 = 10 << 20
 
+// batchBytes is the byte budget of one chunked read. Tests lower it to force
+// several batches out of a small fixture.
+var batchBytes = 4 << 20
+
 // leaseHeartbeatInterval is how often a long export or restore renews the
 // lease in the background. A failed renewal cancels the operation before it
 // can overlap a second client.
@@ -89,6 +93,8 @@ type Deps struct {
 	NewOpID      func() (string, error)
 	Progress     func(Progress)
 	ReadyTimeout time.Duration
+	// Logf records one diagnostic line per admin round trip. Nil disables it.
+	Logf func(format string, args ...any)
 }
 
 func (d Deps) now() time.Time {
@@ -127,6 +133,12 @@ func (d Deps) pollInterval() time.Duration {
 		return 10 * time.Millisecond
 	}
 	return interval
+}
+
+func (d Deps) logf(format string, args ...any) {
+	if d.Logf != nil {
+		d.Logf(format, args...)
+	}
 }
 
 func (d Deps) report(progress Progress) {
@@ -414,7 +426,7 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 	progress := Progress{Op: "export", Phase: PhaseDatabase}
 	deps.report(progress)
 	for _, ref := range exportRefs(info.TaskIDs, info.BotIDs) {
-		object, err := exportDurableObject(ctx, client, writer, ref, &progress, deps)
+		object, err := exportDurableObjectBatched(ctx, client, writer, ref, &progress, deps)
 		if err != nil {
 			// A Worker that predates the ledger or the wallet rejects that
 			// kind. Back it up without it instead of failing the whole export.
@@ -483,7 +495,12 @@ func exportDurableObject(ctx context.Context, client *AdminClient, writer *Write
 		}
 		var cursor *string
 		for {
+			started := time.Now()
 			rows, next, err := client.Page(ctx, ref, table, cursor)
+			deps.logf(
+				"page do=%s id=%s table=%s rows=%d next=%v ms=%d",
+				ref.DO, ref.ID, table.Name, len(rows), next != nil, time.Since(started).Milliseconds(),
+			)
 			if err != nil {
 				return DOManifest{}, err
 			}
@@ -507,6 +524,95 @@ func exportDurableObject(ctx context.Context, client *AdminClient, writer *Write
 	return object, nil
 }
 
+// exportDurableObjectBatched reads every table of one DO through the chunk
+// route. The chunk route is newer than the oldest supported Worker, so a 404
+// falls back to the per-page export before anything is written.
+func exportDurableObjectBatched(ctx context.Context, client *AdminClient, writer *Writer, ref DORef, progress *Progress, deps Deps) (DOManifest, error) {
+	schema, err := client.Schema(ctx, ref)
+	if err != nil {
+		return DOManifest{}, err
+	}
+	object := DOManifest{DORef: ref, Schema: schema, Rows: map[string]int64{}}
+	if len(schema.Tables) == 0 {
+		return object, nil
+	}
+
+	state := BatchState{}
+	closed := map[string]bool{}
+	var open *TableWriter
+	openName := ""
+	wrote := false
+
+	for {
+		started := time.Now()
+		result, err := client.Batch(ctx, ref, schema.Tables, state, batchBytes)
+		if err != nil {
+			if errorCode(err) == CodeAdminUnavailable && !wrote {
+				return exportDurableObject(ctx, client, writer, ref, progress, deps)
+			}
+			return DOManifest{}, err
+		}
+		if len(result.Chunks) > 0 {
+			wrote = true
+		}
+
+		rows := 0
+		for _, chunk := range result.Chunks {
+			if closed[chunk.Table] {
+				return DOManifest{}, invalidBackupf("table %s was returned after it finished", chunk.Table)
+			}
+			if open == nil || openName != chunk.Table {
+				tableWriter, err := writer.Table(ref, chunk.Table)
+				if err != nil {
+					return DOManifest{}, err
+				}
+				open, openName = tableWriter, chunk.Table
+			}
+			if err := open.Append(chunk.Rows); err != nil {
+				return DOManifest{}, err
+			}
+			rows += len(chunk.Rows)
+			if chunk.Next == nil {
+				object.Rows[chunk.Table] = open.Rows()
+				closed[chunk.Table] = true
+				progress.Tables++
+			}
+		}
+
+		progress.Rows += int64(rows)
+		deps.logf(
+			"chunk do=%s id=%s chunks=%d rows=%d done=%v ms=%d",
+			ref.DO, ref.ID, len(result.Chunks), rows, result.Done, time.Since(started).Milliseconds(),
+		)
+		deps.report(*progress)
+
+		if result.Done {
+			// `done` is the server's claim; the archive is the proof. A table
+			// the server never sent would otherwise be silently missing.
+			for _, table := range schema.Tables {
+				if !closed[table.Name] {
+					return DOManifest{}, invalidBackupf("table %s is missing from %s %s", table.Name, ref.DO, ref.ID)
+				}
+			}
+			return object, nil
+		}
+		if sameBatchState(state, result.State) {
+			return DOManifest{}, invalidBackupf("chunk cursor did not advance for %s %s", ref.DO, ref.ID)
+		}
+		state = result.State
+	}
+}
+
+func sameBatchState(a, b BatchState) bool {
+	if a.Index != b.Index {
+		return false
+	}
+	if a.Cursor == nil || b.Cursor == nil {
+		return a.Cursor == nil && b.Cursor == nil
+	}
+	return *a.Cursor == *b.Cursor
+}
+
 func exportObjects(ctx context.Context, deps Deps, client *AdminClient, writer *Writer, objects []ObjectInfo, progress *Progress, op string) (R2Manifest, error) {
 	manifest := R2Manifest{Objects: []R2Item{}, Oversized: []string{}}
 	for _, object := range objects {
@@ -519,7 +625,9 @@ func exportObjects(ctx context.Context, deps Deps, client *AdminClient, writer *
 			deps.report(*progress)
 			continue
 		}
+		started := time.Now()
 		body, err := client.GetObject(ctx, object.Key)
+		deps.logf("object key=%s size=%d ms=%d", object.Key, object.Size, time.Since(started).Milliseconds())
 		if err != nil {
 			return R2Manifest{}, err
 		}

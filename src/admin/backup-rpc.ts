@@ -126,7 +126,7 @@ export class BackupRpc {
       const row: DumpRow = { key, value: encoded };
       const size = JSON.stringify(row).length;
       if (rows.length > 0 && bytes + size > PAGE_BYTES) {
-        return { rows, next: last };
+        return { rows, next: last, bytes };
       }
       rows.push(row);
       bytes += size;
@@ -135,6 +135,7 @@ export class BackupRpc {
     return {
       rows,
       next: entries.size < KV_PAGE_LIMIT ? null : last,
+      bytes,
     };
   }
 }

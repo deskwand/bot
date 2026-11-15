@@ -8,6 +8,13 @@
  */
 
 export const LEASE_MS = 600_000;
+
+/**
+ * Rewrite the lease only when less than this remains; renewals are frequent.
+ * Must exceed the client's renewal interval (`leaseHeartbeatInterval`, one
+ * minute), or a single late tick lets the lease lapse mid-export.
+ */
+export const RENEW_SLACK_MS = 180_000;
 export const DEFER_MS = 60_000;
 
 export type Lease = {
@@ -53,6 +60,7 @@ export class MaintenanceStore {
   renew(opId: string): boolean {
     const lease = this.current();
     if (lease === null || lease.opId !== opId) return false;
+    if (lease.until - this.now() > RENEW_SLACK_MS) return true;
     this.write({ ...lease, until: this.now() + LEASE_MS });
     return true;
   }
