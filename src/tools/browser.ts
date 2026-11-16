@@ -304,6 +304,18 @@ export function browseTool(deps: BrowseToolDeps): ToolRegistration<typeof Browse
             );
           }
           const bytes = await deps.files.readFile(result.path, MAX_ARTIFACT_BYTES + 1);
+          // Only enforce when the sandbox actually reported a size: a missing field
+          // must not turn every download into a failure, and must not reach the
+          // message as "undefined bytes".
+          const reported = typeof result.size === "number" ? result.size : null;
+          if (reported !== null && bytes.byteLength !== reported) {
+            return text(
+              `downloaded ${result.name}: the sandbox reported ${String(reported)} bytes but ` +
+                `${String(bytes.byteLength)} came back — nothing was saved. It is still in the sandbox ` +
+                `at ${result.path} for 1 hour; use exec to trim it and download again.`,
+              true,
+            );
+          }
           const key = await writeArtifact(
             deps.bucket,
             deps.taskId(),
@@ -312,7 +324,7 @@ export function browseTool(deps: BrowseToolDeps): ToolRegistration<typeof Browse
             "application/octet-stream",
           );
           return text(
-            `downloaded ${result.name} (${String(result.size)} bytes) as artifact ${key}\n\n` +
+            `downloaded ${result.name} (${String(reported ?? bytes.byteLength)} bytes) as artifact ${key}\n\n` +
               renderSnapshot(result.snapshot),
           );
         }

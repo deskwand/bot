@@ -7,9 +7,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/adminendpoint"
@@ -22,6 +24,10 @@ const (
 	CodeUnavailable = "BROWSER_UNAVAILABLE"
 	CodeFailed      = "BROWSER_FAILED"
 )
+
+// ErrSilent means the stream stopped sending anything at all while the socket
+// stayed open: half-open TCP, a killed container, or a dead tunnel.
+var ErrSilent = errors.New("browser stream went silent")
 
 const (
 	statusPath = "/admin/browser/status"
@@ -89,6 +95,9 @@ type Client struct {
 	http    *http.Client
 	// Locale supplies the language for the two sentences this package owns.
 	Locale func() string
+	// SilentAfter is how long the stream may say nothing before it is treated as
+	// dead. Zero means the 20-second default.
+	SilentAfter time.Duration
 }
 
 func (c *Client) lang() string {
@@ -118,7 +127,12 @@ func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &Client{baseURL: strings.TrimRight(baseURL, "/"), token: token, http: httpClient}
+	return &Client{
+		baseURL:     strings.TrimRight(baseURL, "/"),
+		token:       token,
+		http:        httpClient,
+		SilentAfter: 20 * time.Second,
+	}
 }
 
 // Status reads whether the takeover panel can do anything at all.
@@ -165,7 +179,22 @@ func (c *Client) Stream(
 	emit func(Frame) error,
 	onState func(StreamState) error,
 ) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+streamPath, nil)
+	silentAfter := c.SilentAfter
+	if silentAfter <= 0 {
+		silentAfter = 20 * time.Second
+	}
+	// Cancelling this context is what unblocks a ReadString that is waiting on a
+	// socket which will never speak again.
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wentSilent atomic.Bool
+	watchdog := time.AfterFunc(silentAfter, func() {
+		wentSilent.Store(true)
+		cancel()
+	})
+	defer watchdog.Stop()
+
+	request, err := http.NewRequestWithContext(streamCtx, http.MethodGet, c.baseURL+streamPath, nil)
 	if err != nil {
 		return c.broken()
 	}
@@ -175,7 +204,15 @@ func (c *Client) Stream(
 	streaming.Timeout = 0
 	response, err := streaming.Do(request)
 	if err != nil {
-		return c.unreachable()
+		// The watchdog can fire before the headers arrive on a cold tunnel.
+		switch {
+		case wentSilent.Load():
+			return ErrSilent
+		case streamCtx.Err() != nil:
+			return streamCtx.Err()
+		default:
+			return c.unreachable()
+		}
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
@@ -184,8 +221,15 @@ func (c *Client) Stream(
 
 	reader := bufio.NewReaderSize(response.Body, readBufferBytes)
 	event := ""
+	// A peer that closes without saying goodbye (killed container, dropped tunnel)
+	// ends the read with EOF, and the panel would keep the last frame forever.
+	sawEnd := false
 	for {
 		line, readErr := reader.ReadString('\n')
+		if line != "" {
+			// Any line, heartbeats included, proves the socket is still carrying data.
+			watchdog.Reset(silentAfter)
+		}
 		trimmed := strings.TrimRight(line, "\r\n")
 		switch {
 		case strings.HasPrefix(trimmed, "event: "):
@@ -201,6 +245,9 @@ func (c *Client) Stream(
 					}
 				}
 			case "state", "end":
+				if event == "end" {
+					sawEnd = true
+				}
 				var body struct {
 					URL    string `json:"url"`
 					Reason string `json:"reason"`
@@ -213,7 +260,17 @@ func (c *Client) Stream(
 			event = ""
 		}
 		if readErr != nil {
+			// Our own watchdog cancelled the request: the socket error is noise.
+			if wentSilent.Load() {
+				return ErrSilent
+			}
+			if streamCtx.Err() != nil {
+				return streamCtx.Err() // the caller closed the panel: not our business
+			}
 			if readErr == io.EOF {
+				if !sawEnd {
+					return io.ErrUnexpectedEOF
+				}
 				return nil
 			}
 			return c.unreachable()

@@ -2,10 +2,13 @@ package browseradmin
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStreamParsesFramesOfAnySize(t *testing.T) {
@@ -103,5 +106,87 @@ func TestCancelStopsTheStream(t *testing.T) {
 	cancel()
 	if err := <-done; err == nil {
 		t.Fatal("a cancelled stream must report an error, not a clean EOF")
+	}
+}
+
+func TestStreamReturnsErrSilentWhenNothingArrives(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("event: frame\ndata: {\"seq\":1,\"jpeg\":\"AA==\",\"w\":1024,\"h\":640}\n\n"))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // hang until the client gives up
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "t", server.Client())
+	client.SilentAfter = 100 * time.Millisecond
+
+	started := time.Now()
+	err := client.Stream(context.Background(), func(Frame) error { return nil }, func(StreamState) error { return nil })
+	if !errors.Is(err, ErrSilent) {
+		t.Fatalf("want ErrSilent, got %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("watchdog took %v, want under 2s", elapsed)
+	}
+}
+
+func TestStreamKeepsAliveOnHeartbeats(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				_, _ = w.Write([]byte("event: idle\ndata: {}\n\n"))
+				w.(http.Flusher).Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "t", server.Client())
+	client.SilentAfter = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel) // three watchdog windows, no frame ever
+
+	// Heartbeats alone must hold the stream open: a static page sends no frames.
+	if err := client.Stream(ctx, func(Frame) error { return nil }, func(StreamState) error { return nil }); errors.Is(err, ErrSilent) {
+		t.Fatal("heartbeats must reset the watchdog")
+	}
+}
+
+func TestStreamReportsAPeerThatHangsUpWithoutEnding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("event: frame\ndata: {\"seq\":1,\"jpeg\":\"AA==\",\"w\":1024,\"h\":640}\n\n"))
+		w.(http.Flusher).Flush()
+		// Returning closes the socket like a killed container: the client sees EOF
+		// with no end event, and the panel must not keep the last frame forever.
+	}))
+
+	client := NewClient(server.URL, "t", server.Client())
+	err := client.Stream(context.Background(), func(Frame) error { return nil }, func(StreamState) error { return nil })
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("want io.ErrUnexpectedEOF, got %v", err)
+	}
+}
+
+func TestStreamReturnsNilWhenTheServerEndsTheStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("event: end\ndata: {\"reason\":\"superseded\"}\n\n"))
+	}))
+
+	client := NewClient(server.URL, "t", server.Client())
+	if err := client.Stream(context.Background(), func(Frame) error { return nil }, func(StreamState) error { return nil }); err != nil {
+		t.Fatalf("an explicit end must read as a clean finish, got %v", err)
 	}
 }

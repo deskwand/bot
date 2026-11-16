@@ -123,3 +123,34 @@ func TestBrowserStreamFreesItsSlotWhenItEndsByItself(t *testing.T) {
 	}
 	fixture.service.BrowserStreamStop()
 }
+
+func TestBrowserStreamReportsSilenceToThePanel(t *testing.T) {
+	fixture := browserHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/browser/mirror" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // never sends anything: only the watchdog can end this
+	}))
+	fixture.service.browserSilentAfter = 100 * time.Millisecond
+
+	ended := make(chan BrowserStreamDTO, 4)
+	fixture.service.emitBrowserStream = func(state BrowserStreamDTO) { ended <- state }
+
+	if err := fixture.service.BrowserStreamStart(); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	select {
+	case state := <-ended:
+		if state.Kind != "end" || state.Reason != "silent" {
+			t.Fatalf("want end/silent, got %+v", state)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no end event: the panel would sit on a dead frame forever")
+	}
+	// The watchdog already cancelled it; Stop must still return promptly.
+	fixture.service.BrowserStreamStop()
+}

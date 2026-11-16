@@ -205,7 +205,7 @@ function fakePage(
       record.calls.push("back");
     },
     async screenshot(options) {
-      record.calls.push(`shot ${String(options.fullPage)}`);
+      record.calls.push(`shot ${String(options.type)} ${String(options.quality)}`);
       return new Uint8Array(2048).fill(7);
     },
     url: () => current,
@@ -1416,5 +1416,23 @@ describe("temp sweep", () => {
     expect(existsSync(stale)).toBe(false);
     expect(existsSync(fresh)).toBe(true);
     rmSync(fresh, { recursive: true, force: true });
+  });
+});
+
+describe("frame budget", () => {
+  it("streams at the smaller quality and width, and snapshots at the same quality", async () => {
+    const record: Recorded = { calls: [], cdp: [] as unknown[][] };
+    const { manager } = mirrorManager(record);
+    await manager.mirror.open("https://a.example");
+
+    const start = record.cdp!.find(([method]) => method === "Page.startScreencast");
+    expect(start?.[1]).toMatchObject({
+      format: "jpeg",
+      quality: 50,
+      maxWidth: 1024,
+      maxHeight: 640,
+    });
+    // The first frame must not be sharper than the stream that follows it.
+    expect(record.calls).toContain("shot jpeg 50");
   });
 });

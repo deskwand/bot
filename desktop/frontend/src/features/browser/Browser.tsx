@@ -107,18 +107,83 @@ export function Browser() {
   }, [client]);
 
   useEffect(() => {
-    if (frame === null || canvas.current === null) return;
+    if (frame === null || canvas.current === null) {
+      // A frame that arrives with no canvas must not leave the guard stuck shut.
+      painting.current = false;
+      return;
+    }
     const element = canvas.current;
-    const image = new Image();
-    image.onload = () => {
-      const context = element.getContext("2d");
-      if (context != null) context.drawImage(image, 0, 0, element.width, element.height);
+    let cancelled = false;
+    let pending: ImageBitmap | null = null;
+
+    const release = (): void => {
       painting.current = false;
     };
-    image.onerror = () => {
-      painting.current = false;
+
+    const paint = (decoded: ImageBitmap): void => {
+      if (cancelled) {
+        decoded.close();
+        return;
+      }
+      try {
+        const context = element.getContext("2d");
+        if (context != null) context.drawImage(decoded, 0, 0, element.width, element.height);
+      } finally {
+        decoded.close();
+        pending = null;
+        release();
+      }
     };
-    image.src = `data:image/jpeg;base64,${frame.jpeg}`;
+
+    let blob: Blob;
+    try {
+      const binary = atob(frame.jpeg);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      blob = new Blob([bytes], { type: "image/jpeg" });
+    } catch {
+      // A truncated base64 string must not leave the canvas wedged shut.
+      release();
+      return;
+    }
+
+    if (typeof createImageBitmap === "function") {
+      // Decoded off the main thread: the old data-URL path parsed and decoded on it.
+      void createImageBitmap(blob)
+        .then((decoded) => {
+          pending = decoded;
+          paint(decoded);
+        })
+        .catch(release);
+    } else {
+      // WKWebView and WebView2 both have createImageBitmap; this path only keeps an
+      // ancient webview showing a picture instead of nothing.
+      const url = URL.createObjectURL(blob);
+      const image = new Image();
+      image.onload = () => {
+        URL.revokeObjectURL(url);
+        if (cancelled) {
+          release();
+          return;
+        }
+        const context = element.getContext("2d");
+        if (context != null) context.drawImage(image, 0, 0, element.width, element.height);
+        release();
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(url);
+        release();
+      };
+      image.src = url;
+    }
+
+    return () => {
+      cancelled = true;
+      if (pending !== null) {
+        pending.close();
+        pending = null;
+      }
+    };
   }, [frame]);
 
   const point = (event: React.PointerEvent<HTMLCanvasElement>) => {

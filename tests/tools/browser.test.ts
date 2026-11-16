@@ -443,7 +443,7 @@ describe("download action", () => {
     truncated: { text: false, elements: false, filtered: 0 },
   };
   const big = { name: "big.bin", size: 20 << 20, path: "/tmp/dw-downloads/x/big.bin", snapshot: emptySnapshot };
-  const small = { name: "a.csv", size: 10, path: "/tmp/dw-downloads/x/a.csv", snapshot: emptySnapshot };
+  const small = { name: "a.csv", size: 3, path: "/tmp/dw-downloads/x/a.csv", snapshot: emptySnapshot };
 
   function toolWith(download: unknown, features = ["browser", "browser-download"]) {
     const { client } = stubClient({ features: async () => features, download: download as never });
@@ -465,6 +465,24 @@ describe("download action", () => {
     const result = await call(toolWith(async () => small), { action: "download", target: "#get" });
     expect(result.isError).toBeFalsy();
     expect(textOf(result)).toContain("t1/");
+  });
+
+  it("refuses a truncated read instead of storing a short artifact", async () => {
+    const truncated = { ...small, size: 10 }; // 说 10 字节，桩只返回 3
+    const result = await call(toolWith(async () => truncated), { action: "download", target: "#get" });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("the sandbox reported 10 bytes but 3 came back");
+  });
+
+  it("keeps a download whose sandbox reported no size", async () => {
+    // An older sandbox omits size; the field is required in the type but the JSON
+    // is not validated, so it arrives undefined.
+    const unreported = { name: small.name, path: small.path, snapshot: small.snapshot };
+    const result = await call(toolWith(async () => unreported), { action: "download", target: "#get" });
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain("t1/");
+    expect(textOf(result)).toContain("(3 bytes)");
+    expect(textOf(result)).not.toContain("undefined");
   });
 
   it("leaves a big download in the sandbox and says for how long", async () => {

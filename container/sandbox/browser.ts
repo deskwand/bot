@@ -108,6 +108,14 @@ export const PANEL_SESSION = "panel";
 /** A frame older than this many frames behind the newest one is not worth clicking. */
 const STALE_FRAMES = 60;
 
+/**
+ * The first frame and the screencast read the same pair: a snapshot at another
+ * quality makes the first paint look different from the stream behind it.
+ */
+const FRAME_QUALITY = 50;
+const FRAME_MAX_WIDTH = 1024;
+const FRAME_MAX_HEIGHT = Math.round((FRAME_MAX_WIDTH * VIEWPORT.height) / VIEWPORT.width);
+
 export type MirrorEvent =
   | { type: "frame"; seq: number; jpeg: string; w: number; h: number }
   | { type: "state"; url: string }
@@ -634,7 +642,7 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
   /** One screenshot so a panel that connects later still has something to draw. */
   async function snapshotFrame(state: MirrorState): Promise<void> {
     const jpeg = await state.tab.page
-      .screenshot({ type: "jpeg", quality: 60 })
+      .screenshot({ type: "jpeg", quality: FRAME_QUALITY })
       .then((bytes) => Buffer.from(bytes).toString("base64"))
       .catch(() => "");
     if (jpeg === "") return;
@@ -716,9 +724,9 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     await cdp.send("Page.enable");
     await cdp.send("Page.startScreencast", {
       format: "jpeg",
-      quality: 60,
-      maxWidth: VIEWPORT.width,
-      maxHeight: VIEWPORT.height,
+      quality: FRAME_QUALITY,
+      maxWidth: FRAME_MAX_WIDTH,
+      maxHeight: FRAME_MAX_HEIGHT,
       everyNthFrame: 1,
     });
   }

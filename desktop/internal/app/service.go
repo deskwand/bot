@@ -282,17 +282,19 @@ type Service struct {
 	// One takeover stream at a time: a second start is a no-op, stop waits.
 	browserStreamMu sync.Mutex
 	browserStream   *browserStream
-	container       ContainerRuntime
-	ssh             SSHProber
-	endpoints       *adminendpoint.Router
-	tunnel          TunnelState
-	emitContainer   func(StepDTO)
-	newOpID         func() (string, error)
-	now             func() time.Time
-	goos            string
-	moveJournal     *backup.MoveJournal
-	moveExporter    MoveExporter
-	moveMuter       MoveMuter
+	// Zero means the sandbox client's own default; tests shrink it.
+	browserSilentAfter time.Duration
+	container          ContainerRuntime
+	ssh                SSHProber
+	endpoints          *adminendpoint.Router
+	tunnel             TunnelState
+	emitContainer      func(StepDTO)
+	newOpID            func() (string, error)
+	now                func() time.Time
+	goos               string
+	moveJournal        *backup.MoveJournal
+	moveExporter       MoveExporter
+	moveMuter          MoveMuter
 
 	pendingMu   sync.Mutex
 	pendingHost *domain.HostRef

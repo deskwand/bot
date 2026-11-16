@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 
 	"github.com/egoist/mygo"
 
@@ -70,6 +71,9 @@ func (s *Service) browserClient(ctx context.Context, target domain.Target) (*bro
 	}
 	client := browseradmin.NewClient(endpoint.BaseURL, endpoint.Token, endpoint.HTTP)
 	client.Locale = s.locale.Current
+	if s.browserSilentAfter > 0 {
+		client.SilentAfter = s.browserSilentAfter
+	}
 	return client, nil
 }
 
@@ -193,13 +197,23 @@ func (s *Service) BrowserStreamStart() error {
 			}
 			s.browserStreamMu.Unlock()
 		}()
-		_ = client.Stream(streamCtx, func(frame browseradmin.Frame) error {
+		err := client.Stream(streamCtx, func(frame browseradmin.Frame) error {
 			emit(BrowserFrameDTO{Seq: frame.Seq, JPEG: frame.JPEG, W: frame.W, H: frame.H})
 			return nil
 		}, func(state browseradmin.StreamState) error {
 			emitState(BrowserStreamDTO{Kind: state.Kind, URL: state.URL, Reason: state.Reason})
 			return nil
 		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			// The panel learns a stream is over only from an end event; a transport
+			// error used to vanish here and leave the last frame on screen. A caller
+			// cancellation is not that: the panel closed itself.
+			reason := "closed"
+			if errors.Is(err, browseradmin.ErrSilent) {
+				reason = "silent"
+			}
+			emitState(BrowserStreamDTO{Kind: "end", Reason: reason})
+		}
 	}()
 	return nil
 }
