@@ -370,10 +370,11 @@ aws_secret="$(printf '%s\n' "$r2_credentials" | sed -n '2p')"
 unset r2_credentials
 
 # 构建与上传在同一次 mygo 调用里完成，所以上传断线会连同已经花掉的构建一起作废。
-# 上传失败（write tcp / broken pipe / timeout / use of closed network connection）
-# 是网络问题，重试值得；编译或打包失败重跑一遍只会再慢一遍，所以只对前者重试。
+# 上传失败（write tcp / broken pipe / timeout / use of closed network connection /
+# 读写线上文件时的 EOF / DNS 解析失败）是网络问题，重试值得；编译或打包失败重跑一遍
+# 只会再慢一遍，所以只对前者重试。
 upload_failure_is_network() {
-  grep -qiE "Uploading .*✗|✗ Uploading|write tcp|broken pipe|use of closed network connection|i/o timeout|connection reset|TLS handshake timeout" "$1"
+  grep -qiE "Uploading .*✗|✗ Uploading|write tcp|broken pipe|use of closed network connection|i/o timeout|connection reset|connection refused|TLS handshake timeout|unexpected EOF|: EOF|dial tcp|no such host|temporary failure in name resolution" "$1"
 }
 
 for target in "${targets[@]}"; do
