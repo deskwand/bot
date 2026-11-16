@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { sweepTemp } from "../container/sandbox/browser.js";
 import {
   MAX_ELEMENTS,
   MAX_TEXT_BYTES,
@@ -142,7 +143,10 @@ import { startSandboxd, type Sandboxd } from "../container/sandbox/server.js";
 
 type Recorded = { calls: string[]; cdp?: unknown[][] };
 
-function fakePage(record: Recorded, options: { url?: string } = {}): PageLike {
+function fakePage(
+  record: Recorded,
+  options: { url?: string; snapshots?: string[] } = {},
+): PageLike {
   let current = options.url ?? "about:blank";
   return {
     async goto(url) {
@@ -158,11 +162,12 @@ function fakePage(record: Recorded, options: { url?: string } = {}): PageLike {
             : "evaluate tag",
       );
       if (source.includes("return collect()")) {
+        const queued = options.snapshots?.shift();
         return {
           url: current,
           title: "T",
           text: "hello",
-          elements: [{ role: "button", name: "Go" }],
+          elements: [{ role: "button", name: queued ?? "Go" }],
           filtered: 0,
         };
       }
@@ -206,6 +211,19 @@ function fakePage(record: Recorded, options: { url?: string } = {}): PageLike {
     url: () => current,
     async close() {
       record.calls.push("close");
+    },
+    async waitForLoadState(state, options) {
+      record.calls.push(`waitForLoadState ${state}`);
+      if (options.timeout !== 2_000) {
+        throw new Error(`unexpected load timeout ${String(options.timeout)}`);
+      }
+    },
+    async setInputFiles(selector, path) {
+      record.calls.push(`setInputFiles ${selector} ${path}`);
+    },
+    async waitForEvent(event, options) {
+      record.calls.push(`waitForEvent ${event} ${String(options.timeout)}`);
+      throw new Error("Timeout exceeded");
     },
   };
 }
@@ -333,8 +351,9 @@ describe("createBrowserManager", () => {
     ]);
     expect(first.url).toBe("https://a.example");
     expect(second.url).toBe("https://a.example");
-    // One collect for open, one per read: both happened, one after the other.
-    expect(record.calls.filter((call) => call === "evaluate collect")).toHaveLength(3);
+    // Two collects per settled snapshot (open and each read) since settle re-reads
+    // once to see the frame stop moving; both calls happened, one after the other.
+    expect(record.calls.filter((call) => call === "evaluate collect")).toHaveLength(6);
   });
 
   it("reclaims idle tabs and then the browser", async () => {
@@ -456,7 +475,12 @@ describe("browser endpoints", () => {
       const body = (await (
         await fetch(`${base}/healthz`, { headers: { authorization: "Bearer t" } })
       ).json()) as { features?: string[] };
-      expect(body.features).toEqual(["browser", "browser-mirror"]);
+      expect(body.features).toEqual([
+        "browser",
+        "browser-mirror",
+        "browser-upload",
+        "browser-download",
+      ]);
     } finally {
       await daemon.close();
     }
@@ -1219,5 +1243,178 @@ describe("mirror coordinates", () => {
     expect(record.calls).toContain("wheel 120");
     expect(record.calls).toContain("type 你好");
     expect(record.calls).toContain("press Enter");
+  });
+});
+
+function fakeDownload(record: Recorded, size: number) {
+  return {
+    suggestedFilename: () => "../../evil name.pdf",
+    async saveAs(path: string) {
+      record.calls.push(`saveAs ${path}`);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, Buffer.alloc(size));
+    },
+  };
+}
+
+describe("open waits for load", () => {
+  it("asks for load after domcontentloaded and before reading the page", async () => {
+    const record: Recorded = { calls: [] };
+    const manager = createBrowserManager({
+      userDataDir: "/tmp/x",
+      launch: async () => ({ newPage: async () => fakePage(record), close: async () => {} }),
+    });
+    await manager.open("a", "https://a.example");
+    expect(record.calls.slice(0, 3)).toEqual([
+      "goto https://a.example",
+      "waitForLoadState load",
+      "evaluate collect",
+    ]);
+  });
+
+  it("returns the snapshot even when load times out", async () => {
+    const record: Recorded = { calls: [] };
+    const page = fakePage(record);
+    page.waitForLoadState = async () => {
+      throw new Error("Timeout 2000ms exceeded");
+    };
+    const manager = createBrowserManager({
+      userDataDir: "/tmp/x",
+      launch: async () => ({ newPage: async () => page, close: async () => {} }),
+    });
+    const snapshot = await manager.open("a", "https://a.example");
+    expect(snapshot.url).toBe("https://a.example");
+  });
+});
+
+describe("collectSettled", () => {
+  it("keeps reading until two frames agree", async () => {
+    const record: Recorded = { calls: [] };
+    const page = fakePage(record, { snapshots: ["one", "two", "two"] });
+    const manager = createBrowserManager({
+      userDataDir: "/tmp/x",
+      launch: async () => ({ newPage: async () => page, close: async () => {} }),
+    });
+    const snapshot = await manager.open("a", "https://a.example");
+    expect(snapshot.elements[0]!.name).toBe("two");
+    expect(record.calls.filter((call) => call === "evaluate collect")).toHaveLength(3);
+  });
+
+  it("returns the last frame when the page never settles", async () => {
+    const record: Recorded = { calls: [] };
+    const page = fakePage(record, { snapshots: ["one", "two", "three", "four"] });
+    const manager = createBrowserManager({
+      userDataDir: "/tmp/x",
+      launch: async () => ({ newPage: async () => page, close: async () => {} }),
+    });
+    const snapshot = await manager.open("a", "https://a.example");
+    expect(snapshot.elements[0]!.name).toBe("three");
+    expect(record.calls.filter((call) => call === "evaluate collect")).toHaveLength(3);
+  });
+
+  it("keeps the last good frame when a later read throws", async () => {
+    const record: Recorded = { calls: [] };
+    let reads = 0;
+    const page = fakePage(record, { snapshots: ["one", "two"] });
+    const original = page.evaluate;
+    page.evaluate = async (source) => {
+      if (source.includes("return collect()")) {
+        reads += 1;
+        if (reads >= 3) throw new Error("Execution context was destroyed");
+      }
+      return original(source);
+    };
+    const manager = createBrowserManager({
+      userDataDir: "/tmp/x",
+      launch: async () => ({ newPage: async () => page, close: async () => {} }),
+    });
+    const snapshot = await manager.open("a", "https://a.example");
+    expect(snapshot.elements[0]!.name).toBe("two");
+  });
+});
+
+describe("upload", () => {
+  it("tags a file input and hands it the path", async () => {
+    const record: Recorded = { calls: [] };
+    const manager = createBrowserManager({
+      userDataDir: "/tmp/x",
+      launch: async () => ({ newPage: async () => fakePage(record), close: async () => {} }),
+    });
+    await manager.open("a", "https://a.example");
+    await manager.upload("a", { target: "input[type=file]", path: "/tmp/dw-uploads/x/a.csv" });
+    expect(record.calls).toContain("setInputFiles [data-dw-hit] /tmp/dw-uploads/x/a.csv");
+    expect(record.calls.filter((call) => call === "evaluate untag")).toHaveLength(1);
+  });
+
+  it("refuses when nothing matched the target", async () => {
+    const record: Recorded = { calls: [] };
+    const page = fakePage(record);
+    const original = page.evaluate;
+    page.evaluate = async (source) => {
+      if (source.includes("data-dw-hit") && source.includes("input[type=file]")) return false;
+      return original(source);
+    };
+    const manager = createBrowserManager({
+      userDataDir: "/tmp/x",
+      launch: async () => ({ newPage: async () => page, close: async () => {} }),
+    });
+    await manager.open("a", "https://a.example");
+    await expect(
+      manager.upload("a", { target: "input[type=file]", path: "/tmp/x" }),
+    ).rejects.toThrow(/no file input/);
+  });
+});
+
+describe("download", () => {
+  it("arms the wait before clicking, then reports name, size and path", async () => {
+    const record: Recorded = { calls: [] };
+    const page = fakePage(record);
+    page.waitForEvent = async (event) => {
+      record.calls.push(`waitForEvent ${event}`);
+      return fakeDownload(record, 1234);
+    };
+    const manager = createBrowserManager({
+      userDataDir: "/tmp/x",
+      launch: async () => ({ newPage: async () => page, close: async () => {} }),
+    });
+    await manager.open("a", "https://a.example");
+    const result = await manager.download("a", "e1");
+    const armed = record.calls.indexOf("waitForEvent download");
+    const clicked = record.calls.indexOf("click [data-dw-hit]");
+    expect(armed).toBeGreaterThanOrEqual(0);
+    expect(clicked).toBeGreaterThan(armed);
+    expect(result.name).toBe("evil name.pdf");
+    expect(result.size).toBe(1234);
+    expect(result.path.startsWith("/tmp/dw-downloads/")).toBe(true);
+    expect(result.path).not.toContain("..");
+  });
+
+  it("turns a timeout into a plain instruction", async () => {
+    const record: Recorded = { calls: [] };
+    const manager = createBrowserManager({
+      userDataDir: "/tmp/x",
+      launch: async () => ({ newPage: async () => fakePage(record), close: async () => {} }),
+    });
+    await manager.open("a", "https://a.example");
+    await expect(manager.download("a", "e1")).rejects.toThrow(/did not start a download/);
+  });
+});
+
+describe("temp sweep", () => {
+  it("removes hour-old directories and keeps fresh ones", async () => {
+    mkdirSync("/tmp/dw-downloads", { recursive: true });
+    const stamp = String(process.pid);
+    const stale = `/tmp/dw-downloads/stale-${stamp}`;
+    const fresh = `/tmp/dw-downloads/fresh-${stamp}`;
+    mkdirSync(stale, { recursive: true });
+    mkdirSync(fresh, { recursive: true });
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(stale, twoHoursAgo, twoHoursAgo);
+
+    await sweepTemp(Date.now());
+
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+    rmSync(fresh, { recursive: true, force: true });
   });
 });

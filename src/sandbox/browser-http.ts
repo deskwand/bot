@@ -45,6 +45,13 @@ export type MirrorOpened = {
 
 export type MirrorInputResult = { ok: boolean; code?: "STALE" | "NO_MIRROR" };
 
+export type DownloadResult = {
+  name: string;
+  size: number;
+  path: string;
+  snapshot: Snapshot;
+};
+
 export type BrowserClient = {
   /** Throws when the sandbox cannot be reached; an empty list means "no browser". */
   features(): Promise<string[]>;
@@ -54,6 +61,8 @@ export type BrowserClient = {
     action: ActAction,
     args?: { target?: string; text?: string; key?: string },
   ): Promise<Snapshot>;
+  upload(session: string, target: string, path: string): Promise<Snapshot>;
+  download(session: string, target: string, timeoutMs?: number): Promise<DownloadResult>;
   shot(session: string, fullPage?: boolean): Promise<Uint8Array>;
   close(session: string): Promise<void>;
   openMirror(url?: string, timeoutMs?: number): Promise<MirrorOpened>;
@@ -137,6 +146,16 @@ export function browserClient(
         key: args.key,
       });
       return (await response.json()) as Snapshot;
+    },
+
+    async upload(session, target, path) {
+      const response = await post("/browser/upload", { session, target, path });
+      return (await response.json()) as Snapshot;
+    },
+
+    async download(session, target, timeoutMs) {
+      const response = await post("/browser/download", { session, target, timeoutMs }, 150_000);
+      return (await response.json()) as DownloadResult;
     },
 
     async shot(session, fullPage = false) {

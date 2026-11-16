@@ -199,6 +199,74 @@ if [ -n "$sandbox" ]; then
   curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
     -H 'content-type: application/json' --data '{}' \
     http://127.0.0.1:18080/browser/mirror/close >/dev/null
+
+  # Upload: the file input a real site hides behind a styled button must still
+  # take the file. The page reports the name and size through its own title.
+  printf '<!doctype html><meta charset="utf-8"><form method="post" enctype="multipart/form-data" action="/recv"><input id="f" name="f" type="file" style="opacity:0;width:0;height:0"><button id="go">send</button></form><script>document.getElementById("f").onchange=function(){document.title=this.files[0].name+":"+this.files[0].size}</script>' \
+    > "$sandbox_dir/upload.html"
+  printf 'abcdefghij' > "$sandbox_dir/up.csv"
+  curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X PUT \
+    --data-binary @"$sandbox_dir/up.csv" \
+    "http://127.0.0.1:18080/files?path=%2Ftmp%2Fdw-uploads%2Fsmoke%2Fup.csv" >/dev/null \
+    || fail "上传文件写不进沙箱"
+
+  curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
+    -H 'content-type: application/json' \
+    --data '{"session":"smoke","url":"http://127.0.0.1:8099/upload.html"}' \
+    http://127.0.0.1:18080/browser/open >/dev/null || fail "上传页打不开"
+
+  curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
+    -H 'content-type: application/json' \
+    --data '{"session":"smoke","target":"input[type=file]","path":"/tmp/dw-uploads/smoke/up.csv"}' \
+    http://127.0.0.1:18080/browser/upload >/dev/null || fail "隐形文件框收不到文件"
+
+  title=$(curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
+    -H 'content-type: application/json' --data '{"session":"smoke","action":"read"}' \
+    http://127.0.0.1:18080/browser/act | tr -d '\n')
+  case "$title" in
+    *"up.csv:10"*) ;;
+    *) fail "文件框没拿到完整文件：$title" ;;
+  esac
+
+  # Download: a click-started download is caught and saved, byte count included.
+  printf '0123456789abcdef' > "$sandbox_dir/payload.bin"
+  printf '<!doctype html><meta charset="utf-8"><a id="get" href="/payload.bin" download>get</a>' \
+    > "$sandbox_dir/download.html"
+  curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
+    -H 'content-type: application/json' \
+    --data '{"session":"smoke","url":"http://127.0.0.1:8099/download.html"}' \
+    http://127.0.0.1:18080/browser/open >/dev/null || fail "下载页打不开"
+
+  dl=$(curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
+    -H 'content-type: application/json' \
+    --data '{"session":"smoke","target":"#get"}' \
+    http://127.0.0.1:18080/browser/download) || fail "下载没接住"
+  case "$dl" in
+    *'"size":16'*) ;;
+    *) fail "下载字节数不对：$dl" ;;
+  esac
+  # The bytes must also come back out through /files, which is what the bot does.
+  dl_path=$(printf '%s' "$dl" | sed -n 's/.*"path":"\([^"]*\)".*/\1/p')
+  [ -n "$dl_path" ] || fail "下载响应里没有 path：$dl"
+  dl_size=$(curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" \
+    "http://127.0.0.1:18080/files?path=$(printf '%s' "$dl_path" | sed 's|/|%2F|g')" | wc -c | tr -d ' ')
+  [ "$dl_size" = 16 ] || fail "下载的文件读回来是 $dl_size 字节，不是 16"
+
+  # Settle: a page whose text changes every 500 ms must still answer quickly.
+  printf '<!doctype html><meta charset="utf-8"><h1 id="n">0</h1><button id="go">bump</button><script>let n=0;setInterval(function(){n++;document.getElementById("n").textContent=n},500)</script>' \
+    > "$sandbox_dir/poll.html"
+  curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
+    -H 'content-type: application/json' \
+    --data '{"session":"smoke","url":"http://127.0.0.1:8099/poll.html"}' \
+    http://127.0.0.1:18080/browser/open >/dev/null || fail "长轮询页打不开"
+
+  started=$(date +%s)
+  curl -s --noproxy '*' -fsS -H "Authorization: Bearer smoke-token" -X POST \
+    -H 'content-type: application/json' \
+    --data '{"session":"smoke","action":"click","target":"#go"}' \
+    http://127.0.0.1:18080/browser/act >/dev/null || fail "会变的页面上点击失败"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -le 5 ] || fail "会变的页面上一次点击用了 ${elapsed} 秒"
 fi
 
 echo "smoke ok"

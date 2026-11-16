@@ -141,7 +141,9 @@ export function createSandboxdHandler(config: SandboxdConfig) {
         uptimeSec: Math.round(process.uptime()),
         disk: usage,
         features:
-          config.browser === undefined ? [] : ["browser", "browser-mirror"],
+          config.browser === undefined
+            ? []
+            : ["browser", "browser-mirror", "browser-upload", "browser-download"],
       });
     }
 
@@ -233,6 +235,25 @@ export function createSandboxdHandler(config: SandboxdConfig) {
               key: typeof body.key === "string" ? body.key : undefined,
             }),
           );
+        }
+
+        if (url.pathname === "/browser/upload") {
+          const target = typeof body.target === "string" ? body.target : "";
+          const path = typeof body.path === "string" ? body.path : "";
+          if (target === "" || path === "") {
+            return fail(res, 400, "BAD_REQUEST", "target and path are required");
+          }
+          return json(res, 200, await browser.upload(session, { target, path }));
+        }
+
+        if (url.pathname === "/browser/download") {
+          const target = typeof body.target === "string" ? body.target : "";
+          if (target === "") return fail(res, 400, "BAD_REQUEST", "target is required");
+          const timeoutMs =
+            typeof body.timeoutMs === "number" && Number.isFinite(body.timeoutMs)
+              ? body.timeoutMs
+              : undefined;
+          return json(res, 200, await browser.download(session, target, timeoutMs));
         }
 
         if (url.pathname === "/browser/shot") {

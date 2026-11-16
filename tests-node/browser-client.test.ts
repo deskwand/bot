@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { browserClient, type Snapshot } from "../src/sandbox/browser-http.js";
-import type { ContainerSnapshot } from "./helpers/browser-types.js";
+import { browserClient, type DownloadResult, type Snapshot } from "../src/sandbox/browser-http.js";
+import type { ContainerDownloadResult, ContainerSnapshot } from "./helpers/browser-types.js";
 
 const ENV = { SANDBOX_URL: "http://sandbox:8080", SANDBOX_TOKEN: "t" };
 
 /** Compile-time drift guard: the bot's copy must match the container's shape. */
 const _shape: Snapshot = null as unknown as ContainerSnapshot;
+const _download: DownloadResult = null as unknown as ContainerDownloadResult;
 
 function fakeFetch(routes: Record<string, { status?: number; body?: unknown; bytes?: Uint8Array }>) {
   const calls: { url: string; body: unknown }[] = [];
@@ -82,4 +83,30 @@ describe("browserClient", () => {
 });
 
 void _shape;
+void _download;
 
+describe("download", () => {
+  it("posts the download target and returns the container's shape", async () => {
+    const { impl, calls } = fakeFetch({
+      "/browser/download": {
+        body: {
+          name: "a.csv",
+          size: 10,
+          path: "/tmp/dw-downloads/x/a.csv",
+          snapshot: {
+            url: "https://a.example/dl",
+            title: "T",
+            text: "",
+            elements: [],
+            truncated: { text: false, elements: false, filtered: 0 },
+          },
+        },
+      },
+    });
+    const client = browserClient(ENV as never, impl)!;
+    const result = await client.download("task-1", "#get");
+    expect(calls[0]!.body).toEqual({ session: "task-1", target: "#get" });
+    expect(result.name).toBe("a.csv");
+    expect(result.snapshot.url).toBe("https://a.example/dl");
+  });
+});

@@ -237,5 +237,34 @@ export function tagSelectorScript(selector: string): string {
 })()`;
 }
 
+/**
+ * File inputs are almost never visible: sites hide them behind a styled button.
+ * These two skip the visibility test tagScript insists on, and refuse anything
+ * that is not an `input[type=file]`.
+ */
+export function tagFileInputScript(wanted: string): string {
+  return `(() => {${PAGE_HELPERS}
+  const wanted = ${JSON.stringify(wanted)};
+  for (const el of document.querySelectorAll("input[type=file]")) {
+    if (el.tagName !== "INPUT" || el.type !== "file" || el.disabled) continue;
+    if (fingerprintOf(roleOf(el), nameOf(el), el.type || undefined, el.placeholder || undefined) !== wanted) continue;
+    el.setAttribute("data-dw-hit", "1");
+    return true;
+  }
+  return false;
+})()`;
+}
+
+export function tagFileSelectorScript(selector: string): string {
+  return `(() => {${PAGE_HELPERS}
+  for (const el of document.querySelectorAll(${JSON.stringify(selector)})) {
+    if (el.tagName !== "INPUT" || el.type !== "file" || el.disabled) continue;
+    el.setAttribute("data-dw-hit", "1");
+    return true;
+  }
+  return false;
+})()`;
+}
+
 export const UNTAG_SOURCE =
   '(() => { for (const el of document.querySelectorAll("[data-dw-hit]")) el.removeAttribute("data-dw-hit"); return true; })()';

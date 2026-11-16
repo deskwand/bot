@@ -1,3 +1,5 @@
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import {
   identityFor,
   launchOptions,
@@ -7,9 +9,12 @@ import {
 import {
   buildSnapshot,
   collectScript,
+  fingerprint,
   refTable,
   resolveTarget,
   isRef,
+  tagFileInputScript,
+  tagFileSelectorScript,
   tagScript,
   tagSelectorScript,
   UNTAG_SOURCE,
@@ -42,6 +47,20 @@ export type ActAction = "click" | "fill" | "press" | "back" | "read";
 
 export type ActArgs = { target?: string; text?: string; key?: string };
 
+export type UploadArgs = { target: string; path: string };
+
+export type DownloadLike = {
+  suggestedFilename(): string;
+  saveAs(path: string): Promise<void>;
+};
+
+export type DownloadResult = {
+  name: string;
+  size: number;
+  path: string;
+  snapshot: Snapshot;
+};
+
 export type Mouse = {
   move(x: number, y: number): Promise<void>;
   down(x: number, y: number, button: "left" | "right"): Promise<void>;
@@ -64,6 +83,10 @@ export type PageLike = {
   }): Promise<Uint8Array>;
   url(): string;
   close(): Promise<void>;
+  /** Absent in test fakes; a real page always has them. */
+  waitForLoadState?(state: "load", options: { timeout: number }): Promise<void>;
+  setInputFiles?(selector: string, path: string): Promise<void>;
+  waitForEvent?(event: "download", options: { timeout: number }): Promise<DownloadLike>;
 };
 
 export type CdpSession = {
@@ -117,6 +140,8 @@ export type Mirror = {
 export type BrowserManager = {
   open(session: string, url: string, timeoutMs?: number): Promise<Snapshot>;
   act(session: string, action: ActAction, args?: ActArgs): Promise<Snapshot>;
+  upload(session: string, args: UploadArgs): Promise<Snapshot>;
+  download(session: string, target: string, timeoutMs?: number): Promise<DownloadResult>;
   shot(session: string, fullPage?: boolean): Promise<Uint8Array>;
   close(session: string): Promise<void>;
   sweep(at?: number): Promise<void>;
@@ -138,6 +163,63 @@ const CLOSED = /has been closed|browser has disconnected|Target (page|closed)|Co
 
 /** Errors Playwright throws when the page navigated out from under a script. */
 const DESTROYED = /Execution context was destroyed|Cannot find context|detached Frame/i;
+
+/** `load` is a bonus, not a requirement: one slow image must not fail the open. */
+const LOAD_SETTLE_MS = 2_000;
+const SETTLE_READS = 3;
+const SETTLE_DELAY_MS = 250;
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+const TEMP_DIRS = ["/tmp/dw-uploads", "/tmp/dw-downloads"];
+const TEMP_TTL_MS = 60 * 60 * 1000;
+
+const pause = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+async function waitForLoad(page: PageLike): Promise<void> {
+  try {
+    await page.waitForLoadState?.("load", { timeout: LOAD_SETTLE_MS });
+  } catch {
+    // The snapshot that follows is what the caller actually needs.
+  }
+}
+
+/** `url` plus element identity: text changes on any clock and proves nothing. */
+function frameKey(snapshot: Snapshot): string {
+  return `${snapshot.url}\u0000${snapshot.elements.map((element) => fingerprint(element)).join(",")}`;
+}
+
+/** Keep the name usable and the path inside its own temp directory. */
+export function sanitizeTempName(raw: string): string {
+  const base = raw.split("/").pop() ?? "";
+  const cleaned = base
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/^\.+/, "")
+    .trim();
+  return cleaned === "" ? "download.bin" : cleaned.slice(0, 120);
+}
+
+/** Temp files survive longer than this only if something went wrong. */
+export async function sweepTemp(now: number): Promise<void> {
+  for (const dir of TEMP_DIRS) {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const path = `${dir}/${entry}`;
+      try {
+        const info = await stat(path);
+        if (now - info.mtimeMs > TEMP_TTL_MS) await rm(path, { recursive: true, force: true });
+      } catch {
+        // Gone already, or not ours: nothing to clean.
+      }
+    }
+  }
+}
 
 /**
  * `playwright-core` lives in the sandbox image, not in this package: importing
@@ -185,6 +267,9 @@ function adaptPage(page: RawPage): PageLike {
     screenshot: (options) => page.screenshot(options),
     url: () => page.url(),
     close: () => page.close(),
+    waitForLoadState: (state, options) => page.waitForLoadState!(state, options),
+    setInputFiles: (selector, path) => page.setInputFiles!(selector, path),
+    waitForEvent: (event, options) => page.waitForEvent!(event, options),
   };
 }
 
@@ -347,14 +432,33 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
    * document when we read it. One short retry covers that; anything else is a
    * real failure.
    */
+  /**
+   * A click can start a render that is still painting when we read it. Read until
+   * two frames agree, at most three times. A navigation mid-read keeps the last
+   * good frame instead of failing the action.
+   */
   async function collectSettled(page: PageLike): Promise<Snapshot> {
-    try {
-      return await collect(page);
-    } catch (error) {
-      if (!DESTROYED.test(error instanceof Error ? error.message : String(error))) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      return collect(page);
+    let previous: Snapshot | null = null;
+    let failure: unknown = null;
+    for (let read = 0; read < SETTLE_READS; read += 1) {
+      if (read > 0) await pause(SETTLE_DELAY_MS);
+      try {
+        const snapshot = await collect(page);
+        if (previous !== null && frameKey(previous) === frameKey(snapshot)) return snapshot;
+        previous = snapshot;
+        failure = null;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // A dead page is not a stale frame: let retryOnce relaunch the browser.
+        if (!DESTROYED.test(message) && !CLOSED.test(message)) {
+          if (previous !== null) return previous;
+          throw error;
+        }
+        failure = error;
+      }
     }
+    if (previous !== null) return previous;
+    throw failure ?? new BrowserError("BAD_REQUEST", "could not read the page");
   }
 
   async function tab(session: string): Promise<Tab> {
@@ -625,6 +729,7 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
         retryOnce(async () => {
           const current = await tab(session);
           await current.page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+          await waitForLoad(current.page);
           const snapshot = await collectSettled(current.page);
           current.table = refTable(snapshot);
           current.usedAt = now();
@@ -635,6 +740,107 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
 
     act(session, action, args = {}) {
       return serial(session, () => retryOnce(async () => actOn(need(session), action, args)));
+    },
+
+    upload(session, args) {
+      return serial(session, () =>
+        retryOnce(async () => {
+          const current = need(session);
+          const setInputFiles = current.page.setInputFiles;
+          if (setInputFiles === undefined) {
+            throw new BrowserError("BAD_REQUEST", "this page cannot take files — open it again");
+          }
+          const live = await collect(current.page);
+          let tagged: unknown;
+          if (isRef(args.target)) {
+            const resolved = resolveTarget(current.table, args.target, live.elements);
+            if (!resolved.ok) {
+              throw new BrowserError(
+                "STALE_REF",
+                resolved.reason === "ambiguous"
+                  ? "page has several identical elements — pass a CSS selector instead"
+                  : "page moved — read it again",
+              );
+            }
+            tagged = await current.page.evaluate(tagFileInputScript(current.table.get(args.target)!));
+          } else {
+            tagged = await current.page.evaluate(tagFileSelectorScript(args.target));
+          }
+          if (tagged !== true) {
+            throw new BrowserError(
+              "BAD_REQUEST",
+              "no file input matches that target — pass a CSS selector like input[type=file]",
+            );
+          }
+          try {
+            await setInputFiles("[data-dw-hit]", args.path);
+          } finally {
+            await current.page.evaluate(UNTAG_SOURCE).catch(() => {});
+          }
+          const snapshot = await collectSettled(current.page);
+          current.table = refTable(snapshot);
+          current.usedAt = now();
+          void sweepTemp(now());
+          return snapshot;
+        }),
+      );
+    },
+
+    download(session, target, timeoutMs = DOWNLOAD_TIMEOUT_MS) {
+      return serial(session, () =>
+        retryOnce(async () => {
+          const current = need(session);
+          const waitForEvent = current.page.waitForEvent;
+          if (waitForEvent === undefined) {
+            throw new BrowserError("BAD_REQUEST", "this page cannot download — open it again");
+          }
+          const live = await collect(current.page);
+          let tagged: unknown;
+          if (isRef(target)) {
+            const resolved = resolveTarget(current.table, target, live.elements);
+            if (!resolved.ok) {
+              throw new BrowserError(
+                "STALE_REF",
+                resolved.reason === "ambiguous"
+                  ? "page has several identical elements — pass a CSS selector instead"
+                  : "page moved — read it again",
+              );
+            }
+            tagged = await current.page.evaluate(tagScript(current.table.get(target)!));
+          } else {
+            tagged = await current.page.evaluate(tagSelectorScript(target));
+          }
+          if (tagged !== true) {
+            throw new BrowserError("STALE_REF", "no visible element matches that selector");
+          }
+          let download: DownloadLike;
+          try {
+            // Arm before clicking: a fast download is gone before we look for it.
+            const waiting = waitForEvent("download", { timeout: timeoutMs });
+            await current.page.click("[data-dw-hit]", { timeout: ACTION_TIMEOUT_MS });
+            download = await waiting;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (/Timeout/i.test(message)) {
+              throw new BrowserError("BAD_REQUEST", "clicking did not start a download");
+            }
+            throw error;
+          } finally {
+            await current.page.evaluate(UNTAG_SOURCE).catch(() => {});
+          }
+          const dir = `/tmp/dw-downloads/${randomUUID()}`;
+          await mkdir(dir, { recursive: true });
+          const name = sanitizeTempName(download.suggestedFilename());
+          const path = `${dir}/${name}`;
+          await download.saveAs(path);
+          const size = (await stat(path)).size;
+          const snapshot = await collectSettled(current.page);
+          current.table = refTable(snapshot);
+          current.usedAt = now();
+          void sweepTemp(now());
+          return { name, size, path, snapshot };
+        }),
+      );
     },
 
     shot(session, fullPage = false) {
@@ -696,6 +902,7 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
         const current = await tab(session);
         if (typed) {
           await current.page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+          await waitForLoad(current.page);
         }
         const snapshot = await collectSettled(current.page);
         const state: MirrorState = {

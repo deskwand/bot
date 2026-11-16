@@ -3,6 +3,7 @@ import { artifactStore } from "../artifact-store";
 import { browseTool } from "../tools/browser";
 import { browserClient } from "./browser-http";
 import type { SandboxFetch } from "./http";
+import { httpSandboxProvider } from "./http";
 import { sandboxEnabled } from "./config";
 import { sandboxFetch } from "./install";
 
@@ -17,11 +18,26 @@ export type BrowserInstallDeps = {
  */
 export function browserExtension(env: Env, deps: BrowserInstallDeps): Extension | null {
   if (!sandboxEnabled(env)) return null;
-  const client = browserClient(env, deps.fetchImpl ?? sandboxFetch(env) ?? fetch);
+  const fetchImpl = deps.fetchImpl ?? sandboxFetch(env) ?? fetch;
+  const client = browserClient(env, fetchImpl);
   if (client === null) return null;
+  const provider = httpSandboxProvider(env, fetchImpl);
   return {
     name: "browser",
-    tools: [browseTool({ client, taskId: deps.taskId, bucket: artifactStore(env) })],
+    tools: [
+      browseTool({
+        client,
+        taskId: deps.taskId,
+        bucket: artifactStore(env),
+        files:
+          provider === null
+            ? null
+            : {
+                readFile: (path, maxBytes) => provider.readFile(path, maxBytes),
+                writeFile: (path, data) => provider.writeFile(path, data),
+              },
+      }),
+    ],
     sections: [{ key: "browser", render: () => browserSectionText() }],
   };
 }
@@ -36,6 +52,8 @@ export function browserSectionText(): string {
     "- Act on element numbers from the last snapshot (`e4`); only reach for a CSS selector when nothing usable was listed.",
     '- `page moved — read it again` means the numbers are stale: run `read`, then act on the new ones. Never retry the old number.',
     "- Take a screenshot when words are not enough to tell what happened, or to show the owner. At most 3 per task.",
+    "- `upload` puts a file from your artifacts or workspace into a file input. Pass `target` as a CSS selector like `input[type=file]` — file inputs are usually invisible and never appear in the snapshot. `source` is `artifact:<key>` or a workspace path.",
+    "- `download` clicks whatever starts a download and returns it as an artifact up to 15 MB. A bigger file stays in the sandbox: use `exec` to unpack or trim it first.",
     "- If a page asks a human to prove they are not a robot, stop clicking and tell the owner to look at the takeover page in the desktop client: it shows this page live and they can finish it there. Say which page and what it is waiting for.",
     "- Ask the owner for passwords, one-time codes and payment details. Do not guess them.",
     "- If the tool says the sandbox image has no browser, tell the owner and stop: retrying cannot fix it.",

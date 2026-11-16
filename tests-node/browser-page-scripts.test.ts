@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   collectScript,
   fingerprintOf,
+  tagFileInputScript,
+  tagFileSelectorScript,
   tagScript,
   tagSelectorScript,
   UNTAG_SOURCE,
@@ -124,5 +126,50 @@ describe("tagSelectorScript and UNTAG_SOURCE", () => {
     expect(button.attributes["data-dw-hit"]).toBe("1");
     vm.runInNewContext(UNTAG_SOURCE, context);
     expect(button.attributes["data-dw-hit"]).toBeUndefined();
+  });
+});
+
+describe("tagFileSelectorScript", () => {
+  it("tags a file input the page hides", () => {
+    const hiddenInput = element({
+      tagName: "INPUT",
+      innerText: "",
+      type: "file",
+      getClientRects: () => [],
+    });
+    const context = page([hiddenInput]);
+    expect(vm.runInNewContext(tagFileSelectorScript("input[type=file]"), context)).toBe(true);
+    expect(hiddenInput.attributes["data-dw-hit"]).toBe("1");
+  });
+
+  it("refuses a hidden element that is not a file input", () => {
+    const text = element({ tagName: "INPUT", innerText: "", type: "text", getClientRects: () => [] });
+    const button = element({ tagName: "BUTTON", innerText: "pick file" });
+    const context = page([text, button]);
+    expect(vm.runInNewContext(tagFileSelectorScript("input"), context)).toBe(false);
+    expect(text.attributes["data-dw-hit"]).toBeUndefined();
+    expect(button.attributes["data-dw-hit"]).toBeUndefined();
+  });
+});
+
+describe("tagFileInputScript", () => {
+  it("matches a hidden file input by fingerprint", () => {
+    const hiddenInput = element({
+      tagName: "INPUT",
+      innerText: "",
+      type: "file",
+      getClientRects: () => [],
+    });
+    const wanted = fingerprintOf("textbox", "", "file", undefined);
+    expect(vm.runInNewContext(tagFileInputScript(wanted), page([hiddenInput]))).toBe(true);
+    expect(hiddenInput.attributes["data-dw-hit"]).toBe("1");
+  });
+
+  it("leaves a differently named file input alone", () => {
+    const input = element({ tagName: "INPUT", innerText: "", type: "file", getClientRects: () => [] });
+    input.attributes["aria-label"] = "resume";
+    const wanted = fingerprintOf("textbox", "avatar", "file", undefined);
+    expect(vm.runInNewContext(tagFileInputScript(wanted), page([input]))).toBe(false);
+    expect(input.attributes["data-dw-hit"]).toBeUndefined();
   });
 });
