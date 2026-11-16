@@ -884,3 +884,25 @@ func TestMemberButlerArchivePath(t *testing.T) {
 		t.Fatal("a path-shaped member id must be refused")
 	}
 }
+
+func TestOpenAcceptsATableWhoseColumnsLookLikeSQLKeywords(t *testing.T) {
+	// The bug that broke a real CF-to-Linux restore: cf_agent_tool_runs has a
+	// column whose name contains DETACH.
+	path := filepath.Join(t.TempDir(), "backup.zip")
+	writeTestArchive(t, path, []testTable{{
+		ref: DORef{DO: "task", ID: "t1"},
+		schema: TableSchema{
+			Name:   "cf_agent_tool_runs",
+			Create: `CREATE TABLE cf_agent_tool_runs (run_id TEXT PRIMARY KEY, detached_at INTEGER, status TEXT NOT NULL DEFAULT 'detached')`,
+		},
+		rows: []json.RawMessage{json.RawMessage(`{"run_id":"r1","detached_at":1,"status":"detached"}`)},
+	}}, nil, nil)
+
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}

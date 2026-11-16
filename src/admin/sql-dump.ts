@@ -373,6 +373,9 @@ export function createTables(sql: SqlStorage, schema: DbSchema): void {
   );
   for (const table of schema.tables) {
     if (table.create === "" || existing.has(table.name)) continue;
+    // The desktop client validates this DDL before a restore starts (it must
+    // be a single CREATE TABLE); this side trusts that check rather than
+    // repeating it.
     sql.exec(table.create);
     existing.add(table.name);
   }

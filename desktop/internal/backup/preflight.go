@@ -115,16 +115,50 @@ func validateSchemaSQL(statement string, pattern *regexp.Regexp, kind string) er
 	if strings.HasSuffix(trimmed, ";") {
 		trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, ";"))
 	}
-	if strings.Contains(trimmed, ";") {
+	if unquotedSemicolon(trimmed) {
 		return fmt.Errorf("%s statement contains multiple statements", kind)
 	}
-	upper := strings.ToUpper(trimmed)
-	for _, forbidden := range []string{"ATTACH", "DETACH", "PRAGMA", "VACUUM"} {
-		if strings.Contains(upper, forbidden) {
-			return fmt.Errorf("%s statement contains %s", kind, forbidden)
+	// Nothing else to check by keyword. The statement must already start with
+	// CREATE TABLE and hold no second statement, so it cannot run ATTACH,
+	// DETACH, PRAGMA or VACUUM; matching those words as substrings only
+	// rejected real tables, such as a column named detached_at or attachments.
+	// CTAS and function-valued DEFAULTs are accepted: they only touch the
+	// database being restored.
+	return nil
+}
+
+// unquotedSemicolon reports a statement separator outside string literals and
+// quoted identifiers, so a DEFAULT 'a;b' does not look like two statements
+// while a real second statement still does.
+func unquotedSemicolon(statement string) bool {
+	const (
+		none = rune(0)
+	)
+	quote := none
+	runes := []rune(statement)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		switch {
+		case quote == none:
+			switch r {
+			case '\'', '"', '`', '[':
+				quote = r
+				if r == '[' {
+					quote = ']'
+				}
+			case ';':
+				return true
+			}
+		case r == quote:
+			// A doubled quote is an escaped one and stays inside the literal.
+			if i+1 < len(runes) && runes[i+1] == quote {
+				i++
+				continue
+			}
+			quote = none
 		}
 	}
-	return nil
+	return false
 }
 
 // preflightObject executes one object's schema, rows and indexes in an isolated
