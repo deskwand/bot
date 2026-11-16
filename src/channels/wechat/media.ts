@@ -88,16 +88,51 @@ export async function downloadWeChatMedia(
   signal?: AbortSignal,
 ): Promise<Uint8Array | undefined> {
   const key = decodeAesKey(media);
+  // The URL carries a signed query parameter, so only the status, the error
+  // and the byte count are logged; describeError redacts the parameter in case
+  // a fetch rejection echoes it back.
+  const url = `${cdnBaseUrl}/download?encrypted_query_param=${encodeURIComponent(media.encryptQueryParam)}`;
 
+  let response: Response;
   try {
-    const response = await fetchImpl(
-      `${cdnBaseUrl}/download?encrypted_query_param=${encodeURIComponent(media.encryptQueryParam)}`,
-      signal ? { signal } : {},
-    );
-    if (!response.ok) return undefined;
-    const body = new Uint8Array(await response.arrayBuffer());
-    return key ? decryptImage(body, key) : body;
-  } catch {
+    response = await fetchImpl(url, signal ? { signal } : {});
+  } catch (err) {
+    console.warn(`channel: wechat media download failed: ${describeError(err)}`);
     return undefined;
   }
+  if (!response.ok) {
+    console.warn(`channel: wechat media download failed: status=${response.status}`);
+    return undefined;
+  }
+
+  let body: Uint8Array;
+  try {
+    body = new Uint8Array(await response.arrayBuffer());
+  } catch (err) {
+    console.warn(`channel: wechat media body unreadable: ${describeError(err)}`);
+    return undefined;
+  }
+  if (!key) return body;
+
+  const plain = decryptImage(body, key);
+  if (!plain) {
+    // Separate the three ways AES-128-ECB can refuse: wrong length, or a pad
+    // that does not unpad (wrong key). content-type names the "200 but not an
+    // image" answer the caller documents.
+    const contentType = response.headers.get("content-type") ?? "?";
+    console.warn(
+      `channel: wechat media decrypt failed: bytes=${body.length}` +
+        ` mod16=${body.length % 16} key=${media.aesKeyHex ? "hex" : "base64"}` +
+        ` content-type=${contentType}`,
+    );
+  }
+  return plain;
+}
+
+/** Bounded and redacted: a fetch rejection can quote the URL it was given. */
+function describeError(err: unknown): string {
+  const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  return text
+    .replace(/encrypted_query_param=[^&\s"']*/g, "encrypted_query_param=***")
+    .slice(0, 200);
 }

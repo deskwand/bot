@@ -1,5 +1,5 @@
 import { createCipheriv } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decodeAesKey,
   decryptImage,
@@ -127,5 +127,96 @@ describe("downloadWeChatMedia", () => {
         encryptQueryParam: "p",
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("downloadWeChatMedia diagnostics", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function warnings(warn: { mock: { calls: unknown[][] } }): string {
+    return warn.mock.calls.map((call) => call.join(" ")).join(" | ");
+  }
+
+  it("names the HTTP status when the CDN refuses", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failing = (async () => new Response("nope", { status: 403 })) as typeof fetch;
+
+    await downloadWeChatMedia(failing, "https://cdn.example.com", {
+      encryptQueryParam: "secret-param",
+      aesKeyHex: KEY_HEX,
+    });
+
+    expect(warnings(warn)).toContain("status=403");
+  });
+
+  it("never logs the signed query parameter, even when the error quotes the URL", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const throwing = (async () => {
+      throw new TypeError(
+        "fetch failed: https://cdn.example.com/download?encrypted_query_param=secret-param",
+      );
+    }) as typeof fetch;
+
+    await downloadWeChatMedia(throwing, "https://cdn.example.com", {
+      encryptQueryParam: "secret-param",
+    });
+
+    expect(warnings(warn)).toContain("TypeError");
+    expect(warnings(warn)).not.toContain("secret-param");
+  });
+
+  it("names an unreadable body", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const broken = (async () =>
+      ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: async () => {
+          throw new Error("body stream errored");
+        },
+      }) as unknown as Response) as typeof fetch;
+
+    await downloadWeChatMedia(broken, "https://cdn.example.com", {
+      encryptQueryParam: "p",
+    });
+
+    expect(warnings(warn)).toContain("body stream errored");
+  });
+
+  it("says when the body arrived but could not be decrypted", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const body = new TextEncoder().encode("this is not ciphertext at all");
+    const fake = (async () =>
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+
+    const bytes = await downloadWeChatMedia(fake, "https://cdn.example.com", {
+      encryptQueryParam: "p",
+      aesKeyHex: KEY_HEX,
+    });
+
+    expect(bytes).toBeUndefined();
+    expect(warnings(warn)).toContain("decrypt failed");
+    expect(warnings(warn)).toContain(`mod16=${body.length % 16}`);
+    expect(warnings(warn)).toContain("content-type=application/json");
+  });
+
+  it("stays quiet when the download works", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const ciphertext = encrypt(PLAIN);
+    const ok = (async () => new Response(ciphertext, { status: 200 })) as typeof fetch;
+
+    const bytes = await downloadWeChatMedia(ok, "https://cdn.example.com", {
+      encryptQueryParam: "p",
+      aesKeyHex: KEY_HEX,
+    });
+
+    expect(Array.from(bytes ?? [])).toEqual(Array.from(PLAIN));
+    expect(warn).not.toHaveBeenCalled();
   });
 });
