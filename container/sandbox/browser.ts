@@ -79,7 +79,8 @@ export type BrowserHandle = {
   newCDPSession?(page: PageLike): Promise<CdpSession>;
 };
 
-export const MIRROR_SESSION = "takeover";
+/** The tab the panel owns when a human types a url; task tabs are only borrowed. */
+export const PANEL_SESSION = "panel";
 
 /** A frame older than this many frames behind the newest one is not worth clicking. */
 const STALE_FRAMES = 60;
@@ -259,7 +260,11 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
 
   type MirrorListener = (event: MirrorEvent) => void;
   type MirrorState = {
+    /** Whose tab the view is pointed at right now. */
+    session: string;
     tab: Tab;
+    /** The panel's own page (a url a human typed), if it ever made one. */
+    owned: Tab | null;
     cdp: CdpSession | null;
     onFrame: ((params: Record<string, any>) => void) | null;
     seq: number;
@@ -273,6 +278,10 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     frame: { w: number; h: number };
   };
   let mirror: MirrorState | null = null;
+  /** The task tab the agent touched last; what the panel attaches to. */
+  let lastActive: string | null = null;
+  /** Serialises view switches; see follow(). */
+  let switching: Promise<void> = Promise.resolve();
   /** One version read is enough for the whole browser; the UA never changes. */
   let identity: Identity | null = null;
 
@@ -353,11 +362,14 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     if (existing !== undefined) {
       // Touch on reuse: a slow goto on a cold tab must not look idle to sweep().
       existing.usedAt = now();
-      return existing;
+      return follow(session, existing);
     }
     if (tabs.size >= maxTabs) {
-      const oldest = [...tabs.entries()].sort((a, b) => a[1].usedAt - b[1].usedAt)[0];
+      const byAge = [...tabs.entries()].sort((a, b) => a[1].usedAt - b[1].usedAt);
+      // Evicting the page a human is watching is the one case worth avoiding.
+      const oldest = byAge.find(([, candidate]) => mirror === null || mirror.tab !== candidate) ?? byAge[0];
       if (oldest !== undefined) {
+        if (mirror !== null && mirror.tab === oldest[1]) endMirror("closed");
         tabs.delete(oldest[0]);
         await oldest[1].page.close().catch(() => {});
       }
@@ -367,7 +379,7 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     await identify(browser, page);
     const created: Tab = { page, table: new Map(), usedAt: now() };
     tabs.set(session, created);
-    return created;
+    return follow(session, created);
   }
 
   /** One promise chain per session: two tools must not drive one page at once. */
@@ -402,7 +414,7 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     }
     current.usedAt = now();
     lastUse = current.usedAt;
-    return current;
+    return follow(session, current);
   }
 
   async function actOn(current: Tab, action: ActAction, args: ActArgs): Promise<Snapshot> {
@@ -460,8 +472,59 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     }
     dying.onFrame = null;
     dying.cdp = null;
-    tabs.delete(MIRROR_SESSION);
-    void dying.tab.page.close().catch(() => {});
+  }
+
+  /**
+   * Close the page the panel itself opened, if it ever did. Separation of
+   * concerns worth the two lines: `endMirror` detaches a view, this closes a
+   * page, and callers that already close pages never double-close one.
+   */
+  function closeOwnedPage(state: MirrorState): void {
+    const owned = state.owned;
+    state.owned = null;
+    if (owned === null) return;
+    if (tabs.get(PANEL_SESSION) === owned) tabs.delete(PANEL_SESSION);
+    void owned.page.close().catch(() => {});
+  }
+
+  /**
+   * Remember which tab the agent touched last, and point the view at it. Never
+   * awaited by the caller: an agent's tool call must not fail because someone
+   * happens to be watching. A failed switch ends the view, and the panel then
+   * offers "重新接管", which is honest and cheap.
+   */
+  function follow(session: string, current: Tab): Tab {
+    if (session !== PANEL_SESSION) lastActive = session;
+    const watching = mirror;
+    // Compare tabs, not session names: a cap eviction can recreate a session's
+    // tab, and the old page must not keep the view.
+    if (watching !== null && watching.tab !== current) {
+      // One switch at a time, or two of them each start a screencast over the
+      // other's CDP session and the loser's listener is never removed.
+      switching = switching
+        .then(() => (mirror === watching ? attach(watching, session, current) : undefined))
+        .catch(() => endMirror("closed"));
+    }
+    return current;
+  }
+
+  /** Point the mirror at one tab's page: snapshot, then a fresh screencast. */
+  async function attach(state: MirrorState, session: string, current: Tab): Promise<void> {
+    if (state.cdp !== null && state.onFrame !== null) {
+      state.cdp.off("Page.screencastFrame", state.onFrame);
+    }
+    state.cdp = null;
+    state.onFrame = null;
+    state.session = session;
+    state.tab = current;
+    // `url()` is sync and cannot throw mid-navigation, unlike a DOM collect.
+    state.lastUrl = current.page.url();
+    // Clicks aimed at the page we just left must not land on this one.
+    state.seq += STALE_FRAMES + 1;
+    await snapshotFrame(state);
+    if (mirror !== state) return;
+    broadcast(state, { type: "state", url: state.lastUrl });
+    await startScreencast(state);
   }
 
   /** One screenshot so a panel that connects later still has something to draw. */
@@ -591,6 +654,9 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
       return serial(session, async () => {
         const current = tabs.get(session);
         if (current === undefined) return;
+        // Closing the page the panel is watching must tell it, or the view just
+        // freezes with no end event and keeps accepting clicks.
+        if (mirror !== null && mirror.tab === current) endMirror("closed");
         tabs.delete(session);
         await current.page.close().catch(() => {});
       });
@@ -599,14 +665,13 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     async sweep(at = now()) {
       for (const [session, current] of [...tabs]) {
         if (active.has(session)) continue;
-        if (session === MIRROR_SESSION && mirror !== null) {
-          // A human is looking at this tab; only a dropped stream ages it.
-          if (mirror.attached > 0) continue;
-          if (at - current.usedAt < idleMs) continue;
-          endMirror("timeout");
-          continue;
-        }
+        // A human is looking at this tab; only a dropped stream ages it.
+        if (mirror !== null && mirror.session === session && mirror.attached > 0) continue;
         if (at - current.usedAt < idleMs) continue;
+        // endMirror only detaches: the page is this loop's to close, once. An
+        // idle panel page that the view has moved away from is just another
+        // entry here and gets closed by its own turn.
+        if (mirror !== null && mirror.session === session) endMirror("timeout");
         tabs.delete(session);
         await current.page.close().catch(() => {});
       }
@@ -620,13 +685,23 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     mirror: {
       async open(url, timeoutMs = DEFAULT_GOTO_TIMEOUT_MS) {
         endMirror("superseded");
-        const current = await tab(MIRROR_SESSION);
-        if (url !== undefined && url !== "") {
+        const typed = url !== undefined && url !== "";
+        // A swept tab must not be recreated: that would open a blank page under
+        // a dead task id and show white where the work used to be. A url the
+        // human typed is the one case where creating a page is the point.
+        if (!typed && (lastActive === null || !tabs.has(lastActive))) {
+          return { url: "", title: "" };
+        }
+        const session = typed ? PANEL_SESSION : lastActive!;
+        const current = await tab(session);
+        if (typed) {
           await current.page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
         }
         const snapshot = await collectSettled(current.page);
         const state: MirrorState = {
+          session,
           tab: current,
+          owned: typed ? current : null,
           cdp: null,
           onFrame: null,
           seq: 0,
@@ -673,7 +748,9 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
       },
 
       async close() {
+        const ending = mirror;
         endMirror("closed");
+        if (ending !== null) closeOwnedPage(ending);
       },
     },
   };

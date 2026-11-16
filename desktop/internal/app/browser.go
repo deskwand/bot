@@ -91,7 +91,8 @@ func (s *Service) BrowserStatus() (BrowserStatusDTO, error) {
 	return BrowserStatusDTO{Available: status.Available, Reason: status.Reason}, nil
 }
 
-// BrowserOpen points the takeover tab at url; an empty url re-opens the page.
+// BrowserOpen points the takeover view at url; an empty url attaches to
+// whatever page the sandbox browser is already showing.
 func (s *Service) BrowserOpen(url string) (BrowserOpenedDTO, error) {
 	ctx := context.Background()
 	target, err := s.managedTarget(ctx)

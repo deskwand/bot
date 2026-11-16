@@ -844,6 +844,38 @@ describe("mirror endpoints", () => {
     await sandboxd.close();
   });
 
+  it("attaches to the live tab when the panel sends no url", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    const { daemon, base } = await startBrowserd(manager);
+    // Open a page the way a task would, then ask for "whatever is on screen".
+    await fetch(`${base}/browser/open`, {
+      method: "POST",
+      headers: { authorization: "Bearer t", "content-type": "application/json" },
+      body: JSON.stringify({ session: "task-1", url: "https://a.example" }),
+    });
+    const opened = await fetch(`${base}/browser/mirror/open`, {
+      method: "POST",
+      headers: { authorization: "Bearer t", "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(await opened.json()).toMatchObject({ url: "https://a.example" });
+    await daemon.close();
+  });
+
+  it("answers an empty url when nothing is open", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    const { daemon, base } = await startBrowserd(manager);
+    const opened = await fetch(`${base}/browser/mirror/open`, {
+      method: "POST",
+      headers: { authorization: "Bearer t", "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(await opened.json()).toMatchObject({ url: "" });
+    await daemon.close();
+  });
+
   it("refuses a non-http url and an unknown mirror path", async () => {
     const { sandboxd, base } = await sandboxWithMirror();
     const bad = await fetch(`${base}/browser/mirror/open`, {
@@ -859,6 +891,149 @@ describe("mirror endpoints", () => {
     });
     expect(missing.status).toBe(404);
     await sandboxd.close();
+  });
+});
+
+describe("mirror attaches to the live tab", () => {
+  it("shows the tab a task is using, without asking for a url", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager, pages } = mirrorManager(record);
+    await manager.open("task-1", "https://a.example");
+    expect(await manager.mirror.open()).toMatchObject({ url: "https://a.example" });
+    // Borrowed, not created: the pool still holds exactly one page.
+    expect(pages).toHaveLength(1);
+  });
+
+  it("says nothing is open when no tab is alive", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager, pages } = mirrorManager(record);
+    expect(await manager.mirror.open()).toMatchObject({ url: "" });
+    expect(pages).toHaveLength(0);
+    expect(await manager.mirror.input(0, [])).toEqual({ ok: false, code: "NO_MIRROR" });
+  });
+
+  it("does not open a blank page for a tab that was already swept", async () => {
+    const record: Recorded = { calls: [] };
+    let clock = 0;
+    const { manager, pages } = mirrorManager(record, { idleMs: 600_000, now: () => clock });
+    await manager.open("task-1", "https://a.example");
+    clock = 700_000;
+    await manager.sweep();
+    expect(await manager.mirror.open()).toMatchObject({ url: "" });
+    expect(pages).toHaveLength(1);
+  });
+
+  it("does not close the task page when the panel closes", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    await manager.open("task-1", "https://a.example");
+    await manager.mirror.open();
+    await manager.mirror.close();
+    expect(record.calls.filter((call) => call === "close")).toHaveLength(0);
+    await expect(manager.act("task-1", "read")).resolves.toBeDefined();
+  });
+
+  it("follows the agent to a tab it reuses, not just one it creates", async () => {
+    const record: Recorded = { calls: [], cdp: [] as unknown[][] };
+    const { manager, cdp } = mirrorManager(record);
+    await manager.open("task-1", "https://a.example");
+    await manager.open("task-2", "https://b.example");
+    await manager.mirror.open();
+    const seen: MirrorEvent[] = [];
+    manager.mirror.subscribe((event) => seen.push(event));
+    // "task-1" already exists: this is the early-return path in tab().
+    await manager.open("task-1", "https://a.example/again");
+    // The url reaches the panel with the next painted frame, which is what the
+    // real browser sends right after a navigation.
+    cdp.fire("Page.screencastFrame", {
+      data: "/9j/AAAA",
+      sessionId: 3,
+      metadata: { deviceWidth: 1280, deviceHeight: 800 },
+    });
+    expect(seen.filter((event) => event.type === "state").at(-1)).toEqual({
+      type: "state",
+      url: "https://a.example/again",
+    });
+  });
+
+  it("follows the agent when it acts on another tab", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    await manager.open("task-1", "https://a.example");
+    await manager.open("task-2", "https://b.example");
+    await manager.mirror.open();
+    const seen: MirrorEvent[] = [];
+    manager.mirror.subscribe((event) => seen.push(event));
+    // need(), not tab(): this is the act path.
+    await manager.act("task-1", "read");
+    expect(seen.filter((event) => event.type === "state").at(-1)).toEqual({
+      type: "state",
+      url: "https://a.example",
+    });
+  });
+
+  it("still opens the url a human types, and owns that tab", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    await manager.open("task-1", "https://a.example");
+    await manager.mirror.open("https://c.example");
+    await manager.mirror.close();
+    // Only the panel's own tab may be closed; the task page stays.
+    expect(record.calls.filter((call) => call === "close")).toHaveLength(1);
+    await expect(manager.act("task-1", "read")).resolves.toBeDefined();
+  });
+
+  it("keeps one screencast when two switches overlap", async () => {
+    const record: Recorded = { calls: [], cdp: [] as unknown[][] };
+    const { manager, cdp } = mirrorManager(record);
+    await manager.open("task-1", "https://a.example");
+    await manager.open("task-2", "https://b.example");
+    await manager.mirror.open();
+    // Two task tabs at once would otherwise run two attaches concurrently and
+    // leak the losing CDP session's screencast.
+    await Promise.all([
+      manager.act("task-1", "read"),
+      manager.act("task-2", "read"),
+    ]);
+    expect(cdp.count("Page.screencastFrame")).toBe(1);
+    expect(record.cdp!.filter(([method]) => method === "Page.startScreencast")).toHaveLength(2);
+  });
+
+  it("tells the panel when the agent closes the page it is watching", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    await manager.open("task-1", "https://a.example");
+    await manager.mirror.open();
+    const seen: MirrorEvent[] = [];
+    manager.mirror.subscribe((event) => seen.push(event));
+    await manager.close("task-1");
+    expect(seen).toContainEqual({ type: "end", reason: "closed" });
+    expect(await manager.mirror.input(0, [])).toEqual({ ok: false, code: "NO_MIRROR" });
+  });
+
+  it("closes the panel's own page even after the view followed the agent", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    await manager.open("task-1", "https://a.example");
+    await manager.mirror.open("https://c.example");
+    await manager.act("task-1", "read"); // the view follows the task page
+    await manager.mirror.close();
+    // One close: the panel's page. The task page stays.
+    expect(record.calls.filter((call) => call === "close")).toHaveLength(1);
+    await expect(manager.act("task-1", "read")).resolves.toBeDefined();
+  });
+
+  it("keeps a watched tab out of the idle sweep", async () => {
+    const record: Recorded = { calls: [] };
+    let clock = 0;
+    const { manager } = mirrorManager(record, { idleMs: 600_000, now: () => clock });
+    await manager.open("task-1", "https://a.example");
+    await manager.mirror.open();
+    const off = manager.mirror.subscribe(() => {});
+    clock = 900_000;
+    await manager.sweep();
+    expect(record.calls).not.toContain("close");
+    off();
   });
 });
 

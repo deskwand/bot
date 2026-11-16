@@ -143,7 +143,8 @@ func (c *Client) Status(ctx context.Context) (Status, error) {
 	return status, nil
 }
 
-// Open points the takeover tab at url (or re-opens the current one when empty).
+// Open points the takeover view at url; an empty url attaches to whatever
+// page the sandbox browser is already showing.
 func (c *Client) Open(ctx context.Context, url string) (Opened, error) {
 	response, err := c.post(ctx, openPath, map[string]string{"url": url})
 	if err != nil {

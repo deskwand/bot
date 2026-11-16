@@ -36,7 +36,7 @@ export function browserSectionText(): string {
     "- Act on element numbers from the last snapshot (`e4`); only reach for a CSS selector when nothing usable was listed.",
     '- `page moved — read it again` means the numbers are stale: run `read`, then act on the new ones. Never retry the old number.',
     "- Take a screenshot when words are not enough to tell what happened, or to show the owner. At most 3 per task.",
-    "- If a page asks a human to prove they are not a robot, stop clicking: tell the owner what the page is and give them the URL, then end the turn. They can finish it in the desktop client's takeover panel, and the login state carries over to the next task.",
+    "- If a page asks a human to prove they are not a robot, stop clicking and tell the owner to look at the takeover page in the desktop client: it shows this page live and they can finish it there. Say which page and what it is waiting for.",
     "- Ask the owner for passwords, one-time codes and payment details. Do not guess them.",
     "- If the tool says the sandbox image has no browser, tell the owner and stop: retrying cannot fix it.",
   ].join("\n");

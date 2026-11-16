@@ -855,7 +855,10 @@ export const Service = {
   browserInput(seq: number, events: BrowserEventDTO[]): Promise<boolean> {
     return call("Service.BrowserInput", seq, events);
   },
-  /** BrowserOpen points the takeover tab at url; an empty url re-opens the page. */
+  /**
+   * BrowserOpen points the takeover view at url; an empty url attaches to
+   * whatever page the sandbox browser is already showing.
+   */
   browserOpen(url: string): Promise<BrowserOpenedDTO> {
     return call("Service.BrowserOpen", url);
   },

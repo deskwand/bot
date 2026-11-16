@@ -1,7 +1,8 @@
 export const browser = {
   title: "接管",
   subtitle: "撞上人机验证时，在这里亲手点过去",
-  urlPlaceholder: "要接管的网址",
+  empty: "浏览器现在没开着页面。等它开始干活，或者在上面输一个网址。",
+  urlPlaceholder: "现在没有打开的页面，输一个网址",
   open: "打开",
   close: "关闭接管",
   ended: "接管已断开",

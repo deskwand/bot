@@ -1,7 +1,8 @@
 export const browser = {
   title: "Takeover",
   subtitle: "When a page asks for a human, click through it here",
-  urlPlaceholder: "Address to take over",
+  empty: "The browser has nothing open. Wait for a task, or type an address above.",
+  urlPlaceholder: "Nothing open; type an address",
   open: "Open",
   close: "Close",
   ended: "Takeover stopped",

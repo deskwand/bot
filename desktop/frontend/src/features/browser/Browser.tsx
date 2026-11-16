@@ -25,6 +25,7 @@ export function Browser() {
   const [current, setCurrent] = useState("");
   const [frame, setFrame] = useState<BrowserFrameDTO | null>(null);
   const [ended, setEnded] = useState<string | null>(null);
+  const [empty, setEmpty] = useState(false);
   const canvas = useRef<HTMLCanvasElement | null>(null);
   // Input must arrive in the order it was produced: a `up` that overtakes its
   // `down` leaves the page with the button stuck down.
@@ -40,12 +41,46 @@ export function Browser() {
 
   useEffect(() => {
     let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    // No url: attach to whatever the sandbox browser is already showing. While
+    // nothing is open, keep asking: a task that starts a page later has to
+    // appear without the human reloading anything.
+    const attach = () => {
+      void client
+        .browserOpen("")
+        .then((opened) => {
+          if (!alive) return;
+          if (opened.url === "") {
+            setEmpty(true);
+            timer = setTimeout(attach, 3000);
+            return;
+          }
+          setEmpty(false);
+          setCurrent(opened.url);
+          void client.browserStreamStart();
+        })
+        // A page mid-navigation can refuse a snapshot; that is not a dead
+        // sandbox, so keep the URL box and try again shortly.
+        .catch(() => {
+          if (!alive) return;
+          setEmpty(true);
+          timer = setTimeout(attach, 3000);
+        });
+    };
+
     void client
       .browserStatus()
-      .then((status) => alive && setAvailable({ ok: status.available, reason: status.reason }))
+      .then((status) => {
+        if (!alive) return;
+        setAvailable({ ok: status.available, reason: status.reason });
+        if (status.available) attach();
+      })
       .catch(() => alive && setAvailable({ ok: false, reason: "sandbox-unreachable" }));
+
     return () => {
       alive = false;
+      if (timer !== null) clearTimeout(timer);
     };
   }, [client]);
 
@@ -99,7 +134,12 @@ export function Browser() {
   };
 
   const start = (target: string) => {
-    void client.browserOpen(target).then(() => client.browserStreamStart());
+    void client.browserOpen(target).then((opened) => {
+      setCurrent(opened.url);
+      setEmpty(opened.url === "");
+      setEnded(null);
+      if (opened.url !== "") void client.browserStreamStart();
+    });
   };
 
   if (available === null) return null;
@@ -134,15 +174,19 @@ export function Browser() {
           <AlertTitle>{t("browser.ended")}</AlertTitle>
           <AlertDescription className="flex items-center gap-3">
             <span>{t("browser.endedHint")}</span>
-            <Button size="sm" onClick={() => start(url || current)}>
+            <Button size="sm" onClick={() => start(url)}>
               {t("browser.reconnect")}
             </Button>
           </AlertDescription>
         </Alert>
       )}
-      <p className="text-xs text-muted-foreground">
-        {current === "" ? t("browser.frameHint") : current}
-      </p>
+      {empty && frame === null ? (
+        <Alert>
+          <AlertTitle>{t("browser.title")}</AlertTitle>
+          <AlertDescription>{t("browser.empty")}</AlertDescription>
+        </Alert>
+      ) : null}
+      <p className="text-xs text-muted-foreground">{empty ? "" : current === "" ? t("browser.frameHint") : current}</p>
       <canvas
         ref={canvas}
         width={VIEWPORT.width}

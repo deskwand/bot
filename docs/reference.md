@@ -480,8 +480,9 @@ npx wrangler r2 object delete my-artifacts/skills/weekly-report/SKILL.md --remot
 - 沙箱镜像太旧时工具会出现一次，然后自报 `sandbox image has no browser` 并在本任务内停用；升级 `sandbox` 镜像即可。bot 与沙箱镜像可以分别升级。
 - 浏览器只在被调用时才启动，闲置 10 分钟后退出，空闲时不占内存。
 - 只接受 http/https 链接，内网地址一律拒绝；页面下载被禁用（要文件走 `web_fetch` / `http_request`）。
-- **撞上人机挑战时由主人接手**。Turnstile、reCAPTCHA、滑块这些只能人点的验证，agent 会把网址交出来并停下；主人打开桌面客户端的「接管」页，把网址粘进去，亲手点过去，再回聊天说一声。下一个任务打开同一站点就是通的——`cf_clearance` 落在沙箱 profile 上，跟登录态一样跨任务。接管画面走 SSE，只在内存里过一遍，不落盘、不进日志；沙箱仍然不发布任何宿主端口，通道是 bot 的 `/admin/browser/*`（同一把 `ADMIN_TOKEN`）。
-- 接管 tab 与任务 tab 共用同一个 profile 和同一个 3 页上限；接管单独占一个 key（`takeover`），流断开 10 分钟后才回收，所以主人隔一阵再来也还在。同时只允许一个接管会话。
+- **撞上人机挑战时由主人接手**。Turnstile、reCAPTCHA、滑块这些只能人点的验证，agent 会停下并让主人去桌面客户端的「接管」页——那一页显示的就是它此刻正在看的那一页，打开即附着，不用粘网址。主人点过去之后再回聊天说一声，下一个任务打开同一站点就是通的（`cf_clearance` 落在沙箱 profile 上，跟登录态一样跨任务）。画面走 SSE，只在内存里过一遍，不落盘、不进日志；沙箱仍然不发布任何宿主端口，通道是 bot 的 `/admin/browser/*`（同一把 `ADMIN_TOKEN`）。
+- 面板不锁页面：主人和 agent 可以同时操作同一个 tab。agent 撞上主人的动作时拿到的是现成的 `page moved — read it again`，重读一次即可。
+- 接管借的是 agent 最近用过的那个任务 tab，因此它带着任务当前的页面状态（填到一半的表单、登录后的页面）。agent 换页面时视图自动跟过去。主人自己输网址时才新建一个面板自己的 tab（键 `panel`），关闭接管只关这一个；任务 tab 从不被面板关掉。
 - 沙箱不再自称 `HeadlessChrome`：UA、`sec-ch-ua` 与 `navigator.webdriver` 都按正式 Chrome 报（`container/sandbox/browser-identity.ts`）。这不是指纹对抗——WebGL、字体、TLS 指纹、出口 IP 都没动，只是把"一眼就被判掉"降到"偶尔弹一次"。想让它自称中文，给沙箱容器加 `SANDBOX_LOCALE=zh`。
 
 首次部署后的手动检查：让它打开 `example.com` 截一张，桌面端应该能看到图。想单独确认浏览器版本：
