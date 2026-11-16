@@ -194,3 +194,46 @@ func TestCheckpointRejectsAShortArtifact(t *testing.T) {
 		t.Fatal("a short artifact is recorded as present")
 	}
 }
+
+func TestCheckpointForgetKeepsOtherObjects(t *testing.T) {
+	dir := t.TempDir()
+	checkpoint := openCheckpoint(t, dir)
+	kept := DORef{DO: "task", ID: "t1"}
+	dropped := DORef{DO: "task", ID: "t2"}
+	if err := checkpoint.AppendTable(kept, "notes", []json.RawMessage{json.RawMessage(`{"n":1}`)}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkpoint.AppendTable(dropped, "notes", []json.RawMessage{
+		json.RawMessage(`{"n":2}`), json.RawMessage(`{"n":3}`),
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	// A half-written file of the object being forgotten goes too.
+	part := filepath.Join(dir, "do", "task", "t2", "other.jsonl.part")
+	if err := os.WriteFile(part, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tables, rows, err := checkpoint.Forget(dropped)
+	if err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+	if tables != 1 || rows != 2 {
+		t.Fatalf("forgot %d tables / %d rows, want 1 / 2", tables, rows)
+	}
+	if checkpoint.HasTable(dropped, "notes") {
+		t.Fatal("the forgotten object still has its table")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "do", "task", "t2", "notes.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("the forgotten file still exists: %v", err)
+	}
+	if _, err := os.Stat(part); !os.IsNotExist(err) {
+		t.Fatalf("the forgotten .part file still exists: %v", err)
+	}
+	if !checkpoint.HasTable(kept, "notes") {
+		t.Fatal("forgetting one object dropped another object's table")
+	}
+	if got := checkpoint.TableRows(kept, "notes"); got != 1 {
+		t.Fatalf("kept rows = %d, want 1", got)
+	}
+}

@@ -144,18 +144,36 @@ func (c *Checkpoint) index() {
 	}
 }
 
-// Reset empties the checkpoint and keeps using the same directory, so a run
-// that finds a changed schema can start over without rebuilding the paths.
-func (c *Checkpoint) Reset() error {
-	if err := os.RemoveAll(c.dir); err != nil {
-		return fmt.Errorf("backup: reset checkpoint: %w", err)
+// Forget drops everything recorded for one Durable Object: its finished
+// tables, its files, and its schema. Drift is per object, so the rest of the
+// checkpoint stays usable.
+func (c *Checkpoint) Forget(ref DORef) (int, int64, error) {
+	state := c.state
+	kept := make([]CheckpointTable, 0, len(state.Tables))
+	tables := 0
+	var rows int64
+	for _, table := range state.Tables {
+		if table.DO == ref.DO && table.ID == ref.ID {
+			tables++
+			rows += table.Rows
+			continue
+		}
+		kept = append(kept, table)
 	}
-	if err := os.MkdirAll(c.dir, 0o700); err != nil {
-		return fmt.Errorf("backup: reset checkpoint: %w", err)
+	state.Tables = kept
+	delete(state.Schemas, doKeyOf(ref))
+	if err := c.Save(state); err != nil {
+		return 0, 0, err
 	}
-	c.state = CheckpointState{TargetKey: c.key, Schemas: map[string]DBSchema{}}
-	c.index()
-	return nil
+	// The object's files go once the state no longer mentions them. A leftover
+	// file only wastes space; a file kept by state is what must not happen.
+	_ = os.RemoveAll(c.doDir(ref))
+	return tables, rows, nil
+}
+
+// doDir is the directory holding one object's table files.
+func (c *Checkpoint) doDir(ref DORef) string {
+	return filepath.Dir(c.entryPath(TableEntry(ref, "table")))
 }
 
 // NeedsReset reports whether a table that already finished no longer has the

@@ -152,6 +152,13 @@ func (d Deps) report(progress Progress) {
 	}
 }
 
+// exportTally counts what a run reused, so the manifest can say whether the
+// archive came from more than one run.
+type exportTally struct {
+	reusedTables  int
+	reusedObjects int
+}
+
 // Export writes every Durable Object table and R2 object of target into path.
 // The archive only appears at path once it is complete; a failure removes the
 // temporary file and releases the maintenance lease.
@@ -299,32 +306,6 @@ func recordSchema(checkpoint *Checkpoint, ref DORef, schema DBSchema) error {
 	}
 	state.Schemas[doKeyOf(ref)] = schema
 	return checkpoint.Save(state)
-}
-
-// schemaDrifted reports whether any table that already finished changed shape.
-// A DO the deployment no longer has cannot drift; its rows are simply not
-// exported this time.
-func schemaDrifted(ctx context.Context, client *AdminClient, checkpoint *Checkpoint, refs []DORef) (bool, error) {
-	recorded := checkpoint.State().Schemas
-	if len(recorded) == 0 {
-		return false, nil
-	}
-	for _, ref := range refs {
-		if _, seen := recorded[doKeyOf(ref)]; !seen {
-			continue
-		}
-		schema, err := client.Schema(ctx, ref)
-		if err != nil {
-			if (ref.DO == "life" || ref.DO == "wallet") && unknownDOKind(err, ref) {
-				continue
-			}
-			return false, err
-		}
-		if checkpoint.NeedsReset(ref, schema) {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // connect builds the admin client for target. The resolver owns the credential
@@ -526,7 +507,6 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 	}
 
 	state := checkpoint.State()
-	resumed := len(state.Tables) > 0
 	if state.StartedAt.IsZero() {
 		state.StartedAt = deps.now().UTC()
 		if err := checkpoint.Save(state); err != nil {
@@ -534,40 +514,39 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 		}
 	}
 	refs := exportRefs(info.TaskIDs, info.BotIDs, info.MemberIDs)
-	// A changed table shape voids the checkpoint. Deciding this before reading
-	// anything keeps a reset from discarding tables this run already finished.
-	if resumed {
-		drift, err := schemaDrifted(ctx, client, checkpoint, refs)
-		if err != nil {
-			return Manifest{}, err
-		}
-		if drift {
-			if err := checkpoint.Reset(); err != nil {
-				return Manifest{}, err
-			}
-			state := checkpoint.State()
-			state.StartedAt = deps.now().UTC()
-			if err := checkpoint.Save(state); err != nil {
-				return Manifest{}, err
-			}
-			resumed = false
-		}
-	}
 
 	manifest := Manifest{
 		Format:     FormatVersion,
 		StartedAt:  checkpoint.State().StartedAt,
-		Resumed:    resumed,
 		ExportedAt: deps.now().UTC(),
 		Release:    releaseOrUnknown(snapshot.ReleaseVersion),
 		VersionID:  info.VersionID,
 		WorkerName: target.ScriptName,
 	}
 
-	progress := Progress{Op: "export", Phase: PhaseDatabase}
-	deps.report(progress)
+	// Progress counts what the archive will contain, not what this run reads: a
+	// resumed run starts from the tables an earlier run already saved, so the
+	// page does not look stuck while it works.
+	// Progress counts what the archive will contain, not what this run reads: a
+	// resumed run starts from the tables an earlier run already saved, so the
+	// page does not look stuck. Tables of objects this run no longer visits are
+	// left out, or the total would tick backwards at the object phase.
+	scheduled := make(map[string]bool, len(refs))
 	for _, ref := range refs {
-		object, err := exportDurableObjectBatched(ctx, client, checkpoint, ref, &progress, deps)
+		scheduled[doKeyOf(ref)] = true
+	}
+	progress := Progress{Op: "export", Phase: PhaseDatabase}
+	for _, table := range checkpoint.State().Tables {
+		if !scheduled[doKeyOf(DORef{DO: table.DO, ID: table.ID})] {
+			continue
+		}
+		progress.Tables++
+		progress.Rows += table.Rows
+	}
+	deps.report(progress)
+	tally := &exportTally{}
+	for _, ref := range refs {
+		object, err := exportDurableObjectBatched(ctx, client, checkpoint, ref, &progress, tally, deps)
 		if err != nil {
 			// A Worker that predates the ledger or the wallet rejects that
 			// kind. Back it up without it instead of failing the whole export.
@@ -584,11 +563,12 @@ func exportData(ctx context.Context, deps Deps, client *AdminClient, snapshot do
 	progress.Rows = rowsExported(manifest)
 	deps.report(progress)
 
-	r2, err := exportObjects(ctx, deps, client, checkpoint, &progress, "export")
+	r2, err := exportObjects(ctx, deps, client, checkpoint, &progress, tally, "export")
 	if err != nil {
 		return Manifest{}, err
 	}
 	manifest.R2 = r2
+	manifest.Resumed = tally.reusedTables > 0 || tally.reusedObjects > 0
 	return manifest, nil
 }
 
@@ -615,10 +595,9 @@ func exportRefs(taskIDs, botIDs, memberIDs []string) []DORef {
 	return append(refs, DORef{DO: "butler"})
 }
 
-func exportDurableObjectPaged(ctx context.Context, client *AdminClient, checkpoint *Checkpoint, ref DORef, schema DBSchema, progress *Progress, deps Deps) (DOManifest, error) {
-	if err := recordSchema(checkpoint, ref, schema); err != nil {
-		return DOManifest{}, err
-	}
+func exportDurableObjectPaged(ctx context.Context, client *AdminClient, checkpoint *Checkpoint, ref DORef, schema DBSchema, progress *Progress, tally *exportTally, deps Deps) (DOManifest, error) {
+	// Drift was already handled by the caller, which fetched this schema and
+	// falls back here only when the chunk route is missing.
 	object := DOManifest{
 		DORef:  ref,
 		Schema: schema,
@@ -627,6 +606,7 @@ func exportDurableObjectPaged(ctx context.Context, client *AdminClient, checkpoi
 	for _, table := range schema.Tables {
 		if checkpoint.HasTable(ref, table.Name) {
 			object.Rows[table.Name] = checkpoint.TableRows(ref, table.Name)
+			tally.reusedTables++
 			continue
 		}
 		rows := 0
@@ -667,10 +647,18 @@ func exportDurableObjectPaged(ctx context.Context, client *AdminClient, checkpoi
 // route. Tables a previous run finished are taken from the checkpoint, so their
 // rows are never read again. The chunk route is newer than the oldest supported
 // Worker, so a 404 falls back to the per-page export before anything is written.
-func exportDurableObjectBatched(ctx context.Context, client *AdminClient, checkpoint *Checkpoint, ref DORef, progress *Progress, deps Deps) (DOManifest, error) {
+func exportDurableObjectBatched(ctx context.Context, client *AdminClient, checkpoint *Checkpoint, ref DORef, progress *Progress, tally *exportTally, deps Deps) (DOManifest, error) {
 	schema, err := client.Schema(ctx, ref)
 	if err != nil {
 		return DOManifest{}, err
+	}
+	if checkpoint.NeedsReset(ref, schema) {
+		tables, rows, err := checkpoint.Forget(ref)
+		if err != nil {
+			return DOManifest{}, err
+		}
+		progress.Tables -= tables
+		progress.Rows -= rows
 	}
 	if err := recordSchema(checkpoint, ref, schema); err != nil {
 		return DOManifest{}, err
@@ -681,6 +669,7 @@ func exportDurableObjectBatched(ctx context.Context, client *AdminClient, checkp
 	for _, table := range schema.Tables {
 		if checkpoint.HasTable(ref, table.Name) {
 			object.Rows[table.Name] = checkpoint.TableRows(ref, table.Name)
+			tally.reusedTables++
 			continue
 		}
 		pending = append(pending, table)
@@ -699,7 +688,7 @@ func exportDurableObjectBatched(ctx context.Context, client *AdminClient, checkp
 		result, err := client.Batch(ctx, ref, pending, state, batchBytes)
 		if err != nil {
 			if errorCode(err) == CodeAdminUnavailable && !wrote {
-				return exportDurableObjectPaged(ctx, client, checkpoint, ref, schema, progress, deps)
+				return exportDurableObjectPaged(ctx, client, checkpoint, ref, schema, progress, tally, deps)
 			}
 			return DOManifest{}, err
 		}
@@ -762,7 +751,7 @@ func sameBatchState(a, b BatchState) bool {
 // exportObjects copies every artifact into the checkpoint. The listing is
 // stored on the first run so a resumed run keeps the same entry numbers: an
 // entry is named after the artifact's position in the listing.
-func exportObjects(ctx context.Context, deps Deps, client *AdminClient, checkpoint *Checkpoint, progress *Progress, op string) (R2Manifest, error) {
+func exportObjects(ctx context.Context, deps Deps, client *AdminClient, checkpoint *Checkpoint, progress *Progress, tally *exportTally, op string) (R2Manifest, error) {
 	manifest := R2Manifest{Objects: []R2Item{}, Oversized: []string{}}
 	state := checkpoint.State()
 
@@ -802,7 +791,9 @@ func exportObjects(ctx context.Context, deps Deps, client *AdminClient, checkpoi
 	deps.report(*progress)
 
 	for _, item := range state.R2.Objects {
-		if !checkpoint.HasObject(item.Entry) {
+		if checkpoint.HasObject(item.Entry) {
+			tally.reusedObjects++
+		} else {
 			started := time.Now()
 			body, err := client.GetObject(ctx, item.Key)
 			deps.logf("object key=%s size=%d ms=%d", item.Key, item.Size, time.Since(started).Milliseconds())
