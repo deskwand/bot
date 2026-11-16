@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.60
+
+- 修备份把正常表当成危险语句拒掉：表结构校验原来按关键字子串匹配 `ATTACH` / `DETACH` / `PRAGMA` / `VACUUM`，于是名字里含这些词的真实列（例如 `detached_at`、`attachments`）会让整张表被拒绝备份。现在只检查「必须以 CREATE TABLE 开头且不含第二条语句」这类真正的边界，关键字不再误伤；CTAS 与函数型 DEFAULT 也允许，因为它们只影响正在恢复的那个库。
+- 续传的表结构变化判定改成按对象处理：某个 Durable Object 的表结构变了，只丢掉它自己的进度（表、文件、schema），其余对象已完成的进度继续复用，不必整份备份重来。
+- 续传时进度从断点里已有的记录开始计数，manifest 里的 `resumed` 与已复用表/对象的统计因此准确。
+
 ## 0.1.59
 
 - 修 sandbox 镜像真的能构建出来：镜像基于 node:26，而 playwright-core 低于 1.60 在 node ≥ 24.16 下解压会永久卡住（microsoft/playwright#40724）——上一版日志显示 headless shell 下载到 100% 后静默停住，58 分钟后才被 job 超时打断。现在固定为 1.64.1（同时与 e2e 用的 @playwright/test 版本一致）。
