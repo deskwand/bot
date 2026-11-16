@@ -25,11 +25,13 @@ COPY --from=build /src/dist/container/sandbox/index.mjs /app/index.mjs
 
 # playwright-core is installed beside the bundle (not globally): /app/index.mjs
 # resolves node_modules from /app. It stays out of the bundle on purpose.
-# The version must match the chromium-headless-shell build installed with it.
+# The version must match the chromium-headless-shell build installed with it, and
+# must stay >= 1.60: below that, extraction hangs forever under node >= 24.16
+# (microsoft/playwright#40724), which is what node:26 here is.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 # The CLI is named after its package: playwright-core ships `.bin/playwright-core`,
 # not `.bin/playwright` (that one belongs to the playwright package).
-RUN npm install --prefix /app playwright-core@1.56.1 \
+RUN npm install --prefix /app playwright-core@1.64.1 \
  && /app/node_modules/.bin/playwright-core install --only-shell --with-deps chromium-headless-shell \
  && apt-get update \
  && apt-get install -y --no-install-recommends fonts-wqy-zenhei \
