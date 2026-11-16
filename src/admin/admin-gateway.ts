@@ -8,6 +8,7 @@
  */
 
 import type { ArtifactStore } from "../artifact-store";
+import type { BrowserClient } from "../sandbox/browser-http";
 import type { BotDO } from "../bot/bot-do";
 import type { ButlerDO } from "../butler/butler-do";
 import type { ChannelDO } from "../channels/channel-do";
@@ -27,6 +28,7 @@ import {
   readBatch,
   type BatchState,
 } from "./backup-batch";
+import { BROWSER_PREFIX, createBrowserAdminRoutes } from "./browser-routes";
 import { createLifeRoutes } from "./life-routes";
 import { BOTS_PATH, createBotRoutes } from "./bot-routes";
 import { createMcpAdminRoutes } from "./mcp-routes";
@@ -58,6 +60,8 @@ export type AdminDeps = {
   ingestExchangeSnapshot?(body: unknown): Promise<ExchangeProbeResult>;
   /** Present only when the deployment wires the wallet status route. */
   walletReads?: WalletReads;
+  /** Null when the deployment has no sandbox; the page then says so. */
+  browser?: BrowserClient | null;
 };
 
 /** The DO RPC surface used by the backup and restore routes. */
@@ -248,6 +252,8 @@ export function createAdminGateway(deps: AdminDeps): {
   const wallet =
     deps.walletReads === undefined ? null : createWalletRoutes(deps.walletReads);
   const life = createLifeRoutes({ vitals: () => deps.life().vitals() });
+  const browser =
+    deps.browser === undefined ? null : createBrowserAdminRoutes({ client: deps.browser });
   const owner = createOwnerRoutes({
     status: () => deps.channel().ownerStatus(),
     open: () => deps.channel().openOwnerClaim(),
@@ -269,6 +275,11 @@ export function createAdminGateway(deps: AdminDeps): {
     // MCP management works during backup/restore and needs no lease.
     if (url.pathname.startsWith("/admin/mcp/")) {
       return mcp.fetch(req);
+    }
+
+    // Takeover is forwarded straight to the sandbox; the sandbox owns the tab.
+    if (url.pathname.startsWith(BROWSER_PREFIX) && browser !== null) {
+      return browser.fetch(req);
     }
 
     // Exchange probing is a read-only health check and needs no lease.

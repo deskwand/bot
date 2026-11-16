@@ -14,6 +14,11 @@ import type {
   BotRunDTO,
   BotsDTO,
   BootStateDTO,
+  BrowserEventDTO,
+  BrowserFrameDTO,
+  BrowserOpenedDTO,
+  BrowserStatusDTO,
+  BrowserStreamDTO,
   CachedConfigDTO,
   CachedStatusDTO,
   CloudflareLoginDTO,
@@ -83,6 +88,10 @@ export type {
   BotRunDTO,
   BotsDTO,
   BootStateDTO,
+  BrowserEventDTO,
+  BrowserFrameDTO,
+  BrowserOpenedDTO,
+  BrowserStatusDTO,
   CachedConfigDTO,
   CachedStatusDTO,
   CloudflareLoginDTO,
@@ -212,6 +221,14 @@ export interface ClientService {
   cancelCloudflareLogin(opId: string): Promise<void>;
   confirmCloudflareAccount(accountId: string): Promise<void>;
   subscribeCloudflareLogin(listener: (status: CloudflareLoginDTO) => void): () => void;
+  browserStatus(): Promise<BrowserStatusDTO>;
+  browserOpen(url: string): Promise<BrowserOpenedDTO>;
+  browserInput(seq: number, events: BrowserEventDTO[]): Promise<boolean>;
+  browserClose(): Promise<void>;
+  browserStreamStart(): Promise<void>;
+  browserStreamStop(): Promise<void>;
+  subscribeBrowserFrame(listener: (frame: BrowserFrameDTO) => void): () => void;
+  subscribeBrowserStream(listener: (state: BrowserStreamDTO) => void): () => void;
   disconnectCloudflare(): Promise<void>;
   listWorkers(): Promise<WorkerDTO[]>;
   selectDeployment(scriptName: string): Promise<void>;

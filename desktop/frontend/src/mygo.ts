@@ -157,6 +157,45 @@ export interface BotsDTO {
   bots: BotDTO[];
 }
 
+/** BrowserEventDTO is one mouse or key action, in frame coordinates. */
+export interface BrowserEventDTO {
+  type: string;
+  kind: string;
+  x?: number;
+  y?: number;
+  button?: string;
+  deltaY?: number;
+  text?: string;
+  key?: string;
+}
+
+/** BrowserFrameDTO is one JPEG frame, still base64-encoded. */
+export interface BrowserFrameDTO {
+  seq: number;
+  jpeg: string;
+  w: number;
+  h: number;
+}
+
+/** BrowserOpenedDTO names the page the takeover tab now shows. */
+export interface BrowserOpenedDTO {
+  url: string;
+  title: string;
+}
+
+/** BrowserStatusDTO tells the page whether takeover can run at all. */
+export interface BrowserStatusDTO {
+  available: boolean;
+  reason?: string;
+}
+
+/** BrowserStreamDTO is either "state" (a new URL) or "end" (with a reason). */
+export interface BrowserStreamDTO {
+  kind: string;
+  url?: string;
+  reason?: string;
+}
+
 /**
  * CachedConfigDTO is the last config written to the local snapshot cache. An
  * absent cache is a nil Data and an empty SavedAt.
@@ -197,7 +236,10 @@ export interface ConfigDTO {
   configPresent: boolean;
   activeChannel?: string;
   ownerUserIds: number[];
-  /** True when the deployment has no owner key: the first Telegram message claims it. */
+  /**
+   * OwnerClaimMode is true when DESKWAND_CONFIG has no owner key at all:
+   * the deployment is waiting for the first Telegram message to claim it.
+   */
   ownerClaimMode: boolean;
   butlerModel: ModelDTO | null;
   taskModel: ModelDTO | null;
@@ -208,14 +250,6 @@ export interface ConfigDTO {
   searchProvider: string;
   exchangeAccounts: ExchangeAccountDTO[];
   secrets: SecretNameDTO[];
-}
-
-/** OwnerStatusDTO mirrors the Worker's /admin/owner/status response. */
-export interface OwnerStatusDTO {
-  mode: "static" | "closed" | "claimed" | "claimable" | "expired" | "revoked";
-  ownerUserId: string;
-  windowOpenedAt: number;
-  windowClosesAt: number;
 }
 
 /**
@@ -260,7 +294,10 @@ export interface ContainerCheckDTO {
  */
 export interface ContainerExistingDTO {
   ownerUserIds: number[];
-  /** True when the existing .env has no owner key: a first message claims it. */
+  /**
+   * OwnerClaimMode is true when the existing .env carries no owner key, so
+   * the flow can show "waiting for a claim" instead of an empty list.
+   */
   ownerClaimMode: boolean;
   butlerModel: ModelDTO | null;
   taskModel: ModelDTO | null;
@@ -597,6 +634,14 @@ export interface OperationDTO {
   updatedAt?: string;
 }
 
+/** OwnerStatusDTO is the frontend view of the owner-claim state. */
+export interface OwnerStatusDTO {
+  mode: string;
+  ownerUserId: string;
+  windowOpenedAt: number;
+  windowClosesAt: number;
+}
+
 /** PendingRestoreDTO describes an unfinished restore found at startup. */
 export interface PendingRestoreDTO {
   operationId: string;
@@ -799,6 +844,36 @@ export const Service = {
   bots(): Promise<BotsDTO> {
     return call("Service.Bots");
   },
+  /** BrowserClose drops the takeover tab. */
+  browserClose(): Promise<void> {
+    return call("Service.BrowserClose");
+  },
+  /**
+   * BrowserInput reports whether the sandbox took the events; a stale frame is
+   * false with a nil error, because that is an expected race.
+   */
+  browserInput(seq: number, events: BrowserEventDTO[]): Promise<boolean> {
+    return call("Service.BrowserInput", seq, events);
+  },
+  /** BrowserOpen points the takeover tab at url; an empty url re-opens the page. */
+  browserOpen(url: string): Promise<BrowserOpenedDTO> {
+    return call("Service.BrowserOpen", url);
+  },
+  /** BrowserStatus tells the takeover page whether it has anything to talk to. */
+  browserStatus(): Promise<BrowserStatusDTO> {
+    return call("Service.BrowserStatus");
+  },
+  /** BrowserStreamStart runs until the page stops it or the stream ends by itself. */
+  browserStreamStart(): Promise<void> {
+    return call("Service.BrowserStreamStart");
+  },
+  /**
+   * BrowserStreamStop cancels and waits: a goroutine that outlived the page would
+   * keep pushing frames into a window nobody is watching.
+   */
+  browserStreamStop(): Promise<void> {
+    return call("Service.BrowserStreamStop");
+  },
   /**
    * CachedConfig returns the last config this app wrote for the managed target.
    * It reads only local files and never contacts Cloudflare.
@@ -964,18 +1039,6 @@ export const Service = {
   lifeVitals(): Promise<LifeVitalsDTO> {
     return call("Service.LifeVitals");
   },
-  /** OwnerStatus reads who currently owns the deployment, or why nobody does. */
-  ownerStatus(): Promise<OwnerStatusDTO> {
-    return call("Service.OwnerStatus");
-  },
-  /** OpenOwnerClaim reopens the 60-minute window so a new person can claim it. */
-  openOwnerClaim(): Promise<OwnerStatusDTO> {
-    return call("Service.OpenOwnerClaim");
-  },
-  /** RevokeOwner clears the claim and closes the window. */
-  revokeOwner(): Promise<OwnerStatusDTO> {
-    return call("Service.RevokeOwner");
-  },
   /** ListBackups lists the backups in the configured folder, newest first. */
   listBackups(): Promise<BackupFileDTO[]> {
     return call("Service.ListBackups");
@@ -1027,6 +1090,14 @@ export const Service = {
    */
   openBackupFolder(): Promise<void> {
     return call("Service.OpenBackupFolder");
+  },
+  /** OpenOwnerClaim reopens the claim window. */
+  openOwnerClaim(): Promise<OwnerStatusDTO> {
+    return call("Service.OpenOwnerClaim");
+  },
+  /** OwnerStatus reads the claim state of the managed deployment. */
+  ownerStatus(): Promise<OwnerStatusDTO> {
+    return call("Service.OwnerStatus");
   },
   /** PendingOperations lists unfinished journaled operations, newest first. */
   pendingOperations(): Promise<OperationDTO[]> {
@@ -1101,6 +1172,10 @@ export const Service = {
   /** ReviveOldHouse restores the entry of an abandoned move. */
   reviveOldHouse(): Promise<void> {
     return call("Service.ReviveOldHouse");
+  },
+  /** RevokeOwner clears the claim and closes the window. */
+  revokeOwner(): Promise<OwnerStatusDTO> {
+    return call("Service.RevokeOwner");
   },
   /** SaveBackupSettings stores the folder and schedule the page edited. */
   saveBackupSettings(input: BackupSettingsEditDTO): Promise<BackupSettingsDTO> {
@@ -1260,6 +1335,13 @@ export const events = {
    * `mygo generate` turns it into `events.backupProgress`.
    */
   backupProgress: event<Progress>("backup-progress"),
+  /**
+   * BrowserFrameEvent carries one screen frame to the takeover page. The frame
+   * lives only in memory: it is emitted as an event and never written anywhere.
+   */
+  browserFrame: event<BrowserFrameDTO>("browser-frame"),
+  /** BrowserStreamEvent carries the URL a frame belongs to, or why the stream ended. */
+  browserStream: event<BrowserStreamDTO>("browser-stream"),
   /**
    * ContainerProgressEvent carries install step updates to the frontend.
    * `mygo generate` turns it into `events.containerProgress`.

@@ -8,6 +8,7 @@ export const shell: Messages["shell"] = {
     overview: "Vitals",
     models: "Brain",
     bots: "Bots",
+    browser: "Takeover",
     search: "Sight",
     mcp: "Hands",
     exchange: "Exchanges",
@@ -28,6 +29,7 @@ export const shell: Messages["shell"] = {
   },
   subtitles: {
     overview: "Balance, runway, tier and the health of each part",
+    browser: "Click through a human check by hand",
     models: "The models used for thinking",
     bots: "The long-running workers your butler keeps",
     search: "Web search",

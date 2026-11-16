@@ -1,4 +1,6 @@
 import { createAdminGateway } from "./admin/admin-gateway";
+import { browserClient } from "./sandbox/browser-http";
+import { sandboxFetch } from "./sandbox/install";
 import { liveWalletReads } from "./admin/wallet-routes";
 import { artifactStore } from "./artifact-store";
 import { ingestSnapshot } from "./exchange/ingest";
@@ -48,6 +50,8 @@ function admin(env: Env) {
     bot: (id) => env.BOT.get(env.BOT.idFromName(id)),
     life: () => lifeStub(env),
     wallet: () => walletStub(env),
+    // Null when the deployment has no sandbox; the takeover page says so.
+    browser: browserClient(env, sandboxFetch(env) ?? fetch),
     artifacts: artifactStore(env),
     mcpAuth: () => mcpAuth(env),
     locale: () => ownerLocale(env),

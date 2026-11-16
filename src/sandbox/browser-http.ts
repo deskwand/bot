@@ -25,6 +25,26 @@ export type Snapshot = {
 
 export type ActAction = "click" | "fill" | "press" | "back" | "read";
 
+/** Mirrors the sandbox's own input shape; coordinates are frame pixels. */
+export type MirrorInput =
+  | {
+      type: "mouse";
+      kind: "down" | "up" | "move" | "wheel";
+      x: number;
+      y: number;
+      button?: "left" | "right";
+      deltaY?: number;
+    }
+  | { type: "key"; kind: "text" | "press"; text?: string; key?: string };
+
+export type MirrorOpened = {
+  url: string;
+  title: string;
+  viewport: { width: number; height: number };
+};
+
+export type MirrorInputResult = { ok: boolean; code?: "STALE" | "NO_MIRROR" };
+
 export type BrowserClient = {
   /** Throws when the sandbox cannot be reached; an empty list means "no browser". */
   features(): Promise<string[]>;
@@ -36,6 +56,11 @@ export type BrowserClient = {
   ): Promise<Snapshot>;
   shot(session: string, fullPage?: boolean): Promise<Uint8Array>;
   close(session: string): Promise<void>;
+  openMirror(url?: string, timeoutMs?: number): Promise<MirrorOpened>;
+  /** The raw SSE response: the admin route pipes its body through untouched. */
+  mirrorStream(signal?: AbortSignal): Promise<Response>;
+  mirrorInput(seq: number, events: MirrorInput[]): Promise<MirrorInputResult>;
+  closeMirror(): Promise<void>;
 };
 
 const TIMEOUT_MS = 120_000;
@@ -121,6 +146,32 @@ export function browserClient(
 
     async close(session) {
       await post("/browser/close", { session });
+    },
+
+    async openMirror(url, timeoutMs) {
+      const response = await post("/browser/mirror/open", { url, timeoutMs });
+      return (await response.json()) as MirrorOpened;
+    },
+
+    async mirrorStream(signal) {
+      // Not `post`: this is a long download and must not be JSON-decoded.
+      const response = await fetchImpl(`${base}/browser/mirror`, {
+        headers: { authorization: `Bearer ${endpoint.token}` },
+        signal,
+      });
+      if (!response.ok) {
+        throw new SandboxError("UNAVAILABLE", `sandbox returned ${String(response.status)}`);
+      }
+      return response;
+    },
+
+    async mirrorInput(seq, events) {
+      const response = await post("/browser/mirror/input", { seq, events });
+      return (await response.json()) as MirrorInputResult;
+    },
+
+    async closeMirror() {
+      await post("/browser/mirror/close", {});
     },
   };
 }

@@ -12,6 +12,7 @@ import {
   Loader2,
   Menu,
   MessageSquare,
+  MousePointerClick,
   Server as ServerIcon,
   Sprout,
   Stethoscope,
@@ -42,6 +43,7 @@ import type { ClientService, OperationDTO } from "@/services/types";
 import { useUiStore } from "@/store/ui";
 import { Diagnostics } from "@/features/diagnostics/Diagnostics";
 import { Backup } from "@/features/backup/Backup";
+import { Browser } from "@/features/browser/Browser";
 import { Mcp } from "@/features/mcp/Mcp";
 import { Models } from "@/features/models/Models";
 import { Bots } from "@/features/bots/Bots";
@@ -86,7 +88,13 @@ const NAV_GROUPS: { group?: NavGroup; items: { page: Page; icon: LucideIcon }[] 
       { page: "entries", icon: MessageSquare },
     ],
   },
-  { group: "action", items: [{ page: "mcp", icon: Hand }] },
+  {
+    group: "action",
+    items: [
+      { page: "mcp", icon: Hand },
+      { page: "browser", icon: MousePointerClick },
+    ],
+  },
   {
     group: "livelihood",
     items: [
@@ -423,6 +431,7 @@ export function App({ client }: { client: ClientService }) {
                   {page === "exchange" ? <Exchanges /> : null}
                   {page === "agent" ? <Agent /> : null}
                   {page === "mcp" ? <Mcp /> : null}
+                  {page === "browser" ? <Browser /> : null}
                   {page === "entries" ? (
                     <Suspense fallback={<PageLoading label={t("shell.pageLoading")} />}>
                       <Entries />

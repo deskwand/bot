@@ -1,4 +1,10 @@
 import {
+  identityFor,
+  launchOptions,
+  VIEWPORT,
+  type Identity,
+} from "./browser-identity.js";
+import {
   buildSnapshot,
   collectScript,
   refTable,
@@ -36,19 +42,76 @@ export type ActAction = "click" | "fill" | "press" | "back" | "read";
 
 export type ActArgs = { target?: string; text?: string; key?: string };
 
+export type Mouse = {
+  move(x: number, y: number): Promise<void>;
+  down(x: number, y: number, button: "left" | "right"): Promise<void>;
+  up(x: number, y: number, button: "left" | "right"): Promise<void>;
+  wheel(deltaY: number): Promise<void>;
+};
+
 export type PageLike = {
   goto(url: string, options: { timeout: number; waitUntil: "domcontentloaded" }): Promise<unknown>;
   evaluate(source: string): Promise<unknown>;
   click(selector: string, options: { timeout: number }): Promise<void>;
   fill(selector: string, value: string): Promise<void>;
-  keyboard: { press(key: string): Promise<void> };
+  keyboard: { press(key: string): Promise<void>; type(text: string): Promise<void> };
+  mouse: Mouse;
   goBack(options: { timeout: number }): Promise<unknown>;
-  screenshot(options: { type: "png"; fullPage: boolean }): Promise<Uint8Array>;
+  screenshot(options: {
+    type: "png" | "jpeg";
+    quality?: number;
+    fullPage?: boolean;
+  }): Promise<Uint8Array>;
   url(): string;
   close(): Promise<void>;
 };
 
-export type BrowserHandle = { newPage(): Promise<PageLike>; close(): Promise<void> };
+export type CdpSession = {
+  send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
+  on(event: string, listener: (params: Record<string, any>) => void): void;
+  off(event: string, listener: (params: Record<string, any>) => void): void;
+};
+
+export type BrowserHandle = {
+  newPage(): Promise<PageLike>;
+  close(): Promise<void>;
+  /** Absent in tests that need neither identity nor a screencast. */
+  newCDPSession?(page: PageLike): Promise<CdpSession>;
+};
+
+export const MIRROR_SESSION = "takeover";
+
+/** A frame older than this many frames behind the newest one is not worth clicking. */
+const STALE_FRAMES = 60;
+
+export type MirrorEvent =
+  | { type: "frame"; seq: number; jpeg: string; w: number; h: number }
+  | { type: "state"; url: string }
+  | { type: "end"; reason: "closed" | "superseded" | "timeout" };
+
+export type MirrorInput =
+  | {
+      type: "mouse";
+      kind: "down" | "up" | "move" | "wheel";
+      x: number;
+      y: number;
+      button?: "left" | "right";
+      deltaY?: number;
+    }
+  | { type: "key"; kind: "text" | "press"; text?: string; key?: string };
+
+export type MirrorResult = { ok: true } | { ok: false; code: "STALE" | "NO_MIRROR" };
+
+/**
+ * The tab a human drives by hand. Deliberately not a task tab: a task's tab is
+ * swept when it ends, and the owner may read the message hours later.
+ */
+export type Mirror = {
+  open(url?: string, timeoutMs?: number): Promise<{ url: string; title: string }>;
+  subscribe(emit: (event: MirrorEvent) => void): () => void;
+  input(seq: number, events: MirrorInput[]): Promise<MirrorResult>;
+  close(): Promise<void>;
+};
 
 export type BrowserManager = {
   open(session: string, url: string, timeoutMs?: number): Promise<Snapshot>;
@@ -57,6 +120,7 @@ export type BrowserManager = {
   close(session: string): Promise<void>;
   sweep(at?: number): Promise<void>;
   shutdown(): Promise<void>;
+  mirror: Mirror;
 };
 
 export type BrowserManagerOptions = {
@@ -65,6 +129,7 @@ export type BrowserManagerOptions = {
   maxTabs?: number;
   idleMs?: number;
   now?: () => number;
+  locale?: string;
 };
 
 /** Errors Playwright throws when the page or the whole browser went away. */
@@ -78,7 +143,59 @@ const DESTROYED = /Execution context was destroyed|Cannot find context|detached 
  * it statically would make every test and typecheck need it. The image installs
  * it beside the bundle, so a runtime dynamic import resolves there.
  */
-type PersistentContext = { newPage(): Promise<PageLike>; close(): Promise<void> };
+/**
+ * Playwright's mouse API is position-less: `down()` presses wherever the pointer
+ * happens to be. Driving it without a `move` first sends every click to (0,0),
+ * so `PageLike` keeps the coordinates and this adapter does the move.
+ */
+type RawPage = Omit<PageLike, "mouse"> & {
+  mouse: {
+    move(x: number, y: number): Promise<void>;
+    down(options?: { button?: "left" | "right" }): Promise<void>;
+    up(options?: { button?: "left" | "right" }): Promise<void>;
+    wheel(deltaX: number, deltaY: number): Promise<void>;
+  };
+};
+
+function adaptPage(page: RawPage): PageLike {
+  return {
+    goto: (url, options) => page.goto(url, options),
+    evaluate: (source) => page.evaluate(source),
+    click: (selector, options) => page.click(selector, options),
+    fill: (selector, value) => page.fill(selector, value),
+    keyboard: {
+      press: (key) => page.keyboard.press(key),
+      type: (value) => page.keyboard.type(value),
+    },
+    mouse: {
+      move: (x, y) => page.mouse.move(x, y),
+      down: async (x, y, button) => {
+        await page.mouse.move(x, y);
+        await page.mouse.down({ button });
+      },
+      up: async (x, y, button) => {
+        await page.mouse.move(x, y);
+        await page.mouse.up({ button });
+      },
+      // Playwright takes (deltaX, deltaY); the panel only ever scrolls vertically.
+      wheel: (deltaY) => page.mouse.wheel(0, deltaY),
+    },
+    goBack: (options) => page.goBack(options),
+    screenshot: (options) => page.screenshot(options),
+    url: () => page.url(),
+    close: () => page.close(),
+  };
+}
+
+type PersistentContext = {
+  newPage(): Promise<RawPage>;
+  close(): Promise<void>;
+  newCDPSession(page: PageLike): Promise<{
+    send(method: string, params?: unknown): Promise<unknown>;
+    on(event: string, listener: (params: unknown) => void): void;
+    off(event: string, listener: (params: unknown) => void): void;
+  }>;
+};
 type Chromium = {
   launchPersistentContext(
     userDataDir: string,
@@ -106,20 +223,20 @@ function launchPersistent(userDataDir: string): () => Promise<BrowserHandle> {
     const chromium = await loadChromium();
     const context = await chromium.launchPersistentContext(userDataDir, {
       headless: true,
-      viewport: { width: 1280, height: 800 },
-      deviceScaleFactor: 1,
-      acceptDownloads: false,
-      args: [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--hide-scrollbars",
-        "--force-device-scale-factor=1",
-      ],
+      ...launchOptions(),
     });
     return {
-      newPage: () => context.newPage(),
+      newPage: async () => adaptPage(await context.newPage()),
       close: () => context.close(),
+      async newCDPSession(page: PageLike) {
+        const session = await context.newCDPSession(page as never);
+        return {
+          send: <T>(method: string, params?: Record<string, unknown>): Promise<T> =>
+            session.send(method as never, params as never) as Promise<T>,
+          on: (event, listener) => session.on(event as never, listener as never),
+          off: (event, listener) => session.off(event as never, listener as never),
+        };
+      },
     };
   };
 }
@@ -131,6 +248,7 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
   const maxTabs = options.maxTabs ?? DEFAULT_MAX_TABS;
   const idleMs = options.idleMs ?? DEFAULT_IDLE_MS;
   const now = options.now ?? (() => Date.now());
+  const locale = options.locale ?? "en";
 
   let handle: BrowserHandle | null = null;
   let lastUse = 0;
@@ -139,6 +257,41 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
   /** Sessions with work in flight; the sweeper must not close their tabs. */
   const active = new Set<string>();
 
+  type MirrorListener = (event: MirrorEvent) => void;
+  type MirrorState = {
+    tab: Tab;
+    cdp: CdpSession | null;
+    onFrame: ((params: Record<string, any>) => void) | null;
+    seq: number;
+    listeners: Set<MirrorListener>;
+    /** Streams attached right now; the sweeper must not close while > 0. */
+    attached: number;
+    /** The newest frame, kept so a late subscriber is not left staring at black. */
+    lastFrame: { seq: number; jpeg: string; w: number; h: number } | null;
+    lastUrl: string;
+    /** Frame pixel size, which input coordinates are relative to. */
+    frame: { w: number; h: number };
+  };
+  let mirror: MirrorState | null = null;
+  /** One version read is enough for the whole browser; the UA never changes. */
+  let identity: Identity | null = null;
+
+  /** CDP overrides live on one target, so every new tab needs its own. */
+  async function identify(browser: BrowserHandle, page: PageLike): Promise<void> {
+    if (browser.newCDPSession === undefined) return;
+    const cdp = await browser.newCDPSession(page);
+    if (identity === null) {
+      const info = await cdp.send<{ product: string }>("Browser.getVersion");
+      identity = identityFor(info.product, locale);
+    }
+    await cdp.send("Network.setUserAgentOverride", {
+      userAgent: identity.userAgent,
+      acceptLanguage: identity.acceptLanguage,
+      platform: "Linux x86_64",
+      userAgentMetadata: identity.metadata,
+    });
+  }
+
   async function ensureHandle(): Promise<BrowserHandle> {
     if (handle === null) handle = await launch();
     lastUse = now();
@@ -146,6 +299,7 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
   }
 
   async function dropHandle(): Promise<void> {
+    endMirror("closed");
     const dying = handle;
     handle = null;
     tabs.clear();
@@ -210,6 +364,7 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     }
     const browser = await ensureHandle();
     const page = await browser.newPage();
+    await identify(browser, page);
     const created: Tab = { page, table: new Map(), usedAt: now() };
     tabs.set(session, created);
     return created;
@@ -294,6 +449,113 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     return snapshot;
   }
 
+  function endMirror(reason: "closed" | "superseded" | "timeout"): void {
+    if (mirror === null) return;
+    const dying = mirror;
+    mirror = null;
+    for (const listener of dying.listeners) listener({ type: "end", reason });
+    dying.listeners.clear();
+    if (dying.cdp !== null && dying.onFrame !== null) {
+      dying.cdp.off("Page.screencastFrame", dying.onFrame);
+    }
+    dying.onFrame = null;
+    dying.cdp = null;
+    tabs.delete(MIRROR_SESSION);
+    void dying.tab.page.close().catch(() => {});
+  }
+
+  /** One screenshot so a panel that connects later still has something to draw. */
+  async function snapshotFrame(state: MirrorState): Promise<void> {
+    const jpeg = await state.tab.page
+      .screenshot({ type: "jpeg", quality: 60 })
+      .then((bytes) => Buffer.from(bytes).toString("base64"))
+      .catch(() => "");
+    if (jpeg === "") return;
+    state.seq += 1;
+    state.frame = { w: VIEWPORT.width, h: VIEWPORT.height };
+    state.lastFrame = { seq: state.seq, jpeg, w: state.frame.w, h: state.frame.h };
+    for (const listener of state.listeners) listener({ type: "frame", ...state.lastFrame });
+  }
+
+  function broadcast(state: MirrorState, event: MirrorEvent): void {
+    for (const listener of state.listeners) listener(event);
+  }
+
+  /** Frame coordinates are relative to whatever the screencast last sent. */
+  function toCss(state: MirrorState, x: number, y: number): { x: number; y: number } {
+    const scale = state.frame.w === 0 ? 1 : VIEWPORT.width / state.frame.w;
+    const clamp = (value: number, max: number): number =>
+      Math.max(0, Math.min(max, Math.round(value * scale)));
+    return { x: clamp(x, VIEWPORT.width), y: clamp(y, VIEWPORT.height) };
+  }
+
+  async function applyInput(state: MirrorState, events: MirrorInput[]): Promise<void> {
+    for (const event of events) {
+      if (event.type === "mouse") {
+        if (event.kind === "wheel") {
+          await state.tab.page.mouse.wheel(event.deltaY ?? 0);
+          continue;
+        }
+        const point = toCss(state, event.x, event.y);
+        if (event.kind === "move") {
+          await state.tab.page.mouse.move(point.x, point.y);
+        } else if (event.kind === "down") {
+          await state.tab.page.mouse.down(point.x, point.y, event.button ?? "left");
+        } else {
+          await state.tab.page.mouse.up(point.x, point.y, event.button ?? "left");
+        }
+        continue;
+      }
+      if (event.kind === "text") {
+        const body = event.text ?? "";
+        if (body !== "") await state.tab.page.keyboard.type(body);
+      } else if ((event.key ?? "") !== "") {
+        await state.tab.page.keyboard.press(event.key!);
+      }
+    }
+  }
+
+  /** The CDP half: start the screencast and keep it acked. */
+  async function startScreencast(state: MirrorState): Promise<void> {
+    const browser = await ensureHandle();
+    if (browser.newCDPSession === undefined) return;
+    const cdp = await browser.newCDPSession(state.tab.page);
+    state.cdp = cdp;
+    state.onFrame = (params) => {
+      if (mirror !== state) return; // a newer session owns the tab now
+      const data = typeof params.data === "string" ? params.data : "";
+      if (data === "") return;
+      const metadata = (params.metadata ?? {}) as {
+        deviceWidth?: number;
+        deviceHeight?: number;
+      };
+      const sessionId = typeof params.sessionId === "number" ? params.sessionId : 0;
+      // Ack first: an unacked stream stalls after a handful of frames.
+      void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+      state.seq += 1;
+      state.frame = {
+        w: metadata.deviceWidth ?? VIEWPORT.width,
+        h: metadata.deviceHeight ?? VIEWPORT.height,
+      };
+      state.lastFrame = { seq: state.seq, jpeg: data, w: state.frame.w, h: state.frame.h };
+      broadcast(state, { type: "frame", ...state.lastFrame });
+      const url = state.tab.page.url();
+      if (url !== state.lastUrl) {
+        state.lastUrl = url;
+        broadcast(state, { type: "state", url });
+      }
+    };
+    cdp.on("Page.screencastFrame", state.onFrame);
+    await cdp.send("Page.enable");
+    await cdp.send("Page.startScreencast", {
+      format: "jpeg",
+      quality: 60,
+      maxWidth: VIEWPORT.width,
+      maxHeight: VIEWPORT.height,
+      everyNthFrame: 1,
+    });
+  }
+
   return {
     open(session, url, timeoutMs = DEFAULT_GOTO_TIMEOUT_MS) {
       return serial(session, () =>
@@ -337,6 +599,13 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
     async sweep(at = now()) {
       for (const [session, current] of [...tabs]) {
         if (active.has(session)) continue;
+        if (session === MIRROR_SESSION && mirror !== null) {
+          // A human is looking at this tab; only a dropped stream ages it.
+          if (mirror.attached > 0) continue;
+          if (at - current.usedAt < idleMs) continue;
+          endMirror("timeout");
+          continue;
+        }
         if (at - current.usedAt < idleMs) continue;
         tabs.delete(session);
         await current.page.close().catch(() => {});
@@ -346,6 +615,66 @@ export function createBrowserManager(options: BrowserManagerOptions): BrowserMan
 
     async shutdown() {
       await dropHandle();
+    },
+
+    mirror: {
+      async open(url, timeoutMs = DEFAULT_GOTO_TIMEOUT_MS) {
+        endMirror("superseded");
+        const current = await tab(MIRROR_SESSION);
+        if (url !== undefined && url !== "") {
+          await current.page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+        }
+        const snapshot = await collectSettled(current.page);
+        const state: MirrorState = {
+          tab: current,
+          cdp: null,
+          onFrame: null,
+          seq: 0,
+          listeners: new Set(),
+          attached: 0,
+          lastFrame: null,
+          lastUrl: snapshot.url,
+          frame: { w: VIEWPORT.width, h: VIEWPORT.height },
+        };
+        mirror = state;
+        await snapshotFrame(state);
+        await startScreencast(state);
+        return { url: snapshot.url, title: snapshot.title };
+      },
+
+      subscribe(emit) {
+        if (mirror === null) {
+          emit({ type: "end", reason: "closed" });
+          return () => {};
+        }
+        const state = mirror;
+        state.listeners.add(emit);
+        state.attached += 1;
+        // Replay before any new frame can arrive, so the panel paints at once.
+        if (state.lastFrame !== null) emit({ type: "frame", ...state.lastFrame });
+        emit({ type: "state", url: state.lastUrl });
+        return () => {
+          state.listeners.delete(emit);
+          state.attached = Math.max(0, state.attached - 1);
+          // The idle window starts when the stream ends, not at the last click:
+          // staring at a still challenge for five minutes must not age the tab.
+          if (state.attached === 0) state.tab.usedAt = now();
+        };
+      },
+
+      async input(seq, events) {
+        const state = mirror;
+        if (state === null) return { ok: false, code: "NO_MIRROR" };
+        if (state.seq - seq > STALE_FRAMES) return { ok: false, code: "STALE" };
+        await applyInput(state, events);
+        // A sweep or a second open can clear the mirror while the events run.
+        state.tab.usedAt = now();
+        return { ok: true };
+      },
+
+      async close() {
+        endMirror("closed");
+      },
     },
   };
 }

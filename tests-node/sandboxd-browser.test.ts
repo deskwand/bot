@@ -131,10 +131,16 @@ describe("page scripts", () => {
   });
 });
 
-import { BrowserError, createBrowserManager, type PageLike } from "../container/sandbox/browser.js";
+import {
+  BrowserError,
+  createBrowserManager,
+  type MirrorEvent,
+  type PageLike,
+} from "../container/sandbox/browser.js";
+import { identityFor, launchOptions } from "../container/sandbox/browser-identity.js";
 import { startSandboxd, type Sandboxd } from "../container/sandbox/server.js";
 
-type Recorded = { calls: string[] };
+type Recorded = { calls: string[]; cdp?: unknown[][] };
 
 function fakePage(record: Recorded, options: { url?: string } = {}): PageLike {
   let current = options.url ?? "about:blank";
@@ -171,6 +177,23 @@ function fakePage(record: Recorded, options: { url?: string } = {}): PageLike {
     keyboard: {
       async press(key: string) {
         record.calls.push(`press ${key}`);
+      },
+      async type(value: string) {
+        record.calls.push(`type ${value}`);
+      },
+    },
+    mouse: {
+      async move(x: number, y: number) {
+        record.calls.push(`mouse move ${x} ${y}`);
+      },
+      async down(x: number, y: number, button: string) {
+        record.calls.push(`mouse down ${x} ${y} ${button}`);
+      },
+      async up(x: number, y: number, button: string) {
+        record.calls.push(`mouse up ${x} ${y} ${button}`);
+      },
+      async wheel(deltaY: number) {
+        record.calls.push(`wheel ${deltaY}`);
       },
     },
     async goBack() {
@@ -433,7 +456,7 @@ describe("browser endpoints", () => {
       const body = (await (
         await fetch(`${base}/healthz`, { headers: { authorization: "Bearer t" } })
       ).json()) as { features?: string[] };
-      expect(body.features).toEqual(["browser"]);
+      expect(body.features).toEqual(["browser", "browser-mirror"]);
     } finally {
       await daemon.close();
     }
@@ -677,5 +700,349 @@ describe("createBrowserManager resilience", () => {
     release!();
     await opening;
     expect(record.calls).not.toContain("close");
+  });
+});
+
+describe("identityFor", () => {
+  it("turns the reported chromium version into a linux chrome identity", () => {
+    const identity = identityFor("HeadlessChrome/141.0.7390.0", "zh");
+    expect(identity.userAgent).toBe(
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    );
+    expect(identity.acceptLanguage).toBe("zh-CN");
+    expect(JSON.stringify(identity.metadata.brands)).not.toContain("Headless");
+  });
+
+  it("refuses to invent a version", () => {
+    expect(() => identityFor("HeadlessChrome", "en")).toThrow(/version/);
+  });
+});
+
+describe("launchOptions", () => {
+  it("drops the automation flag and keeps the container flags", () => {
+    const options = launchOptions();
+    expect(options.ignoreDefaultArgs).toEqual(["--enable-automation"]);
+    expect(options.args).toContain("--disable-blink-features=AutomationControlled");
+    expect(options.args).toContain("--no-sandbox");
+  });
+});
+
+describe("identity applied to every tab", () => {
+  it("sends one override per page, with no Headless brand", async () => {
+    const record: Recorded = { calls: [], cdp: [] as unknown[][] };
+    const handle = {
+      async newPage() {
+        return fakePage(record);
+      },
+      async close() {
+        record.calls.push("browser close");
+      },
+      async newCDPSession() {
+        return cdpThatFrames(record);
+      },
+    };
+    const manager = createBrowserManager({
+      userDataDir: "/tmp/x",
+      launch: async () => handle,
+      locale: "zh",
+    });
+    await manager.open("a", "https://a.example");
+    await manager.open("b", "https://b.example");
+    const overrides = record.cdp!.filter(([method]) => method === "Network.setUserAgentOverride");
+    expect(overrides).toHaveLength(2);
+    for (const [, params] of overrides) {
+      const typed = params as {
+        userAgent: string;
+        acceptLanguage: string;
+        userAgentMetadata: { brands: { brand: string }[] };
+      };
+      expect(typed.userAgent).not.toContain("Headless");
+      expect(typed.acceptLanguage).toBe("zh-CN");
+      expect(typed.userAgentMetadata.brands.map((brand) => brand.brand).join()).not.toContain("Headless");
+    }
+    // One version read is enough for the whole browser.
+    expect(record.cdp!.filter(([method]) => method === "Browser.getVersion")).toHaveLength(1);
+  });
+});
+
+function cdpThatFrames(record: Recorded) {
+  const listeners = new Map<string, ((params: Record<string, any>) => void)[]>();
+  return {
+    async send<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+      record.cdp?.push([method, params ?? {}]);
+      if (method === "Browser.getVersion") {
+        return { product: "HeadlessChrome/141.0.7390.0" } as T;
+      }
+      return {} as T;
+    },
+    on(event: string, listener: (params: Record<string, any>) => void) {
+      listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+    },
+    off(event: string, listener: (params: Record<string, any>) => void) {
+      listeners.set(event, (listeners.get(event) ?? []).filter((item) => item !== listener));
+    },
+    fire(event: string, params: Record<string, any>) {
+      for (const listener of listeners.get(event) ?? []) listener(params);
+    },
+    count(event: string) {
+      return (listeners.get(event) ?? []).length;
+    },
+  };
+}
+
+function mirrorManager(
+  record: Recorded,
+  extra: { maxTabs?: number; idleMs?: number; now?: () => number } = {},
+) {
+  const cdp = cdpThatFrames(record);
+  const { handle, pages } = fakeHandle(record);
+  (handle as unknown as { newCDPSession?: unknown }).newCDPSession = async () => cdp;
+  const manager = createBrowserManager({ userDataDir: "/tmp/x", launch: async () => handle, ...extra });
+  return { manager, pages, cdp };
+}
+
+describe("mirror endpoints", () => {
+  async function sandboxWithMirror() {
+    const record: Recorded = { calls: [], cdp: [] as unknown[][] };
+    const { manager, cdp } = mirrorManager(record);
+    const { daemon, base } = await startBrowserd(manager);
+    return { sandboxd: daemon, base, cdp };
+  }
+
+  it("advertises the feature", async () => {
+    const { sandboxd, base } = await sandboxWithMirror();
+    const response = await fetch(`${base}/healthz`, { headers: { authorization: "Bearer t" } });
+    expect(((await response.json()) as { features: string[] }).features).toContain("browser-mirror");
+    await sandboxd.close();
+  });
+
+  it("streams a frame over sse and closes", async () => {
+    const { sandboxd, base } = await sandboxWithMirror();
+    const opened = await fetch(`${base}/browser/mirror/open`, {
+      method: "POST",
+      headers: { authorization: "Bearer t", "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://a.example" }),
+    });
+    expect(await opened.json()).toMatchObject({ viewport: { width: 1280, height: 800 } });
+
+    const stream = await fetch(`${base}/browser/mirror`, {
+      headers: { authorization: "Bearer t" },
+    });
+    expect(stream.headers.get("content-type")).toBe("text/event-stream");
+    const reader = stream.body!.getReader();
+    const first = await reader.read();
+    // The replayed frame is the first body write, which also flushes headers.
+    expect(new TextDecoder().decode(first.value)).toContain("event: frame");
+    await reader.cancel();
+
+    const closed = await fetch(`${base}/browser/mirror/close`, {
+      method: "POST",
+      headers: { authorization: "Bearer t", "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(await closed.json()).toEqual({ ok: true });
+    await sandboxd.close();
+  });
+
+  it("refuses a non-http url and an unknown mirror path", async () => {
+    const { sandboxd, base } = await sandboxWithMirror();
+    const bad = await fetch(`${base}/browser/mirror/open`, {
+      method: "POST",
+      headers: { authorization: "Bearer t", "content-type": "application/json" },
+      body: JSON.stringify({ url: "file:///etc/passwd" }),
+    });
+    expect(bad.status).toBe(400);
+    const missing = await fetch(`${base}/browser/mirror/nope`, {
+      method: "POST",
+      headers: { authorization: "Bearer t", "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(missing.status).toBe(404);
+    await sandboxd.close();
+  });
+});
+
+describe("mirror lifecycle", () => {
+  it("answers NO_MIRROR before anything is open", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    expect(await manager.mirror.input(0, [])).toEqual({ ok: false, code: "NO_MIRROR" });
+  });
+
+  it("replays the current frame and url to a subscriber that arrives late", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    await manager.mirror.open("https://a.example");
+    const seen: MirrorEvent[] = [];
+    const off = manager.mirror.subscribe((event) => seen.push(event));
+    off();
+    // The stream connects after the POST that opened the page: without a replay
+    // the panel would stay black until the page happens to change.
+    expect(seen[0]).toMatchObject({ type: "frame", seq: 1, w: 1280, h: 800 });
+    expect(seen).toContainEqual({ type: "state", url: "https://a.example" });
+  });
+
+  it("replaces the old session and tells it why", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    await manager.mirror.open("https://a.example");
+    const seen: MirrorEvent[] = [];
+    manager.mirror.subscribe((event) => seen.push(event));
+    await manager.mirror.open("https://b.example");
+    expect(seen).toContainEqual({ type: "end", reason: "superseded" });
+  });
+
+  it("closes the tab immediately on close", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    await manager.mirror.open("https://a.example");
+    await manager.mirror.close();
+    expect(record.calls.filter((call) => call === "close")).toHaveLength(1);
+    expect(await manager.mirror.input(0, [])).toEqual({ ok: false, code: "NO_MIRROR" });
+  });
+
+  it("starts the idle window when the stream ends, not at the last click", async () => {
+    const record: Recorded = { calls: [] };
+    let clock = 0;
+    const { manager } = mirrorManager(record, { idleMs: 600_000, now: () => clock });
+    await manager.mirror.open("https://a.example");
+    const closed = () => record.calls.filter((call) => call === "close").length;
+    clock = 400_000;
+    const off = manager.mirror.subscribe(() => {});
+    off(); // the owner closed the panel at 400s
+    clock = 900_000; // 500s later: still inside the window
+    await manager.sweep();
+    expect(closed()).toBe(0);
+    clock = 1_000_001; // 600s + 1ms after the drop
+    await manager.sweep();
+    expect(closed()).toBe(1);
+  });
+
+  it("counts the takeover tab against the cap and evicts the oldest task tab", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record, { maxTabs: 2 });
+    await manager.open("a", "https://a.example");
+    await manager.open("b", "https://b.example");
+    await manager.mirror.open("https://c.example");
+    // Equal usedAt means insertion order decides: "a" is the oldest.
+    await expect(manager.act("a", "read")).rejects.toMatchObject({ code: "NO_SESSION" });
+    await expect(manager.act("b", "read")).resolves.toBeDefined();
+  });
+
+  it("forwards a click as a down and an up on the page", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    await manager.mirror.open("https://a.example");
+    expect(
+      await manager.mirror.input(1, [
+        { type: "mouse", kind: "down", x: 100, y: 50, button: "left" },
+        { type: "mouse", kind: "up", x: 100, y: 50, button: "left" },
+      ]),
+    ).toEqual({ ok: true });
+    expect(record.calls).toContain("mouse down 100 50 left");
+    expect(record.calls).toContain("mouse up 100 50 left");
+  });
+
+  it("refuses input from a frame that scrolled out of the window", async () => {
+    const record: Recorded = { calls: [] };
+    const { manager } = mirrorManager(record);
+    await manager.mirror.open("https://a.example");
+    // The open snapshot is frame 1, so 60 frames behind is exactly the edge.
+    expect(await manager.mirror.input(-100, [])).toEqual({ ok: false, code: "STALE" });
+    expect(await manager.mirror.input(1 - 60, [])).toEqual({ ok: true });
+    expect(await manager.mirror.input(1 - 61, [])).toEqual({ ok: false, code: "STALE" });
+  });
+});
+
+describe("mirror frames", () => {
+  async function openWithFrames() {
+    const record: Recorded = { calls: [], cdp: [] as unknown[][] };
+    const { manager, pages, cdp } = mirrorManager(record);
+    await manager.mirror.open("https://a.example");
+    const seen: MirrorEvent[] = [];
+    manager.mirror.subscribe((event) => seen.push(event));
+    return { record, cdp, manager, seen, page: pages[0]! };
+  }
+
+  it("starts the screencast and acks every frame", async () => {
+    const { record, cdp, seen } = await openWithFrames();
+    expect(record.cdp?.some(([method]) => method === "Page.startScreencast")).toBe(true);
+    cdp.fire("Page.screencastFrame", {
+      data: "/9j/AAAA",
+      sessionId: 7,
+      metadata: { deviceWidth: 640, deviceHeight: 400 },
+    });
+    const frames = seen.filter((event) => event.type === "frame");
+    expect(frames.at(-1)).toMatchObject({ type: "frame", jpeg: "/9j/AAAA", w: 640, h: 400 });
+    expect(record.cdp).toContainEqual(["Page.screencastFrameAck", { sessionId: 7 }]);
+  });
+
+  it("drops the screencast listener when the session ends", async () => {
+    const { cdp, manager } = await openWithFrames();
+    expect(cdp.count("Page.screencastFrame")).toBe(1);
+    await manager.mirror.close();
+    expect(cdp.count("Page.screencastFrame")).toBe(0);
+  });
+
+  it("reports the url once per navigation", async () => {
+    const { cdp, seen, page } = await openWithFrames();
+    const before = seen.filter((event) => event.type === "state").length;
+    await page.goto("https://b.example", { timeout: 1_000, waitUntil: "domcontentloaded" });
+    cdp.fire("Page.screencastFrame", {
+      data: "/9j/AAAB",
+      sessionId: 8,
+      metadata: { deviceWidth: 1280, deviceHeight: 800 },
+    });
+    cdp.fire("Page.screencastFrame", {
+      data: "/9j/AAAC",
+      sessionId: 9,
+      metadata: { deviceWidth: 1280, deviceHeight: 800 },
+    });
+    const states = seen.filter((event) => event.type === "state");
+    expect(states).toHaveLength(before + 1);
+    expect(states.at(-1)).toEqual({ type: "state", url: "https://b.example" });
+  });
+});
+
+describe("mirror coordinates", () => {
+  async function openFramed() {
+    const record: Recorded = { calls: [], cdp: [] as unknown[][] };
+    const { manager, cdp } = mirrorManager(record);
+    await manager.mirror.open("https://a.example");
+    // A 640x400 frame for a 1280x800 viewport: the screencast downscaled.
+    cdp.fire("Page.screencastFrame", {
+      data: "/9j/AAAA",
+      sessionId: 1,
+      metadata: { deviceWidth: 640, deviceHeight: 400 },
+    });
+    return { manager, record };
+  }
+
+  it("scales frame coordinates back to css pixels", async () => {
+    const { manager, record } = await openFramed();
+    await manager.mirror.input(2, [
+      { type: "mouse", kind: "down", x: 320, y: 200, button: "left" },
+      { type: "mouse", kind: "up", x: 320, y: 200, button: "left" },
+    ]);
+    expect(record.calls).toContain("mouse down 640 400 left");
+    expect(record.calls).toContain("mouse up 640 400 left");
+  });
+
+  it("clamps a click outside the frame instead of throwing", async () => {
+    const { manager, record } = await openFramed();
+    await manager.mirror.input(2, [{ type: "mouse", kind: "down", x: 9999, y: -10, button: "left" }]);
+    expect(record.calls).toContain("mouse down 1280 0 left");
+  });
+
+  it("leaves wheel and keys alone", async () => {
+    const { manager, record } = await openFramed();
+    await manager.mirror.input(2, [
+      { type: "mouse", kind: "wheel", x: 0, y: 0, deltaY: 120 },
+      { type: "key", kind: "text", text: "你好" },
+      { type: "key", kind: "press", key: "Enter" },
+    ]);
+    expect(record.calls).toContain("wheel 120");
+    expect(record.calls).toContain("type 你好");
+    expect(record.calls).toContain("press Enter");
   });
 });

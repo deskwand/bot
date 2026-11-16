@@ -6,6 +6,7 @@ export const shell = {
     overview: "生命体征",
     models: "头脑",
     bots: "机器人",
+    browser: "接管",
     search: "视野",
     mcp: "双手",
     exchange: "交易所",
@@ -26,6 +27,7 @@ export const shell = {
   },
   subtitles: {
     overview: "额度、可运行天数、档位与各部分健康",
+    browser: "撞上人机验证时，在这里亲手点过去",
     models: "用哪些模型思考",
     bots: "管家手下的长期执行体",
     search: "联网搜索",

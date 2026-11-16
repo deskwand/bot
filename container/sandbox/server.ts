@@ -6,7 +6,7 @@ import {
 } from "node:http";
 // Type-only: importing the manager at runtime would drag playwright-core into
 // this module, and the endpoint tests must not need it.
-import type { ActAction, BrowserManager } from "./browser.js";
+import type { ActAction, BrowserManager, MirrorInput } from "./browser.js";
 import { createDiskProbe, type DiskUsage } from "./disk.js";
 import { runCommand, type ExecLimits } from "./exec.js";
 import {
@@ -49,6 +49,25 @@ function json(res: ServerResponse, status: number, body: unknown): void {
     "content-length": Buffer.byteLength(payload),
   });
   res.end(payload);
+}
+
+/** BrowserError carries the status; anything else is a real 500. */
+function failBrowser(res: ServerResponse, error: unknown): void {
+  const { code } = error as { code?: string };
+  const message = error instanceof Error ? error.message : "browser failure";
+  switch (code) {
+    case "STALE_REF":
+    case "NO_SESSION":
+      return fail(res, 409, code, message);
+    case "TOO_LARGE":
+      return fail(res, 413, code, message);
+    case "BAD_REQUEST":
+      return fail(res, 400, code, message);
+    case "BROWSER_DEAD":
+      return fail(res, 502, code, message);
+    default:
+      return fail(res, 500, "INTERNAL", message);
+  }
 }
 
 export function fail(
@@ -121,8 +140,55 @@ export function createSandboxdHandler(config: SandboxdConfig) {
         version: config.version,
         uptimeSec: Math.round(process.uptime()),
         disk: usage,
-        features: config.browser === undefined ? [] : ["browser"],
+        features:
+          config.browser === undefined ? [] : ["browser", "browser-mirror"],
       });
+    }
+
+    if (url.pathname === "/browser/mirror" && req.method === "GET") {
+      const browser = config.browser;
+      if (browser === undefined) {
+        return fail(res, 503, "UNAVAILABLE", "browser is not configured");
+      }
+      return streamMirror(browser.mirror, res);
+    }
+
+    if (url.pathname.startsWith("/browser/mirror/") && req.method === "POST") {
+      const browser = config.browser;
+      if (browser === undefined) {
+        return fail(res, 503, "UNAVAILABLE", "browser is not configured");
+      }
+      const body = (await readJson(req)) as Record<string, unknown>;
+
+      if (url.pathname === "/browser/mirror/open") {
+        const target = typeof body.url === "string" ? body.url : "";
+        if (target !== "" && !/^https?:/i.test(target)) {
+          return fail(res, 400, "BAD_REQUEST", "only http(s) urls can be opened");
+        }
+        const timeoutMs = typeof body.timeoutMs === "number" ? body.timeoutMs : undefined;
+        try {
+          const opened = await browser.mirror.open(target === "" ? undefined : target, timeoutMs);
+          return json(res, 200, {
+            ...opened,
+            viewport: { width: 1280, height: 800 },
+          });
+        } catch (error) {
+          return failBrowser(res, error);
+        }
+      }
+
+      if (url.pathname === "/browser/mirror/input") {
+        const seq = typeof body.seq === "number" ? body.seq : -1;
+        const events = Array.isArray(body.events) ? (body.events as MirrorInput[]) : [];
+        return json(res, 200, await browser.mirror.input(seq, events));
+      }
+
+      if (url.pathname === "/browser/mirror/close") {
+        await browser.mirror.close();
+        return json(res, 200, { ok: true });
+      }
+
+      return fail(res, 404, "NOT_FOUND", "no such mirror endpoint");
     }
 
     if (req.method === "POST" && url.pathname.startsWith("/browser/")) {
@@ -186,22 +252,7 @@ export function createSandboxdHandler(config: SandboxdConfig) {
 
         return fail(res, 404, "NOT_FOUND", "no such browser endpoint");
       } catch (error) {
-        // BrowserError carries the status; anything else is a real 500.
-        const { code } = error as { code?: string };
-        const message = error instanceof Error ? error.message : "browser failure";
-        switch (code) {
-          case "STALE_REF":
-          case "NO_SESSION":
-            return fail(res, 409, code, message);
-          case "TOO_LARGE":
-            return fail(res, 413, code, message);
-          case "BAD_REQUEST":
-            return fail(res, 400, code, message);
-          case "BROWSER_DEAD":
-            return fail(res, 502, code, message);
-          default:
-            return fail(res, 500, "INTERNAL", message);
-        }
+        return failBrowser(res, error);
       }
     }
 
@@ -297,6 +348,50 @@ export function createSandboxdHandler(config: SandboxdConfig) {
 
     return fail(res, 404, "NOT_FOUND", "no such endpoint");
   };
+}
+
+/** SSE, not JSON: one long response and every write is a whole frame. */
+function streamMirror(mirror: BrowserManager["mirror"], res: ServerResponse): void {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  const send = (event: string, data: unknown): void => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  let closed = false;
+  // A frame is ~100 KB of base64 and the reader may be an SSH tunnel: past a
+  // couple of megabytes of unsent data, drop frames instead of growing a queue
+  // nobody will ever watch. State and end still go out.
+  const MAX_BUFFERED = 2 * 1024 * 1024;
+  const detach = mirror.subscribe((event) => {
+    if (event.type === "frame") {
+      if (res.writableLength > MAX_BUFFERED) return;
+      send("frame", { seq: event.seq, jpeg: event.jpeg, w: event.w, h: event.h });
+      return;
+    }
+    if (event.type === "state") {
+      send("state", { url: event.url });
+      return;
+    }
+    stop(event.reason);
+  });
+  const heartbeat = setInterval(() => {
+    send("idle", {});
+  }, 15_000);
+
+  /** `close` and `error` both fire on a dropped socket: end the response once. */
+  function stop(reason?: string): void {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    detach();
+    if (reason !== undefined) send("end", { reason });
+    res.end();
+  }
+  res.on("close", () => stop());
+  res.on("error", () => stop());
 }
 
 export function startSandboxd(

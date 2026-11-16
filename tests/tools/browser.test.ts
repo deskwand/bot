@@ -46,6 +46,10 @@ function stubClient(over: Partial<BrowserClient> = {}) {
     close: async (session) => {
       calls.push(`close ${session}`);
     },
+    openMirror: async (url) => ({ url: url ?? "", title: "", viewport: { width: 1280, height: 800 } }),
+    mirrorStream: async () => new Response("", { headers: { "content-type": "text/event-stream" } }),
+    mirrorInput: async () => ({ ok: true }),
+    closeMirror: async () => {},
     ...over,
   };
   return { client, calls, probes };

@@ -104,6 +104,8 @@ func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 		"SaveWallet": true, "WalletStatus": true, "LifeVitals": true,
 		"Bots": true, "BotDetail": true,
 		"OwnerStatus": true, "OpenOwnerClaim": true, "RevokeOwner": true,
+		"BrowserStatus": true, "BrowserOpen": true, "BrowserInput": true,
+		"BrowserClose": true, "BrowserStreamStart": true, "BrowserStreamStop": true,
 		"StartContainer": true,
 		"StartMove":      true, "SettleMove": true, "MoveStatus": true,
 		"MoveBack": true, "AbandonMove": true, "ReviveOldHouse": true,

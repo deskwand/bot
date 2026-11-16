@@ -23,7 +23,11 @@ const diskLimitBytes = parseDiskLimitMb(process.env.SANDBOX_DISK_MB);
 // stays logged into across tasks and restarts. It lives on the volume.
 const profileDir = join(sandboxDir, "browser", "profile");
 mkdirSync(profileDir, { recursive: true });
-const browser = createBrowserManager({ userDataDir: profileDir });
+const browser = createBrowserManager({
+  userDataDir: profileDir,
+  // What the page claims about its language; the UA is a Linux Chrome either way.
+  locale: process.env.SANDBOX_LOCALE ?? "en",
+});
 
 const daemon = await startSandboxd(
   {

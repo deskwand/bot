@@ -219,6 +219,10 @@ type ServiceOptions struct {
 	EmitLoginStatus func(LoginStatusDTO)
 	// EmitCloudflareLogin defaults to CloudflareLoginEvent.Broadcast.
 	EmitCloudflareLogin func(CloudflareLoginDTO)
+	// EmitBrowserFrame defaults to BrowserFrameEvent.Broadcast.
+	EmitBrowserFrame func(BrowserFrameDTO)
+	// EmitBrowserStream defaults to BrowserStreamEvent.Broadcast.
+	EmitBrowserStream func(BrowserStreamDTO)
 	// Container is the SSH-hosted container runtime. Nil makes every container
 	// operation report SERVICE_UNAVAILABLE.
 	Container ContainerRuntime
@@ -273,17 +277,22 @@ type Service struct {
 	applyTheme         func(string)
 	emitLogin          func(LoginStatusDTO)
 	emitCloudflare     func(CloudflareLoginDTO)
-	container          ContainerRuntime
-	ssh                SSHProber
-	endpoints          *adminendpoint.Router
-	tunnel             TunnelState
-	emitContainer      func(StepDTO)
-	newOpID            func() (string, error)
-	now                func() time.Time
-	goos               string
-	moveJournal        *backup.MoveJournal
-	moveExporter       MoveExporter
-	moveMuter          MoveMuter
+	emitBrowserFrame   func(BrowserFrameDTO)
+	emitBrowserStream  func(BrowserStreamDTO)
+	// One takeover stream at a time: a second start is a no-op, stop waits.
+	browserStreamMu sync.Mutex
+	browserStream   *browserStream
+	container       ContainerRuntime
+	ssh             SSHProber
+	endpoints       *adminendpoint.Router
+	tunnel          TunnelState
+	emitContainer   func(StepDTO)
+	newOpID         func() (string, error)
+	now             func() time.Time
+	goos            string
+	moveJournal     *backup.MoveJournal
+	moveExporter    MoveExporter
+	moveMuter       MoveMuter
 
 	pendingMu   sync.Mutex
 	pendingHost *domain.HostRef
@@ -328,6 +337,14 @@ func NewService(options ServiceOptions) *Service {
 	emitCloudflare := options.EmitCloudflareLogin
 	if emitCloudflare == nil {
 		emitCloudflare = func(status CloudflareLoginDTO) { _ = CloudflareLoginEvent.Broadcast(status) }
+	}
+	emitBrowserFrame := options.EmitBrowserFrame
+	if emitBrowserFrame == nil {
+		emitBrowserFrame = func(frame BrowserFrameDTO) { _ = BrowserFrameEvent.Broadcast(frame) }
+	}
+	emitBrowserStream := options.EmitBrowserStream
+	if emitBrowserStream == nil {
+		emitBrowserStream = func(state BrowserStreamDTO) { _ = BrowserStreamEvent.Broadcast(state) }
 	}
 	now := options.Now
 	if now == nil {
@@ -389,6 +406,8 @@ func NewService(options ServiceOptions) *Service {
 		applyTheme:         applyTheme,
 		emitLogin:          emit,
 		emitCloudflare:     emitCloudflare,
+		emitBrowserFrame:   emitBrowserFrame,
+		emitBrowserStream:  emitBrowserStream,
 		container:          options.Container,
 		endpoints:          options.Endpoints,
 		tunnel:             options.Tunnel,

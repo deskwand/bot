@@ -1473,6 +1473,14 @@ export function createMockClient(): ClientService {
       state.connected = true;
       emitCloudflare({ operationId: cfOperationID, state: "connected" });
     },
+    browserStatus: async () => ({ available: false, reason: "no-sandbox" }),
+    browserOpen: async () => ({ url: "", title: "" }),
+    browserInput: async () => true,
+    browserClose: async () => undefined,
+    browserStreamStart: async () => undefined,
+    browserStreamStop: async () => undefined,
+    subscribeBrowserFrame: () => () => undefined,
+    subscribeBrowserStream: () => () => undefined,
     subscribeCloudflareLogin(listener) {
       cfListeners.add(listener);
       return () => {
