@@ -40,12 +40,22 @@ trap 'exit 143' TERM
 
 # 版本发布完成后打 tag 并建 GitHub Release。两个平台的公网 manifest 都到这一版才建
 # Release，避免把一个只有单平台可用的版本当成完整发布对外公布。
-github_tag_and_release() {
+# 打 tag 并推送。发布流程一开始就调用它，让 GitHub 上的容器镜像构建与这里的
+# R2 上传并行（镜像只由 tag 触发，以前要等整轮发布结束才开始）。
+#
+# 提前打 tag 的前提是 tag 指向的提交就是本次要发的版本：工作区干净已经由前置检查
+# 保证，这里再核对一次该提交里的版本号，避免出现「tag 有、产物却是别的版本」。
+github_push_tag() {
   local tag="v${version}"
-  if ! command -v gh >/dev/null; then
-    echo "缺少 gh（GitHub CLI），跳过 tag 与 GitHub Release" >&2
-    return 0
+  local head_version
+  head_version="$(git -C "$root" show "HEAD:desktop/mygo.json" 2>/dev/null |
+    node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).version))}catch{}})' ||
+    true)"
+  if [ "$head_version" != "$version" ]; then
+    echo "HEAD 的 desktop/mygo.json 版本是 ${head_version:-未知}，不是 ${version}：拒绝打 tag" >&2
+    return 1
   fi
+
   if git -C "$root" rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
     echo "tag ${tag} 已存在"
   else
@@ -65,6 +75,16 @@ github_tag_and_release() {
       echo "重试推送 tag ${tag}（第 ${attempt} 次）" >&2
       sleep 2
     done
+  fi
+}
+
+# 两个平台的 manifest 都到该版本后才建 GitHub Release，避免把只有单平台可用的
+# 版本对外宣布；tag 在此之前已经推送（镜像也已在构建）。
+github_create_release() {
+  local tag="v${version}"
+  if ! command -v gh >/dev/null; then
+    echo "缺少 gh（GitHub CLI），跳过 GitHub Release" >&2
+    return 0
   fi
 
   local missing=""
@@ -260,11 +280,13 @@ if [ "$dry_run" = true ]; then
   echo
   echo "1. 前置检查：git 工作区干净；Worker 发布私钥 ${release_key_file}；客户端更新私钥 ${client_key_file}"
   echo "2. desktop-release.ts preflight ${version}（三处版本一致、CHANGELOG 含该版本）"
-  echo "3. 逐目标线上版本检查（只有 404 视为该平台首发）："
+  echo "3. 打 tag v${version} 并推送，让 GitHub 的容器镜像构建先开始："
+  echo "   git tag -a v${version} && git push origin v${version}（--no-github 跳过）"
+  echo "4. 逐目标线上版本检查（只有 404 视为该平台首发）："
   for target in "${targets[@]}"; do
     printf '   %-8s GET %s/update-%s.json\n' "$target" "$base" "$(target_of "$target")"
   done
-  echo "4. 从 ~/.mc/config.json 的 aliases.r2 读取 R2 凭据（不打印、不写盘），逐目标构建并上传："
+  echo "5. 从 ~/.mc/config.json 的 aliases.r2 读取 R2 凭据（不打印、不写盘），逐目标构建并上传："
   for target in "${targets[@]}"; do
     t="$(target_of "$target")"
     files_of "$t"
@@ -277,11 +299,11 @@ if [ "$dry_run" = true ]; then
       echo "     额外：MYGO_UPDATER_PRIVATE_KEY 与 LANG/LC_ALL=en_US.UTF-8（NSIS 需要 UTF-8 locale）"
     fi
   done
-  echo "5. 逐目标公网核验：manifest 的版本；归档、安装包、安装脚本的大小与 SHA-256 对公网 SHA256SUMS 逐字节核对"
+  echo "6. 逐目标公网核验：manifest 的版本；归档、安装包、安装脚本的大小与 SHA-256 对公网 SHA256SUMS 逐字节核对"
   if [ "$platform" = "both" ]; then
     echo "   windows 的核验额外带上 darwin-arm64，确认共享 SHA256SUMS 仍保留 macOS 行"
   fi
-  echo "6. 打 tag v${version}、推送到 origin，并在两个平台的 manifest 都到该版本后建 GitHub Release"
+  echo "7. 两个平台的 manifest 都到该版本后建 GitHub Release（tag 已在第 3 步推送）"
   echo "   （--no-github 跳过；事后补发用 --github-only）"
   echo
   echo "本命令只打印，以下动作一行都不跑：构建、读取私钥或 R2 凭据、联网、上传。"
@@ -303,11 +325,12 @@ fi
 # --github-only：版本已经在 R2 上，只补 tag 与 GitHub Release。
 if [ "$github_only" = true ]; then
   echo "==> 只打 tag 与 GitHub Release（${version}）"
-  github_tag_and_release
+  github_push_tag || exit 1
+  github_create_release || exit 1
   exit 0
 fi
 
-echo "==> 1/6 前置检查"
+echo "==> 1/7 前置检查"
 if [ -n "$(git -C "$root" status --porcelain)" ]; then
   echo "工作区不干净：请先提交或清理改动再发布" >&2
   exit 1
@@ -320,7 +343,7 @@ for key in "$release_key_file" "$client_key_file"; do
   fi
 done
 
-echo "==> 2/6 发布预检与线上版本检查"
+echo "==> 2/7 发布预检与线上版本检查"
 node --experimental-strip-types "$root/scripts/desktop-release.ts" preflight "$version"
 # 公网 manifest 的读取会偶发 fetch failed（本机实测），失败即中止发布会让人误以为
 # 版本冲突。这里只对网络读取重试 3 次；版本冲突等确定性错误仍会连续失败并中止。
@@ -338,7 +361,14 @@ for target in "${targets[@]}"; do
   done
 done
 
-echo "==> 3/6 逐平台构建并上传"
+echo "==> 3/7 提前打 tag 并推送（让镜像构建与上传并行）"
+if [ "$github" = true ]; then
+  github_push_tag || exit 1
+else
+  echo "已指定 --no-github：跳过 tag"
+fi
+
+echo "==> 4/7 逐平台构建并上传"
 # 每个平台只构建一次：mygo 的 -upload 与打包在同一次调用里完成。以前先构建一遍、
 # 上传时再构建一遍，编译、打包、下载旧归档和生成 delta 全都做了两遍。
 # 合并维护者的更新配置并保持到脚本退出：上传要读同一份 updates，若只在
@@ -410,7 +440,7 @@ for target in "${targets[@]}"; do
   done
 done
 
-echo "==> 4/6 公网核验"
+echo "==> 5/7 公网核验"
 # 刚上传的对象不会立刻在公网上可读（0.1.35 实测：核验第一次读到 404，约半分钟后正常），
 # 先等几秒再核验，避免把「还没生效」当成发布失败。
 sleep 5
@@ -436,7 +466,7 @@ for target in "${targets[@]}"; do
   done
 done
 
-echo "==> 5/6 完成"
+echo "==> 6/7 完成"
 for target in "${targets[@]}"; do
   t="$(target_of "$target")"
   files_of "$t"
@@ -448,9 +478,9 @@ done
 echo "只发布了一个平台时，另一个平台用 --platform <macos|windows> 单独重跑；不得重建同版本覆盖。"
 
 
-echo "==> 6/6 打 tag 与 GitHub Release"
+echo "==> 7/7 GitHub Release"
 if [ "$github" = true ]; then
-  github_tag_and_release
+  github_create_release
 else
-  echo "已指定 --no-github：跳过 tag 与 GitHub Release"
+  echo "已指定 --no-github：跳过 GitHub Release"
 fi

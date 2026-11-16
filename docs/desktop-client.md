@@ -449,10 +449,12 @@ npm run release:desktop -- --platform both      # 先 macOS 后 Windows
 1. `git status --porcelain` 必须为空；
 2. Worker 发布私钥（`$HOME/.deskwand-bot/release-signing-key.pem`）与客户端更新私钥（`$HOME/.deskwand-bot/client-update.key`）必须存在；
 3. `desktop-release.ts preflight <version>`：三处版本一致、CHANGELOG 含当前版本；
-4. 按目标顺序逐个 `desktop-release.ts check-remote <target> <version>`：只有 404 视为该平台首发，线上同版本或更高都拒绝；
-5. 从 `~/.mc/config.json` 的 `aliases.r2` 读取 R2 凭据（`accessKey` / `secretKey`），凭据只存在于脚本内存与构建子 shell 的环境里，不打印、不写盘；
-6. 逐目标 `bash scripts/build-desktop.sh --platform <target> --upload`：一次调用里生成并签名 Worker 发布包、嵌入客户端、打包本平台产物并上传。两个平台都要 `MYGO_UPDATER_PRIVATE_KEY`，Windows 还要 `LANG`/`LC_ALL=en_US.UTF-8`。**每个平台只构建一次**：早先的脚本先构建一遍、上传时再 `mygo build -upload` 构建一遍，编译、打包、下载旧归档、生成 delta 全部做了两遍，一次发布要十几分钟；
-7. 先等 5 秒再 `desktop-release.ts verify <target> <version> <buildDir>`：manifest 版本、归档大小与 SHA-256、安装包与安装脚本对公网 `SHA256SUMS` 逐字节核对；`--platform both` 时 Windows 额外带上 `darwin-arm64`，确认共享 `SHA256SUMS` 仍保留 macOS 行。刚上传的对象不会立刻公网可读，网络错误与 404 都会重试，最多 8 次、退避到 20 秒。
+4. 打 tag 并推送：`git tag -a v<version>` 后 `git push origin v<version>`。**这一步在构建之前**，因为容器镜像只由 tag 推送触发，提前推能让 GitHub 的镜像构建与本地 R2 上传并行；打 tag 前会核对 `HEAD:desktop/mygo.json` 的版本等于本次版本，工作区干净也已由第 1 步保证，避免「tag 有、产物却是别的版本」；
+5. 按目标顺序逐个 `desktop-release.ts check-remote <target> <version>`：只有 404 视为该平台首发，线上同版本或更高都拒绝；
+6. 从 `~/.mc/config.json` 的 `aliases.r2` 读取 R2 凭据（`accessKey` / `secretKey`），凭据只存在于脚本内存与构建子 shell 的环境里，不打印、不写盘；
+7. 逐目标 `bash scripts/build-desktop.sh --platform <target> --upload`：一次调用里生成并签名 Worker 发布包、嵌入客户端、打包本平台产物并上传。两个平台都要 `MYGO_UPDATER_PRIVATE_KEY`，Windows 还要 `LANG`/`LC_ALL=en_US.UTF-8`。**每个平台只构建一次**：早先的脚本先构建一遍、上传时再 `mygo build -upload` 构建一遍，编译、打包、下载旧归档、生成 delta 全部做了两遍，一次发布要十几分钟；
+8. 先等 5 秒再 `desktop-release.ts verify <target> <version> <buildDir>`：manifest 版本、归档大小与 SHA-256、安装包与安装脚本对公网 `SHA256SUMS` 逐字节核对；`--platform both` 时 Windows 额外带上 `darwin-arm64`，确认共享 `SHA256SUMS` 仍保留 macOS 行。刚上传的对象不会立刻公网可读，网络错误与 404 都会重试，最多 8 次、退避到 20 秒。
+9. 两个平台的 manifest 都到该版本后建 GitHub Release（`gh release create`，说明取自 CHANGELOG，附两个平台的安装包与共享 `SHA256SUMS`）。`--platform` 只发单平台时只推送 tag，留到另一平台发完后用 `--github-only` 补建。
 
 两个平台严格顺序执行（先 macOS 后 Windows），不并发：`mygo build -upload` 上传 `SHA256SUMS` 前会读取线上文件再合并，并发会互相覆盖。脚本从不删除 R2 上的任何对象，manifest 最后上传，中途失败不会让已安装的客户端看到缺文件的版本。
 
