@@ -1246,7 +1246,10 @@ describe("pollWeChat", () => {
     setWeChatCredentialsOverride(JSON.stringify(CREDS_A));
     await channels().ensurePolling();
     await cancelSchedules();
-    setPollTimingOverride({ runMs: 20, baseBackoffMs: 2 });
+    // The loop stops once the run window is spent, so a first fetch slower than
+    // the window would end it before the retry. Give the retry room, the same
+    // 200ms the telegram poll tests use.
+    setPollTimingOverride({ runMs: 200, baseBackoffMs: 2 });
 
     const { calls, fetchImpl } = scriptedILink([
       jsonResponse({ errmsg: "server down" }, 500),

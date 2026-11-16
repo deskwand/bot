@@ -206,6 +206,7 @@ func TestAddMcpServerGitHubPublishesReferenceAndSecret(t *testing.T) {
 func TestAddMcpServerRejectsDuplicateAndInvalidNames(t *testing.T) {
 	existing := `[{"name":"github","url":"https://api.githubcopilot.com/mcp/"}]`
 	f := newMcpFixture(t, existing, []string{"ADMIN_TOKEN"}, nil)
+	setServiceLocale(f.service, i18n.ZH)
 	_, err := f.service.AddMcpServer(McpAddInput{CatalogID: "github", Name: "github"})
 	if err == nil || !strings.Contains(err.Error(), "已存在同名服务") {
 		t.Fatalf("duplicate error = %v", err)
@@ -294,6 +295,7 @@ func TestUpdateMcpServerReplacesOneEntry(t *testing.T) {
 
 func TestUpdateMcpServerRejectsRenamedEntry(t *testing.T) {
 	f := newMcpFixture(t, `[{"name":"github","url":"https://api.githubcopilot.com/mcp/"}]`, []string{"ADMIN_TOKEN"}, nil)
+	setServiceLocale(f.service, i18n.ZH)
 	_, err := f.service.UpdateMcpServer("github", json.RawMessage(`{"name":"renamed","url":"https://x.example/"}`), nil)
 	if err == nil || !strings.Contains(err.Error(), "名称必须与原名一致") {
 		t.Fatalf("error = %v", err)

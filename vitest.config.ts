@@ -9,5 +9,9 @@ export default defineConfig({
     // Node-only tests use Node APIs (fs, child processes, signing keys) and
     // must never be collected by the workerd pool.
     include: ["tests/**/*.test.ts"],
+    // Shared CI runners are slow enough that a healthy test can take longer
+    // than 5s. Keep the tight bound locally, where a hang should surface fast.
+    testTimeout: process.env.CI ? 30_000 : 5_000,
+    hookTimeout: process.env.CI ? 30_000 : 5_000,
   },
 });

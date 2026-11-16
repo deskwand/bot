@@ -50,7 +50,11 @@ jobs:
         working-directory: desktop/frontend
         run: npm ci
 
+      # The worker suite runs in workerd and does not vary by host OS, so it
+      # runs on macOS only. Windows still covers the Go client, the frontend
+      # build and the Playwright tests below.
       - name: Root typecheck and tests
+        if: runner.os == 'macOS'
         run: npm run typecheck && npm test
 
       - name: Go vet and tests
