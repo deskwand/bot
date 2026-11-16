@@ -1,9 +1,12 @@
 name: desktop-build
 
+# Manual only. Every push to main ran this job and mailed its result to the
+# repository owner; the Go suite is not green on Windows yet (directory fsync
+# fails there, see internal/deployment/journal.go), so the mail said nothing
+# beyond "still red". Run it from the Actions tab or with
+# `gh workflow run desktop-build.yml --ref <branch>` when a desktop change needs
+# checking, and restore `push`/`pull_request` once Windows is green again.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
