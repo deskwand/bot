@@ -151,6 +151,12 @@ func invalidRequest(message string) error {
 
 // Install writes the compose file and .env, then starts the container.
 func (s *Service) Install(ctx context.Context, target domain.Target, request InstallRequest, onStep func(domain.Step)) (domain.Result, error) {
+	unlock, err := s.lockTarget(ctx, target)
+	if err != nil {
+		return domain.Result{}, err
+	}
+	defer unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

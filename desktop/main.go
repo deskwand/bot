@@ -153,6 +153,7 @@ func main() {
 		},
 		Version: pkg.Version(),
 		Locale:  locale.Current,
+		Locker:  locker,
 	})
 	publishRouter := &app.PublishRouter{Cloudflare: publish, Container: containers}
 	snapshotRouter := &app.SnapshotRouter{Cloudflare: api, Container: containers}

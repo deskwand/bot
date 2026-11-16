@@ -138,6 +138,12 @@ func messageOf(err error) string {
 // becomes healthy is rolled back automatically. The .env and the data volumes
 // are never read or written.
 func (s *Service) Upgrade(ctx context.Context, target domain.Target, onStep func(domain.Step)) (domain.Result, error) {
+	unlock, err := s.lockTarget(ctx, target)
+	if err != nil {
+		return domain.Result{}, err
+	}
+	defer unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

@@ -6,12 +6,14 @@ package container
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/deskwand/bot/desktop/internal/backup"
 	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/hostexec"
 )
@@ -32,12 +34,23 @@ const ImageRepository = "ghcr.io/deskwand/bot"
 
 const commandTimeout = 30 * time.Second
 
+// lockWait bounds how long a deploy waits for a backup or restore of the same
+// target before telling the user to come back later.
+const lockWait = 60 * time.Second
+
+// Locker serializes an operation that rewrites a target against a backup or a
+// restore of the same target. *deployment.TargetLocker implements it.
+type Locker interface {
+	Lock(ctx context.Context, target domain.Target) (func(), error)
+}
+
 // Options configures the container service.
 type Options struct {
 	Dial    Dialer
 	Version string                                           // release version bundled with the client
 	Sleep   func(ctx context.Context, d time.Duration) error // defaults to a context-aware wait
 	Locale  func() string                                    // "zh" | "en"
+	Locker  Locker                                           // nil means no serialization with backups
 }
 
 // Service implements snapshot, status, preflight, install, and publish against
@@ -51,6 +64,30 @@ type Service struct {
 // New constructs a container service.
 func New(options Options) *Service {
 	return &Service{options: options}
+}
+
+// lockTarget waits for the target lock so a deploy cannot recreate the
+// container in the middle of a backup or a restore of the same target. A
+// restore can hold it for its whole run, so the wait is bounded: an operation
+// that cannot start within lockWait reports why instead of hanging for half an
+// hour.
+func (s *Service) lockTarget(ctx context.Context, target domain.Target) (func(), error) {
+	if s.options.Locker == nil {
+		return func() {}, nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, lockWait)
+	defer cancel()
+	unlock, err := s.options.Locker.Lock(waitCtx, target)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return nil, domain.Error{
+				Code:    backup.CodeMaintenanceBusy,
+				Message: "a backup or restore of this deployment is running; try again when it finishes",
+			}
+		}
+		return nil, err
+	}
+	return unlock, nil
 }
 
 func (s *Service) sleep(ctx context.Context, d time.Duration) error {
@@ -73,6 +110,12 @@ func (s *Service) dial(target domain.Target) (Host, error) {
 
 // StopTarget stops the container, keeping its volume and .env.
 func (s *Service) StopTarget(ctx context.Context, target domain.Target) error {
+	unlock, err := s.lockTarget(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	host, err := s.dial(target)
@@ -84,6 +127,12 @@ func (s *Service) StopTarget(ctx context.Context, target domain.Target) error {
 
 // StartTarget brings a stopped container back up.
 func (s *Service) StartTarget(ctx context.Context, target domain.Target) error {
+	unlock, err := s.lockTarget(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	host, err := s.dial(target)

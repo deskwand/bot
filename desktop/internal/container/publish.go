@@ -43,6 +43,12 @@ func (s *Service) step(id, state string) domain.Step {
 // file. Even when the bytes are unchanged the container is restarted, because
 // a previous attempt may have written the file and then lost the connection.
 func (s *Service) Apply(ctx context.Context, target domain.Target, change domain.Change) (domain.Result, error) {
+	unlock, err := s.lockTarget(ctx, target)
+	if err != nil {
+		return domain.Result{}, err
+	}
+	defer unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -92,6 +98,12 @@ func (s *Service) Apply(ctx context.Context, target domain.Target, change domain
 // RestorePrevious copies .env.bak back over .env and restarts the container.
 // The backup is kept so the user can retry.
 func (s *Service) RestorePrevious(ctx context.Context, target domain.Target) (domain.Result, error) {
+	unlock, err := s.lockTarget(ctx, target)
+	if err != nil {
+		return domain.Result{}, err
+	}
+	defer unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

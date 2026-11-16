@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,7 +71,7 @@ func (l *TargetLocker) Lock(ctx context.Context, target domain.Target) (func(), 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	key := target.AccountID + "/" + target.ScriptName
+	key := targetLockKey(target)
 	l.mu.Lock()
 	semaphore := l.locks[key]
 	if semaphore == nil {
@@ -82,10 +83,29 @@ func (l *TargetLocker) Lock(ctx context.Context, target domain.Target) (func(), 
 
 	select {
 	case <-semaphore:
-		return func() { semaphore <- struct{}{} }, nil
+		var once sync.Once
+		return func() { once.Do(func() { semaphore <- struct{}{} }) }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// targetLockKey names the lock one target owns. A container has no account or
+// script name, so without the host every container in the folder would share
+// one lock and no restore would be protected from the wrong deploy.
+func targetLockKey(target domain.Target) string {
+	if target.Kind == domain.TargetContainer {
+		host := target.Host
+		port := host.Port
+		if port == 0 {
+			port = domain.DefaultSSHPort
+		}
+		// Trailing slashes are the one spelling difference that turns up in
+		// practice; two keys for one container means no serialization at all.
+		return "container/" + host.Address + ":" + strconv.Itoa(port) +
+			"/" + host.User + "/" + strings.TrimRight(host.Dir, "/")
+	}
+	return target.AccountID + "/" + target.ScriptName
 }
 
 // Service executes Preview/Apply/Resume/Abandon with a per-target lock, a
