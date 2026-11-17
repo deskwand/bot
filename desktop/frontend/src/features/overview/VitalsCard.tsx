@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Bar, type ChartTone } from "@/components/charts";
 import { useApp } from "@/components/app-context";
 import { tryT, useT } from "@/i18n";
 import { isCode } from "@/services/errors";
@@ -21,8 +22,21 @@ export function sourceLabel(source: string): string {
   return source;
 }
 
+// The runway gauge reads against a month: longer than that fills the bar, which
+// is the right story for "no hurry".
+const RUNWAY_SCALE_DAYS = 30;
+
+const TIER_TONE: Record<string, ChartTone> = {
+  ample: "emerald",
+  lean: "amber",
+  critical: "red",
+  dormant: "muted",
+};
+
 function NormalVitals({ vitals }: { vitals: LifeVitalsDTO }) {
   const t = useT();
+  const runway = vitals.runwayDays;
+  const maxSource = Math.max(...vitals.topSources.map((source) => source.usd), 0);
   return (
     <>
       <Badge data-testid="vitals-tier">
@@ -42,16 +56,19 @@ function NormalVitals({ vitals }: { vitals: LifeVitalsDTO }) {
           </dd>
         </div>
       </dl>
-      {vitals.runwayDays !== null && vitals.runwayDays >= 1 ? (
-        <p className="mt-2 text-sm text-muted-foreground">
-          {t("overview.runway", { days: Math.floor(vitals.runwayDays) })}
-        </p>
-      ) : vitals.runwayDays !== null &&
-        vitals.runwayDays > 0 &&
-        vitals.runwayDays < 1 ? (
-        <p className="mt-2 text-sm text-muted-foreground">
-          {t("overview.runwayUnderDay")}
-        </p>
+      {runway !== null && runway > 0 ? (
+        <div className="mt-2 space-y-1.5" data-testid="vitals-runway">
+          <p className="text-sm text-muted-foreground">
+            {runway >= 1
+              ? t("overview.runway", { days: Math.floor(runway) })
+              : t("overview.runwayUnderDay")}
+          </p>
+          <Bar value={runway} max={RUNWAY_SCALE_DAYS} tone={TIER_TONE[vitals.tier] ?? "primary"} />
+          <div className="flex justify-between text-[10px] text-muted-foreground/70">
+            <span>0</span>
+            <span>{t("overview.runwayScale")}</span>
+          </div>
+        </div>
       ) : null}
       {vitals.unpriced ? (
         <p className="mt-2 text-xs text-muted-foreground">{t("overview.unpriced")}</p>
@@ -59,11 +76,18 @@ function NormalVitals({ vitals }: { vitals: LifeVitalsDTO }) {
       {vitals.topSources.length > 0 ? (
         <div className="mt-4">
           <h3 className="text-xs text-muted-foreground">{t("overview.topSources")}</h3>
-          <ul className="mt-1 space-y-1 text-sm">
-            {vitals.topSources.map((source) => (
-              <li key={source.source} className="flex items-center justify-between gap-4">
-                <span>{sourceLabel(source.source)}</span>
-                <span data-i18n-ignore>{formatUsd(source.usd)}</span>
+          <ul className="mt-2 space-y-2 text-sm">
+            {vitals.topSources.map((source, index) => (
+              <li key={source.source} className="space-y-1">
+                <div className="flex items-center justify-between gap-4">
+                  <span>{sourceLabel(source.source)}</span>
+                  <span data-i18n-ignore>{formatUsd(source.usd)}</span>
+                </div>
+                <Bar
+                  value={source.usd}
+                  max={maxSource}
+                  tone={index === 0 ? "primary" : "primarySoft"}
+                />
               </li>
             ))}
           </ul>

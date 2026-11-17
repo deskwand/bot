@@ -7,6 +7,7 @@ export const exchange: Messages["exchange"] = {
   addAccount: "Add account",
   remove: "Remove",
   empty: "No accounts yet. Add one, then save and deploy so the bot can see it.",
+  compareTitle: "Total holding per account (USDT)",
   id: "Account id",
   idHint: "Lowercase letters, digits and -; used to reference the account",
   label: "Display name",

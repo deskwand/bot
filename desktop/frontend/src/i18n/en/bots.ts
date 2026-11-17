@@ -24,6 +24,7 @@ export const bots = {
   docs: "Documents",
   runs: "Recent runs",
   noRuns: "No runs yet",
+  runsSummary: "Last {count} runs: {ok} completed, {failed} failed",
   finishReason: "Finish reason",
   sep: ": ",
   unsupported: {

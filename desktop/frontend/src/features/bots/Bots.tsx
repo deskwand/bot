@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { pageSubtitle, useApp } from "@/components/app-context";
+import { CellStrip, type ChartCell, type ChartTone } from "@/components/charts";
 import { ErrorAlert } from "@/components/feedback";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -50,6 +51,27 @@ function outcomeLabel(t: (key: MessageKey) => string, outcome: string): string {
     default:
       return outcome;
   }
+}
+
+function outcomeTone(outcome: string | null | undefined): ChartTone {
+  if (outcome === "completed") return "emerald";
+  if (outcome === "failed") return "red";
+  if (outcome === "cancelled") return "muted";
+  return "primarySoft";
+}
+
+// A long log would turn the strip into a wall of cells; the list below keeps the
+// whole history.
+const RUN_STRIP_LIMIT = 40;
+
+function runCells(t: (key: MessageKey) => string, runs: BotRunDTO[]): ChartCell[] {
+  return runs.map((run) => ({
+    key: run.taskId,
+    tone: outcomeTone(run.outcome),
+    title: `${stamp(run.startedAt)} · ${
+      run.outcome ? outcomeLabel(t, run.outcome) : "—"
+    } · ${(run.summary ?? "").slice(0, 120)}`,
+  }));
 }
 
 export function Bots() {
@@ -196,6 +218,11 @@ function BotDetail({ id }: { id: string }) {
     );
   }
   const { meta, docs, runs } = query.data;
+  // The Worker hands the log back newest first, but the panel should not depend
+  // on that: sorting by start time makes the strip a timeline whatever the order.
+  const shown = [...runs]
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .slice(-RUN_STRIP_LIMIT);
   return (
     <div data-testid={`bot-detail-${id}`} className="mt-3 flex flex-col gap-3 text-sm">
       {meta ? (
@@ -231,7 +258,22 @@ function BotDetail({ id }: { id: string }) {
         {runs.length === 0 ? (
           <p className="text-muted-foreground">{t("bots.noRuns")}</p>
         ) : (
-          runs.map((run) => <RunLine key={run.taskId} run={run} />)
+          <>
+            {shown.length > 1 ? (
+              <CellStrip
+                cells={runCells(t, shown)}
+                label={t("bots.runsSummary", {
+                  count: shown.length,
+                  ok: shown.filter((run) => run.outcome === "completed").length,
+                  failed: shown.filter((run) => run.outcome === "failed").length,
+                })}
+                className="mb-1"
+              />
+            ) : null}
+            {runs.map((run) => (
+              <RunLine key={run.taskId} run={run} />
+            ))}
+          </>
         )}
       </div>
     </div>

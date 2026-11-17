@@ -49,6 +49,7 @@ export const overview: Messages["overview"] = {
   dailySpend: "Daily spend",
   runway: "About {days} days of runway left",
   runwayUnderDay: "Less than a day of runway left",
+  runwayScale: "30 days",
   unpriced: "Some calls could not be priced; actual spend may be higher",
   topSources: "Top spend, last 7 days",
   sourceButler: "Butler",

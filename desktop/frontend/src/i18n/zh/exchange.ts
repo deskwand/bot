@@ -4,6 +4,7 @@ export const exchange = {
   addAccount: "添加账号",
   remove: "移除",
   empty: "还没有账号。添加一个后保存并部署，机器人才能查到资产。",
+  compareTitle: "各账户持仓总值（USDT）",
   id: "账号 id",
   idHint: "小写字母、数字和 -，保存后用于引用",
   label: "显示名称",

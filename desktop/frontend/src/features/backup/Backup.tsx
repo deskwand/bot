@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { pageSubtitle, useApp } from "@/components/app-context";
+import { ColumnChart, type ChartColumn } from "@/components/charts";
 import { ErrorAlert } from "@/components/feedback";
 import { formatDateTime, getT, useT, type MessageKey } from "@/i18n";
 import { queryKeys, useContainerStatusQuery, useInvalidate } from "@/services/queries";
@@ -77,6 +78,20 @@ function formatBytes(bytes: number): string {
     unit += 1;
   }
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+// The folder keeps at most a handful of files, so one column per file is
+// readable; older folders listed at the cap stop being a chart and stay a list.
+function backupColumns(files: BackupFileDTO[]): ChartColumn[] {
+  const ordered = [...files]
+    .sort((a, b) => a.modifiedAt.localeCompare(b.modifiedAt))
+    .slice(-24);
+  return ordered.map((file) => ({
+    key: file.path,
+    value: file.bytes,
+    tone: "primarySoft" as const,
+    title: `${file.name} · ${formatBytes(file.bytes)}`,
+  }));
 }
 
 function formatExportedAt(value: string): string {
@@ -566,6 +581,25 @@ export function Backup() {
         </CardHeader>
         <CardContent>
           <ErrorAlert error={filesError} onRetry={refreshFiles} retryLabel={t("backup.retryFiles")} />
+          {files.length > 1 ? (
+            <div className="mb-4 max-w-sm" data-testid="backup-size-chart">
+              <ColumnChart
+                columns={backupColumns(files)}
+                label={t("backup.filesChart")}
+                className="mb-1"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground/70">
+                <span>{t("backup.filesAxisOldest")}</span>
+                <span>{t("backup.filesAxisNewest")}</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t("backup.filesSummary", {
+                  count: files.length,
+                  size: formatBytes(files.reduce((sum, file) => sum + file.bytes, 0)),
+                })}
+              </p>
+            </div>
+          ) : null}
           {files.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t("backup.filesEmpty")}</p>
           ) : (

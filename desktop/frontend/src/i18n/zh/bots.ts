@@ -24,6 +24,7 @@ export const bots = {
   docs: "文档",
   runs: "最近运行",
   noRuns: "还没有运行记录",
+  runsSummary: "最近 {count} 次运行：成功 {ok} 次，失败 {failed} 次",
   finishReason: "结束原因",
   sep: "：",
   unsupported: {

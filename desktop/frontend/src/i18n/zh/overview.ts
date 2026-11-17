@@ -43,6 +43,7 @@ export const overview = {
   dailySpend: "日均开销",
   runway: "还能运行约 {days} 天",
   runwayUnderDay: "还能运行不到 1 天",
+  runwayScale: "30 天",
   unpriced: "部分调用无法计价，实际开销可能更高",
   topSources: "近 7 天开销最多",
   sourceButler: "管家",

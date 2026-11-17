@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { pageSubtitle, useApp } from "@/components/app-context";
+import { Bar } from "@/components/charts";
 import { ErrorAlert } from "@/components/feedback";
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -153,6 +154,24 @@ export function Exchanges() {
 
   const draftOf = (rowKey: string): SecretDraft =>
     drafts[rowKey] ?? emptyDraft();
+
+  // A total only arrives with a Binance sync. One account is not a comparison,
+  // so the chart waits for a second total instead of drawing a full bar.
+  const totals = useMemo(() => {
+    const found: { id: string; label: string; total: number }[] = [];
+    for (const row of rows) {
+      const status = syncById.get(row.account.id);
+      if (!status?.ok || status.total === undefined) continue;
+      const venue = venueOption(row.account.venue) ?? EXCHANGE_VENUES[0]!;
+      found.push({
+        id: row.account.id,
+        label: row.account.label?.trim() || `${venue.name} · ${row.account.id}`,
+        total: status.total,
+      });
+    }
+    return found;
+  }, [rows, syncById]);
+  const maxTotal = Math.max(...totals.map((item) => item.total), 0);
 
   const incompleteRows = useMemo(() => {
     const incomplete = new Set<string>();
@@ -407,6 +426,30 @@ export function Exchanges() {
           <p className="text-sm text-muted-foreground" data-testid="exchange-empty">
             {t("exchange.empty")}
           </p>
+        ) : null}
+
+        {totals.length > 1 ? (
+          <div
+            className="mt-4 rounded-md border border-border bg-muted/20 p-3"
+            data-testid="exchange-compare"
+          >
+            <p className="text-xs font-medium">{t("exchange.compareTitle")}</p>
+            <ul className="mt-2 space-y-2">
+              {totals.map((item, index) => (
+                <li key={item.id} className="space-y-1">
+                  <div className="flex items-center justify-between gap-3 text-xs">
+                    <span className="truncate">{item.label}</span>
+                    <span data-i18n-ignore>{item.total.toFixed(2)}</span>
+                  </div>
+                  <Bar
+                    value={item.total}
+                    max={maxTotal}
+                    tone={index === 0 ? "primary" : "primarySoft"}
+                  />
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : null}
 
         <ul className="mt-3 space-y-4">
