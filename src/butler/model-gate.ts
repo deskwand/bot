@@ -2,6 +2,7 @@ import type { UserInput } from "@earendil-works/pi-durable";
 import { attachmentLine } from "../channels/inbox";
 import { ownerLocale, type Locale } from "../i18n";
 import {
+  codexReloginText,
   lastModelError,
   userTextForModelError,
 } from "../llm/model-errors";
@@ -19,11 +20,14 @@ import { errorNotice, imageModelNotice } from "./owner-copy";
  * can take it. Covers both a model that cannot run at all and a text-only
  * model asked to look at images.
  */
-export function turnBlocker(env: Env, hasImages: boolean): string | undefined {
+export async function turnBlocker(
+  env: Env,
+  hasImages: boolean,
+): Promise<string | undefined> {
   const models = createModelsForEnv(env);
   const butlerModel = readRuntimeConfig(env).models.butler;
 
-  const notReady = modelReadiness(env, models, butlerModel);
+  const notReady = await modelReadiness(env, models, butlerModel);
   if (notReady) return notReady;
 
   if (hasImages && !modelAcceptsImages(models, butlerModel)) {
@@ -79,5 +83,9 @@ export async function unansweredText(
       );
     }
   }
-  return userTextForModelError(modelError, locale) ?? errorNotice(locale);
+  return (
+    codexReloginText(modelError, locale) ??
+    userTextForModelError(modelError, locale) ??
+    errorNotice(locale)
+  );
 }

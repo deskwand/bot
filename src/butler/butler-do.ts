@@ -1102,7 +1102,7 @@ export class ButlerDO extends Agent<Env> {
         return false;
       try {
         const route = await this.channels().currentRoute();
-        if (route.channel === null || turnBlocker(this.env, false)) {
+        if (route.channel === null || (await turnBlocker(this.env, false))) {
           await this.deferSelfWake(generation, now + 3_600_000);
           return false;
         }
@@ -2663,7 +2663,7 @@ export class ButlerDO extends Agent<Env> {
 
     // Answer a missing key or an unavailable model here instead of letting pi
     // fail the run after the input was accepted.
-    const blocked = turnBlocker(this.env, images.length > 0);
+    const blocked = await turnBlocker(this.env, images.length > 0);
     if (blocked) {
       await this.sendBestEffort({ text: blocked });
       this.kickReconcile();

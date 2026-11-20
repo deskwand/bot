@@ -85,15 +85,31 @@ type ModelEntryDTO struct {
 
 // ModelProviderDTO is one built-in provider from the shared catalog.
 type ModelProviderDTO struct {
-	ID      string          `json:"id"`
-	Name    string          `json:"name"`
-	Keyless bool            `json:"keyless,omitempty"`
-	Models  []ModelEntryDTO `json:"models"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Keyless bool   `json:"keyless,omitempty"`
+	// Subscription providers log in with an OAuth subscription instead of a
+	// MODEL_KEY_* secret; the page shows a sign-in card, never a key field.
+	Subscription bool            `json:"subscription,omitempty"`
+	Models       []ModelEntryDTO `json:"models"`
 }
 
 // ModelCatalogDTO is the built-in provider and model list shown in the UI.
 type ModelCatalogDTO struct {
 	Providers []ModelProviderDTO `json:"providers"`
+}
+
+// ModelAuthDTO is one subscription provider's login state.
+type ModelAuthDTO struct {
+	Provider  string `json:"provider"`
+	Connected bool   `json:"connected"`
+}
+
+// ModelLoginDTO is a started device-code login. The device handle stays in Go.
+type ModelLoginDTO struct {
+	UserCode        string `json:"userCode"`
+	VerificationURL string `json:"verificationUrl"`
+	IntervalSeconds int    `json:"intervalSeconds"`
 }
 
 // CustomModelDTO is one model declared by a custom provider.

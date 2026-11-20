@@ -65,6 +65,30 @@ export function modelKeyMissingText(
   return t(locale, "llm.modelKeyMissing", { provider, secret });
 }
 
+/** The model needs a subscription login that this deployment does not have. */
+export function codexSignedOutText(locale: Locale, provider: string): string {
+  return t(locale, "llm.codexSignedOut", { provider });
+}
+
+/**
+ * A subscription credential that used to work no longer refreshes: the owner
+ * revoked it, or signed in somewhere else. Returns undefined for other errors
+ * so the caller can fall back to the generic notice.
+ */
+export function codexReloginText(
+  rawProviderError: string | undefined,
+  locale: Locale,
+): string | undefined {
+  if (rawProviderError === undefined) return undefined;
+  // Match the token exchange's own failure signature only: an error that
+  // merely names the provider (a quota notice, a transport failure) must keep
+  // its own message.
+  if (!/OAuth refresh failed|invalid_grant/i.test(rawProviderError)) {
+    return undefined;
+  }
+  return t(locale, "llm.codexRelogin");
+}
+
 export function workersAiBindingUnavailableText(locale: Locale): string {
   return t(locale, "llm.bindingUnavailable");
 }

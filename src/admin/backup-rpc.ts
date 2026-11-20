@@ -9,6 +9,7 @@
  */
 
 import type { MaintenanceStore } from "./maintenance";
+import { MODEL_CREDENTIAL_PREFIX } from "../llm/credential-key";
 import {
   createIndexes,
   createTables,
@@ -106,12 +107,16 @@ export class BackupRpc {
 
   /**
    * Keys that must never leave the deployment in a backup: WeChat tokens,
-   * QR challenges, login tickets and connection context tokens. Filtering
-   * happens per row, but the cursor still follows what was actually scanned,
-   * so a page of excluded keys neither ends the dump nor skips later rows.
+   * QR challenges, login tickets, connection context tokens and model
+   * subscription credentials. Filtering happens per row, but the cursor still
+   * follows what was actually scanned, so a page of excluded keys neither ends
+   * the dump nor skips later rows.
    */
   private isExcludedKv(key: string): boolean {
-    return key.startsWith("private:wechat:");
+    return (
+      key.startsWith("private:wechat:") ||
+      key.startsWith(MODEL_CREDENTIAL_PREFIX)
+    );
   }
 
   private async readKvPage(cursor: string | null): Promise<DumpPage> {

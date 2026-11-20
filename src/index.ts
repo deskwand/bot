@@ -1,4 +1,11 @@
 import { createAdminGateway } from "./admin/admin-gateway";
+import {
+  codexStatus,
+  disconnectCodex,
+  pollCodexLogin,
+  startCodexLogin,
+  CODEX_PROVIDER_ID,
+} from "./llm/codex";
 import { browserClient } from "./sandbox/browser-http";
 import { sandboxFetch } from "./sandbox/install";
 import { liveWalletReads } from "./admin/wallet-routes";
@@ -58,6 +65,14 @@ function admin(env: Env) {
     probeExchange: (account) => probeExchange(env, account),
     ingestExchangeSnapshot: (body) => ingestSnapshot(env, body),
     walletReads: liveWalletReads(env),
+    modelAuth: {
+      status: async () => [
+        { id: CODEX_PROVIDER_ID, ...(await codexStatus(env)) },
+      ],
+      start: () => startCodexLogin(),
+      poll: (device) => pollCodexLogin(device, env),
+      disconnect: () => disconnectCodex(env),
+    },
   });
 }
 

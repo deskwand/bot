@@ -191,7 +191,7 @@ export class BotChatDO extends Agent<Env> {
         throw new Error(error.message);
       }
 
-      const blocked = turnBlocker(this.env, false);
+      const blocked = await turnBlocker(this.env, false);
       if (blocked !== undefined) throw new Error(blocked);
 
       const receipt = await this.harness.submit(toUserInput(input.text, [], []), {

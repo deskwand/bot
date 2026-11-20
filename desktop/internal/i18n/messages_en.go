@@ -1,3 +1,3 @@
 package i18n
 
-var en = join(enLocale, enApp, enDeployment, enDiagnostics, enWeChat, enMcpAdmin, enCatalog, enAuth, enMcpCatalog, enExchangeAdmin, enWalletAdmin, enLifeAdmin, enBrowserAdmin, enBotAdmin, enOwnerAdmin)
+var en = join(enLocale, enApp, enDeployment, enDiagnostics, enWeChat, enMcpAdmin, enCatalog, enAuth, enMcpCatalog, enExchangeAdmin, enWalletAdmin, enLifeAdmin, enBrowserAdmin, enBotAdmin, enOwnerAdmin, enModelAuth)

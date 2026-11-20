@@ -30,6 +30,11 @@ import {
 } from "./backup-batch";
 import { BROWSER_PREFIX, createBrowserAdminRoutes } from "./browser-routes";
 import { createLifeRoutes } from "./life-routes";
+import {
+  createModelAuthRoutes,
+  MODEL_AUTH_PREFIX,
+  type ModelAuthDeps,
+} from "./model-routes";
 import { BOTS_PATH, createBotRoutes } from "./bot-routes";
 import { createMcpAdminRoutes } from "./mcp-routes";
 import { createOwnerRoutes, OWNER_STATUS_PATH } from "./owner-routes";
@@ -60,6 +65,8 @@ export type AdminDeps = {
   ingestExchangeSnapshot?(body: unknown): Promise<ExchangeProbeResult>;
   /** Present only when the deployment wires the wallet status route. */
   walletReads?: WalletReads;
+  /** Present only when the deployment wires subscription model logins. */
+  modelAuth?: ModelAuthDeps;
   /** Null when the deployment has no sandbox; the page then says so. */
   browser?: BrowserClient | null;
 };
@@ -251,6 +258,8 @@ export function createAdminGateway(deps: AdminDeps): {
         });
   const wallet =
     deps.walletReads === undefined ? null : createWalletRoutes(deps.walletReads);
+  const modelAuth =
+    deps.modelAuth === undefined ? null : createModelAuthRoutes(deps.modelAuth);
   const life = createLifeRoutes({ vitals: () => deps.life().vitals() });
   const browser =
     deps.browser === undefined ? null : createBrowserAdminRoutes({ client: deps.browser });
@@ -290,6 +299,16 @@ export function createAdminGateway(deps: AdminDeps): {
     // Wallet status is a read-only health check and needs no lease.
     if (url.pathname.startsWith("/admin/wallet/") && wallet !== null) {
       return wallet.fetch(req);
+    }
+
+    // Subscription logins touch no user data; the prompts themselves live in
+    // the service, and the credential is written by the poll.
+    if (
+      modelAuth !== null &&
+      (url.pathname === MODEL_AUTH_PREFIX ||
+        url.pathname.startsWith(`${MODEL_AUTH_PREFIX}/`))
+    ) {
+      return modelAuth.fetch(req);
     }
 
     // Vitals are a read-only health check and need no lease.

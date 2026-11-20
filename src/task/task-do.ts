@@ -911,7 +911,7 @@ export class TaskDO extends Agent<Env> {
 
     // Refuse before any tool setup or model work: a missing key or an
     // unavailable model is a permanent failure, not a retryable one.
-    const notReady = modelReadiness(this.env, models, selected);
+    const notReady = await modelReadiness(this.env, models, selected);
     if (notReady) {
       await this.failWith(notReady, false);
       return;

@@ -9,5 +9,9 @@ export const llm = {
   modelUnavailableShort: "模型 {provider}/{id} 不可用",
   modelKeyMissing:
     "模型 {provider} 没有配置 key（{secret}），请在桌面端模型页填写",
+  codexSignedOut:
+    "模型 {provider} 还没有登录 ChatGPT 订阅，请在桌面端模型页登录",
+  codexRelogin:
+    "ChatGPT 订阅的登录已失效或被撤销，请在桌面端模型页重新登录。",
   bindingUnavailable: "Workers AI binding 不可用，请在桌面端重新部署",
 } as const;

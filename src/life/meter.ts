@@ -2,6 +2,7 @@ import type { Api, Model, StreamFunction, Usage } from "@earendil-works/pi-ai";
 import type { Provider } from "@earendil-works/pi-ai/models";
 import type { SpendEntry } from "./books";
 import { getClock } from "../butler/notifier";
+import { SUBSCRIPTION_PROVIDER_IDS } from "../llm/providers";
 import { WORKERS_AI_PROVIDER_ID } from "../llm/workers-ai";
 
 export type Meter = {
@@ -24,6 +25,9 @@ export function spendUsd(
   rates: Rates,
 ): { usd: number; priced: boolean } {
   if (provider === WORKERS_AI_PROVIDER_ID) return { usd: 0, priced: true };
+  // A subscription is a monthly fee: the marginal cost of a call is zero, and
+  // calling it unpriced would claim we do not know the price.
+  if (SUBSCRIPTION_PROVIDER_IDS.has(provider)) return { usd: 0, priced: true };
   if (usage.totalTokens === 0) return { usd: 0, priced: false };
   if (
     rates.input === 0 &&

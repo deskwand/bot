@@ -87,17 +87,17 @@ describe("model error copy", () => {
 describe("modelReadiness locale", () => {
   const ref = { provider: "deepseek", id: "deepseek-flash" };
 
-  it("reports a missing key in English", () => {
+  it("reports a missing key in English", async () => {
     const env = envWith({
       DESKWAND_CONFIG: { ...validConfig, locale: "en" },
     });
     const models = createModelsForEnv(env);
 
-    expectEnglish(modelReadiness(env, models, ref) ?? "");
-    expect(modelReadiness(env, models, ref)).toContain("MODEL_KEY_DEEPSEEK");
+    expectEnglish((await modelReadiness(env, models, ref)) ?? "");
+    expect(await modelReadiness(env, models, ref)).toContain("MODEL_KEY_DEEPSEEK");
   });
 
-  it("reports a missing Workers AI binding in English", () => {
+  it("reports a missing Workers AI binding in English", async () => {
     const env = envWith({
       DESKWAND_CONFIG: { ...validConfig, locale: "en" },
       AI: {},
@@ -105,10 +105,10 @@ describe("modelReadiness locale", () => {
     const models = createModelsForEnv(env);
 
     expectEnglish(
-      modelReadiness(env, models, {
+      (await modelReadiness(env, models, {
         provider: "workers-ai",
         id: "@cf/google/gemma-4-26b-a4b-it",
-      }) ?? "",
+      })) ?? "",
     );
   });
 });

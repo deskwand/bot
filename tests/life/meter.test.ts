@@ -142,6 +142,14 @@ describe("spendUsd", () => {
     });
   });
 
+  it("charges nothing for a subscription call", () => {
+    // The monthly fee is the cost; the call itself adds no spend.
+    expect(spendUsd("openai-codex", usage, rates)).toEqual({
+      usd: 0,
+      priced: true,
+    });
+  });
+
   it("leaves a call without tokens unpriced", () => {
     expect(
       spendUsd("inner", { ...usage, totalTokens: 0 }, rates),

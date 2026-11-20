@@ -20,6 +20,7 @@ var zhApp = map[string]string{
 	"app.releaseNotBundled":      "此客户端未内置 Worker 发布包",
 	"app.releaseUntrusted":       "内置 Worker 发布包未使用受信任的发布密钥签名",
 	"app.releaseUnavailable":     "内置 Worker 发布包不可用",
+	"app.modelLoginNotStarted":   "还没有开始登录，请重新点一次「登录」",
 	"app.browserOpenFailed":      "无法打开浏览器，请检查默认浏览器设置后重试",
 	"app.webViewMissingTitle":    "缺少 Microsoft Edge WebView2 运行时",
 	"app.webViewMissingMessage":  "DeskWand Bot 的界面依赖 WebView2 运行时，这台 Windows 上还没有安装。安装 Evergreen 运行时后重新打开客户端。",

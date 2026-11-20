@@ -38,6 +38,17 @@ export const BUILTIN_PROVIDER_IDS: ReadonlySet<string> = new Set(
   catalog.providers.map((provider) => provider.id),
 );
 
+/**
+ * Providers configured through an OAuth subscription login instead of a
+ * `MODEL_KEY_*` secret. They are registered by `src/llm/codex.ts` and keep
+ * their tokens in the deployment's own storage, never in configuration.
+ */
+export const SUBSCRIPTION_PROVIDER_IDS: ReadonlySet<string> = new Set(
+  (catalog.providers as readonly { id: string; subscription?: boolean }[])
+    .filter((provider) => provider.subscription === true)
+    .map((provider) => provider.id),
+);
+
 const ROLES: readonly Role[] = ["butler", "task"];
 
 function priceValid(price: unknown): boolean {

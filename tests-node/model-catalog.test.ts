@@ -14,7 +14,6 @@ const EXCLUDED_PROVIDERS = [
   "google-vertex",
   "azure",
   "github-copilot",
-  "openai-codex",
   "cloudflare-ai-gateway",
   "cloudflare-workers-ai",
 ];
@@ -22,6 +21,7 @@ const EXCLUDED_PROVIDERS = [
 const GENERIC_APIS = new Set([
   "openai-completions",
   "openai-responses",
+  "openai-codex-responses",
   "anthropic-messages",
 ]);
 
@@ -48,6 +48,26 @@ describe("generated model catalog", () => {
 
   it("does not import a factory for keyless providers", async () => {
     expect(renderCatalogTs(await buildCatalog())).not.toContain("workers-ai");
+  });
+
+  it("lists the Codex subscription provider without an api key", async () => {
+    const catalog = await buildCatalog();
+    const codex = catalog.providers.find((provider) => provider.id === "openai-codex");
+
+    expect(codex?.subscription).toBe(true);
+    // The catalog stays language-neutral; the desktop localizes the name.
+    expect(codex?.name).toBe("OpenAI Codex");
+    expect(codex?.models.length).toBeGreaterThan(0);
+    expect(codex?.models[0]?.api).toBe("openai-codex-responses");
+    expect(codex?.models[0]?.baseUrl).toBe("https://chatgpt.com/backend-api");
+  });
+
+  it("does not import or register the subscription provider's factory", async () => {
+    // src/llm/codex.ts registers it with its own OAuth flow.
+    const source = renderCatalogTs(await buildCatalog());
+    expect(source).not.toContain("openaiCodexProvider");
+    expect(source).not.toContain("providers/openai-codex");
+    expect(source).not.toContain('"openai-codex"');
   });
 
   it("states each model's thinking levels the way pi does", async () => {

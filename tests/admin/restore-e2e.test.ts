@@ -473,6 +473,14 @@ describe("life ledger backup and restore", () => {
     try {
       const life = env.LIFE.get(env.LIFE.idFromName("global"));
       await life.recordCredit(20, "");
+      // A subscription credential is deployment state, not owner data: it must
+      // not travel in the archive.
+      await life.saveModelCredential("openai-codex", {
+        type: "oauth",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: START + DAY_MS,
+      });
       for (let day = 0; day < 6; day += 1) {
         now = START + Math.round((day + 0.5) * DAY_MS);
         await life.recordSpend(spend(2, now));
@@ -503,12 +511,18 @@ describe("life ledger backup and restore", () => {
       expect(
         lifeDump.tables.find(({ table }) => table.name === "spend_hourly")?.rows,
       ).not.toHaveLength(0);
+      const kvRows =
+        lifeDump.tables.find(({ table }) => table.name === "__kv")?.rows ?? [];
+      expect(
+        kvRows.some((row) => String(row.key).startsWith("model_auth:")),
+      ).toBe(false);
 
       await acquire("restore");
       await restoreDo({ do: "life", id: "" }, lifeDump);
       await release();
 
       const restored = env.LIFE.get(env.LIFE.idFromName("global"));
+      expect(await restored.modelCredential("openai-codex")).toBeUndefined();
       const after = await restored.vitals();
       expect(after).toMatchObject({
         balanceUsd: before.balanceUsd,

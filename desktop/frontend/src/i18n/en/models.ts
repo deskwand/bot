@@ -94,6 +94,25 @@ export const models: Messages["models"] = {
   modelsLabel: "Model IDs (comma-separated)",
   saveEndpoint: "Save endpoint",
   listSeparator: ", ",
+  subscriptionTitle: "Subscription sign-in",
+  subscriptionDescription:
+    "These providers bill a subscription instead of an API key. Sign in, enter the device code on the ChatGPT page, and the deployment keeps the credential. It is not part of a backup.",
+  subscriptionSignedIn: "Signed in",
+  subscriptionSignedOut: "Not signed in",
+  subscriptionLogin: "Sign in",
+  subscriptionDisconnect: "Sign out",
+  subscriptionDialog: "Sign in to {provider}",
+  subscriptionInstructions:
+    "Enter the device code below on the page that just opened; this card turns to signed in when you are done.",
+  subscriptionCodeLabel: "Device code",
+  subscriptionCopy: "Copy",
+  subscriptionCopied: "Copied",
+  subscriptionWaiting: "Waiting for you to finish in the browser…",
+  subscriptionDone: "Signed in. The credential is stored in the deployment.",
+  subscriptionRetry: "Retry",
+  subscriptionClose: "Close",
+  subscriptionCodeExpiry: "The device code expires; finish soon.",
+  subscriptionUnavailable: "This deployment does not support subscription sign-in yet; update it first.",
   errors: {
     idPattern:
       "The ID may use only lowercase letters, digits and -, starting with a letter or digit",

@@ -579,6 +579,12 @@ export interface McpToolDTO {
   mode: string;
 }
 
+/** ModelAuthDTO is one subscription provider's login state. */
+export interface ModelAuthDTO {
+  provider: string;
+  connected: boolean;
+}
+
 /** ModelCatalogDTO is the built-in provider and model list shown in the UI. */
 export interface ModelCatalogDTO {
   providers: ModelProviderDTO[];
@@ -604,11 +610,23 @@ export interface ModelEntryDTO {
   thinkingLevels?: string[];
 }
 
+/** ModelLoginDTO is a started device-code login. The device handle stays in Go. */
+export interface ModelLoginDTO {
+  userCode: string;
+  verificationUrl: string;
+  intervalSeconds: number;
+}
+
 /** ModelProviderDTO is one built-in provider from the shared catalog. */
 export interface ModelProviderDTO {
   id: string;
   name: string;
   keyless?: boolean;
+  /**
+   * Subscription providers log in with an OAuth subscription instead of a
+   * MODEL_KEY_* secret; the page shows a sign-in card, never a key field.
+   */
+  subscription?: boolean;
   models: ModelEntryDTO[];
 }
 
@@ -998,6 +1016,10 @@ export const Service = {
   disconnectContainer(): Promise<void> {
     return call("Service.DisconnectContainer");
   },
+  /** DisconnectModel forgets the deployment's subscription credential. */
+  disconnectModel(): Promise<void> {
+    return call("Service.DisconnectModel");
+  },
   /**
    * ExchangeSyncStatus lists every locally stored account, sorted by id. An
    * account that never synced carries only its id.
@@ -1065,6 +1087,10 @@ export const Service = {
   mcpStatus(): Promise<McpAuthDTO[]> {
     return call("Service.McpStatus");
   },
+  /** ModelAuthStatus lists the subscription providers and whether they are signed in. */
+  modelAuthStatus(): Promise<ModelAuthDTO[]> {
+    return call("Service.ModelAuthStatus");
+  },
   /**
    * ModelCatalog returns the built-in providers and models shared with the
    * Worker and the desktop client.
@@ -1109,6 +1135,13 @@ export const Service = {
   /** PendingRestore reports an unfinished restore, or nil when there is none. */
   pendingRestore(): Promise<PendingRestoreDTO | null> {
     return call("Service.PendingRestore");
+  },
+  /**
+   * PollModelLogin reports the state of the login started by StartModelLogin:
+   * pending, slow_down or done.
+   */
+  pollModelLogin(): Promise<string> {
+    return call("Service.PollModelLogin");
   },
   /** PreviewConfig validates and describes a publish without writing. */
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]> {
@@ -1257,6 +1290,13 @@ export const Service = {
    */
   startMcpOAuth(name: string): Promise<void> {
     return call("Service.StartMcpOAuth", name);
+  },
+  /**
+   * StartModelLogin asks the deployment for a device code and opens the page
+   * where the owner enters it. The returned code is the only thing the UI needs.
+   */
+  startModelLogin(): Promise<ModelLoginDTO> {
+    return call("Service.StartModelLogin");
   },
   /**
    * StartMove packs the current residence, silences it, and records the move.

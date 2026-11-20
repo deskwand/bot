@@ -85,6 +85,24 @@ func TestCheckModelKeysAllowsKeyless(t *testing.T) {
 	}
 }
 
+const subscriptionModelKeyConfig = `{
+  "schemaVersion": 1,
+  "owner": {"telegramUserIds": []},
+  "models": {
+    "butler": {"provider": "openai-codex", "id": "gpt-5.6-luna"},
+    "task": {"provider": "openai-codex", "id": "gpt-5.6-luna"}
+  },
+  "mcpServers": []
+}`
+
+func TestCheckModelKeysAllowsSubscriptionProviders(t *testing.T) {
+	// The login happens after the deployment exists, so publishing must not
+	// demand a MODEL_KEY_* for it.
+	if err := CheckModelKeys(i18n.ZH, []byte(subscriptionModelKeyConfig), nil, nil); err != nil {
+		t.Fatalf("CheckModelKeys() = %v, want nil", err)
+	}
+}
+
 func TestCheckModelKeysRequiresCustomProviderKey(t *testing.T) {
 	err := CheckModelKeys(i18n.ZH, []byte(customModelKeyConfig), nil, nil)
 	var coded domain.Error

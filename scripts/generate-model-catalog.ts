@@ -34,6 +34,12 @@ export type CatalogProvider = {
   id: string;
   name: string;
   keyless?: true;
+  /**
+   * Credential is an OAuth subscription login, not a MODEL_KEY_* secret. The
+   * desktop offers a login flow instead of a key field, and the Worker
+   * registers the provider from src/llm/codex.ts rather than from this file.
+   */
+  subscription?: true;
   models: CatalogModel[];
 };
 
@@ -67,8 +73,18 @@ function thinkingLevels(model: PiModel): { thinkingLevels?: string[] } {
 type PiProvider = {
   id: string;
   name: string;
+  auth?: { apiKey?: unknown; oauth?: { isSubscription?: boolean } };
   getModels(): readonly PiModel[];
 };
+
+/** A provider whose only credential is a subscription OAuth login. */
+function isSubscriptionOnly(provider: PiProvider): boolean {
+  return (
+    provider.auth !== undefined &&
+    provider.auth.apiKey === undefined &&
+    provider.auth.oauth?.isSubscription === true
+  );
+}
 
 const PROVIDERS_DIR = resolve("node_modules/@earendil-works/pi-ai/dist/providers");
 
@@ -77,7 +93,6 @@ const EXCLUDED_PROVIDER_IDS = new Set([
   "google-vertex",
   "azure",
   "github-copilot",
-  "openai-codex",
   "cloudflare-ai-gateway",
   "cloudflare-workers-ai",
 ]);
@@ -85,6 +100,7 @@ const EXCLUDED_PROVIDER_IDS = new Set([
 const GENERIC_APIS = new Set([
   "openai-completions",
   "openai-responses",
+  "openai-codex-responses",
   "anthropic-messages",
 ]);
 
@@ -185,7 +201,12 @@ export async function buildCatalog(): Promise<Catalog> {
       .sort((left, right) => left.id.localeCompare(right.id, "en"));
     if (models.length === 0) continue;
 
-    providers.push({ id: provider.id, name: provider.name, models });
+    providers.push({
+      id: provider.id,
+      name: provider.name,
+      ...(isSubscriptionOnly(provider) ? { subscription: true as const } : {}),
+      models,
+    });
   }
 
   providers.sort((left, right) => left.id.localeCompare(right.id, "en"));
@@ -204,7 +225,7 @@ export function renderCatalogTs(catalog: Catalog): string {
     'import type { Provider } from "@earendil-works/pi-ai/models";',
   ];
   for (const provider of catalog.providers) {
-    if (provider.keyless) continue;
+    if (provider.keyless || provider.subscription) continue;
     lines.push(
       `import { ${providerFactoryName(provider.id)} } from "@earendil-works/pi-ai/providers/${provider.id}";`,
     );
@@ -214,7 +235,9 @@ export function renderCatalogTs(catalog: Catalog): string {
     "export const BUILTIN_PROVIDERS: readonly { id: string; create: () => Provider }[] = [",
   );
   for (const provider of catalog.providers) {
-    if (provider.keyless) continue;
+    // Subscription providers are registered by src/llm/codex.ts with their own
+    // OAuth flow; this file only names the API-key ones.
+    if (provider.keyless || provider.subscription) continue;
     lines.push(
       `  { id: ${JSON.stringify(provider.id)}, create: () => ${providerFactoryName(provider.id)}() },`,
     );

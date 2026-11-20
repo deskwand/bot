@@ -34,10 +34,13 @@ type Model struct {
 
 // Provider is one built-in provider from the shared catalog.
 type Provider struct {
-	ID      string  `json:"id"`
-	Name    string  `json:"name"`
-	Keyless bool    `json:"keyless,omitempty"`
-	Models  []Model `json:"models"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Keyless bool   `json:"keyless,omitempty"`
+	// Subscription providers authenticate through an OAuth login in the
+	// deployment, so they need no MODEL_KEY_* secret.
+	Subscription bool    `json:"subscription,omitempty"`
+	Models       []Model `json:"models"`
 }
 
 type catalog struct {
@@ -111,6 +114,13 @@ func SecretNameFor(id string) string {
 func IsKeyless(id string) bool {
 	provider, ok := LookupBuiltin(id)
 	return ok && provider.Keyless
+}
+
+// IsSubscription reports whether a built-in provider logs in through an OAuth
+// subscription instead of a MODEL_KEY_* secret.
+func IsSubscription(id string) bool {
+	provider, ok := LookupBuiltin(id)
+	return ok && provider.Subscription
 }
 
 // ParseModels reads models and customProviders from one configuration
@@ -215,7 +225,7 @@ func ContextWindow(doc ModelsDoc, ref RoleRef) int {
 func RequiredSecretNames(doc ModelsDoc) []string {
 	seen := map[string]bool{}
 	for _, ref := range []RoleRef{doc.Butler, doc.Task} {
-		if ref.Provider == "" || IsKeyless(ref.Provider) {
+		if ref.Provider == "" || IsKeyless(ref.Provider) || IsSubscription(ref.Provider) {
 			continue
 		}
 		seen[SecretNameFor(ref.Provider)] = true

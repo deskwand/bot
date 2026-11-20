@@ -52,10 +52,12 @@ import type {
   McpHeaderInput,
   McpProbeDTO,
   McpToolDTO,
+  ModelAuthDTO,
   ModelCatalogDTO,
   ModelDTO,
   ManifestBrief,
   ModelEntryDTO,
+  ModelLoginDTO,
   ModelProviderDTO,
   MoveDTO,
   OperationDTO,
@@ -121,9 +123,11 @@ export type {
   McpHeaderInput,
   McpProbeDTO,
   McpToolDTO,
+  ModelAuthDTO,
   ModelCatalogDTO,
   ModelDTO,
   ModelEntryDTO,
+  ModelLoginDTO,
   ModelProviderDTO,
   MoveDTO,
   OperationDTO,
@@ -274,6 +278,10 @@ export interface ClientService {
   botDetail(id: string): Promise<BotDetailDTO>;
   saveWallet(input: WalletEditDTO): Promise<ResultDTO>;
   mcpStatus(): Promise<McpAuthDTO[]>;
+  modelAuthStatus(): Promise<ModelAuthDTO[]>;
+  startModelLogin(): Promise<ModelLoginDTO>;
+  pollModelLogin(): Promise<string>;
+  disconnectModel(): Promise<void>;
   startMcpOAuth(name: string): Promise<void>;
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]>;
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO>;

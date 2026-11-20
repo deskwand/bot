@@ -5,6 +5,8 @@ export type ProviderOption = {
   label: string;
   custom: boolean;
   keyless: boolean;
+  /** Logs in with an OAuth subscription instead of a MODEL_KEY_* secret. */
+  subscription: boolean;
   models: { id: string; label: string; imageInput: boolean; thinkingLevels?: string[] }[];
 };
 
@@ -19,7 +21,7 @@ export function secretNameFor(id: string): string {
 
 export function providerNeedsKey(catalog: ModelCatalogDTO, providerId: string): boolean {
   const provider = catalog.providers.find((entry) => entry.id === providerId);
-  return !(provider?.keyless === true);
+  return !(provider?.keyless === true || provider?.subscription === true);
 }
 
 export function providerOptions(
@@ -31,6 +33,7 @@ export function providerOptions(
     label: provider.name,
     custom: false,
     keyless: provider.keyless === true,
+    subscription: provider.subscription === true,
     models: provider.models.map((model) => ({
       id: model.id,
       label: model.name,
@@ -43,6 +46,7 @@ export function providerOptions(
     label: provider.name?.trim() || provider.id,
     custom: true,
     keyless: false,
+    subscription: false,
     models: provider.models.map((model) => ({
       id: model.id,
       label: model.id,

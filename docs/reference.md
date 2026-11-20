@@ -125,7 +125,7 @@
 
 她记的是自己的账，不查厂商余额。每次模型调用结束，用量按模型单价折算成美元记一行；主人报的充值和校准另记一行。第一次对管家说「给你充了 X 美元」之后代谢才开始；在那之前一切照旧：模型、唤醒间隔、提示词都和升级前一样。第一次入账之前已经记下的开销留在账本里，仍计入日均和第一次开销时间，但不从余额里扣。
 
-余额 = 入账 - 第一次入账之后记录的开销。日均开销是最近 7 天开销除以天数（账本不满 7 天按实际天数，至少 1 天）；还能活的天数 = 余额 ÷ 日均开销。金额一律记 USD，单价单位是 USD / 百万 token。Workers AI 的调用照常记下 token 数，但金额记 0，所以不减少余额（它的免费额度由 Cloudflare 管）。
+余额 = 入账 - 第一次入账之后记录的开销。日均开销是最近 7 天开销除以天数（账本不满 7 天按实际天数，至少 1 天）；还能活的天数 = 余额 ÷ 日均开销。金额一律记 USD，单价单位是 USD / 百万 token。Workers AI 的调用照常记下 token 数，但金额记 0，所以不减少余额（它的免费额度由 Cloudflare 管）。订阅厂商（`openai-codex`）同理：token 数照记，金额记 0 且不算「未计价」，因为月费已经付过一次，单次调用没有边际成本。
 
 ### 四个档位
 
@@ -325,6 +325,8 @@ npx wrangler secret put TELEGRAM_BOT_TOKEN
 
 模型 key 的 secret 名统一按厂商 id 推导：`MODEL_KEY_` + id 转大写、`-` 换成 `_`。例如 `opencode-go` → `MODEL_KEY_OPENCODE_GO`、`deepseek` → `MODEL_KEY_DEEPSEEK`、`anthropic` → `MODEL_KEY_ANTHROPIC`。自定义端点同样按 id 推导，例如 `my-proxy` → `MODEL_KEY_MY_PROXY`。
 
+例外是订阅厂商 `openai-codex`：它没有 key，也不读任何 secret。凭据来自桌面端模型页的 ChatGPT 设备码登录，存在部署自身的存储里（`LifeDO` 的 kv，前缀 `model_auth:`），刷新 token 由部署在过期前自动换新；这份凭据不进备份、不随搬家，恢复或迁移后需要重新登录。命令行部署时，先按上面的方式部署，再到桌面端登录即可。
+
 本地开发时，把 `.dev.vars.example` 复制为 `.dev.vars` 并填入同样的值（`.dev.vars` 已被 git 忽略）。其中 `DESKWAND_CONFIG` 必填，否则本地业务处理同样以 `CONFIG_MISSING` 拒绝：
 
 ```bash
@@ -333,7 +335,7 @@ cp .dev.vars.example .dev.vars
 
 | 名称 | 类型 | 说明 |
 | --- | --- | --- |
-| `MODEL_KEY_<ID>` | secret | 模型调用；`<ID>` 是厂商 id 转大写、`-` 换 `_`（如 `MODEL_KEY_OPENCODE_GO`、`MODEL_KEY_DEEPSEEK`）；缺失时只影响该厂商的模型 |
+| `MODEL_KEY_<ID>` | secret | 模型调用；`<ID>` 是厂商 id 转大写、`-` 换 `_`（如 `MODEL_KEY_OPENCODE_GO`、`MODEL_KEY_DEEPSEEK`）；缺失时只影响该厂商的模型。订阅厂商 `openai-codex` 不需要，凭据由模型页登录写入部署内部 |
 | `TELEGRAM_BOT_TOKEN` | secret | BotFather 提供的 token |
 | `WECHAT_CREDENTIALS` | secret | 可选；微信 iLink 登录凭据，由 `npm run wechat-login` 写入 |
 | `WALLET_PRIVATE_KEY` | secret | 可选；Base 钱包私钥，`0x` 加 64 位 hex |

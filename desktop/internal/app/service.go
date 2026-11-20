@@ -313,6 +313,11 @@ type Service struct {
 	backupPath string
 	backupBusy bool
 
+	// modelLogin holds the device-code pair between StartModelLogin and the
+	// polls; the handle is a one-time secret, so it never leaves Go.
+	modelLoginMu sync.Mutex
+	modelLogin   *pendingLogin
+
 	// exchangeSyncRun serializes SyncExchange and syncAllExchanges so the
 	// scheduled and manual pushes never overlap.
 	exchangeSyncRun sync.Mutex
@@ -1783,10 +1788,11 @@ func (s *Service) ModelCatalog() (ModelCatalogDTO, error) {
 			})
 		}
 		providers = append(providers, ModelProviderDTO{
-			ID:      provider.ID,
-			Name:    name,
-			Keyless: provider.Keyless,
-			Models:  models,
+			ID:           provider.ID,
+			Name:         name,
+			Keyless:      provider.Keyless,
+			Subscription: provider.Subscription,
+			Models:       models,
 		})
 	}
 	return ModelCatalogDTO{Providers: providers}, nil

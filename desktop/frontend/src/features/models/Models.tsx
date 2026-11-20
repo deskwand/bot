@@ -57,6 +57,7 @@ import {
   secretNameFor,
   thinkingLevelsFor,
 } from "./catalog";
+import { SubscriptionProviders } from "./SubscriptionCard";
 import { defaultLevelFrom } from "./thinking-level";
 import { ModelSelect } from "./ModelSelect";
 
@@ -318,6 +319,28 @@ export function Models() {
       custom: customProviders.find((provider) => provider.id === id),
     }));
   }, [butler, catalog, customProviders, options, task]);
+
+  // The same derivation as keyProviders, but for providers that log in
+  // instead of taking a key.
+  const subscriptionProviders = useMemo(() => {
+    const ids: string[] = [];
+    const roles: Record<string, string[]> = {};
+    for (const [role, value] of [
+      ["roleButler", butler],
+      ["roleTask", task],
+    ] as const) {
+      const providerId = parseModelKey(value)?.provider;
+      if (!providerId) continue;
+      if (!options.find((option) => option.id === providerId)?.subscription) continue;
+      if (!ids.includes(providerId)) ids.push(providerId);
+      (roles[providerId] ??= []).push(role);
+    }
+    return ids.map((id) => ({
+      id,
+      label: options.find((option) => option.id === id)?.label ?? id,
+      roles: roles[id] ?? [],
+    }));
+  }, [butler, options, task]);
 
   const updateKeyDraft = (
     id: string,
@@ -841,6 +864,10 @@ export function Models() {
               </div>
             )}
           </section>
+          <SubscriptionProviders
+            providers={subscriptionProviders}
+            localeKey={`${formVersion}-${t("models.subscriptionTitle")}`}
+          />
           <p className="mt-4 text-xs text-muted-foreground">
             {t("models.uneditedKept")}
           </p>

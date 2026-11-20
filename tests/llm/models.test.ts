@@ -1,5 +1,7 @@
+import { env as workerEnv } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { fauxProvider } from "@earendil-works/pi-ai";
+import { deleteModelCredential, saveModelCredential } from "../../src/llm/model-auth";
 import {
   createModelsForEnv,
   modelAcceptsImages,
@@ -158,32 +160,32 @@ describe("createModelsForEnv", () => {
 describe("modelReadiness", () => {
   const ref = { provider: "deepseek", id: "deepseek-flash" };
 
-  it("reports a missing key", () => {
+  it("reports a missing key", async () => {
     const env = envWith({});
     const models = createModelsForEnv(env);
 
-    expect(modelReadiness(env, models, ref)).toBe(
+    expect(await modelReadiness(env, models, ref)).toBe(
       "模型 deepseek 没有配置 key（MODEL_KEY_DEEPSEEK），请在桌面端模型页填写",
     );
   });
 
-  it("reports a model missing from the catalog", () => {
+  it("reports a model missing from the catalog", async () => {
     const env = envWith({ MODEL_KEY_DEEPSEEK: "k" });
     const models = createModelsForEnv(env);
 
     expect(
-      modelReadiness(env, models, {
+      await modelReadiness(env, models, {
         provider: "deepseek",
         id: "not-in-catalog",
       }),
     ).toBe("模型 deepseek/not-in-catalog 不可用，请在桌面端模型页重新选择");
   });
 
-  it("returns undefined when the model and key are available", () => {
+  it("returns undefined when the model and key are available", async () => {
     const env = envWith({ MODEL_KEY_DEEPSEEK: "k" });
     const models = createModelsForEnv(env);
 
-    expect(modelReadiness(env, models, ref)).toBeUndefined();
+    expect(await modelReadiness(env, models, ref)).toBeUndefined();
   });
 
   describe("Workers AI", () => {
@@ -193,32 +195,70 @@ describe("modelReadiness", () => {
     };
     const fakeAi = { aiGatewayLogId: null, fetch: async () => new Response("") };
 
-    it("needs no key when the AI binding is available", () => {
+    it("needs no key when the AI binding is available", async () => {
       const env = envWith({ AI: fakeAi });
       const models = createModelsForEnv(env);
 
-      expect(modelReadiness(env, models, workersRef)).toBeUndefined();
+      expect(await modelReadiness(env, models, workersRef)).toBeUndefined();
     });
 
-    it("reports a missing AI binding", () => {
+    it("reports a missing AI binding", async () => {
       const env = envWith({ AI: {} });
       const models = createModelsForEnv(env);
 
-      expect(modelReadiness(env, models, workersRef)).toBe(
+      expect(await modelReadiness(env, models, workersRef)).toBe(
         "Workers AI binding 不可用，请在桌面端重新部署",
       );
     });
 
-    it("reports a model missing from the catalog", () => {
+    it("reports a model missing from the catalog", async () => {
       const env = envWith({ AI: fakeAi });
       const models = createModelsForEnv(env);
 
       expect(
-        modelReadiness(env, models, {
+        await modelReadiness(env, models, {
           provider: "workers-ai",
           id: "@cf/not-a-model",
         }),
       ).toBe("模型 workers-ai/@cf/not-a-model 不可用，请在桌面端模型页重新选择");
+    });
+  });
+
+  describe("subscription providers", () => {
+    const codexRef = { provider: "openai-codex", id: "gpt-5.6-luna" };
+
+    it("asks for a login instead of a key", async () => {
+      const env = envWith({});
+      const models = createModelsForEnv(env);
+
+      expect(await modelReadiness(env, models, codexRef)).toBe(
+        "模型 openai-codex 还没有登录 ChatGPT 订阅，请在桌面端模型页登录",
+      );
+    });
+
+    it("is ready once a credential is stored, and leaves keys alone", async () => {
+      // The store needs the real LIFE binding; the key check needs a missing
+      // neighbour, so spread the test bindings and add one key.
+      const env = { ...workerEnv, MODEL_KEY_DEEPSEEK: "k" } as unknown as Env;
+      const credential = {
+        type: "oauth" as const,
+        access: "a",
+        refresh: "r",
+        expires: 1_900_000_000_000,
+      };
+      await saveModelCredential(env, "openai-codex", credential);
+      try {
+        const models = createModelsForEnv(env);
+        expect(await modelReadiness(env, models, codexRef)).toBeUndefined();
+        // A subscription login must not become a substitute for a key.
+        expect(
+          await modelReadiness(env, models, { provider: "openai", id: "gpt-4" }),
+        ).toBe(
+          "模型 openai 没有配置 key（MODEL_KEY_OPENAI），请在桌面端模型页填写",
+        );
+      } finally {
+        await deleteModelCredential(env, "openai-codex");
+      }
     });
   });
 });

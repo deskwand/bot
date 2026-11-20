@@ -62,19 +62,19 @@ afterEach(() => {
 });
 
 describe("turnBlocker", () => {
-  it("lets an available model take a text-only turn", () => {
+  it("lets an available model take a text-only turn", async () => {
     setModelOverride(scriptedModel([]));
 
-    expect(turnBlocker(env, false)).toBeUndefined();
+    await expect(turnBlocker(env, false)).resolves.toBeUndefined();
   });
 
-  it("lets an available model take a turn with images", () => {
+  it("lets an available model take a turn with images", async () => {
     setModelOverride(scriptedModel([]));
 
-    expect(turnBlocker(env, true)).toBeUndefined();
+    await expect(turnBlocker(env, true)).resolves.toBeUndefined();
   });
 
-  it("returns the readiness copy for an unavailable model", () => {
+  it("returns the readiness copy for an unavailable model", async () => {
     setModelOverride(null);
     setEnv({
       DESKWAND_CONFIG: {
@@ -88,18 +88,18 @@ describe("turnBlocker", () => {
       },
     });
     const ref = { provider: "opencode-go", id: "does-not-exist" };
-    const readiness = modelReadiness(env, createModelsForEnv(env), ref);
+    const readiness = await modelReadiness(env, createModelsForEnv(env), ref);
 
     expect(readiness).toBeTruthy();
-    expect(turnBlocker(env, false)).toBe(readiness);
+    await expect(turnBlocker(env, false)).resolves.toBe(readiness);
   });
 
-  it("returns the image copy when the model cannot see images", () => {
+  it("returns the image copy when the model cannot see images", async () => {
     setModelOverride(null);
     setEnv({ DESKWAND_CONFIG: TEXT_ONLY_MODEL, MODEL_KEY_MY_PROXY: "k" });
 
-    expect(turnBlocker(env, false)).toBeUndefined();
-    expect(turnBlocker(env, true)).toBe(
+    await expect(turnBlocker(env, false)).resolves.toBeUndefined();
+    await expect(turnBlocker(env, true)).resolves.toBe(
       "当前模型不支持图片，请在桌面端模型页换成支持视觉的模型",
     );
   });

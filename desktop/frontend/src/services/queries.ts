@@ -28,6 +28,7 @@ export const queryKeys = {
   modelCatalog: ["modelCatalog"],
   mcpCatalog: ["mcpCatalog"],
   mcpStatus: ["mcpStatus"],
+  modelAuthStatus: ["modelAuthStatus"],
   exchangeSyncStatus: ["exchangeSyncStatus"],
   bots: ["bots"],
   lifeVitals: ["lifeVitals"],
@@ -149,6 +150,17 @@ export function useMcpStatusQuery(): UseQueryResult<Awaited<ReturnType<ClientSer
   });
 }
 
+export function useModelAuthStatusQuery(
+  enabled = true,
+): UseQueryResult<Awaited<ReturnType<ClientService["modelAuthStatus"]>>> {
+  const { client } = useApp();
+  return useQuery({
+    queryKey: queryKeys.modelAuthStatus,
+    queryFn: () => client.modelAuthStatus(),
+    enabled,
+  });
+}
+
 export function useLifeVitalsQuery(enabled = true): UseQueryResult<LifeVitalsDTO> {
   const { client } = useApp();
   return useQuery({
@@ -176,6 +188,7 @@ export function useInvalidate(): {
   config: () => void;
   configAndStatus: () => void;
   mcp: () => void;
+  modelAuth: () => void;
   ownerStatus: () => void;
 } {
   const queryClient = useQueryClient();
@@ -190,12 +203,15 @@ export function useInvalidate(): {
     void queryClient.invalidateQueries({ queryKey: queryKeys.config });
     void queryClient.invalidateQueries({ queryKey: queryKeys.mcpStatus });
   }, [queryClient]);
+  const modelAuth = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.modelAuthStatus });
+  }, [queryClient]);
   const ownerStatus = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.ownerStatus });
   }, [queryClient]);
   return useMemo(
-    () => ({ config, configAndStatus, mcp, ownerStatus }),
-    [config, configAndStatus, mcp, ownerStatus],
+    () => ({ config, configAndStatus, mcp, modelAuth, ownerStatus }),
+    [config, configAndStatus, mcp, modelAuth, ownerStatus],
   );
 }
 

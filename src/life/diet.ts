@@ -56,7 +56,9 @@ export async function effectiveModelRef(
       readRuntimeConfig(env).models.frugal,
     );
     if (sameModel(candidate, configured)) return configured;
-    if (modelReadiness(env, models, candidate) !== undefined) return configured;
+    if ((await modelReadiness(env, models, candidate)) !== undefined) {
+      return configured;
+    }
     assertModelWindowSwitch(
       models,
       active ?? configured,

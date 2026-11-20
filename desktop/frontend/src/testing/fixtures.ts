@@ -133,6 +133,9 @@ type Scenario =
   | "mcp-many-tools"
   | "mcp-probe-failed"
   | "mcp-admin-unavailable"
+  | "model-auth-unsupported"
+  | "model-auth-failed"
+  | "model-auth-connected"
   | "cloud-slow"
   | "cloud-offline"
   | "cloud-updated"
@@ -223,6 +226,10 @@ interface MockState {
   secrets: Record<string, boolean>;
   mcpServers: MockMcpServer[];
   mcpAuth: Record<string, string>;
+  // modelAuth is the OpenAI Codex subscription login state; modelLogin holds
+  // the pending device code for the fixture's poll script.
+  modelAuth: { connected: boolean };
+  modelLogin: { userCode: string; intervalSeconds: number; remainingPolls: number } | null;
   installAttempts: number;
   pending: OperationDTO[];
   loginTimers: Map<string, number[]>;
@@ -366,6 +373,14 @@ const CATALOG: ModelCatalogDTO = {
       ],
     },
     {
+      id: "openai-codex",
+      name: "OpenAI Codex（ChatGPT 订阅）",
+      subscription: true,
+      models: [
+        { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", input: ["text", "image"] },
+      ],
+    },
+    {
       id: "opencode-go",
       name: "OpenCode Go",
       models: [
@@ -490,6 +505,9 @@ function scenarioFromLocation(): Scenario {
     case "mcp-many-tools":
     case "mcp-probe-failed":
     case "mcp-admin-unavailable":
+    case "model-auth-unsupported":
+    case "model-auth-failed":
+    case "model-auth-connected":
     case "cloud-slow":
     case "cloud-offline":
     case "cloud-updated":
@@ -588,6 +606,9 @@ function initialState(): MockState {
     "upgrade-required",
     "upgrade-keys-missing",
     "model-key-missing",
+    "model-auth-unsupported",
+    "model-auth-failed",
+    "model-auth-connected",
     "search-deepseek",
     "search-tavily",
     "exchange-okx",
@@ -945,6 +966,8 @@ function initialState(): MockState {
           ]
         : [],
     mcpAuth: {},
+    modelAuth: { connected: scenario === "model-auth-connected" },
+    modelLogin: null,
     installAttempts: 0,
     pending:
       scenario === "pending-operations" || scenario === "pending-other-account"
@@ -2381,6 +2404,43 @@ export function createMockClient(): ClientService {
 
     async exportDiagnostics() {
       return JSON.stringify({ exportedAt: NOW, items: statusItems() }, null, 2);
+    },
+
+    async modelAuthStatus() {
+      record("modelAuthStatus");
+      if (state.scenario === "model-auth-unsupported") {
+        fail("MODEL_AUTH_ADMIN_UNAVAILABLE", "这个部署还不支持订阅登录，请先更新部署。");
+      }
+      return [{ provider: "openai-codex", connected: state.modelAuth.connected }];
+    },
+
+    async startModelLogin() {
+      if (state.scenario === "model-auth-unsupported") {
+        fail("MODEL_AUTH_ADMIN_UNAVAILABLE", "这个部署还不支持订阅登录，请先更新部署。");
+      }
+      if (state.scenario === "model-auth-failed") {
+        fail("MODEL_AUTH_FAILED", "订阅登录请求失败，请重试。");
+      }
+      state.modelLogin = { userCode: "ABCD-1234", intervalSeconds: 1, remainingPolls: 2 };
+      return { userCode: "ABCD-1234", verificationUrl: "https://auth.openai.com/codex/device", intervalSeconds: 1 };
+    },
+
+    async pollModelLogin() {
+      if (state.modelLogin === null) {
+        fail("SERVICE_UNAVAILABLE", "还没有开始登录，请重新点一次「登录」");
+      }
+      if (state.modelLogin.remainingPolls > 0) {
+        state.modelLogin.remainingPolls -= 1;
+        return "pending";
+      }
+      state.modelLogin = null;
+      state.modelAuth.connected = true;
+      return "done";
+    },
+
+    async disconnectModel() {
+      state.modelAuth.connected = false;
+      state.modelLogin = null;
     },
 
     async modelCatalog() {

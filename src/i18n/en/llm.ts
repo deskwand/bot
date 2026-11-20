@@ -12,6 +12,10 @@ export const llm: Messages["llm"] = {
   modelUnavailableShort: "Model {provider}/{id} is unavailable",
   modelKeyMissing:
     "Model {provider} has no key configured ({secret}); add it on the Models page of the desktop app",
+  codexSignedOut:
+    "Model {provider} is not signed in to a ChatGPT subscription yet; sign in on the Models page of the desktop app",
+  codexRelogin:
+    "The ChatGPT subscription sign-in expired or was revoked. Sign in again on the Models page of the desktop app.",
   bindingUnavailable:
     "The Workers AI binding is unavailable; redeploy from the desktop app",
 };

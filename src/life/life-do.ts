@@ -1,3 +1,4 @@
+import type { Credential } from "@earendil-works/pi-ai";
 import { DurableObject } from "cloudflare:workers";
 import { BackupRpc } from "../admin/backup-rpc";
 import {
@@ -8,6 +9,7 @@ import {
   type TableSchema,
 } from "../admin/sql-dump";
 import { getClock } from "../butler/notifier";
+import { modelCredentialKey } from "../llm/credential-key";
 import {
   walletConfigured,
   walletStub,
@@ -69,6 +71,55 @@ export class LifeDO extends DurableObject<Env> {
 
   async restoreReset(): Promise<void> {
     this.backup.restoreReset();
+  }
+
+  /**
+   * The stored subscription credential for `providerId`, if any. Model
+   * credentials live here rather than in Worker secrets because a refresh
+   * rotates the refresh token and must be written back; they are excluded
+   * from backups.
+   */
+  async modelCredential(providerId: string): Promise<Credential | undefined> {
+    return await this.ctx.storage.kv.get<Credential>(
+      modelCredentialKey(providerId),
+    );
+  }
+
+  async saveModelCredential(
+    providerId: string,
+    credential: Credential,
+  ): Promise<void> {
+    await this.ctx.storage.kv.put(modelCredentialKey(providerId), credential);
+  }
+
+  /**
+   * Compare-and-set on the refresh token. Two Worker isolates can both see the
+   * same expired credential and both refresh it; whoever loses this write keeps
+   * the winner's credential instead of reviving a rotated-out refresh token.
+   * `expectedRefresh` is null when no credential was stored.
+   */
+  async saveModelCredentialIfCurrent(
+    providerId: string,
+    expectedRefresh: string | null,
+    credential: Credential,
+  ): Promise<{ saved: boolean; current: Credential | undefined }> {
+    const key = modelCredentialKey(providerId);
+    const current = await this.ctx.storage.kv.get<Credential>(key);
+    const currentRefresh =
+      current === undefined
+        ? null
+        : current.type === "oauth"
+          ? current.refresh
+          : undefined;
+    if (currentRefresh !== expectedRefresh) {
+      return { saved: false, current };
+    }
+    await this.ctx.storage.kv.put(key, credential);
+    return { saved: true, current: credential };
+  }
+
+  async deleteModelCredential(providerId: string): Promise<void> {
+    await this.ctx.storage.kv.delete(modelCredentialKey(providerId));
   }
 
   async recordSpend(entry: SpendEntry): Promise<void> {

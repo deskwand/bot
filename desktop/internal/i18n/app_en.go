@@ -20,6 +20,7 @@ var enApp = map[string]string{
 	"app.releaseNotBundled":      "This client does not bundle a Worker release",
 	"app.releaseUntrusted":       "The bundled Worker release is not signed with a trusted release key",
 	"app.releaseUnavailable":     "The bundled Worker release is unavailable",
+	"app.modelLoginNotStarted":   "No sign-in is in progress; press Sign in again",
 	"app.browserOpenFailed":      "Could not open the browser; check the default browser setting and retry",
 	"app.webViewMissingTitle":    "Microsoft Edge WebView2 Runtime is missing",
 	"app.webViewMissingMessage":  "DeskWand Bot draws its interface with the WebView2 Runtime, which this Windows installation does not have. Install the Evergreen Runtime, then open the app again.",

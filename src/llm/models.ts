@@ -16,14 +16,18 @@ import { meteredProvider, type Meter } from "../life/meter";
 import { readRuntimeConfig, RuntimeConfigError } from "../runtime-config";
 import { BUILTIN_PROVIDERS } from "./catalog.generated";
 import { modelKeyAuth } from "./model-key-auth";
+import { modelCredentialStore, readModelCredential } from "./model-auth";
+import { codexProvider } from "./codex";
 import { defaultLevelFrom } from "./thinking-level";
 import {
+  codexSignedOutText,
   modelKeyMissingText,
   modelUnavailableText,
   workersAiBindingUnavailableText,
 } from "./model-errors";
 import {
   MODEL_KEY_PREFIX,
+  SUBSCRIPTION_PROVIDER_IDS,
   secretNameFor,
   type CustomProviderConfig,
 } from "./providers";
@@ -100,7 +104,10 @@ export function createModelsForEnv(env: Env, meter?: Meter): MutableModels {
     },
   };
 
-  const models = createModels({ authContext });
+  const models = createModels({
+    authContext,
+    credentials: modelCredentialStore(env),
+  });
   const register = (provider: Provider): void => {
     models.setProvider(
       meter
@@ -130,6 +137,8 @@ export function createModelsForEnv(env: Env, meter?: Meter): MutableModels {
   for (const config of readCustomProviders(env)) {
     register(customProvider(config));
   }
+  // Subscription providers carry their own OAuth; they take no secret.
+  register(codexProvider());
   for (const provider of testProviders.values()) register(provider);
   if (workersAiBindingReady(env)) register(workersAiProvider(env));
   return models;
@@ -139,11 +148,11 @@ export function createModelsForEnv(env: Env, meter?: Meter): MutableModels {
  * Reports why a model cannot run, or `undefined` when it can. Test overrides
  * and scripted test providers bypass the check.
  */
-export function modelReadiness(
+export async function modelReadiness(
   env: Env,
   models: Models,
   ref: ModelRef,
-): string | undefined {
+): Promise<string | undefined> {
   if (modelOverride || testProviders.has(ref.provider)) return undefined;
 
   const locale = ownerLocale(env);
@@ -157,6 +166,13 @@ export function modelReadiness(
   }
 
   if (workersAi) return undefined;
+
+  if (SUBSCRIPTION_PROVIDER_IDS.has(ref.provider)) {
+    const credential = await readModelCredential(env, ref.provider);
+    return credential === undefined
+      ? codexSignedOutText(locale, ref.provider)
+      : undefined;
+  }
 
   const secretName = secretNameFor(ref.provider);
   const key = (env as unknown as Record<string, string | undefined>)[secretName];

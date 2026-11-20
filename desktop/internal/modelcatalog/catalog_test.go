@@ -178,6 +178,23 @@ func TestRequiredSecretNamesSkipsKeyless(t *testing.T) {
 	}
 }
 
+func TestRequiredSecretNamesSkipsSubscriptionProviders(t *testing.T) {
+	doc := validModelsDoc()
+	doc.Butler = RoleRef{Provider: "openai-codex", ID: "gpt-5.6-luna"}
+	doc.Task = doc.Butler
+	// The credential is an OAuth login in the deployment, not a secret the
+	// desktop publishes before deploying.
+	if got := RequiredSecretNames(doc); len(got) != 0 {
+		t.Fatalf("RequiredSecretNames() = %#v, want it to be empty", got)
+	}
+	if IsSubscription("opencode-go") {
+		t.Fatal("IsSubscription(\"opencode-go\") = true, want false")
+	}
+	if !IsSubscription("openai-codex") {
+		t.Fatal("IsSubscription(\"openai-codex\") = false, want true")
+	}
+}
+
 func TestWorkersAIIsKeyless(t *testing.T) {
 	if !IsKeyless("workers-ai") {
 		t.Fatal("IsKeyless(\"workers-ai\") = false, want true")

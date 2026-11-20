@@ -102,6 +102,11 @@ export const errors: Messages["errors"] = {
   WALLET_ADMIN_UNAVAILABLE:
     "This deployment's admin API is unavailable; check that it finished deploying.",
   WALLET_FAILED: "The wallet request failed; retry later.",
+  MODEL_AUTH_ADMIN_UNAVAILABLE:
+    "This deployment does not support subscription sign-in yet; update it first.",
+  MODEL_AUTH_FAILED: "The subscription sign-in request failed; retry.",
+  MODEL_AUTH_UNKNOWN_PROVIDER: "That subscription provider is not supported.",
+  MODEL_AUTH_INVALID: "The subscription sign-in request was incomplete; start it again.",
   LIFE_ADMIN_UNAVAILABLE:
     "This deployment's admin API is unavailable; check that it finished deploying.",
   LIFE_VITALS_UNSUPPORTED: "The cloud service is too old to report vitals; upgrade it first.",

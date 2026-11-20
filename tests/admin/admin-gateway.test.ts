@@ -365,6 +365,35 @@ describe("admin gateway", () => {
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ code: "ADMIN_UNAUTHORIZED" });
   });
+
+  it("serves subscription login routes without a maintenance lease", async () => {
+    const gateway = createAdminGateway({
+      ...deps("admin-model-auth"),
+      modelAuth: {
+        status: async () => [{ id: "openai-codex", connected: false }],
+        start: async () => {
+          throw new Error("not used here");
+        },
+        poll: async () => ({ status: "pending" }),
+        disconnect: async () => {},
+      },
+    });
+
+    const response = await call(gateway, "/admin/models/auth");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      providers: [{ id: "openai-codex", connected: false }],
+    });
+  });
+
+  it("answers 404 for model auth when the deployment does not wire it", async () => {
+    const gateway = createAdminGateway(deps("admin-model-auth-none"));
+
+    const response = await call(gateway, "/admin/models/auth");
+
+    expect(response.status).toBe(404);
+  });
 });
 
 describe("bot routes through the gateway", () => {
