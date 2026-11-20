@@ -30,22 +30,35 @@ test("a subscription provider offers a login card instead of a key field", async
   await expect(page.getByTestId("model-key-row-openai-codex")).toHaveCount(0);
 });
 
-test("signing in shows the device code and settles into signed in", async ({ page }) => {
+test("the browser sign-in settles into signed in without a code", async ({ page }) => {
   await openModels(page);
   await chooseModel(page, "管家模型", CODEX, /GPT-5\.6 Luna/);
 
   await page.getByTestId("model-subscription-login").click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(page.getByTestId("model-subscription-code")).toHaveText("ABCD-1234");
-  await expect(dialog).toContainText("https://auth.openai.com/codex/device");
+  await expect(dialog).toContainText("已在浏览器打开登录页");
+  await expect(page.getByTestId("model-subscription-code")).toHaveCount(0);
 
-  // The fixture answers pending twice, then done.
   await expect(page.getByTestId("model-subscription-done")).toBeVisible({ timeout: 15_000 });
   await page.getByTestId("model-subscription-close").click();
 
   await expect(subscriptionRow(page)).toContainText("已登录");
   await expect(page.getByTestId("model-subscription-disconnect")).toBeVisible();
+});
+
+test("the device-code fallback shows a code", async ({ page }) => {
+  await openModels(page);
+  await chooseModel(page, "管家模型", CODEX, /GPT-5\.6 Luna/);
+
+  await page.getByTestId("model-subscription-login").click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await page.getByTestId("model-subscription-use-device").click();
+
+  await expect(page.getByTestId("model-subscription-code")).toHaveText("ABCD-1234");
+  await expect(dialog).toContainText("https://auth.openai.com/codex/device");
+  await expect(page.getByTestId("model-subscription-done")).toBeVisible({ timeout: 15_000 });
 });
 
 test("signing out goes back to not signed in", async ({ page }) => {
@@ -77,4 +90,6 @@ test("a failed start offers a retry instead of spinning", async ({ page }) => {
   await expect(dialog).toContainText("订阅登录请求失败");
   await expect(dialog).not.toContainText("这个部署还不支持订阅登录");
   await expect(page.getByRole("button", { name: "重试" })).toBeVisible();
+  // The fallback stays one click away even when the browser start failed.
+  await expect(page.getByTestId("model-subscription-use-device")).toBeVisible();
 });

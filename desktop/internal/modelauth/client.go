@@ -50,6 +50,14 @@ type PollResult struct {
 	Status string `json:"status"`
 }
 
+// BrowserStart is one started browser (authorization code + PKCE) login. The
+// verifier and state go back with the code; only the deployment exchanges it.
+type BrowserStart struct {
+	AuthorizeURL string `json:"authorizeUrl"`
+	State        string `json:"state"`
+	CodeVerifier string `json:"codeVerifier"`
+}
+
 type Client struct {
 	baseURL string
 	token   string
@@ -87,6 +95,28 @@ func (c *Client) Start(ctx context.Context, provider string) (Login, error) {
 		return Login{}, err
 	}
 	return login, nil
+}
+
+// StartBrowser asks the deployment for an authorize URL and its PKCE pair.
+func (c *Client) StartBrowser(ctx context.Context, provider string) (BrowserStart, error) {
+	var started BrowserStart
+	path := authPath + "/" + url.PathEscape(provider) + "/browser/start"
+	if err := c.call(ctx, http.MethodPost, path, nil, &started); err != nil {
+		return BrowserStart{}, err
+	}
+	return started, nil
+}
+
+// CompleteBrowser hands the loopback code back so the deployment can exchange
+// it and store the credential.
+func (c *Client) CompleteBrowser(ctx context.Context, provider, code, codeVerifier, state string) error {
+	body := map[string]string{
+		"code":         code,
+		"codeVerifier": codeVerifier,
+		"state":        state,
+	}
+	path := authPath + "/" + url.PathEscape(provider) + "/browser/complete"
+	return c.call(ctx, http.MethodPost, path, body, nil)
 }
 
 // Poll reports the login state for a started device code.

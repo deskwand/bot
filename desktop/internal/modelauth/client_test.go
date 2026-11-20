@@ -51,6 +51,47 @@ func TestStartPostsToTheProviderPath(t *testing.T) {
 	}
 }
 
+func TestStartBrowserReturnsTheAuthorizeURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/admin/models/auth/openai-codex/browser/start" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"authorizeUrl":"https://auth.openai.com/oauth/authorize?state=s","state":"0123456789abcdef0123456789abcdef","codeVerifier":"verifier-1"}`))
+	}))
+	defer server.Close()
+
+	started, err := NewClient(server.URL, "token", server.Client()).StartBrowser(context.Background(), "openai-codex")
+	if err != nil {
+		t.Fatalf("StartBrowser: %v", err)
+	}
+	if started.CodeVerifier != "verifier-1" || started.State == "" || started.AuthorizeURL == "" {
+		t.Fatalf("started = %#v", started)
+	}
+}
+
+func TestCompleteBrowserPostsTheCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/admin/models/auth/openai-codex/browser/complete" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["code"] != "code-1" || body["codeVerifier"] != "verifier-1" || body["state"] != "state-1" {
+			t.Fatalf("body = %#v", body)
+		}
+		_, _ = w.Write([]byte(`{"status":"done"}`))
+	}))
+	defer server.Close()
+
+	err := NewClient(server.URL, "token", server.Client()).
+		CompleteBrowser(context.Background(), "openai-codex", "code-1", "verifier-1", "state-1")
+	if err != nil {
+		t.Fatalf("CompleteBrowser: %v", err)
+	}
+}
+
 func TestPollSendsTheDevicePair(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/admin/models/auth/openai-codex/poll" {

@@ -100,7 +100,7 @@ function SubscriptionCard({ provider }: { provider: SubscriptionProviderRow }) {
     };
   }, []);
 
-  const startLogin = async () => {
+  const startLogin = async (method: "browser" | "device" = "browser") => {
     const seq = (startSeq.current += 1);
     setOpen(true);
     setState("starting");
@@ -108,7 +108,10 @@ function SubscriptionCard({ provider }: { provider: SubscriptionProviderRow }) {
     setError(null);
     setCopied(false);
     try {
-      const started = await client.startModelLogin();
+      const started =
+        method === "device"
+          ? await client.startModelDeviceLogin()
+          : await client.startModelLogin();
       if (startSeq.current !== seq) return;
       setLogin(started);
       setState("waiting");
@@ -156,6 +159,8 @@ function SubscriptionCard({ provider }: { provider: SubscriptionProviderRow }) {
 
   const close = () => {
     startSeq.current += 1;
+    // Best effort: drops a pending login and frees the loopback port.
+    void client.cancelModelLogin().catch(() => undefined);
     setOpen(false);
     setLogin(null);
     setState("starting");
@@ -253,7 +258,11 @@ function SubscriptionCard({ provider }: { provider: SubscriptionProviderRow }) {
             <DialogTitle>
               {t("models.subscriptionDialog", { provider: provider.label })}
             </DialogTitle>
-            <DialogDescription>{t("models.subscriptionInstructions")}</DialogDescription>
+            <DialogDescription>
+              {login?.method === "device"
+                ? t("models.subscriptionInstructionsDevice")
+                : t("models.subscriptionInstructionsBrowser")}
+            </DialogDescription>
           </DialogHeader>
 
           {state === "starting" ? (
@@ -263,7 +272,18 @@ function SubscriptionCard({ provider }: { provider: SubscriptionProviderRow }) {
             </p>
           ) : null}
 
-          {login !== null && state !== "done" ? (
+          {login !== null && login.method === "browser" && state === "waiting" ? (
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">
+                {t("models.subscriptionBrowserHint")}
+              </p>
+              <p className="break-all text-xs text-muted-foreground" data-i18n-ignore>
+                {login.verificationUrl}
+              </p>
+            </div>
+          ) : null}
+
+          {login !== null && login.method === "device" && state !== "done" ? (
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">{t("models.subscriptionCodeLabel")}</p>
               <div className="flex flex-wrap items-center gap-2">
@@ -308,8 +328,18 @@ function SubscriptionCard({ provider }: { provider: SubscriptionProviderRow }) {
           ) : null}
 
           <DialogFooter>
+            {login?.method === "browser" || state === "error" ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void startLogin("device")}
+                data-testid="model-subscription-use-device"
+              >
+                {t("models.subscriptionUseDevice")}
+              </Button>
+            ) : null}
             {state === "error" ? (
-              <Button type="button" onClick={() => void startLogin()}>
+              <Button type="button" onClick={() => void startLogin("browser")}>
                 {t("models.subscriptionRetry")}
               </Button>
             ) : null}

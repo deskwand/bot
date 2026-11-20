@@ -375,6 +375,12 @@ describe("admin gateway", () => {
           throw new Error("not used here");
         },
         poll: async () => ({ status: "pending" }),
+        startBrowser: async () => ({
+          authorizeUrl: "https://auth.openai.com/oauth/authorize",
+          state: "s",
+          codeVerifier: "v",
+        }),
+        completeBrowser: async () => {},
         disconnect: async () => {},
       },
     });

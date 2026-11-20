@@ -325,7 +325,7 @@ npx wrangler secret put TELEGRAM_BOT_TOKEN
 
 模型 key 的 secret 名统一按厂商 id 推导：`MODEL_KEY_` + id 转大写、`-` 换成 `_`。例如 `opencode-go` → `MODEL_KEY_OPENCODE_GO`、`deepseek` → `MODEL_KEY_DEEPSEEK`、`anthropic` → `MODEL_KEY_ANTHROPIC`。自定义端点同样按 id 推导，例如 `my-proxy` → `MODEL_KEY_MY_PROXY`。
 
-例外是订阅厂商 `openai-codex`：它没有 key，也不读任何 secret。凭据来自桌面端模型页的 ChatGPT 设备码登录，存在部署自身的存储里（`LifeDO` 的 kv，前缀 `model_auth:`），刷新 token 由部署在过期前自动换新；这份凭据不进备份、不随搬家，恢复或迁移后需要重新登录。命令行部署时，先按上面的方式部署，再到桌面端登录即可。
+例外是订阅厂商 `openai-codex`：它没有 key，也不读任何 secret。凭据来自桌面端模型页的 ChatGPT 登录——默认走浏览器授权码 + PKCE（回调在桌面端的 `127.0.0.1:1455/auth/callback`，code 交给部署换 token），设备码作为备选。凭据存在部署自身的存储里（`LifeDO` 的 kv，前缀 `model_auth:`），刷新 token 由部署在过期前自动换新；这份凭据不进备份、不随搬家，恢复或迁移后需要重新登录。命令行部署时，先按上面的方式部署，再到桌面端登录即可。
 
 本地开发时，把 `.dev.vars.example` 复制为 `.dev.vars` 并填入同样的值（`.dev.vars` 已被 git 忽略）。其中 `DESKWAND_CONFIG` 必填，否则本地业务处理同样以 `CONFIG_MISSING` 拒绝：
 

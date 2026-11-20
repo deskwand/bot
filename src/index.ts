@@ -1,8 +1,10 @@
 import { createAdminGateway } from "./admin/admin-gateway";
 import {
   codexStatus,
+  completeCodexBrowserLogin,
   disconnectCodex,
   pollCodexLogin,
+  startCodexBrowserLogin,
   startCodexLogin,
   CODEX_PROVIDER_ID,
 } from "./llm/codex";
@@ -71,6 +73,8 @@ function admin(env: Env) {
       ],
       start: () => startCodexLogin(),
       poll: (device) => pollCodexLogin(device, env),
+      startBrowser: () => startCodexBrowserLogin(),
+      completeBrowser: (input) => completeCodexBrowserLogin(input, env),
       disconnect: () => disconnectCodex(env),
     },
   });

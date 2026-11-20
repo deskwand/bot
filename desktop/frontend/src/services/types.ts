@@ -280,7 +280,9 @@ export interface ClientService {
   mcpStatus(): Promise<McpAuthDTO[]>;
   modelAuthStatus(): Promise<ModelAuthDTO[]>;
   startModelLogin(): Promise<ModelLoginDTO>;
+  startModelDeviceLogin(): Promise<ModelLoginDTO>;
   pollModelLogin(): Promise<string>;
+  cancelModelLogin(): Promise<void>;
   disconnectModel(): Promise<void>;
   startMcpOAuth(name: string): Promise<void>;
   previewConfig(input: ConfigEditDTO): Promise<StepDTO[]>;

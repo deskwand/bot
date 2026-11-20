@@ -8,7 +8,11 @@
  */
 
 import { SUBSCRIPTION_PROVIDER_IDS } from "../llm/providers";
-import type { CodexLoginPoll, CodexLoginStart } from "../llm/codex";
+import type {
+  CodexBrowserStart,
+  CodexLoginPoll,
+  CodexLoginStart,
+} from "../llm/codex";
 
 export const MODEL_AUTH_PREFIX = "/admin/models/auth";
 
@@ -21,6 +25,16 @@ export type ModelAuthDeps = {
   status(): Promise<{ id: string; connected: boolean }[]>;
   start(): Promise<CodexLoginStart>;
   poll(device: { deviceAuthId: string; userCode: string }): Promise<CodexLoginPoll>;
+  /**
+   * The browser flow: the desktop opens the URL and returns the loopback code
+   * here, so only the deployment ever sees the tokens.
+   */
+  startBrowser(): Promise<CodexBrowserStart>;
+  completeBrowser(input: {
+    code: string;
+    codeVerifier: string;
+    state: string;
+  }): Promise<void>;
   disconnect(): Promise<void>;
 };
 
@@ -42,6 +56,35 @@ function invalid(message: string): Response {
 /** Upstream failures stay opaque; only a fixed code reaches the desktop. */
 function failed(): Response {
   return json({ code: "MODEL_AUTH_FAILED", message: "model login request failed" }, 502);
+}
+
+async function readBrowserCode(
+  req: Request,
+): Promise<{ code: string; codeVerifier: string; state: string } | null> {
+  try {
+    const body = (await req.json()) as {
+      code?: unknown;
+      codeVerifier?: unknown;
+      state?: unknown;
+    };
+    if (
+      typeof body.code !== "string" ||
+      body.code === "" ||
+      typeof body.codeVerifier !== "string" ||
+      body.codeVerifier === "" ||
+      typeof body.state !== "string" ||
+      body.state === ""
+    ) {
+      return null;
+    }
+    return {
+      code: body.code,
+      codeVerifier: body.codeVerifier,
+      state: body.state,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function readDevice(
@@ -111,6 +154,29 @@ export function createModelAuthRoutes(deps: ModelAuthDeps): {
         console.error("model login poll failed:", error);
         return failed();
       }
+    }
+
+    if (action === "browser/start" && req.method === "POST") {
+      try {
+        return json(await deps.startBrowser());
+      } catch (error) {
+        console.error("model browser login start failed:", error);
+        return failed();
+      }
+    }
+
+    if (action === "browser/complete" && req.method === "POST") {
+      const input = await readBrowserCode(req);
+      if (input === null) {
+        return invalid("complete needs { code, codeVerifier, state }");
+      }
+      try {
+        await deps.completeBrowser(input);
+      } catch (error) {
+        console.error("model browser login exchange failed:", error);
+        return failed();
+      }
+      return json({ status: "done" });
     }
 
     if (action === "" && req.method === "DELETE") {

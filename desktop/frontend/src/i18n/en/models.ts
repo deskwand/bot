@@ -96,18 +96,23 @@ export const models: Messages["models"] = {
   listSeparator: ", ",
   subscriptionTitle: "Subscription sign-in",
   subscriptionDescription:
-    "These providers bill a subscription instead of an API key. Sign in, enter the device code on the ChatGPT page, and the deployment keeps the credential. It is not part of a backup.",
+    "These providers bill a subscription instead of an API key. Sign in through the browser; the deployment keeps the credential, and it is not part of a backup.",
   subscriptionSignedIn: "Signed in",
   subscriptionSignedOut: "Not signed in",
   subscriptionLogin: "Sign in",
   subscriptionDisconnect: "Sign out",
   subscriptionDialog: "Sign in to {provider}",
-  subscriptionInstructions:
+  subscriptionInstructionsBrowser:
+    "Finish the sign-in in your browser; this card turns to signed in by itself.",
+  subscriptionInstructionsDevice:
     "Enter the device code below on the page that just opened; this card turns to signed in when you are done.",
   subscriptionCodeLabel: "Device code",
   subscriptionCopy: "Copy",
   subscriptionCopied: "Copied",
   subscriptionWaiting: "Waiting for you to finish in the browser…",
+  subscriptionBrowserHint:
+    "The sign-in page is open in your browser; this card continues as soon as it finishes.",
+  subscriptionUseDevice: "Use a device code instead",
   subscriptionDone: "Signed in. The credential is stored in the deployment.",
   subscriptionRetry: "Retry",
   subscriptionClose: "Close",

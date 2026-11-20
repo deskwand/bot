@@ -105,8 +105,11 @@ type ModelAuthDTO struct {
 	Connected bool   `json:"connected"`
 }
 
-// ModelLoginDTO is a started device-code login. The device handle stays in Go.
+// ModelLoginDTO is a started login. The device handle and the PKCE verifier
+// stay in Go; the UI only shows the code (device method) or the URL.
 type ModelLoginDTO struct {
+	// Method is "browser" or "device"; the dialog shows a code only for device.
+	Method          string `json:"method"`
 	UserCode        string `json:"userCode"`
 	VerificationURL string `json:"verificationUrl"`
 	IntervalSeconds int    `json:"intervalSeconds"`

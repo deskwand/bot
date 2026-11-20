@@ -610,8 +610,13 @@ export interface ModelEntryDTO {
   thinkingLevels?: string[];
 }
 
-/** ModelLoginDTO is a started device-code login. The device handle stays in Go. */
+/**
+ * ModelLoginDTO is a started login. The device handle and the PKCE verifier
+ * stay in Go; the UI only shows the code (device method) or the URL.
+ */
 export interface ModelLoginDTO {
+  /** Method is "browser" or "device"; the dialog shows a code only for device. */
+  method: string;
   userCode: string;
   verificationUrl: string;
   intervalSeconds: number;
@@ -913,6 +918,13 @@ export const Service = {
   cancelCloudflareLogin(opID: string): Promise<void> {
     return call("Service.CancelCloudflareLogin", opID);
   },
+  /**
+   * CancelModelLogin stops a login that is still waiting for the browser. It is
+   * safe to call when nothing is pending.
+   */
+  cancelModelLogin(): Promise<void> {
+    return call("Service.CancelModelLogin");
+  },
   /** CancelWeChatLogin cancels a running QR login by operation id. */
   cancelWeChatLogin(opID: string): Promise<void> {
     return call("Service.CancelWeChatLogin", opID);
@@ -1137,8 +1149,8 @@ export const Service = {
     return call("Service.PendingRestore");
   },
   /**
-   * PollModelLogin reports the state of the login started by StartModelLogin:
-   * pending, slow_down or done.
+   * PollModelLogin reports the state of the started login: pending, slow_down
+   * or done. The browser flow reads its own loopback result here.
    */
   pollModelLogin(): Promise<string> {
     return call("Service.PollModelLogin");
@@ -1292,8 +1304,15 @@ export const Service = {
     return call("Service.StartMcpOAuth", name);
   },
   /**
-   * StartModelLogin asks the deployment for a device code and opens the page
-   * where the owner enters it. The returned code is the only thing the UI needs.
+   * StartModelDeviceLogin falls back to the device code for workspaces that
+   * allow it, or for hosts where nothing can receive the loopback callback.
+   */
+  startModelDeviceLogin(): Promise<ModelLoginDTO> {
+    return call("Service.StartModelDeviceLogin");
+  },
+  /**
+   * StartModelLogin opens the browser sign-in (authorization code + PKCE) and
+   * listens on the loopback callback. PollModelLogin reports when it finishes.
    */
   startModelLogin(): Promise<ModelLoginDTO> {
     return call("Service.StartModelLogin");

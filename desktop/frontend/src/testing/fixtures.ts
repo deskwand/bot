@@ -2421,8 +2421,27 @@ export function createMockClient(): ClientService {
       if (state.scenario === "model-auth-failed") {
         fail("MODEL_AUTH_FAILED", "订阅登录请求失败，请重试。");
       }
+      // The browser flow: no code to show, the fixture finishes on its own.
+      state.modelLogin = { userCode: "", intervalSeconds: 1, remainingPolls: 1 };
+      return {
+        method: "browser",
+        userCode: "",
+        verificationUrl: "https://auth.openai.com/oauth/authorize?state=probe",
+        intervalSeconds: 1,
+      };
+    },
+
+    async startModelDeviceLogin() {
+      if (state.scenario === "model-auth-unsupported") {
+        fail("MODEL_AUTH_ADMIN_UNAVAILABLE", "这个部署还不支持订阅登录，请先更新部署。");
+      }
       state.modelLogin = { userCode: "ABCD-1234", intervalSeconds: 1, remainingPolls: 2 };
-      return { userCode: "ABCD-1234", verificationUrl: "https://auth.openai.com/codex/device", intervalSeconds: 1 };
+      return {
+        method: "device",
+        userCode: "ABCD-1234",
+        verificationUrl: "https://auth.openai.com/codex/device",
+        intervalSeconds: 1,
+      };
     },
 
     async pollModelLogin() {
@@ -2436,6 +2455,10 @@ export function createMockClient(): ClientService {
       state.modelLogin = null;
       state.modelAuth.connected = true;
       return "done";
+    },
+
+    async cancelModelLogin() {
+      state.modelLogin = null;
     },
 
     async disconnectModel() {

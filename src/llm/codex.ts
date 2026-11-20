@@ -3,8 +3,9 @@
  *
  * pi-ai ships the provider, the wire API and the OAuth type, but its login
  * needs `node:crypto` and a local callback server, and its credential store is
- * app-owned. This module supplies the missing Worker-side pieces: a device-code
- * login (`auth.openai.com/codex/device`), the token refresh, and the small
+ * app-owned. This module supplies the missing Worker-side pieces: the browser
+ * login (authorization code + PKCE, callback on the desktop's loopback), the
+ * device-code login for headless hosts, the token refresh, and the small
  * status/disconnect surface the desktop talks to through `/admin/models/auth`.
  *
  * Endpoints and the public client id mirror
@@ -25,12 +26,20 @@ const AUTH_BASE_URL = "https://auth.openai.com";
 const TOKEN_URL = `${AUTH_BASE_URL}/oauth/token`;
 const DEVICE_USER_CODE_URL = `${AUTH_BASE_URL}/api/accounts/deviceauth/usercode`;
 const DEVICE_TOKEN_URL = `${AUTH_BASE_URL}/api/accounts/deviceauth/token`;
+const AUTHORIZE_URL = `${AUTH_BASE_URL}/oauth/authorize`;
+const SCOPE = "openid profile email offline_access";
 
 /** Where the owner types the code; the code itself comes from the service. */
 export const CODEX_VERIFICATION_URL = `${AUTH_BASE_URL}/codex/device`;
 
 /** The device-auth callback the service issued the code for. */
 const DEVICE_REDIRECT_URI = `${AUTH_BASE_URL}/deviceauth/callback`;
+
+/**
+ * The loopback callback the desktop listens on. It is registered against this
+ * public client, so the port is fixed: 1455 is also what Codex CLI uses.
+ */
+export const BROWSER_REDIRECT_URI = "http://localhost:1455/auth/callback";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -46,6 +55,13 @@ export type CodexLoginStart = {
 };
 
 export type CodexLoginPoll = { status: "pending" | "slow_down" | "done" };
+
+export type CodexBrowserStart = {
+  authorizeUrl: string;
+  /** The desktop echoes this back; it is the CSRF guard on the loopback. */
+  state: string;
+  codeVerifier: string;
+};
 
 function basicHeaders(): HeadersInit {
   return { "content-type": "application/x-www-form-urlencoded" };
@@ -117,6 +133,85 @@ export function codexProvider(): Provider {
   return Object.create(openaiCodexProvider(), {
     auth: { value: { oauth }, enumerable: true },
   }) as Provider;
+}
+
+function randomHex(bytes: number): string {
+  const buffer = crypto.getRandomValues(new Uint8Array(bytes));
+  return Array.from(buffer, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function base64Url(input: ArrayBuffer | Uint8Array): string {
+  const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+/**
+ * The browser flow: the desktop opens this URL, the service redirects back to
+ * the loopback listener with a code, and the exchange happens here so the
+ * tokens never leave the deployment. Enterprise workspaces can disable the
+ * device-code grant, which is why this is the default path.
+ */
+export async function startCodexBrowserLogin(): Promise<CodexBrowserStart> {
+  const codeVerifier = base64Url(crypto.getRandomValues(new Uint8Array(32)));
+  const state = randomHex(16);
+  const challenge = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(codeVerifier),
+  );
+  const url = new URL(AUTHORIZE_URL);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", CLIENT_ID);
+  url.searchParams.set("redirect_uri", BROWSER_REDIRECT_URI);
+  url.searchParams.set("scope", SCOPE);
+  url.searchParams.set("code_challenge", base64Url(challenge));
+  url.searchParams.set("code_challenge_method", "S256");
+  url.searchParams.set("state", state);
+  url.searchParams.set("id_token_add_organizations", "true");
+  url.searchParams.set("codex_cli_simplified_flow", "true");
+  url.searchParams.set("originator", "pi");
+  return { authorizeUrl: url.toString(), state, codeVerifier };
+}
+
+/** Redeem the loopback code and store the credential. */
+export async function completeCodexBrowserLogin(
+  input: { code: string; codeVerifier: string; state: string },
+  env: Env,
+  fetchFn: typeof fetch = fetch,
+): Promise<void> {
+  // A shape check only; the real guard is the desktop comparing the state it
+  // issued. This just keeps a stray payload out of the token endpoint.
+  if (!/^[0-9a-f]{32}$/.test(input.state)) {
+    throw new Error("codex browser login state is malformed");
+  }
+  const before = await readModelCredential(env, CODEX_PROVIDER_ID);
+  try {
+    const response = await fetchFn(TOKEN_URL, {
+      method: "POST",
+      headers: basicHeaders(),
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: CLIENT_ID,
+        code: input.code,
+        code_verifier: input.codeVerifier,
+        redirect_uri: BROWSER_REDIRECT_URI,
+      }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    const credential = await readToken(response, "exchange");
+    await saveModelCredential(env, CODEX_PROVIDER_ID, credential);
+  } catch (error) {
+    // The code is single-use: a retried completion after a lost response fails
+    // here even though the exchange succeeded. Only an actually rotated
+    // credential proves that, so a failed re-login still surfaces.
+    const after = await readModelCredential(env, CODEX_PROVIDER_ID);
+    const rotated =
+      after !== undefined &&
+      after.type === "oauth" &&
+      after.refresh !== (before?.type === "oauth" ? before.refresh : null);
+    if (!rotated) throw error;
+  }
 }
 
 /**

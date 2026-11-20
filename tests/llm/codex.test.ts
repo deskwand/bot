@@ -2,8 +2,10 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codexStatus,
+  completeCodexBrowserLogin,
   disconnectCodex,
   pollCodexLogin,
+  startCodexBrowserLogin,
   startCodexLogin,
 } from "../../src/llm/codex";
 import { readModelCredential, saveModelCredential } from "../../src/llm/model-auth";
@@ -62,6 +64,76 @@ function harness() {
 afterEach(async () => {
   await disconnectCodex(env);
   vi.unstubAllGlobals();
+});
+
+describe("browser login", () => {
+  it("builds a PKCE authorize URL for the loopback callback", async () => {
+    const started = await startCodexBrowserLogin();
+    const url = new URL(started.authorizeUrl);
+
+    expect(`${url.origin}${url.pathname}`).toBe("https://auth.openai.com/oauth/authorize");
+    expect(url.searchParams.get("client_id")).toBe("app_EMoamEEZ73f0CkXaXp7hrann");
+    expect(url.searchParams.get("redirect_uri")).toBe(
+      "http://localhost:1455/auth/callback",
+    );
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(url.searchParams.get("state")).toBe(started.state);
+    expect(started.state).toMatch(/^[0-9a-f]{32}$/);
+    // The challenge is the SHA-256 of the verifier, so the pair must agree.
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(started.codeVerifier),
+    );
+    const expected = btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replaceAll("=", "");
+    expect(url.searchParams.get("code_challenge")).toBe(expected);
+  });
+
+  it("exchanges the loopback code and stores the credential", async () => {
+    const { server, fetchFn } = harness();
+    let form: URLSearchParams | undefined;
+    server.token = (_url, init) => {
+      form = new URLSearchParams(String(init?.body));
+      return Response.json({
+        access_token: "access-browser",
+        refresh_token: "refresh-browser",
+        expires_in: 3600,
+      });
+    };
+
+    await completeCodexBrowserLogin(
+      {
+        code: "code-browser",
+        codeVerifier: "verifier-browser",
+        state: "0123456789abcdef0123456789abcdef",
+      },
+      env,
+      fetchFn,
+    );
+
+    expect(form?.get("grant_type")).toBe("authorization_code");
+    expect(form?.get("redirect_uri")).toBe("http://localhost:1455/auth/callback");
+    expect(form?.get("code_verifier")).toBe("verifier-browser");
+    expect(await readModelCredential(env, CODEX)).toMatchObject({
+      access: "access-browser",
+      refresh: "refresh-browser",
+    });
+  });
+
+  it("refuses a malformed state before touching the network", async () => {
+    const { server, fetchFn } = harness();
+
+    await expect(
+      completeCodexBrowserLogin(
+        { code: "code-browser", codeVerifier: "v", state: "not-a-state" },
+        env,
+        fetchFn,
+      ),
+    ).rejects.toThrow(/state is malformed/);
+    expect(server.tokenCalls).toBe(0);
+  });
 });
 
 describe("startCodexLogin", () => {
