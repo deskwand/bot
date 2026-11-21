@@ -71,7 +71,8 @@ import {
 import {
   loadMcpTools,
   mcpConnector,
-  mcpExtension,
+  mcpExtensions,
+  mcpNamespaceExtensions,
   type McpGates,
 } from "../tools/mcp";
 import { documentConverterFromAi } from "../tools/file-content";
@@ -1430,6 +1431,7 @@ export class TaskDO extends Agent<Env> {
         }
         return;
       }
+      this.installMcpNamespaces();
       await this.installMcpTools();
       this.installCodemode();
     })();
@@ -1562,25 +1564,33 @@ export class TaskDO extends Agent<Env> {
   };
 
   private installCodemode(): void {
-    let namespaces: NonNullable<Parameters<typeof createCodemodeExtension>[0]["namespaces"]> = [];
-    try {
-      namespaces = readRuntimeConfig(this.env).mcpServers.map((server) => ({
-        name: server.name,
-        prefix: `${server.name.replace(/[^A-Za-z0-9_-]/g, "_")}__`,
-        description: server.description,
-      }));
-    } catch (error) {
-      console.warn(`codemode namespaces skipped: ${error instanceof Error ? error.message : String(error)}`);
-    }
     this.registry.install(createCodemodeExtension({
       // Half the default interrupt budget bounds synchronous QuickJS work.
       // Poll rate varies by script and host; this is not a wall-clock limit.
       sandbox: createInlineCodemodeSandbox({ interruptBudget: 50_000 }),
-      namespaces,
       models: false,
       inlineBudget: 3000,
     }));
     this.registry.install(createToolSearchExtension());
+  }
+
+  /**
+   * Declare every enabled server's code-mode namespace before its tools load:
+   * pi lists a namespace with no tools yet, so a server that is still signing
+   * in stays visible to the model instead of looking absent.
+   */
+  private installMcpNamespaces(): void {
+    try {
+      for (const extension of mcpNamespaceExtensions(
+        readRuntimeConfig(this.env).mcpServers,
+      )) {
+        this.registry.install(extension);
+      }
+    } catch (error) {
+      console.warn(
+        `mcp namespaces skipped: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   private async installMcpTools(): Promise<void> {
@@ -1598,8 +1608,9 @@ export class TaskDO extends Agent<Env> {
         ),
         (body) => this.emitProgress(body),
       );
-      const ext = mcpExtension(loaded);
-      if (ext) this.registry.install(ext);
+      for (const extension of mcpExtensions(loaded)) {
+        this.registry.install(extension);
+      }
     } catch (error) {
       if (error instanceof RuntimeConfigError) {
         // Configuration is not a transient MCP failure: run without MCP tools

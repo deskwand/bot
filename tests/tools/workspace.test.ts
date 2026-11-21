@@ -1,5 +1,6 @@
 import type { Context } from "@earendil-works/chord/context";
-import type { ToolExecutionResult } from "@earendil-works/pi-durable";
+import type { ToolExecutionResult, ToolPark } from "@earendil-works/pi-durable";
+import { toolResult } from "../helpers/tool-result";
 import type { ImageLimits, ImageProcessor } from "@earendil-works/pi-durable/tools";
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
@@ -20,7 +21,8 @@ function abortedContext(): Context {
   return { abortSignal: controller.signal } as unknown as Context;
 }
 
-function textOf(result: ToolExecutionResult): string {
+function textOf(parked: ToolExecutionResult | ToolPark): string {
+  const result = toolResult(parked);
   return (result.output ?? [])
     .map((item) => (item.type === "text" ? item.text : ""))
     .join("");

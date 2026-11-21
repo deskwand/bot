@@ -1,5 +1,6 @@
 import type { Context } from "@earendil-works/chord/context";
-import type { ToolExecutionResult } from "@earendil-works/pi-durable";
+import type { ToolExecutionResult, ToolPark } from "@earendil-works/pi-durable";
+import { toolResult } from "../helpers/tool-result";
 import { describe, expect, it } from "vitest";
 import { fakeConnect } from "../helpers/fake-socket";
 import { mailReadTool, mailSearchTool } from "../../src/tools/mail";
@@ -38,7 +39,8 @@ function fetchResponse(payload: Uint8Array, tag: string): Uint8Array {
   ]);
 }
 
-function textOf(result: ToolExecutionResult): string {
+function textOf(parked: ToolExecutionResult | ToolPark): string {
+  const result = toolResult(parked);
   return (result.output ?? [])
     .map((item) => (item.type === "text" ? item.text : ""))
     .join("");

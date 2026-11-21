@@ -2,8 +2,10 @@ import type { Context } from "@earendil-works/chord/context";
 import { Type } from "typebox";
 import type {
   ToolExecutionResult,
+  ToolPark,
   ToolRegistration,
 } from "@earendil-works/pi-durable";
+import { toolResult } from "../helpers/tool-result";
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setChannelOverride } from "../../src/channels/override";
@@ -131,7 +133,8 @@ function context(abortSignal?: AbortSignal): Context {
   return { abortSignal } as unknown as Context;
 }
 
-function textOf(result: ToolExecutionResult): string {
+function textOf(parked: ToolExecutionResult | ToolPark): string {
+  const result = toolResult(parked);
   return (result.output ?? [])
     .map((item) => (item.type === "text" ? item.text : ""))
     .join("");

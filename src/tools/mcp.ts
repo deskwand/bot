@@ -6,6 +6,7 @@ import { Type, type Static, type TSchema } from "typebox";
 import type {
   Extension,
   ToolExecutionResult,
+  ToolNamespace,
   ToolRegistration,
 } from "@earendil-works/pi-durable";
 import type { ApprovalMode, McpServerConfig } from "../config";
@@ -43,6 +44,15 @@ export type McpGates = {
 
 /** A configured server that could not be loaded for this run. */
 export type McpUnavailable = { name: string; reason: string };
+
+/**
+ * One server's loaded tools, kept per server so each carries its own code-mode
+ * namespace.
+ */
+export type McpServerTools = {
+  server: McpServerConfig;
+  tools: ToolRegistration[];
+};
 
 /** The modes the desktop's mode picker offers. */
 export type McpProbeMode = Exclude<McpToolMode, "destructive">;
@@ -329,7 +339,13 @@ export async function loadMcpTools(
   connect: McpConnector,
   emit: (body: TaskEventBody) => Promise<void>,
   timeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
-): Promise<{ tools: ToolRegistration[]; unavailable: McpUnavailable[] }> {
+): Promise<{
+  /** Every loaded tool, in server order: a compatibility view of `groups`. */
+  tools: ToolRegistration[];
+  unavailable: McpUnavailable[];
+  /** The same tools kept per server, so each carries its own code-mode namespace. */
+  groups: McpServerTools[];
+}> {
   const enabled = servers.filter((server) => server.enabled !== false);
   const results = await Promise.allSettled(
     enabled.map((server) =>
@@ -337,12 +353,12 @@ export async function loadMcpTools(
     ),
   );
 
-  const tools: ToolRegistration[] = [];
   const unavailable: McpUnavailable[] = [];
+  const groups: McpServerTools[] = [];
   results.forEach((result, index) => {
     const server = enabled[index]!;
     if (result.status === "fulfilled") {
-      tools.push(...result.value);
+      groups.push({ server, tools: result.value });
       return;
     }
 
@@ -354,7 +370,9 @@ export async function loadMcpTools(
     unavailable.push({ name: server.name, reason });
   });
 
-  return { tools, unavailable };
+  // One array, two views: the flat list existing callers use, and the
+  // per-server groups `mcpExtensions()` needs for namespaces.
+  return { tools: groups.flatMap((group) => group.tools), unavailable, groups };
 }
 
 /** Connect one server and build its tools; rejects with the failure reason. */
@@ -483,23 +501,59 @@ export function unavailableNotice(
   return `以下服务本次不可用：${parts.join("；")}`;
 }
 
-/**
- * Wrap a load result as the extension `TaskDO` installs. The notice section
- * tells the model which servers were skipped this run; without any tools and
- * nothing to report there is nothing to install.
- */
-export function mcpExtension(loaded: {
-  tools: ToolRegistration[];
-  unavailable: McpUnavailable[];
-}): Extension | null {
-  if (loaded.tools.length === 0 && loaded.unavailable.length === 0) {
-    return null;
-  }
+/** The extension name one server's tools live under. */
+function mcpExtensionName(serverName: string): string {
+  return `mcp:${serverName}`;
+}
+
+/** The code-mode namespace a server's tools are grouped under. */
+function mcpNamespace(server: McpServerConfig): ToolNamespace {
   return {
-    name: "mcp",
-    tools: loaded.tools,
-    sections: [
-      { key: "mcp", render: () => unavailableNotice(loaded.unavailable) },
-    ],
+    name: server.name,
+    // A blank description would leave an empty line under the `## <name>`
+    // header, so treat it like a missing one.
+    description: server.description?.trim() || `${server.name} MCP tools`,
   };
+}
+
+/**
+ * One namespace-only extension per enabled server, installed before its tools
+ * load so the code-mode section lists a server that is still signing in or
+ * unreachable. `install()` replaces an extension with the same name in place.
+ */
+export function mcpNamespaceExtensions(servers: McpServerConfig[]): Extension[] {
+  return servers
+    .filter((server) => server.enabled !== false)
+    .map((server) => ({
+      name: mcpExtensionName(server.name),
+      namespace: mcpNamespace(server),
+    }));
+}
+
+/**
+ * The extensions `TaskDO` installs after a load: one per server that returned
+ * tools, plus the notice section naming the servers skipped in this run.
+ */
+export function mcpExtensions(loaded: {
+  groups: McpServerTools[];
+  unavailable: McpUnavailable[];
+}): Extension[] {
+  const extensions: Extension[] = [];
+  for (const group of loaded.groups) {
+    if (group.tools.length === 0) continue;
+    extensions.push({
+      name: mcpExtensionName(group.server.name),
+      namespace: mcpNamespace(group.server),
+      tools: group.tools,
+    });
+  }
+  if (loaded.unavailable.length > 0) {
+    extensions.push({
+      name: "mcp",
+      sections: [
+        { key: "mcp", render: () => unavailableNotice(loaded.unavailable) },
+      ],
+    });
+  }
+  return extensions;
 }

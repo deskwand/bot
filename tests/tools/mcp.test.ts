@@ -1,5 +1,7 @@
 import type { Context } from "@earendil-works/chord/context";
-import type { ToolExecutionResult } from "@earendil-works/pi-durable";
+import type { ToolExecutionResult, ToolPark } from "@earendil-works/pi-durable";
+import { namespacesOf } from "@earendil-works/pi-durable/codemode";
+import { toolResult } from "../helpers/tool-result";
 import type { McpServerConfig } from "../../src/config";
 import type { TaskEventBody } from "../../src/protocol";
 import type { ApprovalGateLike, ApprovalNote } from "../../src/task/approvals";
@@ -7,7 +9,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   loadMcpTools,
   mcpConnector,
-  mcpExtension,
+  mcpExtensions,
+  mcpNamespaceExtensions,
   mcpToolMode,
   mcpToolName,
   probeMcpServer,
@@ -52,7 +55,8 @@ function context(): Context {
   return { abortSignal: undefined } as unknown as Context;
 }
 
-function textOf(result: ToolExecutionResult): string {
+function textOf(parked: ToolExecutionResult | ToolPark): string {
+  const result = toolResult(parked);
   return (result.output ?? [])
     .map((item) => (item.type === "text" ? item.text : ""))
     .join("");
@@ -618,7 +622,7 @@ describe("loadMcpTools", () => {
 
     await expect(
       loadMcpTools([], { approval: gate("approved"), destructive: gate("approved"), review: gate("approved") }, connect, recorder().emit),
-    ).resolves.toEqual({ tools: [], unavailable: [] });
+    ).resolves.toEqual({ tools: [], unavailable: [], groups: [] });
     expect(connect).not.toHaveBeenCalled();
   });
 
@@ -810,35 +814,74 @@ describe("unavailableNotice", () => {
   });
 });
 
-describe("mcpExtension", () => {
+describe("mcpExtensions", () => {
   const noInput = {} as never;
   const noContext = {} as never;
 
-  it("returns null when there is nothing to install", () => {
-    expect(mcpExtension({ tools: [], unavailable: [] })).toBeNull();
+  it("keeps the namespace of a server whose tools never loaded", () => {
+    const extensions = mcpNamespaceExtensions([
+      { name: "notion", url: "https://notion.test/mcp", description: "Notion" },
+      { name: "off", url: "https://off.test/mcp", enabled: false },
+    ]);
+    expect(extensions).toEqual([
+      { name: "mcp:notion", namespace: { name: "notion", description: "Notion" } },
+    ]);
   });
 
-  it("installs only a notice section when every server is unavailable", async () => {
-    const ext = mcpExtension({
-      tools: [],
-      unavailable: [{ name: "notion", reason: "需要在桌面端登录授权" }],
-    });
-    expect(ext?.tools).toEqual([]);
-    await expect(
-      Promise.resolve(ext!.sections![0]!.render(noInput, noContext)),
-    ).resolves.toBe("以下服务本次不可用：notion（需要在桌面端登录授权）");
-  });
-
-  it("installs tools without a notice when every server loaded", async () => {
-    const tool = { name: "notion__search", description: "Search" };
-    const ext = mcpExtension({
-      tools: [tool as never],
+  it("groups each server's tools under its own namespace", () => {
+    const notion = { name: "notion__search", description: "Search" } as never;
+    const git = { name: "git__log", description: "Log" } as never;
+    const extensions = mcpExtensions({
+      groups: [
+        {
+          server: { name: "notion", url: "https://notion.test/mcp", description: "Notion" },
+          tools: [notion],
+        },
+        { server: { name: "git", url: "https://git.test/mcp" }, tools: [git] },
+      ],
       unavailable: [],
     });
-    expect(ext?.tools).toEqual([tool]);
-    expect(ext?.name).toBe("mcp");
+    expect(extensions.map((ext) => ext.name)).toEqual(["mcp:notion", "mcp:git"]);
+    expect(extensions[1]!.namespace).toEqual({
+      name: "git",
+      description: "git MCP tools",
+    });
+    // The tool name scripts call is unchanged by the namespace.
+    expect(namespacesOf(extensions).get("notion__search")).toEqual({
+      name: "notion",
+      description: "Notion",
+    });
+  });
+
+  it("skips servers that returned no tools and adds a notice for the others", async () => {
+    const extensions = mcpExtensions({
+      groups: [{ server: { name: "notion", url: "https://notion.test/mcp" }, tools: [] }],
+      unavailable: [{ name: "linear", reason: "需要在桌面端登录授权" }],
+    });
+    expect(extensions.map((ext) => ext.name)).toEqual(["mcp"]);
     await expect(
-      Promise.resolve(ext!.sections![0]!.render(noInput, noContext)),
-    ).resolves.toBeUndefined();
+      Promise.resolve(extensions[0]!.sections![0]!.render(noInput, noContext)),
+    ).resolves.toBe("以下服务本次不可用：linear（需要在桌面端登录授权）");
+  });
+
+  it("keeps the namespace of a server that failed to load", () => {
+    const server = { name: "linear", url: "https://linear.test/mcp", description: "Linear" };
+    // `TaskDO` installs the namespace first, then the load result; a failed
+    // load installs only the notice, so the namespace extension must survive.
+    const installed = [
+      ...mcpNamespaceExtensions([server]),
+      ...mcpExtensions({
+        groups: [],
+        unavailable: [{ name: "linear", reason: "需要在桌面端登录授权" }],
+      }),
+    ];
+    expect(installed.map((ext) => [ext.name, ext.namespace?.name ?? null])).toEqual([
+      ["mcp:linear", "linear"],
+      ["mcp", null],
+    ]);
+  });
+
+  it("installs nothing when nothing loaded and nothing failed", () => {
+    expect(mcpExtensions({ groups: [], unavailable: [] })).toEqual([]);
   });
 });

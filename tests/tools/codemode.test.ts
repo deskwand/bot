@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ButlerDO } from "../../src/butler/butler-do";
 import { setChannelOverride } from "../../src/channels/override";
 import { setModelOverride } from "../../src/llm/models";
-import { loadMcpTools } from "../../src/tools/mcp";
+import { namespacesOf } from "@earendil-works/pi-durable/codemode";
+import { loadMcpTools, mcpExtensions, mcpNamespaceExtensions } from "../../src/tools/mcp";
 import { fakeChannel } from "../helpers/fake-channel";
 import { scriptedModel } from "../helpers/scripted-model";
 import { mapSettledFailureToRestartLimit } from "../helpers/task-recovery";
@@ -79,14 +80,34 @@ async function script(id: string, code: string, setup?: (stub: Stub) => Promise<
   expect(result).toBeDefined();
   return {stub,result:result!};
 }
-async function fixtureMcp(stub: Stub) {
+const FIXTURE_SERVERS=[{name:"fixture",url:"https://fixture.test/mcp",description:"Fixture server"}];
+
+/** Installs MCP extensions the way `TaskDO` does; `connect` decides how the load ends. */
+async function installMcp(stub: Stub, connect: Parameters<typeof loadMcpTools>[2]) {
   await runInDurableObject(stub,async instance=>{
-    const loaded=await loadMcpTools([{name:"fixture",url:"https://fixture.test/mcp"}],{approval:instance.approvals,destructive:instance.approvals,review:instance.reviewedGate},async()=>({
-      listTools:async()=>[{name:"echo",description:"Fixture echo",inputSchema:{type:"object",properties:{text:{type:"string"}},required:["text"]}}],
-      callTool:async(_name,args)=>({content:[{type:"text",text:`echo:${args.text}`}]}),
-    }),async()=>{});
-    instance.registry.install({name:"fixture-mcp",tools:loaded.tools});
+    // The same order `TaskDO` uses: the namespace first, so the code-mode
+    // section lists the server even before its tools load.
+    for(const extension of mcpNamespaceExtensions(FIXTURE_SERVERS)) instance.registry.install(extension);
+    const loaded=await loadMcpTools(FIXTURE_SERVERS,{approval:instance.approvals,destructive:instance.approvals,review:instance.reviewedGate},connect,async()=>{});
+    for(const extension of mcpExtensions(loaded)) instance.registry.install(extension);
   });
+}
+
+async function fixtureMcp(stub: Stub) {
+  await installMcp(stub,async()=>({
+    listTools:async()=>[{name:"echo",description:"Fixture echo",inputSchema:{type:"object",properties:{text:{type:"string"}},required:["text"]}}],
+    callTool:async(_name,args)=>({content:[{type:"text",text:`echo:${args.text}`}]}),
+  }));
+}
+
+/** The `codemode` prompt section the model received on its first request. */
+function codemodeSection(seen: TranscriptContext|undefined): string {
+  return seen!.messages
+    .filter(m=>m.role==="system")
+    .flatMap(m=>Object.entries(m.sections??{}))
+    .filter(([name])=>name==="codemode")
+    .map(([,text])=>text??"")
+    .join("\n");
 }
 
 describe("TaskDO codemode",()=>{
@@ -237,6 +258,42 @@ describe("TaskDO codemode",()=>{
     const user=seen!.messages.find(m=>m.role==="user");
     expect(user).toBeDefined();
     expect(contentText(user!.content)).not.toContain("机器人记忆xyz");
+  });
+  it("lists the MCP server as a code-mode namespace before its tools load",async()=>{
+    let seen:TranscriptContext|undefined;
+    setModelOverride(scriptedModel([
+      {observe:c=>{seen=c;},toolCalls:[{name:"finish_task",args:{summary:"namespace seen"}}]},
+    ]));
+    const id="t-code-namespace",stub=task(id);
+    await fixtureMcp(stub);
+    await stub.start({taskId:id,title:id,instructions:"run script"});
+    await complete(stub);
+    expect(seen).toBeDefined();
+    // Prompt sections travel in `SystemMessage.sections`, not in `content`.
+    // The section emits `## <name>` then the description for every selected
+    // extension (all MCP tools are deferred, so only the namespace shows up).
+    const section=codemodeSection(seen);
+    expect(section).toContain("## fixture");
+    expect(section).toContain("Fixture server");
+    const space=await runInDurableObject(stub,async instance=>[...namespacesOf(instance.registry.snapshot().installed())]);
+    expect(space).toContainEqual(["fixture__echo",{name:"fixture",description:"Fixture server"}]);
+  });
+  it("lists an MCP server that failed to load, without its tools",async()=>{
+    let seen:TranscriptContext|undefined;
+    setModelOverride(scriptedModel([
+      {observe:c=>{seen=c;},toolCalls:[{name:"finish_task",args:{summary:"offline server seen"}}]},
+    ]));
+    const id="t-code-offline",stub=task(id);
+    // Nothing installs a namespace for a failed server except
+    // `installMcpNamespaces`, so this case fails if that step is dropped.
+    await installMcp(stub,async()=>{throw new Error("needs sign-in");});
+    await stub.start({taskId:id,title:id,instructions:"run script"});
+    await complete(stub);
+    expect(seen).toBeDefined();
+    const section=codemodeSection(seen);
+    expect(section).toContain("## fixture");
+    expect(section).toContain("Fixture server");
+    expect(section).not.toContain("fixture__echo");
   });
   it("calls deferred MCP tools from scripts without loading them into the prompt",async()=>{
     const {result}=await script("t-code-deferred",'return await tools.fixture__echo({text:"from script"});',fixtureMcp);

@@ -1,5 +1,6 @@
 import type { Context } from "@earendil-works/chord/context";
-import type { ToolExecutionResult } from "@earendil-works/pi-durable";
+import type { ToolExecutionResult, ToolPark } from "@earendil-works/pi-durable";
+import { toolResult } from "../helpers/tool-result";
 import { describe, expect, it, vi } from "vitest";
 import { webFetchTool } from "../../src/tools/web-fetch";
 import { PNG_B64, bytes, fakeApi } from "../helpers/images";
@@ -8,7 +9,8 @@ function context(signal?: AbortSignal): Context {
   return { abortSignal: signal } as unknown as Context;
 }
 
-function textOf(result: ToolExecutionResult): string {
+function textOf(parked: ToolExecutionResult | ToolPark): string {
+  const result = toolResult(parked);
   return (result.output ?? [])
     .map((item) => (item.type === "text" ? item.text : ""))
     .join("");
