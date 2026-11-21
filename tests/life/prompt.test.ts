@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setClockOverride } from "../../src/butler/notifier";
 import { t } from "../../src/i18n";
 import { formatUsd, lifeBlock } from "../../src/life/prompt";
 import type { Vitals } from "../../src/life/vitals";
+import type { QuotaSnapshot } from "../../src/llm/quota";
 
 function vitals(overrides: Partial<Vitals> = {}): Vitals {
   return {
@@ -133,5 +135,66 @@ describe("lifeBlock", () => {
     expect(text).toContain(
       "The owner's instructions, pauses and deletions always come before that.",
     );
+  });
+});
+
+const QUOTA_NOW = Date.UTC(2030, 0, 1, 0, 0, 0);
+
+function snapshot(usedPercents: number[], plan?: string): QuotaSnapshot {
+  return {
+    providers: [
+      {
+        provider: "openai-codex",
+        ...(plan === undefined ? {} : { plan }),
+        fetchedAt: QUOTA_NOW,
+        windows: usedPercents.map((usedPercent, index) => ({
+          key: index === 0 ? ("5h" as const) : ("week" as const),
+          usedPercent,
+          resetsAt: QUOTA_NOW + 2 * 86_400_000,
+        })),
+      },
+    ],
+    failures: [],
+  };
+}
+
+describe("lifeBlock quota", () => {
+  beforeEach(() => {
+    setClockOverride({
+      now: () => QUOTA_NOW,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    });
+  });
+
+  afterEach(() => {
+    setClockOverride(null);
+  });
+
+  it("reports the tightest window in coarse bands", () => {
+    const text = lifeBlock("zh", vitals(), null, snapshot([9, 88], "team"));
+
+    expect(text).toContain("订阅 Codex（team）");
+    expect(text).toContain("本周额度见底（剩 10%）");
+    expect(text).toContain("2 天后重置");
+    expect(text).not.toContain("5 小时额度");
+  });
+
+  it("rounds the percent to five-point steps", () => {
+    expect(lifeBlock("zh", vitals(), null, snapshot([32]))).toContain("剩 70%");
+  });
+
+  it("omits the line when there is no data", () => {
+    expect(
+      lifeBlock("zh", vitals(), null, { providers: [], failures: [] }),
+    ).not.toContain("订阅");
+    expect(lifeBlock("zh", vitals())).not.toContain("订阅");
+  });
+
+  it("speaks English in English", () => {
+    const text = lifeBlock("en", vitals(), null, snapshot([9]));
+
+    expect(text).toContain("Subscription Codex");
+    expect(text).toContain("ample");
   });
 });

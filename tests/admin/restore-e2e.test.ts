@@ -494,6 +494,14 @@ describe("life ledger backup and restore", () => {
         metabolismStarted: true,
       });
 
+      // Derived remote state: a quota cache must not travel in the archive
+      // either, even when the instance happens to hold one.
+      await runInDurableObject(life, async (_instance, state) => {
+        await state.storage.kv.put("model_quota", {
+          "openai-codex": { failure: { reason: "unreachable", at: 0 } },
+        });
+      });
+
       await acquire("export");
       const lifeDump = await dumpDo({ do: "life", id: "" });
       await release();
@@ -516,6 +524,9 @@ describe("life ledger backup and restore", () => {
       expect(
         kvRows.some((row) => String(row.key).startsWith("model_auth:")),
       ).toBe(false);
+      expect(kvRows.some((row) => String(row.key) === "model_quota")).toBe(
+        false,
+      );
 
       await acquire("restore");
       await restoreDo({ do: "life", id: "" }, lifeDump);

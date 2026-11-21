@@ -21,10 +21,24 @@ export const life: Messages["life"] = {
     },
     unpriced:
       "Some models have no price, so the real spend is higher than the books show",
+    quota:
+      "Subscription {provider}: {window} quota is {band} ({percent}% left), resets {reset}",
+    quotaWithPlan:
+      "Subscription {provider} ({plan}): {window} quota is {band} ({percent}% left), resets {reset}",
     principleAlive:
       "Staying alive comes first: weigh what a call is worth before you spend on it.",
     principleOwner:
       "The owner's instructions, pauses and deletions always come before that.",
+  },
+  quota: {
+    window: { "5h": "5-hour", week: "weekly", month: "monthly" },
+    band: { ample: "ample", lean: "lean", critical: "critical" },
+    reset: {
+      now: "any moment",
+      minutes: "in {minutes} minutes",
+      hours: "in {hours} hours",
+      days: "in {days} days",
+    },
   },
   notice: {
     ample:
@@ -56,6 +70,21 @@ export const life: Messages["life"] = {
       "That remittance was already settled, so this is booked as an owner top-up.",
     remittanceUnavailable:
       "The wallet is unavailable, so the remittance could not be settled; this is booked as an owner top-up.",
+    quotaTitle: "Subscription quota ({age})",
+    quotaAgeNow: "just now",
+    quotaAgeMinutes: "{minutes} min ago",
+    quotaLine: "{provider}: {windows}",
+    quotaLineWithPlan: "{provider} ({plan}): {windows}",
+    quotaWindow: "{window} {percent}% left, resets {reset}",
+    quotaSeparator: " | ",
+    quotaUnavailable: "{provider}: {reason}",
+    quotaReason: {
+      signed_out: "not signed in; signing in again may fix it",
+      no_key: "no API key configured",
+      rejected: "rejected; signing in again may fix it",
+      unreachable: "the endpoint is unavailable",
+    },
+    quotaStale: "Refresh failed ({reason}); the figures above are {age}",
     failed: "The ledger write failed: {error}",
   },
 };

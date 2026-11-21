@@ -1,4 +1,14 @@
+import { getClock } from "../butler/notifier";
 import { t, type Locale, type MessageKey } from "../i18n";
+import type { QuotaSnapshot } from "../llm/quota";
+import {
+  providerLabel,
+  quotaBand,
+  remainingPercent,
+  resetText,
+  tightestWindow,
+  windowName,
+} from "./quota-format";
 import type { Tier, Vitals } from "./vitals";
 
 const TIER_NAME: Record<Tier, MessageKey> = {
@@ -43,6 +53,7 @@ export function lifeBlock(
   locale: Locale,
   vitals: Vitals | null,
   walletValueUsd?: number | null,
+  quota?: QuotaSnapshot | null,
 ): string {
   if (vitals === null || !vitals.metabolismStarted) return "";
 
@@ -69,8 +80,42 @@ export function lifeBlock(
             days: Math.floor(vitals.runwayDays),
           }),
   );
+  lines.push(...quotaLines(locale, quota));
   if (vitals.unpriced) lines.push(t(locale, "life.prompt.unpriced"));
   lines.push(t(locale, "life.prompt.principleAlive"));
   lines.push(t(locale, "life.prompt.principleOwner"));
   return lines.join("\n");
+}
+
+/**
+ * One line per provider, naming the window that will throttle first. The
+ * percent is rounded to five-point steps so the block does not change on every
+ * call and invalidate the prompt prefix cache.
+ */
+function quotaLines(locale: Locale, quota?: QuotaSnapshot | null): string[] {
+  if (quota === undefined || quota === null) return [];
+  const now = getClock().now();
+  const lines: string[] = [];
+  for (const providerQuota of quota.providers) {
+    const window = tightestWindow(providerQuota);
+    if (window === undefined) continue;
+    const remaining = Math.round(remainingPercent(window.usedPercent) / 5) * 5;
+    const band = quotaBand(remaining);
+    const params = {
+      provider: providerLabel(providerQuota.provider),
+      window: windowName(locale, window.key),
+      band: t(locale, `life.quota.band.${band}` as MessageKey),
+      percent: remaining,
+      reset: resetText(locale, window.resetsAt, now),
+    };
+    lines.push(
+      providerQuota.plan === undefined
+        ? t(locale, "life.prompt.quota", params)
+        : t(locale, "life.prompt.quotaWithPlan", {
+            ...params,
+            plan: providerQuota.plan,
+          }),
+    );
+  }
+  return lines;
 }

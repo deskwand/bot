@@ -10,6 +10,7 @@
 
 import type { MaintenanceStore } from "./maintenance";
 import { MODEL_CREDENTIAL_PREFIX } from "../llm/credential-key";
+import { QUOTA_CACHE_KEY } from "../llm/quota-key";
 import {
   createIndexes,
   createTables,
@@ -115,7 +116,9 @@ export class BackupRpc {
   private isExcludedKv(key: string): boolean {
     return (
       key.startsWith("private:wechat:") ||
-      key.startsWith(MODEL_CREDENTIAL_PREFIX)
+      key.startsWith(MODEL_CREDENTIAL_PREFIX) ||
+      // Derived remote state: always refetched, never worth restoring.
+      key === QUOTA_CACHE_KEY
     );
   }
 

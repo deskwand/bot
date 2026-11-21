@@ -18,8 +18,21 @@ export const life = {
       dormant: "全部用 Workers AI 默认免费模型，机器人全停自动唤醒",
     },
     unpriced: "有模型没有计价，实际开销比账面高",
+    quota: "订阅 {provider}：{window}额度{band}（剩 {percent}%），{reset}重置",
+    quotaWithPlan:
+      "订阅 {provider}（{plan}）：{window}额度{band}（剩 {percent}%），{reset}重置",
     principleAlive: "活下去是你的第一要务：花钱之前掂量值不值。",
     principleOwner: "主人的指令、暂停和删除永远排在这之前。",
+  },
+  quota: {
+    window: { "5h": "5 小时", week: "本周", month: "本月" },
+    band: { ample: "充足", lean: "偏紧", critical: "见底" },
+    reset: {
+      now: "即将",
+      minutes: "{minutes} 分钟后",
+      hours: "{hours} 小时后",
+      days: "{days} 天后",
+    },
   },
   notice: {
     ample:
@@ -47,6 +60,21 @@ export const life = {
     remittanceAlready: "这笔汇款已经结清过，按主人充值记账。",
     remittanceUnavailable:
       "钱包暂时不可用，汇款没能结清，按主人充值记账。",
+    quotaTitle: "订阅额度（{age}）",
+    quotaAgeNow: "刚刚",
+    quotaAgeMinutes: "{minutes} 分钟前",
+    quotaLine: "{provider}：{windows}",
+    quotaLineWithPlan: "{provider}（{plan}）：{windows}",
+    quotaWindow: "{window} 剩 {percent}%，{reset}重置",
+    quotaSeparator: " | ",
+    quotaUnavailable: "{provider}：{reason}",
+    quotaReason: {
+      signed_out: "未登录，可能需要重新登录",
+      no_key: "未配置 key",
+      rejected: "被拒绝，可能需要重新登录",
+      unreachable: "接口暂时不可用",
+    },
+    quotaStale: "刷新失败（{reason}），以上是 {age}的数据",
     failed: "记账失败：{error}",
   },
 } as const;

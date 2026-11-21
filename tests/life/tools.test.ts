@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { setClockOverride } from "../../src/butler/notifier";
 import { t } from "../../src/i18n";
 import { createLifeTools, type LifeToolDeps } from "../../src/life/tools";
 import type { Vitals } from "../../src/life/vitals";
+import type { QuotaSnapshot } from "../../src/llm/quota";
 
 function vitals(overrides: Partial<Vitals> = {}): Vitals {
   return {
@@ -275,5 +277,100 @@ describe("life_vitals wallet", () => {
         "任务模型：test/task-model",
       ].join("\n"),
     );
+  });
+});
+
+const QUOTA_NOW = Date.UTC(2030, 0, 1, 0, 0, 0);
+
+function snapshot(): QuotaSnapshot {
+  return {
+    providers: [
+      {
+        provider: "openai-codex",
+        plan: "team",
+        fetchedAt: QUOTA_NOW - 3 * 60_000,
+        windows: [
+          { key: "5h", usedPercent: 9, resetsAt: QUOTA_NOW + 3_600_000 },
+          { key: "week", usedPercent: 12, resetsAt: QUOTA_NOW + 86_400_000 },
+        ],
+      },
+    ],
+    failures: [],
+  };
+}
+
+describe("life_vitals quota", () => {
+  it("lists every window with the exact remaining percent", async () => {
+    setClockOverride({
+      now: () => QUOTA_NOW,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    });
+    try {
+      const result = await run(
+        createLifeTools(deps({ quota: async () => snapshot() })),
+        "life_vitals",
+      );
+      const out = text(result);
+
+      expect(out).toContain("订阅额度（3 分钟前）");
+      expect(out).toContain("Codex（team）：5 小时 剩 91%，1 小时后重置");
+      expect(out).toContain("本周 剩 88%，1 天后重置");
+    } finally {
+      setClockOverride(null);
+    }
+  });
+
+  it("says why a provider has no data instead of implying headroom", async () => {
+    const result = await run(
+      createLifeTools(
+        deps({
+          quota: async () => ({
+            providers: [],
+            failures: [{ provider: "opencode-go", reason: "no_key", at: 0 }],
+          }),
+        }),
+      ),
+      "life_vitals",
+    );
+
+    expect(text(result)).toContain("OpenCode Go：未配置 key");
+  });
+
+  it("marks a stale value and keeps it", async () => {
+    const result = await run(
+      createLifeTools(
+        deps({
+          quota: async () => ({
+            ...snapshot(),
+            failures: [
+              { provider: "openai-codex", reason: "unreachable", at: 0 },
+            ],
+          }),
+        }),
+      ),
+      "life_vitals",
+    );
+
+    const out = text(result);
+    expect(out).toContain("剩 91%");
+    expect(out).toContain("刷新失败");
+    expect(out).toContain("接口暂时不可用");
+  });
+
+  it("adds nothing when no quota provider is in use", async () => {
+    const result = await run(
+      createLifeTools(
+        deps({ quota: async () => ({ providers: [], failures: [] }) }),
+      ),
+      "life_vitals",
+    );
+
+    expect(text(result)).not.toContain("订阅额度");
+  });
+
+  it("keeps the current output when the dep is absent", async () => {
+    const result = await run(createLifeTools(deps()), "life_vitals");
+    expect(text(result)).not.toContain("订阅额度");
   });
 });

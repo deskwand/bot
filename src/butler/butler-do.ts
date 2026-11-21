@@ -2,6 +2,7 @@ import { Agent, type Schedule } from "agents";
 import { contentText } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { assertModelWindowSwitch, ModelSwitchError } from "../llm/model-switch";
+import { inUseQuotaProviders } from "../llm/models";
 import { PiHarness, type PiModel, type PiOperationResult } from "agents/harness/pi";
 import {
   createRegistry,
@@ -23,7 +24,7 @@ import { HEAL_INTERVAL_MS } from "../bot/wake";
 import { ensureEarnerBot, type EnsureEarnerResult } from "./earner";
 import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
-import { lifeStub, readVitals } from "../life/client";
+import { lifeStub, readQuota, readVitals } from "../life/client";
 import { effectiveModelRef } from "../life/diet";
 import type { Meter } from "../life/meter";
 import { lifeBlock } from "../life/prompt";
@@ -565,10 +566,14 @@ export class ButlerDO extends Agent<Env> {
             const walletValue = vitals?.metabolismStarted
               ? await readWalletValue(this.env)
               : null;
+            const quota = vitals?.metabolismStarted
+              ? await readQuota(this.env, inUseQuotaProviders(this.env))
+              : null;
             const block = lifeBlock(
               ownerLocale(this.env),
               vitals,
               walletValue,
+              quota,
             );
             return block.length > 0 ? block : undefined;
           },
@@ -582,6 +587,7 @@ export class ButlerDO extends Agent<Env> {
         vitals: () => lifeStub(this.env).vitals(),
         credit: (usd, note, source) =>
           lifeStub(this.env).recordCredit(usd, note, source),
+        quota: () => readQuota(this.env, inUseQuotaProviders(this.env)),
         settleRemittance: walletConfigured(this.env)
           ? (id) => walletStub(this.env).settleRemittance(id)
           : undefined,

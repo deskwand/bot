@@ -10,6 +10,7 @@ import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messag
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { Api, AuthContext, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { PiModel } from "agents/harness/pi";
+import type { ModelsConfig } from "../config";
 import { ownerLocale } from "../i18n";
 import { lifeStub } from "../life/client";
 import { meteredProvider, type Meter } from "../life/meter";
@@ -18,6 +19,7 @@ import { BUILTIN_PROVIDERS } from "./catalog.generated";
 import { modelKeyAuth } from "./model-key-auth";
 import { modelCredentialStore, readModelCredential } from "./model-auth";
 import { codexProvider } from "./codex";
+import { QUOTA_PROVIDERS } from "./quota";
 import { defaultLevelFrom } from "./thinking-level";
 import {
   codexSignedOutText,
@@ -142,6 +144,30 @@ export function createModelsForEnv(env: Env, meter?: Meter): MutableModels {
   for (const provider of testProviders.values()) register(provider);
   if (workersAiBindingReady(env)) register(workersAiProvider(env));
   return models;
+}
+
+/**
+ * The quota-reporting providers the configured roles actually use. An empty
+ * array means the feature is silent on the network: nothing to ask about.
+ */
+export function inUseQuotaProviders(env: Env): string[] {
+  let models: ModelsConfig;
+  try {
+    models = readRuntimeConfig(env).models;
+  } catch {
+    return [];
+  }
+  const refs = [
+    models.butler,
+    models.task,
+    ...(models.frugal === undefined ? [] : [models.frugal]),
+  ];
+  const providers = new Set(
+    refs
+      .map((ref) => ref.provider)
+      .filter((provider) => QUOTA_PROVIDERS.has(provider)),
+  );
+  return [...providers].sort();
 }
 
 /**

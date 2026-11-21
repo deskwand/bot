@@ -1,10 +1,20 @@
 import { Type } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
-import { t, type Locale } from "../i18n";
+import { getClock } from "../butler/notifier";
+import { t, type Locale, type MessageKey } from "../i18n";
+import type { QuotaSnapshot } from "../llm/quota";
 import type { ModelRef, Role } from "../llm/models";
 import { walletStatusLines } from "../wallet/tools";
 import type { WalletStatus } from "../wallet/wallet-do";
 import { formatUsd, tierName } from "./prompt";
+import {
+  formatPercent,
+  providerLabel,
+  remainingPercent,
+  resetText,
+  sortedWindows,
+  windowName,
+} from "./quota-format";
 import type { Vitals } from "./vitals";
 
 const LifeVitals = Type.Object({});
@@ -49,6 +59,8 @@ export type LifeToolDeps = {
   calibrate(balanceUsd: number, note: string): Promise<Vitals>;
   /** The chain wallet, or null when it cannot be read. Omitted when unconfigured. */
   wallet?(): Promise<WalletStatus | null>;
+  /** Subscription quota, when the deployment uses a provider that reports it. */
+  quota?(): Promise<QuotaSnapshot>;
   /** The model each role would use right now. */
   effectiveModels(): Promise<Record<Role, ModelRef>>;
   locale: Locale;
@@ -79,6 +91,74 @@ function vitalsLines(locale: Locale, vitals: Vitals): string[] {
         }),
     t(locale, "life.tool.tier", { tier: tierName(locale, vitals.tier) }),
   ];
+}
+
+/** "just now" / "3 min ago", so a stale number is identified by age. */
+function ageText(locale: Locale, at: number, now: number): string {
+  const minutes = Math.max(0, Math.round((now - at) / 60_000));
+  return minutes < 1
+    ? t(locale, "life.tool.quotaAgeNow")
+    : t(locale, "life.tool.quotaAgeMinutes", { minutes });
+}
+
+/**
+ * The exact figures behind the prompt's coarse bands. A provider with no data
+ * says why: "not signed in" is not the same as "plenty left".
+ */
+function quotaLines(locale: Locale, snapshot: QuotaSnapshot): string[] {
+  const withData = snapshot.providers.filter(
+    (provider) => provider.windows.length > 0,
+  );
+  if (withData.length === 0 && snapshot.failures.length === 0) return [];
+  const now = getClock().now();
+  const fetchedAt =
+    withData.length === 0
+      ? now
+      : Math.min(...withData.map((provider) => provider.fetchedAt));
+  const lines = [
+    t(locale, "life.tool.quotaTitle", {
+      age: ageText(locale, fetchedAt, now),
+    }),
+  ];
+  for (const provider of withData) {
+    const windows = sortedWindows(provider)
+      .map((window) =>
+        t(locale, "life.tool.quotaWindow", {
+          window: windowName(locale, window.key),
+          percent: formatPercent(remainingPercent(window.usedPercent)),
+          reset: resetText(locale, window.resetsAt, now),
+        }),
+      )
+      .join(t(locale, "life.tool.quotaSeparator"));
+    lines.push(
+      provider.plan === undefined
+        ? t(locale, "life.tool.quotaLine", {
+            provider: providerLabel(provider.provider),
+            windows,
+          })
+        : t(locale, "life.tool.quotaLineWithPlan", {
+            provider: providerLabel(provider.provider),
+            plan: provider.plan,
+            windows,
+          }),
+    );
+  }
+  for (const failure of snapshot.failures) {
+    const reason = t(
+      locale,
+      `life.tool.quotaReason.${failure.reason}` as MessageKey,
+    );
+    const provider = providerLabel(failure.provider);
+    lines.push(
+      withData.some((entry) => entry.provider === failure.provider)
+        ? t(locale, "life.tool.quotaStale", {
+            reason,
+            age: ageText(locale, failure.at, now),
+          })
+        : t(locale, "life.tool.quotaUnavailable", { provider, reason }),
+    );
+  }
+  return lines;
 }
 
 function modelLabel(ref: ModelRef): string {
@@ -121,6 +201,15 @@ export function createLifeTools(deps: LifeToolDeps): ToolRegistration[] {
             task: modelLabel(models.task),
           }),
         );
+        if (deps.quota !== undefined) {
+          let quota: QuotaSnapshot | null = null;
+          try {
+            quota = await deps.quota();
+          } catch {
+            quota = null;
+          }
+          if (quota !== null) lines.push(...quotaLines(locale, quota));
+        }
         if (deps.wallet !== undefined) {
           let wallet: WalletStatus | null = null;
           try {

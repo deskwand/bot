@@ -4,6 +4,7 @@ import { fauxProvider } from "@earendil-works/pi-ai";
 import { deleteModelCredential, saveModelCredential } from "../../src/llm/model-auth";
 import {
   createModelsForEnv,
+  inUseQuotaProviders,
   modelAcceptsImages,
   modelReadiness,
   registerTestProvider,
@@ -295,5 +296,56 @@ describe("modelAcceptsImages", () => {
     } finally {
       setModelOverride(null);
     }
+  });
+});
+
+function withModels(models: Record<string, unknown>): Env {
+  return envWith({
+    DESKWAND_CONFIG: JSON.stringify({
+      schemaVersion: 1,
+      owner: { telegramUserIds: [] },
+      models,
+      mcpServers: [],
+    }),
+  });
+}
+
+describe("inUseQuotaProviders", () => {
+  it("lists the quota providers the configured roles use", () => {
+    expect(
+      inUseQuotaProviders(
+        withModels({
+          butler: { provider: "openai-codex", id: "gpt-6-astra" },
+          task: { provider: "opencode-go", id: "deepseek-v4.1-flash" },
+        }),
+      ),
+    ).toEqual(["openai-codex", "opencode-go"]);
+  });
+
+  it("is empty when no role uses a quota provider", () => {
+    expect(
+      inUseQuotaProviders(
+        withModels({
+          butler: { provider: "anthropic", id: "claude-5-5" },
+          task: { provider: "anthropic", id: "claude-5-5" },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("includes the frugal model", () => {
+    expect(
+      inUseQuotaProviders(
+        withModels({
+          butler: { provider: "anthropic", id: "claude-5-5" },
+          task: { provider: "anthropic", id: "claude-5-5" },
+          frugal: { provider: "openai-codex", id: "gpt-6-luna" },
+        }),
+      ),
+    ).toEqual(["openai-codex"]);
+  });
+
+  it("is empty when the configuration is invalid", () => {
+    expect(inUseQuotaProviders(envWith({ DESKWAND_CONFIG: "{" }))).toEqual([]);
   });
 });

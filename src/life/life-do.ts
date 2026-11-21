@@ -11,6 +11,20 @@ import {
 import { getClock } from "../butler/notifier";
 import { modelCredentialKey } from "../llm/credential-key";
 import {
+  QUOTA_PROVIDERS,
+  QUOTA_REQUEST_TIMEOUT_MS,
+  QUOTA_TTL_MS,
+  codexQuota,
+  emptyQuota,
+  openCodeQuota,
+  quotaSecret,
+  type ProviderQuota,
+  type QuotaFailure,
+  type QuotaResult,
+  type QuotaSnapshot,
+} from "../llm/quota";
+import { QUOTA_CACHE_KEY } from "../llm/quota-key";
+import {
   walletConfigured,
   walletStub,
 } from "../wallet/wallet-do";
@@ -19,6 +33,32 @@ import { computeVitals, tierRank, type Tier, type Vitals } from "./vitals";
 
 const NOTIFIED_TIER_KEY = "notified_tier";
 const HOUR_MS = 3_600_000;
+
+/** One provider's cached quota, plus why the last refresh failed. */
+type QuotaCacheEntry = {
+  quota?: ProviderQuota;
+  failure?: { reason: QuotaFailure; at: number };
+};
+
+type QuotaCache = Record<string, QuotaCacheEntry>;
+
+/** Only the requested providers reach the caller; nothing else is shown. */
+function quotaSnapshot(cache: QuotaCache, wanted: string[]): QuotaSnapshot {
+  const providers: ProviderQuota[] = [];
+  const failures: QuotaSnapshot["failures"] = [];
+  for (const provider of wanted) {
+    const entry = cache[provider];
+    if (entry?.quota !== undefined) providers.push(entry.quota);
+    if (entry?.failure !== undefined) {
+      failures.push({
+        provider,
+        reason: entry.failure.reason,
+        at: entry.failure.at,
+      });
+    }
+  }
+  return { providers, failures };
+}
 
 /** Just the Butler RPC the ledger needs to reach the owner. */
 type TierNotifier = {
@@ -35,6 +75,9 @@ export class LifeDO extends DurableObject<Env> {
   private readonly backup: BackupRpc;
 
   private cachedVitals: { hour: number; vitals: Vitals } | undefined;
+
+  /** One refresh at a time: two turns must not ask the same endpoint twice. */
+  private refreshing: Promise<void> | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -165,6 +208,107 @@ export class LifeDO extends DurableObject<Env> {
     const vitals = computeVitals(this.books.vitalsInput(now));
     this.cachedVitals = { hour, vitals };
     return vitals;
+  }
+
+  /**
+   * The subscription quota for `providers`, from cache when it is fresh.
+   * A turn never waits on the network: a stale or missing entry returns what
+   * is cached and a background refresh fills it in for the next turn.
+   */
+  async quota(providers: string[]): Promise<QuotaSnapshot> {
+    const wanted = [...new Set(providers)].filter((provider) =>
+      QUOTA_PROVIDERS.has(provider),
+    );
+    if (wanted.length === 0) return emptyQuota();
+
+    const cache = await this.quotaCache();
+    const now = getClock().now();
+    const due = wanted.filter((provider) => {
+      const entry = cache[provider];
+      // The newest attempt decides, not the newest success: otherwise a
+      // provider that keeps failing after one good read stays "due" forever
+      // and gets asked on every turn.
+      const at = Math.max(
+        entry?.quota?.fetchedAt ?? Number.NEGATIVE_INFINITY,
+        entry?.failure?.at ?? Number.NEGATIVE_INFINITY,
+      );
+      return now - at >= QUOTA_TTL_MS;
+    });
+    if (due.length > 0) {
+      this.ctx.waitUntil(
+        this.refreshQuota(due).catch((error) =>
+          console.warn("subscription quota refresh failed", error),
+        ),
+      );
+    }
+    return quotaSnapshot(cache, wanted);
+  }
+
+  private async quotaCache(): Promise<QuotaCache> {
+    return (await this.ctx.storage.kv.get<QuotaCache>(QUOTA_CACHE_KEY)) ?? {};
+  }
+
+  private refreshQuota(providers: string[]): Promise<void> {
+    if (this.refreshing !== null) return this.refreshing;
+    const run = this.runQuotaRefresh(providers).finally(() => {
+      this.refreshing = null;
+    });
+    this.refreshing = run;
+    return run;
+  }
+
+  private async runQuotaRefresh(providers: string[]): Promise<void> {
+    const results = await Promise.all(
+      providers.map(
+        async (provider) =>
+          [provider, await this.readProviderQuota(provider)] as const,
+      ),
+    );
+    const cache = await this.quotaCache();
+    const at = getClock().now();
+    for (const [provider, result] of results) {
+      const previous = cache[provider]?.quota;
+      if (result.ok) {
+        cache[provider] = { quota: result.quota };
+        continue;
+      }
+      cache[provider] = {
+        ...(previous === undefined ? {} : { quota: previous }),
+        failure: { reason: result.reason, at },
+      };
+      console.warn(
+        `subscription quota refresh failed: ${provider} (${result.reason})`,
+      );
+    }
+    await this.ctx.storage.kv.put(QUOTA_CACHE_KEY, cache);
+  }
+
+  private async readProviderQuota(provider: string): Promise<QuotaResult> {
+    if (provider === "openai-codex") {
+      const credential = await this.modelCredential(provider);
+      if (credential?.type !== "oauth") {
+        return { ok: false, reason: "signed_out" };
+      }
+      // Never refresh here. Codex's refresh token is single-use, and a read
+      // path has no business rotating the deployment's login; the next model
+      // call does it. An expired token is therefore just "rejected".
+      if (credential.expires <= getClock().now()) {
+        return { ok: false, reason: "rejected" };
+      }
+      return await codexQuota(
+        credential.access,
+        AbortSignal.timeout(QUOTA_REQUEST_TIMEOUT_MS),
+      );
+    }
+    const apiKey = quotaSecret(
+      this.env as unknown as Record<string, unknown>,
+      provider,
+    );
+    if (apiKey === undefined) return { ok: false, reason: "no_key" };
+    return await openCodeQuota(
+      apiKey,
+      AbortSignal.timeout(QUOTA_REQUEST_TIMEOUT_MS),
+    );
   }
 
   /** Asks the wallet to remit; replaced by a stub in tests. */
