@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  codexAccessToken,
   codexStatus,
   completeCodexBrowserLogin,
   disconnectCodex,
@@ -10,6 +11,7 @@ import {
 } from "../../src/llm/codex";
 import { readModelCredential, saveModelCredential } from "../../src/llm/model-auth";
 import { createModelsForEnv } from "../../src/llm/models";
+import { fakeCodexToken } from "../helpers/codex-token";
 
 const CODEX = "openai-codex";
 const AUTH = "https://auth.openai.com";
@@ -299,5 +301,134 @@ describe("codex credential lifecycle", () => {
 
     const models = createModelsForEnv(env);
     await expect(models.getAuth(CODEX)).rejects.toThrow(/OAuth refresh failed/);
+  });
+});
+
+describe("access token", () => {
+  it("returns a live token with its account id and does not refresh", async () => {
+    const { server, fetchFn } = harness();
+    const access = fakeCodexToken();
+    await saveModelCredential(env, CODEX, {
+      type: "oauth",
+      access,
+      refresh: "refresh-0",
+      expires: Date.now() + 3_600_000,
+    });
+
+    expect(await codexAccessToken(env, AbortSignal.timeout(5_000), fetchFn)).toEqual({
+      access,
+      accountId: "acct-1",
+    });
+    expect(server.tokenCalls).toBe(0);
+  });
+
+  it("refreshes inside the shared lock when the token is about to expire", async () => {
+    const { server, fetchFn } = harness();
+    const refreshed = fakeCodexToken();
+    server.token = () =>
+      Response.json({
+        access_token: refreshed,
+        refresh_token: "refresh-1",
+        expires_in: 3600,
+      });
+    await saveModelCredential(env, CODEX, {
+      type: "oauth",
+      access: "stale-access",
+      refresh: "refresh-0",
+      expires: Date.now() + 60_000,
+    });
+
+    expect(await codexAccessToken(env, AbortSignal.timeout(5_000), fetchFn)).toEqual({
+      access: refreshed,
+      accountId: "acct-1",
+    });
+    expect(server.tokenCalls).toBe(1);
+    expect(await readModelCredential(env, CODEX)).toMatchObject({
+      type: "oauth",
+      access: refreshed,
+      refresh: "refresh-1",
+    });
+
+    // The refreshed credential is live, so the next call must not refresh again:
+    // OpenAI rotates refresh tokens and a second refresh would kill the session.
+    await codexAccessToken(env, AbortSignal.timeout(5_000), fetchFn);
+    expect(server.tokenCalls).toBe(1);
+  });
+
+  it("reports not signed in without a credential", async () => {
+    const { fetchFn } = harness();
+    expect(
+      await codexAccessToken(env, AbortSignal.timeout(5_000), fetchFn),
+    ).toBeUndefined();
+  });
+
+  it("treats a token it cannot decode as not signed in", async () => {
+    const { fetchFn } = harness();
+    await saveModelCredential(env, CODEX, {
+      type: "oauth",
+      access: "not-a-jwt",
+      refresh: "refresh-0",
+      expires: Date.now() + 3_600_000,
+    });
+    expect(
+      await codexAccessToken(env, AbortSignal.timeout(5_000), fetchFn),
+    ).toBeUndefined();
+  });
+
+  it("treats a token without the account claim as not signed in", async () => {
+    const { fetchFn } = harness();
+    await saveModelCredential(env, CODEX, {
+      type: "oauth",
+      access: fakeCodexToken({ sub: "user-1" }),
+      refresh: "refresh-0",
+      expires: Date.now() + 3_600_000,
+    });
+    expect(
+      await codexAccessToken(env, AbortSignal.timeout(5_000), fetchFn),
+    ).toBeUndefined();
+  });
+
+  it("refreshes once when pi refreshes at the same moment", async () => {
+    const { server, fetchFn } = harness();
+    const refreshed = fakeCodexToken();
+    server.token = () =>
+      Response.json({
+        access_token: refreshed,
+        refresh_token: "refresh-1",
+        expires_in: 3600,
+      });
+    vi.stubGlobal("fetch", fetchFn);
+    await saveModelCredential(env, CODEX, {
+      type: "oauth",
+      access: "stale-access",
+      refresh: "refresh-0",
+      expires: Date.now() + 60_000,
+    });
+
+    // Both callers reach the same credential store, so the second one queues
+    // behind the first and finds a credential that no longer needs a refresh.
+    // Two refreshes would rotate the token twice and sign the session out.
+    const [auth, token] = await Promise.all([
+      createModelsForEnv(env).getAuth(CODEX),
+      codexAccessToken(env, AbortSignal.timeout(5_000)),
+    ]);
+
+    expect(server.tokenCalls).toBe(1);
+    expect(token?.access).toBe(refreshed);
+    expect(auth).toMatchObject({ auth: { apiKey: refreshed } });
+  });
+
+  it("surfaces a failed refresh instead of handing back a dead token", async () => {
+    const { server, fetchFn } = harness();
+    server.token = () => new Response("invalid_grant", { status: 400 });
+    await saveModelCredential(env, CODEX, {
+      type: "oauth",
+      access: "stale-access",
+      refresh: "refresh-0",
+      expires: Date.now(),
+    });
+    await expect(
+      codexAccessToken(env, AbortSignal.timeout(5_000), fetchFn),
+    ).rejects.toThrow(/refresh/);
   });
 });

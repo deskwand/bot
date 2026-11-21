@@ -53,6 +53,7 @@ import {
   defaultThinkingLevel,
   modelReadiness,
   resolveModel,
+  type ModelRef,
 } from "../llm/models";
 import { PI_PROGRESS } from "../llm/pi-settings";
 import type {
@@ -459,6 +460,8 @@ export class TaskDO extends Agent<Env> {
   private executionProfilePromise?: Promise<ExecutionProfile>;
   private executionInstalled = false;
   private finishTaskTool: ToolRegistration | null = null;
+  /** The model this task's session runs on; tools read it lazily. */
+  private selectedModel: ModelRef | undefined;
   private readonly convert: ReturnType<typeof documentConverterFromAi>;
 
   /**
@@ -598,6 +601,22 @@ export class TaskDO extends Agent<Env> {
     return (this.spec?.attachments ?? []).map((file) => file.key);
   }
 
+  /**
+   * The model this session runs on, for tools that need to know. Falls back to
+   * the stored ref because every round that is not a fresh `start()` — and
+   * every round after an eviction — has no in-memory copy.
+   */
+  private currentModelRef(): ModelRef | undefined {
+    if (this.selectedModel !== undefined) return this.selectedModel;
+    const stored = this.readMeta("model");
+    if (stored === undefined) return undefined;
+    try {
+      return JSON.parse(stored) as ModelRef;
+    } catch {
+      return undefined;
+    }
+  }
+
   private installOwnerExecution(): void {
     const convert = this.convert;
     const emitProgress = (body: TaskEventBody) => this.emitProgress(body);
@@ -610,7 +629,7 @@ export class TaskDO extends Agent<Env> {
       name: "execution",
       tools: [
         withProgress(
-          webSearchTool(this.env),
+          webSearchTool(this.env, undefined, () => this.currentModelRef()),
           emitProgress,
           (args) => progressSearchText(ownerLocale(this.env), args.query),
         ),
@@ -712,6 +731,7 @@ export class TaskDO extends Agent<Env> {
         guard: () => this.assertNoMaintenance(),
         convert: this.convert,
         finish,
+        currentModel: () => this.currentModelRef(),
       }),
     });
   }
@@ -885,6 +905,11 @@ export class TaskDO extends Agent<Env> {
       configured,
     );
     await this.harness.session().setModel(resolveModel(selected, this.env));
+    this.selectedModel = selected;
+    // Tools read the model per call, and a round that is not a fresh start
+    // (a retry, a follow-up) never reaches this line — nor does anything after
+    // an eviction. Only the meta table outlives the object.
+    this.setMeta("model", JSON.stringify(selected));
     // The role's own level stays the owner's stated intent for its model; a
     // substituted model uses its own default instead.
     const substituted =

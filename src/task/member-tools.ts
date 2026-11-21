@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { ArtifactStore } from "../artifact-store";
+import type { ModelRef } from "../llm/models";
 import { nowTool } from "../tools/now";
 import { getArtifactTool } from "../tools/get-artifact";
 import { saveArtifactTool } from "../tools/artifacts";
@@ -130,6 +131,8 @@ export type MemberToolDeps = {
   /** Fences artifact writes during a backup/restore lease. */
   guard?: () => Promise<void>;
   convert?: DocumentConverter;
+  /** The model this task runs on; `web_search` reads it to pick its provider. */
+  currentModel?: () => ModelRef | undefined;
   /** The TaskDO-owned `finish_task`; it resolves artifacts through the scope. */
   finish: ToolRegistration;
 };
@@ -155,7 +158,7 @@ export function memberTaskTools(deps: MemberToolDeps): ToolRegistration[] {
   };
 
   return [
-    webSearchTool(deps.env),
+    webSearchTool(deps.env, undefined, deps.currentModel),
     nowTool(),
     getArtifactTool(deps.store, deps.env.PUBLIC_BASE_URL, {
       taskId: deps.taskId,

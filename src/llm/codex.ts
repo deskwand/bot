@@ -15,6 +15,7 @@ import type { Credential, OAuthAuth, OAuthCredential, Provider } from "@earendil
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import {
   deleteModelCredential,
+  modelCredentialStore,
   readModelCredential,
   saveModelCredential,
 } from "./model-auth";
@@ -100,11 +101,19 @@ async function readToken(
 }
 
 /** Exchange the refresh token; pi calls this from inside its write lock. */
-async function refreshCredential(
+function refreshCredential(
   credential: OAuthCredential,
   signal: AbortSignal,
 ): Promise<OAuthCredential> {
-  const response = await fetch(TOKEN_URL, {
+  return refreshWith(credential, signal, fetch);
+}
+
+async function refreshWith(
+  credential: OAuthCredential,
+  signal: AbortSignal,
+  fetchFn: typeof fetch,
+): Promise<OAuthCredential> {
+  const response = await fetchFn(TOKEN_URL, {
     method: "POST",
     headers: basicHeaders(),
     body: new URLSearchParams({
@@ -133,6 +142,77 @@ export function codexProvider(): Provider {
   return Object.create(openaiCodexProvider(), {
     auth: { value: { oauth }, enumerable: true },
   }) as Provider;
+}
+
+/** Refresh this long before expiry so a slow turn cannot use a dead token. */
+const ACCESS_SKEW_MS = 5 * 60_000;
+
+export type CodexToken = { access: string; accountId: string };
+
+function decodeBase64Url(value: string): string {
+  const base64 = value.replaceAll("-", "+").replaceAll("_", "/");
+  return atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4));
+}
+
+/** The ChatGPT account id the access token was issued for, or undefined. */
+export function codexAccountId(access: string): string | undefined {
+  const payload = access.split(".")[1];
+  if (payload === undefined) return undefined;
+  try {
+    const claims = JSON.parse(decodeBase64Url(payload)) as {
+      "https://api.openai.com/auth"?: { chatgpt_account_id?: unknown };
+    };
+    const id = claims["https://api.openai.com/auth"]?.chatgpt_account_id;
+    return typeof id === "string" && id !== "" ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function expiresSoon(credential: OAuthCredential): boolean {
+  return credential.expires - Date.now() < ACCESS_SKEW_MS;
+}
+
+/**
+ * A live access token and the account id it carries, for callers that speak to
+ * the Codex backend themselves instead of going through pi.
+ *
+ * The refresh goes through the shared credential store — the same lock pi uses.
+ * OpenAI rotates refresh tokens on every use, so a second refresher would
+ * invalidate the session. `undefined` means "not signed in"; a failed refresh
+ * throws and the caller decides how to degrade.
+ */
+export async function codexAccessToken(
+  env: Env,
+  signal: AbortSignal,
+  fetchFn: typeof fetch = fetch,
+): Promise<CodexToken | undefined> {
+  signal.throwIfAborted();
+  const store = modelCredentialStore(env);
+  const stored = await store.read(CODEX_PROVIDER_ID);
+  if (stored?.type !== "oauth") return undefined;
+
+  let credential = stored;
+  if (expiresSoon(credential)) {
+    // The check runs again inside the lock: a request that queued ahead may
+    // have refreshed already, and then this returns that credential instead.
+    const after = await store.modify(CODEX_PROVIDER_ID, async (current) =>
+      current?.type === "oauth" && expiresSoon(current)
+        ? await refreshWith(
+            current,
+            AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            fetchFn,
+          )
+        : undefined,
+    );
+    if (after?.type !== "oauth") return undefined; // signed out meanwhile
+    credential = after;
+  }
+
+  const accountId = codexAccountId(credential.access);
+  return accountId === undefined
+    ? undefined
+    : { access: credential.access, accountId };
 }
 
 function randomHex(bytes: number): string {

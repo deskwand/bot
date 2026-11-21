@@ -1,7 +1,10 @@
 import { Type } from "typebox";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
+import { CODEX_PROVIDER_ID } from "../llm/codex";
+import type { ModelRef } from "../llm/models";
 import { readRuntimeConfig } from "../runtime-config";
 import { braveAdapter } from "./search/brave";
+import { subscriptionSearch } from "./search/codex";
 import { deepseekAdapter } from "./search/deepseek";
 import { exaAdapter } from "./search/exa";
 import { formatResults, truncate } from "./search/format";
@@ -134,11 +137,48 @@ export async function searchWeb(
 }
 
 /**
+ * Search the web for a task. A task on the Codex subscription searches through
+ * the subscription's own tool first — it costs nothing extra and cites the
+ * pages it read — and falls back to the configured provider when that path is
+ * unavailable. The note names only the reason: whether the fallback ended up on
+ * the configured provider or on Exa is `searchWeb`'s own story to tell.
+ */
+export async function searchWebWithModel(
+  env: Env,
+  model: ModelRef | undefined,
+  query: string,
+  maxResults: number,
+  signal: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ok: boolean; text: string }> {
+  if (model?.provider !== CODEX_PROVIDER_ID) {
+    return await searchWeb(env, query, maxResults, signal, fetchImpl);
+  }
+
+  try {
+    const results = await subscriptionSearch(env, model, query, signal, fetchImpl);
+    // An empty answer is how a blocked account shows up: treat it as a failure.
+    if (results.length === 0) throw new Error("没有返回内容"); // i18n-ignore: model-facing
+    return { ok: true, text: truncate(formatResults(results)) };
+  } catch (error) {
+    if (signal.aborted) return { ok: false, text: timeoutText() };
+    console.warn(
+      `web_search: subscription search failed, using the configured provider: ${errorMessage(error)}`,
+    );
+    const fallback = await searchWeb(env, query, maxResults, signal, fetchImpl);
+    const note = `（订阅搜索不可用：${errorMessage(error)}）\n`; // i18n-ignore: model-facing
+    return { ok: fallback.ok, text: note + fallback.text };
+  }
+}
+
+/**
  * Search the web for the model. Read-only, so safe to replay after a restart.
  */
 export function webSearchTool(
   env: Env,
   fetchImpl: typeof fetch = fetch,
+  /** The model this task runs on; read per call, after the session picked it. */
+  currentModel: () => ModelRef | undefined = () => undefined,
 ): ToolRegistration<typeof Search> {
   return {
     name: "web_search",
@@ -151,8 +191,9 @@ export function webSearchTool(
         ? AbortSignal.any([context.abortSignal, timeout])
         : timeout;
 
-      const result = await searchWeb(
+      const result = await searchWebWithModel(
         env,
+        currentModel(),
         query,
         maxResults ?? DEFAULT_MAX_RESULTS,
         signal,

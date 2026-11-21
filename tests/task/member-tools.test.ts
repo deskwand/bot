@@ -7,7 +7,9 @@ import { MemberStore } from "../../src/members/store";
 import { ownerPrincipal } from "../../src/members/principal";
 import type { Principal } from "../../src/members/principal";
 import type { TaskSpec } from "../../src/protocol";
-import { memberArtifactStore } from "../../src/task/member-tools";
+import { memberArtifactStore, memberTaskTools } from "../../src/task/member-tools";
+import { saveModelCredential } from "../../src/llm/model-auth";
+import { fakeCodexToken } from "../helpers/codex-token";
 import { fakeChannel } from "../helpers/fake-channel";
 import { scriptedModel } from "../helpers/scripted-model";
 
@@ -127,6 +129,7 @@ afterEach(() => {
   setModelOverride(null);
   setChannelOverride("telegram", null);
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("member task execution profile", () => {
@@ -327,5 +330,57 @@ describe("member task control", () => {
     expect((await stub.status()).denied).toBeUndefined();
     const actor = await activeMember("legacy");
     expect((await stub.status(actor)).denied).toBe(true);
+  });
+});
+
+/**
+ * The suite runs a scripted model, so this checks the wiring directly: the
+ * tool must ask for the task's model instead of assuming a provider.
+ */
+describe("web_search model wiring", () => {
+  it("passes the task's model through to the search tool", async () => {
+    await saveModelCredential(env, "openai-codex", {
+      type: "oauth",
+      access: fakeCodexToken(),
+      refresh: "refresh-0",
+      expires: Date.now() + 3_600_000,
+    });
+
+    const hosts: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const host = new URL(String(input)).host;
+      hosts.push(host);
+      if (host !== "chatgpt.com") throw new Error(`unexpected host: ${host}`);
+      const event = {
+        type: "response.output_item.done",
+        item: {
+          type: "message",
+          content: [{ type: "output_text", text: "订阅搜索的结果" }],
+        },
+      };
+      return new Response(
+        `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    });
+
+    const tool = memberTaskTools({
+      env,
+      taskId: () => "",
+      attachments: () => [],
+      store: {} as never,
+      finish: {} as never,
+      currentModel: () => ({ provider: "openai-codex", id: "gpt-6.2-sol" }),
+    }).find((item) => item.name === "web_search");
+    if (tool === undefined) throw new Error("web_search is not installed");
+
+    const result = await tool.execute(
+      { query: "q" },
+      {} as never,
+      { abortSignal: new AbortController().signal } as never,
+    );
+
+    expect(hosts).toEqual(["chatgpt.com"]);
+    expect(JSON.stringify(result)).toContain("订阅搜索的结果");
   });
 });

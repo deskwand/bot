@@ -2,7 +2,8 @@ import type { Context } from "@earendil-works/chord/context";
 import type { ToolExecutionResult, ToolPark } from "@earendil-works/pi-durable";
 import { toolResult } from "../helpers/tool-result";
 import { describe, expect, it, vi } from "vitest";
-import { searchWeb, webSearchTool } from "../../src/tools/web-search";
+import { searchWeb, searchWebWithModel, webSearchTool } from "../../src/tools/web-search";
+import { fakeCodexToken } from "../helpers/codex-token";
 
 type RecordedCall = {
   input: RequestInfo | URL;
@@ -109,6 +110,7 @@ type Routes = {
   brave?: () => Response;
   deepseek?: () => Response;
   exa?: (body: Record<string, unknown>) => Response;
+  codex?: () => Response;
 };
 
 /**
@@ -140,6 +142,7 @@ function providerFetch(
     });
     if (host === "api.tavily.com" && routes.tavily) return routes.tavily();
     if (host === "api.search.brave.com" && routes.brave) return routes.brave();
+    if (host === "chatgpt.com" && routes.codex) return routes.codex();
     if (host === "api.deepseek.com" && routes.deepseek) {
       return routes.deepseek();
     }
@@ -656,5 +659,213 @@ describe("searchWeb", () => {
 
     expect(result.ok).toBe(false);
     expect(result.text.startsWith("搜索失败：")).toBe(true);
+  });
+});
+
+const CODEX_MODEL = { provider: "openai-codex", id: "gpt-6.2-sol" };
+
+/** An Env whose life object hands back the given credential, or nothing. */
+function subscriptionEnv(credential?: unknown): Env {
+  return {
+    DESKWAND_CONFIG: BASE_CONFIG,
+    LIFE: {
+      idFromName: () => "global",
+      get: () => ({ modelCredential: async () => credential }),
+    },
+  } as unknown as Env;
+}
+
+const LIVE_CREDENTIAL = {
+  type: "oauth",
+  access: fakeCodexToken(),
+  refresh: "refresh-0",
+  expires: Date.now() + 3_600_000,
+};
+
+function codexStream(
+  text: string,
+  citations: Array<{ title: string; url: string }> = [],
+): Response {
+  const events = [
+    {
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        content: [
+          {
+            type: "output_text",
+            text,
+            annotations: citations.map((citation) => ({
+              type: "url_citation",
+              ...citation,
+            })),
+          },
+        ],
+      },
+    },
+    { type: "response.completed" },
+  ];
+  return new Response(
+    events
+      .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+      .join(""),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
+describe("subscription search", () => {
+  it("searches through the subscription for a codex model", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = providerFetch(
+      { codex: () => codexStream("1 BTC 约 58,132 美元。") },
+      calls,
+    );
+
+    const result = await searchWebWithModel(
+      subscriptionEnv(LIVE_CREDENTIAL),
+      CODEX_MODEL,
+      "bitcoin price",
+      5,
+      AbortSignal.timeout(5_000),
+      fakeFetch,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.text).toContain("58,132");
+    expect(hosts(calls)).toEqual(["chatgpt.com"]);
+  });
+
+  it("falls back to the configured provider when the subscription fails", async () => {
+    const calls: RecordedCall[] = [];
+    const fakeFetch = providerFetch(
+      {
+        codex: () =>
+          new Response("<html>blocked</html>", {
+            status: 403,
+            headers: { "content-type": "text/html" },
+          }),
+      },
+      calls,
+    );
+
+    const result = await searchWebWithModel(
+      subscriptionEnv(LIVE_CREDENTIAL),
+      CODEX_MODEL,
+      "bitcoin price",
+      5,
+      AbortSignal.timeout(5_000),
+      fakeFetch,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.text).toContain("（订阅搜索不可用：Codex 搜索返回 HTTP 403）");
+    expect(result.text).toContain("Exa result");
+    expect(new Set(hosts(calls))).toEqual(new Set(["chatgpt.com", "mcp.exa.ai"]));
+  });
+
+  it("falls back when there is no subscription to use", async () => {
+    const result = await searchWebWithModel(
+      subscriptionEnv(undefined),
+      CODEX_MODEL,
+      "q",
+      5,
+      AbortSignal.timeout(5_000),
+      providerFetch({}),
+    );
+
+    expect(result.text).toContain("（订阅搜索不可用：没有可用的 Codex 授权）");
+    expect(result.text).toContain("Exa result");
+  });
+
+  it("falls back when the subscription answers nothing", async () => {
+    const result = await searchWebWithModel(
+      subscriptionEnv(LIVE_CREDENTIAL),
+      CODEX_MODEL,
+      "q",
+      5,
+      AbortSignal.timeout(5_000),
+      providerFetch({ codex: () => new Response("", { status: 200 }) }),
+    );
+
+    expect(result.text).toContain("（订阅搜索不可用：没有返回内容）");
+    expect(result.text).toContain("Exa result");
+  });
+
+  it("reports a timeout and never reaches the fallback", async () => {
+    const calls: RecordedCall[] = [];
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await searchWebWithModel(
+      subscriptionEnv(LIVE_CREDENTIAL),
+      CODEX_MODEL,
+      "q",
+      5,
+      controller.signal,
+      providerFetch(
+        {
+          codex: () => {
+            throw new Error("must not be called");
+          },
+        },
+        calls,
+      ),
+    );
+
+    expect(result).toEqual({ ok: false, text: "搜索超时：超过 30 秒" });
+    expect(calls).toEqual([]);
+  });
+
+  it("does not touch the subscription for a model outside it", async () => {
+    const calls: RecordedCall[] = [];
+    const result = await searchWebWithModel(
+      subscriptionEnv(LIVE_CREDENTIAL),
+      { provider: "deepseek", id: "deepseek-v4.1-flash" },
+      "q",
+      5,
+      AbortSignal.timeout(5_000),
+      providerFetch({}, calls),
+    );
+
+    expect(result.text).toContain("Exa result");
+    expect(new Set(hosts(calls))).toEqual(new Set(["mcp.exa.ai"]));
+  });
+
+  it("reads the model at execute time, not at install time", async () => {
+    let model: { provider: string; id: string } | undefined;
+    const calls: RecordedCall[] = [];
+    const tool = webSearchTool(
+      subscriptionEnv(LIVE_CREDENTIAL),
+      providerFetch({ codex: () => codexStream("订阅结果") }, calls),
+      () => model,
+    );
+    model = CODEX_MODEL;
+
+    const result = await tool.execute(
+      { query: "q" },
+      {} as never,
+      context(new AbortController().signal),
+    );
+
+    expect(textOf(result)).toContain("订阅结果");
+    expect(hosts(calls)).toEqual(["chatgpt.com"]);
+  });
+
+  it("uses the configured provider while the model is still unknown", async () => {
+    const calls: RecordedCall[] = [];
+    const tool = webSearchTool(
+      subscriptionEnv(LIVE_CREDENTIAL),
+      providerFetch({}, calls),
+      () => undefined,
+    );
+
+    const result = await tool.execute(
+      { query: "q" },
+      {} as never,
+      context(new AbortController().signal),
+    );
+
+    expect(textOf(result)).toContain("Exa result");
+    expect(new Set(hosts(calls))).toEqual(new Set(["mcp.exa.ai"]));
   });
 });

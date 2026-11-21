@@ -191,6 +191,31 @@ describe("TaskDO lifecycle", () => {
     expect(await storedLevel(stub)).toBe("medium");
   });
 
+  it("remembers the session's model after an eviction", async () => {
+    setEnv(taskConfig());
+    setModelOverride(scriptedModel([{ text: "done" }]));
+    const taskId = "t-model-survives-eviction";
+    const stub = task(taskId);
+    const pinned = { provider: "openai-codex", id: "gpt-6.2-sol" };
+
+    await stub.start({ ...spec(taskId), model: pinned });
+    await vi.waitFor(
+      async () => {
+        expect((await stub.status()).state).toBe("completed");
+      },
+      { timeout: 10_000 },
+    );
+
+    // An eviction drops every in-memory field; only the meta table survives.
+    // The search tool reads the model per call, so it has to come back.
+    const recalled = await runInDurableObject(stub, (instance) => {
+      (instance as unknown as { selectedModel: unknown }).selectedModel = undefined;
+      return (instance as unknown as { currentModelRef(): unknown }).currentModelRef();
+    });
+
+    expect(recalled).toEqual(pinned);
+  }, 30_000);
+
   it("attributes a bot's run to the bot in the ledger", async () => {
     setEnv(taskConfig());
     setModelOverride(scriptedModel([{ text: "done" }]));

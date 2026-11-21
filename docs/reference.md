@@ -32,7 +32,7 @@
 
 每个任务的每一步先落盘再展示，进程被打断就从最后一次提交继续；同一个请求重发返回原结果，不会执行两次。
 
-`web_search` 支持 Exa（默认，免 key）/ Tavily / Brave / DeepSeek，key 分别是 `SEARCH_KEY_TAVILY` / `SEARCH_KEY_BRAVE` / `MODEL_KEY_DEEPSEEK`，在 desktop「搜索」页切换。
+`web_search` 支持 Exa（默认，免 key）/ Tavily / Brave / DeepSeek，key 分别是 `SEARCH_KEY_TAVILY` / `SEARCH_KEY_BRAVE` / `MODEL_KEY_DEEPSEEK`，在 desktop「搜索」页切换。任务跑在 Codex 订阅的模型上时优先用订阅自带的联网搜索（不额外计费、带来源链接），不可用时回落到上面配置的那家。它返回的是模型写好的综述而非网页原文，需要原文时配合 `web_fetch`。
 
 ## 消息格式
 
