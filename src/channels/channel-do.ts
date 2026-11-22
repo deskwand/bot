@@ -127,6 +127,19 @@ import type { WeChatImageRef } from "./wechat/media";
 const WECHAT_POLL_RUN_MS = 0;
 const WECHAT_POLL_BACKOFF_MS = 1_000;
 const WECHAT_POLL_MAX_BACKOFF_MS = 10_000;
+/** After this many failed drains the channel waits for an operator. */
+const MEMBER_FLUSH_MAX_ATTEMPTS = 6;
+/** Exponential poll backoff: 1s, 2s, 4s, 8s, then 10s. */
+export function memberPollDeferDelayMs(attempts: number): number {
+  return Math.min(1_000 * 2 ** Math.max(0, Math.min(attempts - 1, 4)), 10_000);
+}
+
+/** Poll backoff in the seconds `schedule` expects. */
+const MemberPollBackoff = {
+  delaySeconds(attempts: number): number {
+    return Math.max(1, Math.round(memberPollDeferDelayMs(attempts) / 1000));
+  },
+};
 const WECHAT_GET_UPDATES_TIMEOUT_MS = 40_000;
 // Skip the pre-poll heartbeat while it is fresh: the write after the previous
 // long poll is enough to keep ensurePolling from starting a second chain.
@@ -1350,10 +1363,13 @@ export class ChannelDO extends Agent<Env> {
     payload?: unknown,
     _schedule?: Schedule<unknown>,
   ): Promise<void> {
-    if (this.lease.current() !== null) return;
     const target = connectionPayload(payload);
     if (target === null) return;
     if (parseActiveChannel(this.env.ACTIVE_CHANNEL) !== "wechat") return;
+    if (this.lease.current() !== null) {
+      await this.deferMemberPoll(target, "maintenance");
+      return;
+    }
 
     const state = this.connections.read(target.connectionId);
     if (
@@ -1366,6 +1382,8 @@ export class ChannelDO extends Agent<Env> {
       return;
     }
     if (this.activeMemberWeChatRuns.has(target.connectionId)) return;
+    const known = this.connections.read(target.connectionId);
+    if (known?.pollStatus === "needs_reset") return;
 
     const actor = this.members.principal(state.memberId);
     if (actor === null || actor.role !== "member") return;
@@ -1385,9 +1403,13 @@ export class ChannelDO extends Agent<Env> {
       );
     } catch (error) {
       console.warn(`channel: member poll skipped: ${errorMessage(error)}`);
+      await this.deferMemberPoll(ref, "admission");
       return;
     }
-    if (route.channel !== "wechat" || credentials === null) return;
+    if (route.channel !== "wechat" || credentials === null) {
+      await this.deferMemberPoll(ref, "credentials unavailable");
+      return;
+    }
 
     const run = { generation: ref.generation };
     this.activeMemberWeChatRuns.set(ref.connectionId, run);
@@ -1434,7 +1456,10 @@ export class ChannelDO extends Agent<Env> {
           AbortSignal.timeout(WECHAT_GET_UPDATES_TIMEOUT_MS),
         );
       } catch (error) {
-        if (!(await ownsRun())) return;
+        if (!(await ownsRun())) {
+          await this.deferMemberPoll(ref, "lost run");
+          return;
+        }
         if (isSessionExpired(error)) {
           emitChannelEvent(this.env, {
             channel: "wechat",
@@ -1466,11 +1491,14 @@ export class ChannelDO extends Agent<Env> {
           ref.connectionId,
           Math.min(backoffMs * 2, WECHAT_POLL_MAX_BACKOFF_MS),
         );
-        await this.scheduleMemberPoll(ref);
+        await this.rearmMemberPoll(ref);
         return;
       }
 
-      if (!(await ownsRun())) return;
+      if (!(await ownsRun())) {
+        await this.deferMemberPoll(ref, "lost run after fetch");
+        return;
+      }
       emitChannelEvent(this.env, { channel: "wechat", event: "poll_ok" });
       this.connections.update(
         ref.connectionId,
@@ -1485,13 +1513,19 @@ export class ChannelDO extends Agent<Env> {
         actor,
         route.routeKey,
       );
-      if (outcome === "maintenance") return;
+      if (outcome === "maintenance") {
+        await this.deferMemberPoll(ref, "maintenance during dispatch");
+        return;
+      }
       // Cursor last: a crash mid-batch makes iLink resend it rather than lose
       // everything this connection already received.
       this.updateMemberCursor(ref.connectionId, ref.generation, batch.cursor);
       this.memberWeChatBackoffMs.delete(ref.connectionId);
-      if (!(await ownsRun())) return;
-      await this.scheduleMemberPoll(ref);
+      if (!(await ownsRun())) {
+        await this.deferMemberPoll(ref, "lost run before rearm");
+        return;
+      }
+      await this.rearmMemberPoll(ref);
     } finally {
       if (this.activeMemberWeChatRuns.get(ref.connectionId) === run) {
         this.activeMemberWeChatRuns.delete(ref.connectionId);
@@ -1499,7 +1533,53 @@ export class ChannelDO extends Agent<Env> {
     }
   }
 
-  private async scheduleMemberPoll(ref: ConnectionRef): Promise<void> {
+  /**
+   * A poll chain that hit a transient condition resumes on its own; ending it
+   * here is what left a member silent until the next restart.
+   */
+  /**
+   * Exponential backoff for one channel, persisted in KV so a restart does not
+   * reset it. Zero-delay re-arms are reserved for a completed poll; every early
+   * exit lands here, with a delay.
+   */
+  private memberPollKey(ref: { connectionId: string; generation: number }): string {
+    return `poll:defer:${ref.connectionId}:${ref.generation}`;
+  }
+
+  private async deferMemberPoll(
+    ref: { connectionId: string; generation: number },
+    reason: string,
+  ): Promise<void> {
+    const key = this.memberPollKey(ref);
+    const attempts =
+      ((await this.ctx.storage.get<number>(key)) ?? 0) + 1;
+    await this.ctx.storage.put(key, attempts);
+    console.warn(`channel: member poll deferred (${reason})`);
+    await this.schedule(
+      MemberPollBackoff.delaySeconds(attempts),
+      "pollMemberWeChat",
+      { connectionId: ref.connectionId, generation: ref.generation },
+      { idempotent: true },
+    );
+  }
+
+  /** A completed poll: clear the backoff, mark the chain alive, re-arm at once. */
+  private async rearmMemberPoll(ref: {
+    connectionId: string;
+    generation: number;
+  }): Promise<void> {
+    await this.ctx.storage.delete(this.memberPollKey(ref));
+    await this.ctx.storage.put(
+      `poll:alive:${ref.connectionId}`,
+      Date.now(),
+    );
+    await this.scheduleMemberPoll(ref);
+  }
+
+  private async scheduleMemberPoll(ref: {
+    connectionId: string;
+    generation: number;
+  }): Promise<void> {
     // Tests drive pollMemberWeChat explicitly. Scheduling here would start a
     // live chain that fires before the test installs its scripted fetch.
     if (getPollTimingOverride()?.manualStart) return;
@@ -1519,10 +1599,13 @@ export class ChannelDO extends Agent<Env> {
 
     for (const connection of this.connections.listActive()) {
       if (connection.memberId === OWNER_ID) continue;
-      if (
-        connection.lastPollAt !== null &&
-        now - connection.lastPollAt < WECHAT_HEARTBEAT_MAX_AGE_MS
-      ) {
+      // Liveness is "the chain re-armed", not "a poll started": a chain that
+      // wrote its heartbeat and then died must still be repaired.
+      const alive =
+        (await this.ctx.storage.get<number>(`poll:alive:${connection.connectionId}`)) ??
+        connection.lastPollAt ??
+        0;
+      if (alive !== 0 && now - alive < WECHAT_HEARTBEAT_MAX_AGE_MS) {
         continue;
       }
       const scheduled = pending.some(
@@ -1914,13 +1997,21 @@ export class ChannelDO extends Agent<Env> {
       state.status !== "active" ||
       state.generation !== generation
     ) {
+      await this.deferMemberFlush(queue, connectionId, generation, "connection inactive");
       return;
     }
-    // No address yet: the rows wait for the member's first inbound message.
-    if (state.conversationId === "") return;
+    // No address yet: the rows wait for the member's first inbound message and
+    // a bounded retry, so a reply never depends on the member speaking again.
+    if (state.conversationId === "") {
+      await this.deferMemberFlush(queue, connectionId, generation, "no address");
+      return;
+    }
 
     const actor = this.members.principal(state.memberId);
-    if (actor === null || actor.role !== "member") return;
+    if (actor === null || actor.role !== "member") {
+      await this.deferMemberFlush(queue, connectionId, generation, "member not active");
+      return;
+    }
     const ref: ConnectionRef = {
       memberId: state.memberId,
       connectionId,
@@ -1931,27 +2022,42 @@ export class ChannelDO extends Agent<Env> {
     try {
       route = await this.routeForMember(actor);
     } catch {
+      await this.deferMemberFlush(queue, connectionId, generation, "route unavailable");
       return;
     }
-    if (route.channel !== "wechat") return;
+    if (route.channel !== "wechat") {
+      await this.deferMemberFlush(queue, connectionId, generation, "channel disabled");
+      return;
+    }
 
     const credentials = await this.loadMemberCredentials(connectionId, generation);
-    if (credentials === null) return;
+    if (credentials === null) {
+      await this.deferMemberFlush(queue, connectionId, generation, "credentials missing");
+      return;
+    }
     const context = await this.connections.readContext(connectionId, generation);
-    if (context === null) return;
+    if (context === null) {
+      await this.deferMemberFlush(queue, connectionId, generation, "context missing");
+      return;
+    }
 
     const client = createILinkClient({
       fetch: getILinkFetchOverride() ?? undefined,
     });
 
     for (const row of queue.listCurrent()) {
-      // A row written for a replaced credential can never be delivered.
+      // A row written for a replaced credential can never be delivered. Never
+      // drop it without a trace: silence here used to hide lost replies.
       if (row.generation !== generation) {
+        console.warn("channel: dropped a queued member message for a replaced credential");
         queue.remove(row.id);
         continue;
       }
       const current = this.connections.read(connectionId);
-      if (current === null || current.conversationId === "") return;
+      if (current === null || current.conversationId === "") {
+        await this.deferMemberFlush(queue, connectionId, generation, "address vanished");
+        return;
+      }
       if (row.conversationId !== current.conversationId) {
         queue.remove(row.id);
         console.error("channel: dropped a queued message for a former account");
@@ -1979,6 +2085,7 @@ export class ChannelDO extends Agent<Env> {
           route.routeKey,
         ))
       ) {
+        await this.deferMemberFlush(queue, connectionId, generation, "admission changed");
         return;
       }
       try {
@@ -2000,9 +2107,67 @@ export class ChannelDO extends Agent<Env> {
           errorCode: code,
         });
         console.error(`channel: member send failed: ${errorMessage(error)}`);
+        await this.deferMemberFlush(queue, connectionId, generation, "send failed");
         return;
       }
     }
+    // Nothing is left waiting: a future failure starts from a fresh budget.
+    await this.ctx.storage.delete(this.memberFlushKey(connectionId, generation));
+    await this.ctx.storage.delete(`channel:error:${connectionId}`);
+  }
+
+  /**
+   * A reply the drain could not hand over yet: keep the row and arm one bounded
+   * retry, so a transient state never turns into a silently lost answer.
+   */
+  private memberFlushKey(connectionId: string, generation: number): string {
+    return `flush:defer:${connectionId}:${generation}`;
+  }
+
+  private async deferMemberFlush(
+    queue: OutboundQueue,
+    connectionId: string,
+    generation: number,
+    reason: string,
+  ): Promise<void> {
+    if (queue.listCurrent().length === 0) return;
+    const key = this.memberFlushKey(connectionId, generation);
+    const attempts = ((await this.ctx.storage.get<number>(key)) ?? 0) + 1;
+    console.warn(`channel: member drain deferred (${reason})`);
+    if (attempts > MEMBER_FLUSH_MAX_ATTEMPTS) {
+      // Stop retrying a channel that cannot deliver; an operator restarts or
+      // rebinds it. Silence here is what hid the failure before.
+      await this.ctx.storage.delete(key);
+      await this.ctx.storage.put(`channel:error:${connectionId}`, "SEND_EXHAUSTED");
+      this.connections.update(connectionId, { pollStatus: "needs_reset" }, generation);
+      return;
+    }
+    await this.ctx.storage.put(key, attempts);
+    await this.schedule(
+      Math.max(3, Math.min(3 * 2 ** (attempts - 1), 30)),
+      "retryMemberFlush",
+      { connectionId, generation },
+      { idempotent: true },
+    ).catch(() => {
+      console.error("channel: member flush retry could not be scheduled");
+    });
+  }
+
+  /** The deferred drain: same rules as the inline flush, without an inbound. */
+  async retryMemberFlush(payload: {
+    connectionId: string;
+    generation: number;
+  }): Promise<void> {
+    if (this.lease.current() !== null) {
+      await this.deferMemberFlush(
+        this.memberQueue(payload.connectionId, payload.generation),
+        payload.connectionId,
+        payload.generation,
+        "maintenance",
+      );
+      return;
+    }
+    await this.flushMemberOutbound(payload.connectionId, payload.generation);
   }
 
   private registerInboundFiles(event: MessageEvent, memberId: string): void {

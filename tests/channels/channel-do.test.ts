@@ -7,6 +7,7 @@ import {
 } from "../../src/channels/override";
 import type { ChannelAdapter } from "../../src/channels/types";
 import { ILinkError } from "../../src/channels/wechat/ilink";
+import { OutboundQueue } from "../../src/channels/outbound-queue";
 import { readRuntimeConfig } from "../../src/runtime-config";
 import type {
   ActionEvent,
@@ -851,5 +852,50 @@ describe("sendArtifact retries and missing prerequisites", () => {
       ),
     );
     expect(outcome).toBe("wechat context missing/0");
+  });
+});
+
+describe("deferred member replies", () => {
+  it("keeps the queued reply when the drain cannot send yet", async () => {
+    const hub = freshChannels("member-defer");
+    const rows = await runInDurableObject(hub, async (instance, state) => {
+      const queue = new OutboundQueue(state.storage.sql, {
+        connectionId: "c-defer",
+        generation: 1,
+      });
+      queue.enqueue({
+        conversationId: "wx-member",
+        text: "reply",
+        buttons: null,
+      });
+      await (
+        instance as unknown as {
+          deferMemberFlush(
+            q: OutboundQueue,
+            connectionId: string,
+            generation: number,
+            reason: string,
+          ): Promise<void>;
+        }
+      ).deferMemberFlush(queue, "c-defer", 1, "no address");
+      return queue.listCurrent().length;
+    });
+    // The row survives the deferral, so the retry (or the next inbound) can
+    // still send it. It used to be dropped without a trace.
+    expect(rows).toBe(1);
+  });
+
+  it("drains nothing, and throws nothing, for an unknown connection", async () => {
+    const hub = freshChannels("member-retry-unknown");
+    await runInDurableObject(hub, (instance) =>
+      (
+        instance as unknown as {
+          retryMemberFlush(payload: {
+            connectionId: string;
+            generation: number;
+          }): Promise<void>;
+        }
+      ).retryMemberFlush({ connectionId: "no-such-connection", generation: 1 }),
+    );
   });
 });

@@ -11,7 +11,7 @@
  * overwrite the state of its successor.
  */
 export type ConnectionStatus = "active" | "retired";
-export type PollStatus = "idle" | "polling" | "expired" | "paused";
+export type PollStatus = "idle" | "polling" | "expired" | "paused" | "needs_reset";
 
 export type ConnectionState = {
   connectionId: string;
@@ -51,6 +51,9 @@ const POLL_STATUSES: readonly PollStatus[] = [
   "polling",
   "expired",
   "paused",
+  // The send retry budget is spent: the channel needs an operator (restart or
+  // rebind) before it can drain again.
+  "needs_reset",
 ];
 
 /** Vault key of one connection's context token, scoped by generation. */

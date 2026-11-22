@@ -134,6 +134,17 @@ import {
 } from "../members/principal";
 import { MEMBER_ACCESS_DENIED, MemberError } from "../members/store";
 import { MemberBindingStore, type MemberBinding, memberIdOfButlerName } from "./member-binding";
+import { DirectoryUnavailable } from "../members/client";
+
+/** The fixed denial code carried by an exception, across the DO boundary. */
+function memberDenialCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const candidate = error as { name?: unknown; code?: unknown };
+  if (typeof candidate.code !== "string") return null;
+  // Either marker is enough: the code is ours, the name survives serialization.
+  if (candidate.name === "MemberError") return candidate.code;
+  return candidate.code;
+}
 import {
   resolveTextAction as resolveAgainstCandidates,
   type PendingApproval,
@@ -742,8 +753,11 @@ export class ButlerDO extends Agent<Env> {
     };
     try {
       await this.channels().assertMemberActive(actor);
-    } catch {
-      throw new MemberError(MEMBER_ACCESS_DENIED);
+    } catch (error) {
+      // The class does not survive the DO RPC boundary, so classify by name and
+      // by the fixed code. A denial is terminal; anything else is transport.
+      const denied = memberDenialCode(error) !== null;
+      throw denied ? new MemberError(memberDenialCode(error) as string) : new DirectoryUnavailable();
     }
     this.installMemberTools();
     this.principalValue = actor;
@@ -764,6 +778,12 @@ export class ButlerDO extends Agent<Env> {
     if (this.memberId === null) return this.principalValue ?? ownerPrincipal();
     const actor = this.principalValue;
     if (actor === null || actor.memberId !== this.memberId) {
+      // Diagnostics only: this path used to fail without a trace, so a reply
+      // could be generated and never sent with nothing in the log.
+      console.warn(
+        "butler: delivery actor missing",
+        actor === null ? "unproven" : "mismatched",
+      );
       throw new MemberError(MEMBER_ACCESS_DENIED);
     }
     return actor;
@@ -997,10 +1017,14 @@ export class ButlerDO extends Agent<Env> {
       try {
         await this.ensurePrincipal();
       } catch (error) {
-        console.warn(
-          "butler: member alarm denied:",
-          error instanceof Error ? error.name : "Error",
-        );
+        // Transient failures must not end the alarm chain; a terminal denial
+        // (the channel was removed) must, or the object would spin forever.
+        if (error instanceof DirectoryUnavailable) {
+          console.warn("butler: member alarm deferred: directory unavailable");
+          await this.ctx.storage.setAlarm(Date.now() + DEFER_MS);
+          return;
+        }
+        console.warn("butler: member alarm denied: terminal");
         return;
       }
     }
@@ -2565,7 +2589,15 @@ export class ButlerDO extends Agent<Env> {
       }
       return await this.channels().sendToMember(actor, message);
     } catch (error) {
-      console.error("butler channel send failed:", error);
+      // Fixed codes only: the payload may carry text or a capability.
+      console.error(
+        "butler channel send failed:",
+        error instanceof MemberError
+          ? `MemberError ${error.code}`
+          : error instanceof Error
+            ? error.name
+            : "Error",
+      );
       return null;
     }
   }

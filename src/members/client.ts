@@ -12,6 +12,17 @@ import { AttachmentAccess } from "./artifact-access";
 import { MEMBER_ACCESS_DENIED, MemberError } from "./store";
 import type { Principal } from "./principal";
 
+/**
+ * The directory could not be reached. Distinct from a denial: a denial means
+ * "this channel is gone", this means "ask again later".
+ */
+export class DirectoryUnavailable extends Error {
+  constructor() {
+    super("member directory unavailable");
+    this.name = "DirectoryUnavailable";
+  }
+}
+
 export const TASK_NOT_FOUND = "TASK_NOT_FOUND";
 export const ARTIFACT_KEY_MISMATCH = "ARTIFACT_KEY_MISMATCH";
 
