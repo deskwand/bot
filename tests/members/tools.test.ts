@@ -426,7 +426,27 @@ describe("member management tools", () => {
       expect(await h.vault.get<string>(`invite:${rows[0]!.id}`)).toBe(token);
       expect(text.toLowerCase()).not.toContain("qrcode");
       expect(text).not.toContain("ticket");
+      // 测试部署有真域名，不附本机专用说明。
+      expect(text).not.toContain(t("zh", "member.localOnly"));
     });
+  });
+
+  it("本机地址的邀请链接说明只能在部署所在机器打开", async () => {
+    const link: MemberInviteLink = {
+      inviteId: "invite-local",
+      expiresAt: Date.now() + 10 * 60_000,
+      bindUrl: "http://localhost:8787/members/bind/#token-token-token-token",
+    };
+    const channel = {
+      createMemberInvite: async () => link,
+    } as unknown as MemberAdminRpc;
+    const text = await runTool(
+      createMemberTools({ actor: OWNER, channel, locale: "zh" }),
+      "invite_member",
+      { label: "小王" },
+    );
+    expect(text).toContain(link.bindUrl);
+    expect(text).toContain(t("zh", "member.localOnly"));
   });
 
   it("成员对象的管理注册表里没有这些工具，主人对象有", async () => {

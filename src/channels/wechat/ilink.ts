@@ -341,12 +341,13 @@ export function createILinkClient(opts: {
         `step=get_auth_url&plugin_version=${REALNAME_PLUGIN_VERSION}`,
         signal,
       );
-      const authUrl = readString(raw, "auth_url");
-      const ticket = readString(raw, "bot_spam_ticket");
+      const payload = realnamePayload(raw);
+      const authUrl = readString(payload, "auth_url");
+      const ticket = readString(payload, "bot_spam_ticket");
       if (!authUrl || !ticket || !isTrustedRealnameAuthUrl(authUrl)) {
         throw new ILinkError("WECHAT_REALNAME_RESPONSE_INVALID", undefined, 200);
       }
-      const expiresAt = readEpochMs(raw, "expire_time");
+      const expiresAt = readEpochMs(payload, "expire_time");
       return { authUrl, ticket, ...(expiresAt === undefined ? {} : { expiresAt }) };
     },
 
@@ -365,12 +366,13 @@ export function createILinkClient(opts: {
         `step=query_auth_result&bot_spam_ticket=${encodeURIComponent(ticket)}`,
         signal,
       );
-      const status = readRealnameStatus(raw);
+      const payload = realnamePayload(raw);
+      const status = readRealnameStatus(payload);
       if (!status) {
         throw new ILinkError("WECHAT_REALNAME_RESPONSE_INVALID", undefined, 200);
       }
-      const nextTicket = readString(raw, "bot_spam_ticket");
-      const expiresAt = readEpochMs(raw, "expire_time");
+      const nextTicket = readString(payload, "bot_spam_ticket");
+      const expiresAt = readEpochMs(payload, "expire_time");
       return {
         status,
         ...(nextTicket === undefined ? {} : { ticket: nextTicket }),
@@ -823,11 +825,24 @@ export function isTrustedRealnameAuthUrl(value: string): boolean {
   return host === "qq.com" || host.endsWith(".qq.com");
 }
 
-/** `status` is numeric in the real-name CGI; map only the known four. */
+/**
+ * The real-name CGI answers inside `data` (`{"ret":0,"data":{…}}`). Reads
+ * fall back to the bare object so a flat answer stays readable.
+ */
+function realnamePayload(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  return isRecord(raw.data) ? raw.data : raw;
+}
+
+/**
+ * The result field is `auth_status` in the live CGI; older shapes used
+ * `status`. Only the four known values are mapped.
+ */
 function readRealnameStatus(
   raw: Record<string, unknown>,
 ): RealnameResultStatus | null {
-  const value = raw.status;
+  const value = raw.auth_status ?? raw.status;
   if (value === 0 || value === "0") return "wait";
   if (value === 1 || value === "1") return "ok";
   if (value === 2 || value === "2") return "denied";

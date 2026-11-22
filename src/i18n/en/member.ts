@@ -17,6 +17,10 @@ export const member = {
     qrLabel: "WeChat binding QR code",
   },
   denied: "Only the owner can manage members.",
+  localOnly:
+    "Note: this deployment has no public address, so this localhost link opens only on the machine running it. Open it yourself and show the QR code on screen; a remote invitee needs a public address configured first.",
+  operatorAuth:
+    "WeChat requires the person who started this invite to finish real-name verification. Open the link below in WeChat and approve it within {minutes} minutes; the binding QR code is issued only after that:\n{url}",
   error: "Member management failed ({code}).",
   inviteCreated:
     "Binding invite created ({inviteId}), valid until {expiresAt}. Forward this link to the invitee as-is; it walks them through binding WeChat:",

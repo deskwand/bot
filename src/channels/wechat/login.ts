@@ -217,6 +217,11 @@ export type WeChatLoginOptions = {
   localTokens?:
     | readonly string[]
     | (() => readonly string[] | Promise<readonly string[]>);
+  /**
+   * The operator's own real-name link, handed to its recipient outside the
+   * model. Called once per issued link; a failure never stops the invite.
+   */
+  onAuthUrl?(auth: { authUrl: string; expiresAt: number }): Promise<void> | void;
   now?: () => number;
   gate?: LoginGate;
   /** Upper bound on one upstream step. Defaults to 20 s. */
@@ -533,8 +538,10 @@ export class WeChatLogin {
         expect,
       );
       if (!auth.ok) return;
-      current = await this.storeAuth(state, auth.value, expect, current);
-      if (!current) return;
+      const stored = await this.storeAuth(state, auth.value, expect, current);
+      if (!stored) return;
+      current = stored.secrets;
+      await this.announceAuthUrl(stored.secrets, stored.deadline);
     }
     const ticket = current.realnameTicket;
     if (!ticket) return void (await this.fail(state, "protocol", expect));
@@ -553,7 +560,7 @@ export class WeChatLogin {
     auth: { authUrl: string; ticket: string; expiresAt?: number },
     expect: LoginSwapExpect,
     secrets: LoginSecrets | undefined,
-  ): Promise<LoginSecrets | null> {
+  ): Promise<{ secrets: LoginSecrets; deadline: number } | null> {
     const deadline =
       auth.expiresAt === undefined
         ? state.realnameDeadline
@@ -567,7 +574,30 @@ export class WeChatLogin {
       authUrl: auth.authUrl,
     };
     await this.writeSecrets(merged);
-    return merged;
+    return { secrets: merged, deadline };
+  }
+
+  /**
+   * Hands the operator's real-name link to its recipient. Delivery happens
+   * outside the model and a failure here never stops the invite: the state
+   * machine keeps polling until the operator acts or the deadline passes.
+   */
+  private async announceAuthUrl(
+    secrets: LoginSecrets,
+    deadline: number,
+  ): Promise<void> {
+    const deliver = this.options.onAuthUrl;
+    const authUrl = secrets.authUrl;
+    if (deliver === undefined || authUrl === undefined) return;
+    try {
+      await deliver({ authUrl, expiresAt: deadline });
+    } catch (error) {
+      // The link is a capability: only the error's shape may be logged.
+      console.warn(
+        "wechat login: operator link delivery failed:",
+        error instanceof Error ? error.constructor.name : "Error",
+      );
+    }
   }
 
   /**

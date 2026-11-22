@@ -158,6 +158,7 @@ function makeHarness(
     activationStatus?: () => "committed" | "pending";
     state?: MemoryStateStore;
     secrets?: MemorySecretStore;
+    onAuthUrl?: (auth: { authUrl: string; expiresAt: number }) => void | Promise<void>;
   } = {},
 ) {
   const requests: Recorded[] = [];
@@ -269,6 +270,7 @@ function makeHarness(
             : "pending",
       inviteLive: async () => options.inviteLive ?? true,
       localTokens: async () => options.localTokens ?? ["local-token-a"],
+      onAuthUrl: options.onAuthUrl,
       now: () => clock,
     });
   }
@@ -552,6 +554,58 @@ describe("WeChatLogin", () => {
     expect(qrRequests(h.requests)).toHaveLength(0);
     const realnameCalls = h.requests.filter((request) => request.url.includes("step=get_auth_url"));
     expect(realnameCalls).toHaveLength(2);
+  });
+
+  it("取到实名链接后立即交给操作者，且同一 ticket 不重复投递", async () => {
+    const delivered: Array<{ authUrl: string; expiresAt: number }> = [];
+    const h = makeHarness({
+      realname: ["wait", "wait"],
+      onAuthUrl: (auth) => {
+        delivered.push(auth);
+      },
+    });
+    const login = h.make();
+    await login.startOtherOwner();
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.authUrl).toBe("https://weixin110.qq.com/auth/1");
+    expect(delivered[0]?.expiresAt).toBeGreaterThan(NOW);
+
+    // 同一个 ticket 的后续轮询不再重发链接。
+    await h.make().advance();
+    expect(delivered).toHaveLength(1);
+  });
+
+  it("刷新后取到的新实名链接再次投递", async () => {
+    const delivered: string[] = [];
+    const h = makeHarness({
+      realname: ["refresh", "wait"],
+      onAuthUrl: (auth) => {
+        delivered.push(auth.authUrl);
+      },
+    });
+    const login = h.make();
+    await login.startOtherOwner();
+    expect(delivered).toEqual(["https://weixin110.qq.com/auth/1"]);
+
+    await login.advance(); // 服务端要求刷新：丢掉旧 ticket
+    await login.advance(); // 重新取授权链接
+    expect(delivered).toEqual([
+      "https://weixin110.qq.com/auth/1",
+      "https://weixin110.qq.com/auth/2",
+    ]);
+  });
+
+  it("投递失败不影响邀请推进", async () => {
+    const h = makeHarness({
+      realname: ["wait"],
+      onAuthUrl: () => {
+        throw new Error("send failed");
+      },
+    });
+    const login = h.make();
+    await login.startOtherOwner();
+    expect(login.view().stage).toBe("realname");
+    expect(login.view().failure).toBeUndefined();
   });
 
   it("实名等待最长 480 秒", async () => {

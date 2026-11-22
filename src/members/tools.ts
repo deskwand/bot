@@ -46,6 +46,17 @@ const ListMembers = Type.Object({});
 
 const RevokeMember = Type.Object({ member_id: Type.String() });
 
+/** Only the machine that runs the deployment can open a loopback link. */
+function isLoopback(url: string): boolean {
+  try {
+    // `URL` keeps the brackets on an IPv6 host, so only that form appears.
+    const host = new URL(url).hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
 function output(text: string) {
   return { output: [{ type: "text" as const, text }] };
 }
@@ -101,7 +112,9 @@ export function createMemberTools(deps: MemberToolDeps): ToolRegistration[] {
   };
 
   const invitation = (link: MemberInviteLink, lead: string): string =>
-    `${lead}\n${link.bindUrl}`;
+    isLoopback(link.bindUrl)
+      ? `${lead}\n${link.bindUrl}\n${t(locale, "member.localOnly")}`
+      : `${lead}\n${link.bindUrl}`;
 
   return [
     {

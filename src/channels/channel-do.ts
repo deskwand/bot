@@ -888,6 +888,17 @@ export class ChannelDO extends Agent<Env> {
         store.getInvite(inviteId)?.status === "consumed"
           ? "committed"
           : "pending",
+      // The operator's real-name link goes to the owner's own chat as a
+      // system message: the invitee page never sees it, and the model never
+      // reads it.
+      onAuthUrl: async ({ authUrl, expiresAt: deadline }) => {
+        const locale = ownerLocale(this.env);
+        const minutes = Math.max(1, Math.ceil((deadline - Date.now()) / 60_000));
+        await this.sendCurrent({
+          text: t(locale, "member.operatorAuth", { minutes, url: authUrl }),
+          priority: "alert",
+        });
+      },
       onConfirmed: async (credentials: WeChatCredentials) => {
         const raw = JSON.stringify(credentials);
         const binding = {

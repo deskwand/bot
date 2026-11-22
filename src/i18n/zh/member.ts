@@ -17,6 +17,10 @@ export const member = {
     qrLabel: "微信绑定二维码",
   },
   denied: "只有主人能管理成员。",
+  localOnly:
+    "说明：这次部署没有公开地址，这条 localhost 链接只能在部署所在的机器上打开。你要自己打开它，把屏上的二维码给家人扫；想让对方远程打开，得先给部署配一个公网可达地址。",
+  operatorAuth:
+    "微信要求先由发起邀请的人完成实名授权：请在 {minutes} 分钟内用微信打开下面的链接并授权。通过后才会生成绑定二维码：\n{url}",
   error: "成员管理失败（{code}）。",
   inviteCreated:
     "绑定邀请已创建（{inviteId}），{expiresAt} 前有效。请把下面这条链接原样转交给受邀人，对方打开后按提示绑定微信：",

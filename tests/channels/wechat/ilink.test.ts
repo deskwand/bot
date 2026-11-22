@@ -735,9 +735,12 @@ describe("realname verification", () => {
   it("使用固定实名 CGI 获取授权链接与 ticket", async () => {
     const { calls, fetchImpl } = fakeFetch([
       jsonResponse({
-        auth_url: "https://weixin110.qq.com/auth/1",
-        bot_spam_ticket: "spam-ticket",
-        expire_time: 1_700_000_000,
+        ret: 0,
+        data: {
+          auth_url: "https://liteapp.weixin.qq.com/q/abc",
+          bot_spam_ticket: "spam-ticket",
+          expire_time: 1_700_000_000,
+        },
       }),
     ]);
     const controller = new AbortController();
@@ -752,13 +755,25 @@ describe("realname verification", () => {
     expect(url.searchParams.get("step")).toBe("get_auth_url");
     expect(url.searchParams.get("plugin_version")).toBe("3.0.1/deskwand");
     expect(result).toEqual({
-      authUrl: "https://weixin110.qq.com/auth/1",
+      authUrl: "https://liteapp.weixin.qq.com/q/abc",
       ticket: "spam-ticket",
       expiresAt: 1_700_000_000_000,
     });
   });
 
-  it("查询实名结果并映射状态", async () => {
+  it("扁平响应仍可读取", async () => {
+    const { fetchImpl } = fakeFetch([
+      jsonResponse({
+        auth_url: "https://weixin110.qq.com/auth/1",
+        bot_spam_ticket: "spam-ticket",
+      }),
+    ]);
+    const result = await client(fetchImpl).getRealnameAuthUrl();
+    expect(result.authUrl).toBe("https://weixin110.qq.com/auth/1");
+    expect(result.expiresAt).toBeUndefined();
+  });
+
+  it("查询实名结果并映射 data.auth_status", async () => {
     const cases = [
       { status: 0, expected: "wait" },
       { status: 1, expected: "ok" },
@@ -767,7 +782,10 @@ describe("realname verification", () => {
     ] as const;
     for (const testCase of cases) {
       const { calls, fetchImpl } = fakeFetch([
-        jsonResponse({ status: testCase.status, bot_spam_ticket: "spam-ticket-2" }),
+        jsonResponse({
+          ret: 0,
+          data: { auth_status: testCase.status, bot_spam_ticket: "spam-ticket-2" },
+        }),
       ]);
       const result = await client(fetchImpl).queryRealnameResult("spam-ticket");
       expect(result.status).toBe(testCase.expected);
@@ -777,12 +795,21 @@ describe("realname verification", () => {
   });
 
   it("未知实名状态按响应错误失败", async () => {
-    const { fetchImpl } = fakeFetch([jsonResponse({ status: 9 })]);
+    const { fetchImpl } = fakeFetch([jsonResponse({ ret: 0, data: { auth_status: 9 } })]);
     const error = await client(fetchImpl)
       .queryRealnameResult("spam-ticket")
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ILinkError);
     expect((error as ILinkError).message).toBe("WECHAT_REALNAME_RESPONSE_INVALID");
+  });
+
+  it("非零 ret 按接口错误失败", async () => {
+    const { fetchImpl } = fakeFetch([jsonResponse({ ret: -1, data: {} })]);
+    const error = await client(fetchImpl)
+      .getRealnameAuthUrl()
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ILinkError);
+    expect((error as ILinkError).message).toBe("WECHAT_ILINK_API_ERROR");
   });
 });
 

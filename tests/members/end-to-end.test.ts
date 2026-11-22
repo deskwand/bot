@@ -285,3 +285,78 @@ describe("invite → bind → work → revoke", () => {
     expect(dispatched.length).toBe(dispatchedAfter);
   }, 30_000);
 });
+
+describe("operator link delivery", () => {
+  it("解开实名 CGI 的 data 信封，并把链接作为系统消息送进主人聊天", async () => {
+    const authUrl = "https://liteapp.weixin.qq.com/q/e2e-realname";
+    let qrRequests = 0;
+    setILinkFetchOverride((async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("step=get_auth_url")) {
+        return json({
+          ret: 0,
+          data: {
+            auth_url: authUrl,
+            bot_spam_ticket: "spam-ticket-e2e",
+            expire_time: 1_795_428_630,
+          },
+        });
+      }
+      if (url.includes("step=query_auth_result")) {
+        return json({ ret: 0, data: { auth_status: 1 } });
+      }
+      if (url.includes("/ilink/bot/get_bot_qrcode")) {
+        qrRequests += 1;
+        return json({
+          qrcode: "qr-e2e",
+          qrcode_img_content: "https://weixin.qq.com/qr/e2e",
+        });
+      }
+      return json({ ret: 0 });
+    }) as typeof fetch);
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+
+    const hub = env.CHANNELS.get(env.CHANNELS.idFromName("channels-realname"));
+
+    const result = await runInDurableObject(hub, async (instance, store) => {
+      settleInbox(store.storage.sql);
+      const sent: string[] = [];
+      const sendCurrent = vi
+        .spyOn(instance, "sendCurrent")
+        .mockImplementation(async (message) => {
+          sent.push(message.text);
+          return {
+            channel: "wechat",
+            conversationId: "owner-conversation",
+            routeKey: "wechat",
+            messageId: null,
+          };
+        });
+      const link = await (instance as unknown as {
+        createMemberInvite(
+          actor: Principal,
+          label: string,
+        ): Promise<{ inviteId: string; bindUrl: string }>;
+      }).createMemberInvite(ownerPrincipal(), "小林");
+      await (instance as unknown as {
+        pollMemberLogin(payload: {
+          inviteId: string;
+          generation: number;
+        }): Promise<void>;
+      }).pollMemberLogin({ inviteId: link.inviteId, generation: 1 });
+      const page = await (instance as unknown as {
+        memberBindState(
+          token: string,
+        ): Promise<{ ok: boolean; view?: { stage: string } }>;
+      }).memberBindState(link.bindUrl.split("#")[1]!);
+      sendCurrent.mockRestore();
+      return { sent, stage: page.view?.stage };
+    });
+
+    // 链接只送一次、送到主人聊天，并且实名通过后同一次轮询就取到绑定码。
+    expect(result.sent).toHaveLength(1);
+    expect(result.sent[0]).toContain(authUrl);
+    expect(result.stage).toBe("scan");
+    expect(qrRequests).toBe(1);
+  }, 30_000);
+});
