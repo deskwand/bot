@@ -23,6 +23,8 @@ export const life: Messages["life"] = {
       "Some models have no price, so the real spend is higher than the books show",
     quota:
       "Subscription {provider}: {window} quota is {band} ({percent}% left), resets {reset}",
+    quotaNote:
+      "That subscription quota comes from this deployment's own credential; answer the owner from it instead of looking elsewhere.",
     quotaWithPlan:
       "Subscription {provider} ({plan}): {window} quota is {band} ({percent}% left), resets {reset}",
     principleAlive:

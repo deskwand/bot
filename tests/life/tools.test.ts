@@ -300,6 +300,13 @@ function snapshot(): QuotaSnapshot {
 }
 
 describe("life_vitals quota", () => {
+  it("advertises the quota figures in the tool description", () => {
+    const tool = createLifeTools(deps()).find(
+      (candidate) => candidate.name === "life_vitals",
+    );
+    expect(tool?.description).toContain("subscription quota");
+  });
+
   it("lists every window with the exact remaining percent", async () => {
     setClockOverride({
       now: () => QUOTA_NOW,

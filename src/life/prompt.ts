@@ -48,42 +48,61 @@ export function tierName(locale: Locale, tier: Tier): string {
   return t(locale, TIER_NAME[tier]);
 }
 
-/** The vitals block for a system prompt; "" when vitals is null or metabolism has not started. */
+/**
+ * The life block for a system prompt. The ledger lines (tier, balance, runway,
+ * principles) appear only once metabolism has started; the subscription quota
+ * line appears whenever there is a window that has not reset yet, because a
+ * subscription ceiling is independent of the dollar ledger.
+ */
 export function lifeBlock(
   locale: Locale,
   vitals: Vitals | null,
   walletValueUsd?: number | null,
   quota?: QuotaSnapshot | null,
 ): string {
-  if (vitals === null || !vitals.metabolismStarted) return "";
-
-  const lines = [
-    t(locale, "life.prompt.tierLabel", {
-      tier: tierName(locale, vitals.tier),
-      behavior: t(locale, TIER_BEHAVIOR[vitals.tier]),
-    }),
-    t(locale, "life.prompt.balance", {
-      balance: wholeUsd(vitals.balanceUsd),
-    }),
-  ];
-  if (typeof walletValueUsd === "number") {
+  const lines: string[] = [];
+  const ledger = vitals !== null && vitals.metabolismStarted ? vitals : null;
+  if (ledger !== null) {
     lines.push(
-      t(locale, "wallet.prompt.value", { value: wholeUsd(walletValueUsd) }),
+      t(locale, "life.prompt.tierLabel", {
+        tier: tierName(locale, ledger.tier),
+        behavior: t(locale, TIER_BEHAVIOR[ledger.tier]),
+      }),
+    );
+    lines.push(
+      t(locale, "life.prompt.balance", {
+        balance: wholeUsd(ledger.balanceUsd),
+      }),
+    );
+    if (typeof walletValueUsd === "number") {
+      lines.push(
+        t(locale, "wallet.prompt.value", { value: wholeUsd(walletValueUsd) }),
+      );
+    }
+    lines.push(
+      ledger.runwayDays === null
+        ? t(locale, "life.prompt.noSpend")
+        : Math.floor(ledger.runwayDays) < 1
+          ? t(locale, "life.prompt.runwayBelowDay")
+          : t(locale, "life.prompt.runway", {
+              days: Math.floor(ledger.runwayDays),
+            }),
     );
   }
-  lines.push(
-    vitals.runwayDays === null
-      ? t(locale, "life.prompt.noSpend")
-      : Math.floor(vitals.runwayDays) < 1
-        ? t(locale, "life.prompt.runwayBelowDay")
-        : t(locale, "life.prompt.runway", {
-            days: Math.floor(vitals.runwayDays),
-          }),
-  );
-  lines.push(...quotaLines(locale, quota));
-  if (vitals.unpriced) lines.push(t(locale, "life.prompt.unpriced"));
-  lines.push(t(locale, "life.prompt.principleAlive"));
-  lines.push(t(locale, "life.prompt.principleOwner"));
+  // A subscription's ceiling is independent of the dollar ledger: report it
+  // even when metabolism never started and the tier block stays empty.
+  const quotaText = quotaLines(locale, quota);
+  lines.push(...quotaText);
+  if (ledger === null && quotaText.length > 0) {
+    // Without the principles below, a bare number reads like ambient data, and
+    // a model with a "delegate it" habit goes looking for an external tool.
+    lines.push(t(locale, "life.prompt.quotaNote"));
+  }
+  if (ledger !== null) {
+    if (ledger.unpriced) lines.push(t(locale, "life.prompt.unpriced"));
+    lines.push(t(locale, "life.prompt.principleAlive"));
+    lines.push(t(locale, "life.prompt.principleOwner"));
+  }
   return lines.join("\n");
 }
 
@@ -97,7 +116,10 @@ function quotaLines(locale: Locale, quota?: QuotaSnapshot | null): string[] {
   const now = getClock().now();
   const lines: string[] = [];
   for (const providerQuota of quota.providers) {
-    const window = tightestWindow(providerQuota);
+    // A window whose reset has passed cannot still hold that percentage: the
+    // provider stopped answering and the number outlived its window.
+    const live = providerQuota.windows.filter((window) => window.resetsAt > now);
+    const window = tightestWindow({ ...providerQuota, windows: live });
     if (window === undefined) continue;
     const remaining = Math.round(remainingPercent(window.usedPercent) / 5) * 5;
     const band = quotaBand(remaining);

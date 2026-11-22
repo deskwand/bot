@@ -485,6 +485,58 @@ describe("butler chat", () => {
     }
   });
 
+  it("shows subscription quota while the ledger is still cold", async () => {
+    const channel = fakeChannel();
+    setChannelOverride("telegram", channel.adapter);
+    await resetLife();
+    const life = env.LIFE.get(env.LIFE.idFromName("global"));
+    try {
+      // The test deployment runs on opencode-go; a fresh cache entry means no
+      // outbound request, and the lifecycle never recorded a credit.
+      await runInDurableObject(life, async (_instance, state) => {
+        await state.storage.kv.put("model_quota", {
+          "opencode-go": {
+            quota: {
+              provider: "opencode-go",
+              windows: [
+                {
+                  key: "5h",
+                  usedPercent: 9,
+                  resetsAt: Date.now() + 3_600_000,
+                },
+              ],
+              fetchedAt: Date.now(),
+            },
+          },
+        });
+      });
+
+      let seen: TranscriptContext | undefined;
+      setModelOverride(
+        scriptedModel([
+          {
+            text: "好",
+            observe: (context) => {
+              seen = context;
+            },
+          },
+        ]),
+      );
+      await butler("chat-life-quota-cold").handleMessage(
+        message({ text: "看看额度", eventId: "tg:life-quota-cold" }),
+      );
+
+      const prompt = systemPromptText(seen);
+      expect(prompt).toContain("订阅 OpenCode Go");
+      expect(prompt).not.toContain("档位");
+    } finally {
+      await runInDurableObject(life, async (_instance, state) => {
+        await state.storage.kv.delete("model_quota");
+      });
+      await resetLife();
+    }
+  });
+
   it("sends an @mention to the butler conversation", async () => {
     const channel = fakeChannel();
     setChannelOverride("telegram", channel.adapter);

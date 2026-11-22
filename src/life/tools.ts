@@ -177,7 +177,7 @@ export function createLifeTools(deps: LifeToolDeps): ToolRegistration[] {
   const vitalsTool: ToolRegistration<typeof LifeVitals> = {
     name: "life_vitals",
     description:
-      "Show the life ledger: balance, daily spend, runway, tier and the model each role is using right now.",
+      "Show the life ledger: balance, daily spend, runway, tier, the model each role is using right now, and how much subscription quota is left (each window with its reset time).",
     parameters: LifeVitals,
     replay: "safe",
     async execute() {

@@ -566,9 +566,12 @@ export class ButlerDO extends Agent<Env> {
             const walletValue = vitals?.metabolismStarted
               ? await readWalletValue(this.env)
               : null;
-            const quota = vitals?.metabolismStarted
-              ? await readQuota(this.env, inUseQuotaProviders(this.env))
-              : null;
+            // Independent of the ledger: a $0 deployment still has a
+            // subscription ceiling worth telling the model about.
+            const quota = await readQuota(
+              this.env,
+              inUseQuotaProviders(this.env),
+            );
             const block = lifeBlock(
               ownerLocale(this.env),
               vitals,

@@ -171,6 +171,35 @@ describe("lifeBlock quota", () => {
     setClockOverride(null);
   });
 
+  it("does not report a window that has already reset", () => {
+    const rolled = snapshot([9]);
+    rolled.providers[0]!.windows[0]!.resetsAt = QUOTA_NOW - 60_000;
+
+    expect(lifeBlock("zh", vitals(), null, rolled)).not.toContain("订阅");
+  });
+
+  it("skips a rolled-over window and keeps the live one", () => {
+    const mixed = snapshot([90, 12]);
+    mixed.providers[0]!.windows[0]!.resetsAt = QUOTA_NOW - 60_000;
+
+    const text = lifeBlock("zh", vitals(), null, mixed);
+
+    expect(text).toContain("本周");
+    expect(text).not.toContain("5 小时");
+  });
+
+  it("tells a cold ledger what the quota line is", () => {
+    const cold = lifeBlock("zh", null, null, snapshot([9]));
+
+    expect(cold).toContain("不要再去外面查");
+  });
+
+  it("does not add that note once the ledger started", () => {
+    expect(lifeBlock("zh", vitals(), null, snapshot([9]))).not.toContain(
+      "不要再去外面查",
+    );
+  });
+
   it("reports the tightest window in coarse bands", () => {
     const text = lifeBlock("zh", vitals(), null, snapshot([9, 88], "team"));
 
@@ -182,6 +211,20 @@ describe("lifeBlock quota", () => {
 
   it("rounds the percent to five-point steps", () => {
     expect(lifeBlock("zh", vitals(), null, snapshot([32]))).toContain("剩 70%");
+  });
+
+  it("renders the quota line even when the ledger never opened", () => {
+    const cold = lifeBlock("zh", vitals({ metabolismStarted: false }), null, snapshot([9]));
+
+    expect(cold).toContain("订阅 Codex");
+    expect(cold).not.toContain("档位");
+  });
+
+  it("renders the quota line without any vitals at all", () => {
+    const cold = lifeBlock("zh", null, null, snapshot([9]));
+
+    expect(cold).toContain("订阅 Codex");
+    expect(cold).not.toContain("档位");
   });
 
   it("omits the line when there is no data", () => {

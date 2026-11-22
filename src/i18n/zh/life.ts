@@ -19,6 +19,8 @@ export const life = {
     },
     unpriced: "有模型没有计价，实际开销比账面高",
     quota: "订阅 {provider}：{window}额度{band}（剩 {percent}%），{reset}重置",
+    quotaNote:
+      "订阅额度来自这个部署自己的凭证；主人问额度时照这个答，不要再去外面查。",
     quotaWithPlan:
       "订阅 {provider}（{plan}）：{window}额度{band}（剩 {percent}%），{reset}重置",
     principleAlive: "活下去是你的第一要务：花钱之前掂量值不值。",
