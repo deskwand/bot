@@ -3,6 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import {
   Archive,
   Bot,
+  UserRound,
   Brain,
   Cloud,
   Eye,
@@ -47,6 +48,7 @@ import { Browser } from "@/features/browser/Browser";
 import { Mcp } from "@/features/mcp/Mcp";
 import { Models } from "@/features/models/Models";
 import { Bots } from "@/features/bots/Bots";
+import { Users } from "@/features/users/Users";
 import { Overview } from "@/features/overview/Overview";
 import { Exchanges } from "@/features/exchanges/Exchanges";
 import { Agent } from "@/features/agent/Agent";
@@ -79,6 +81,7 @@ const NAV_GROUPS: { group?: NavGroup; items: { page: Page; icon: LucideIcon }[] 
     items: [
       { page: "models", icon: Brain },
       { page: "bots", icon: Bot },
+      { page: "users", icon: UserRound },
     ],
   },
   {
@@ -427,6 +430,7 @@ export function App({ client }: { client: ClientService }) {
                   {page === "overview" ? <Overview /> : null}
                   {page === "models" ? <Models /> : null}
                   {page === "bots" ? <Bots /> : null}
+                  {page === "users" ? <Users /> : null}
                   {page === "search" ? <Search /> : null}
                   {page === "exchange" ? <Exchanges /> : null}
                   {page === "agent" ? <Agent /> : null}

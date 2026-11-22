@@ -98,7 +98,7 @@ import {
 import { parseTextAction, textHint, type TextAction } from "./text-action";
 import { ChannelError, type ChannelAdapter, type OutboundArtifact } from "./types";
 import { withRetry } from "./retry";
-import { renderQrPng } from "../members/qr-image";
+import { adminInviteView, type AdminInviteView } from "../members/admin-view";
 import { ConnectionStore, contextKey } from "./wechat/connections";
 import { PRIVATE_WECHAT_PREFIX } from "../members/credentials";
 import { toWeChatText } from "./wechat/markdown";
@@ -698,6 +698,13 @@ export class ChannelDO extends Agent<Env> {
    * Owner gate for the management surface: the claimed role must be the
    * owner's id and role, and the directory must still agree on the epoch.
    */
+  /** Writes are refused while a backup/restore owns the database. */
+  private async assertWritable(): Promise<void> {
+    if (await this.maintenanceActive()) {
+      throw new MemberError("MAINTENANCE_ACTIVE");
+    }
+  }
+
   private assertOwnerActor(actor: Principal): void {
     if (actor.memberId !== OWNER_ID || actor.role !== "owner") {
       throw new MemberError(MEMBER_ACCESS_DENIED);
@@ -715,6 +722,7 @@ export class ChannelDO extends Agent<Env> {
     label: string,
   ): Promise<MemberInviteLink> {
     this.assertOwnerActor(actor);
+    await this.assertWritable();
     return await this.issueInvite(label, {});
   }
 
@@ -728,6 +736,7 @@ export class ChannelDO extends Agent<Env> {
     memberId: string,
   ): Promise<MemberInviteLink> {
     this.assertOwnerActor(actor);
+    await this.assertWritable();
     const member = this.members.getMember(memberId);
     if (member === null || member.role !== "member") {
       throw new MemberError(MEMBER_ACCESS_DENIED);
@@ -752,6 +761,7 @@ export class ChannelDO extends Agent<Env> {
     inviteId: string,
   ): Promise<void> {
     this.assertOwnerActor(actor);
+    await this.assertWritable();
     if (this.members.getInvite(inviteId) === null) {
       throw new MemberError(INVITE_NOT_FOUND);
     }
@@ -770,6 +780,7 @@ export class ChannelDO extends Agent<Env> {
    */
   async revokeMember(actor: Principal, memberId: string): Promise<void> {
     this.assertOwnerActor(actor);
+    await this.assertWritable();
     // Read everything the revoke retires before the directory changes: the
     // access epoch is persisted first, so cleanup can never restore access.
     const credentialKey = this.members.credentialKeyOf(memberId);
@@ -837,9 +848,35 @@ export class ChannelDO extends Agent<Env> {
     inviteId: string;
     generation: number;
   }): Promise<void> {
-    if (this.lease.current() !== null) return;
     const invite = this.members.getInvite(payload.inviteId);
     if (invite === null || invite.status !== "pending") return;
+    const remaining = invite.expiresAt - Date.now();
+    if (remaining <= 0) return;
+    if (this.lease.current() !== null) {
+      // A maintenance window replaces the database. The invite keeps its own
+      // deadline and is resumed when the lease clears, never dropped.
+      await this.schedule(
+        Math.min(30, Math.max(5, Math.ceil(remaining / 1000))),
+        "pollMemberLogin",
+        payload,
+        { idempotent: true },
+      );
+      return;
+    }
+    try {
+      await this.pollMemberLoginStep(payload);
+    } catch {
+      // The payload never enters the log; the schedule keeps the invite alive.
+      console.error("channel: member login step failed");
+      await this.schedule(5, "pollMemberLogin", payload, { idempotent: true });
+    }
+  }
+
+  /** One scheduled step per invite; the caller owns lease and retry policy. */
+  private async pollMemberLoginStep(payload: {
+    inviteId: string;
+    generation: number;
+  }): Promise<void> {
     const login = this.weChatLogin(payload.inviteId, payload.generation);
     await login.load();
     const stage = login.view().stage;
@@ -889,27 +926,6 @@ export class ChannelDO extends Agent<Env> {
         store.getInvite(inviteId)?.status === "consumed"
           ? "committed"
           : "pending",
-      // Both codes go to the owner's own chat as images: the invitee page never
-      // sees the real-name link, the model never reads either of them, and
-      // WeChat only opens its own links when they are scanned.
-      onAuthUrl: async ({ authUrl, expiresAt: deadline }) => {
-        const locale = ownerLocale(this.env);
-        const minutes = Math.max(1, Math.ceil((deadline - Date.now()) / 60_000));
-        await this.sendOwnerQr(
-          "wechat-realname.png",
-          authUrl,
-          t(locale, "member.operatorAuth", { minutes }),
-        );
-      },
-      // Without a public address the invitee page is not reachable from
-      // another phone, while a forwarded image can be scanned anywhere.
-      onQrCode: async ({ text }) => {
-        await this.sendOwnerQr(
-          "wechat-bind.png",
-          text,
-          t(ownerLocale(this.env), "member.bindingQr"),
-        );
-      },
       onConfirmed: async (credentials: WeChatCredentials) => {
         const raw = JSON.stringify(credentials);
         const binding = {
@@ -971,8 +987,87 @@ export class ChannelDO extends Agent<Env> {
   > {
     const found = await this.inviteByToken(token);
     if (!found.ok) return found;
-    // A 6-digit PIN is small enough to brute-force by whoever holds the link;
-    // the server-side verify-code block is not the only line of defence.
+    if (!this.consumePinAttempt(found.inviteId)) {
+      return { ok: true, view: this.weChatLogin(found.inviteId, 1).view() };
+    }
+    const login = this.weChatLogin(found.inviteId, 1);
+    await login.load();
+    await login.submitPin(pin);
+    return { ok: true, view: login.view() };
+  }
+
+  /** Owner-only: pending invites, both kinds, for the desktop console. */
+  async adminPendingInvites(): Promise<
+    Array<{
+      inviteId: string;
+      label: string;
+      kind: "new" | "rebind";
+      memberId: string | null;
+      expiresAt: number;
+    }>
+  > {
+    this.assertOwnerActor(ownerPrincipal());
+    const now = Date.now();
+    return this.members
+      .listInvites()
+      .filter((invite) => invite.status === "pending" && now < invite.expiresAt)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((invite) => ({
+        inviteId: invite.inviteId,
+        label: invite.label,
+        kind: invite.kind,
+        memberId: invite.memberId,
+        expiresAt: invite.expiresAt,
+      }));
+  }
+
+  /** Owner-only: one invite's stage, without holding its bearer token. */
+  async adminInviteState(
+    inviteId: string,
+  ): Promise<
+    | { ok: true; view: AdminInviteView }
+    | { ok: false; status: 404 }
+  > {
+    this.assertOwnerActor(ownerPrincipal());
+    const invite = this.members.getInvite(inviteId);
+    if (invite === null) return { ok: false, status: 404 };
+    const login = this.weChatLogin(inviteId, 1);
+    await login.load();
+    return { ok: true, view: adminInviteView(invite, login.view(), Date.now()) };
+  }
+
+  /** Owner-only: submit the PIN WeChat showed on the invitee's phone. */
+  async adminSubmitInvitePin(
+    inviteId: string,
+    pin: string,
+  ): Promise<
+    | { ok: true; view: AdminInviteView }
+    | { ok: false; status: 400 | 404 | 409 | 429 }
+  > {
+    this.assertOwnerActor(ownerPrincipal());
+    // The PIN path writes attempts, login state and possibly a connection.
+    await this.assertWritable();
+    if (!/^\d{6}$/.test(pin)) return { ok: false, status: 400 };
+    const invite = this.members.getInvite(inviteId);
+    if (invite === null) return { ok: false, status: 404 };
+    const login = this.weChatLogin(inviteId, 1);
+    await login.load();
+    if (login.view().stage !== "pin") return { ok: false, status: 409 };
+    if (!this.consumePinAttempt(inviteId)) return { ok: false, status: 429 };
+    await login.submitPin(pin);
+    await login.load();
+    return {
+      ok: true,
+      view: adminInviteView(this.members.getInvite(inviteId)!, login.view(), Date.now()),
+    };
+  }
+
+  /**
+   * A 6-digit PIN is small enough to brute-force by whoever holds the invite,
+   * so both the page and the admin surface share one budget per invite. The
+   * server-side verify-code block is not the only line of defence.
+   */
+  private consumePinAttempt(inviteId: string): boolean {
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS member_bind_attempts (
          invite_id TEXT PRIMARY KEY,
@@ -983,21 +1078,16 @@ export class ChannelDO extends Agent<Env> {
       this.db
         .exec<{ attempts: number }>(
           `SELECT attempts FROM member_bind_attempts WHERE invite_id = ?`,
-          found.inviteId,
+          inviteId,
         )
         .toArray()[0]?.attempts ?? 0;
-    if (attempts >= 5) {
-      return { ok: true, view: this.weChatLogin(found.inviteId, 1).view() };
-    }
+    if (attempts >= 5) return false;
     this.db.exec(
       `INSERT INTO member_bind_attempts (invite_id, attempts) VALUES (?, 1)
        ON CONFLICT(invite_id) DO UPDATE SET attempts = attempts + 1`,
-      found.inviteId,
+      inviteId,
     );
-    const login = this.weChatLogin(found.inviteId, 1);
-    await login.load();
-    await login.submitPin(pin);
-    return { ok: true, view: login.view() };
+    return true;
   }
 
   /**
@@ -2089,40 +2179,6 @@ export class ChannelDO extends Agent<Env> {
     };
 
     await this.sendOwnerFile(channel, file);
-  }
-
-  /**
-   * Sends one generated PNG to the owner's current chat. It is deliberately
-   * not an artifact: nothing has to be addressable later, and the text queue
-   * cannot carry bytes.
-   */
-  private async sendOwnerImage(
-    name: string,
-    bytes: Uint8Array,
-  ): Promise<void> {
-    const route = await this.currentRoute();
-    if (route.channel === null) {
-      throw new ChannelError("channel selection disabled", 0);
-    }
-    await this.sendOwnerFile(route.channel, {
-      name,
-      contentType: "image/png",
-      bytes: bytes.slice().buffer as ArrayBuffer,
-    });
-  }
-
-  /**
-   * The image is the message: the caption goes out only after the image
-   * reached the channel, so the chat never says "scan this" with nothing to
-   * scan. A failed image speaks through the `send_error` event instead.
-   */
-  private async sendOwnerQr(
-    name: string,
-    qrText: string,
-    caption: string,
-  ): Promise<void> {
-    await this.sendOwnerImage(name, await renderQrPng(qrText));
-    await this.sendCurrent({ text: caption, priority: "alert" });
   }
 
   /** One sender for owner bytes, so artifacts and images fail the same way. */

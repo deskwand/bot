@@ -557,3 +557,45 @@ type BotDetailDTO struct {
 	Docs []BotDocDTO `json:"docs"`
 	Runs []BotRunDTO `json:"runs"`
 }
+
+// MemberUserDTO is one row of the users page.
+type MemberUserDTO struct {
+	MemberID   string  `json:"memberId"`
+	Label      string  `json:"label"`
+	Role       string  `json:"role"`
+	Status     string  `json:"status"`
+	Connection string  `json:"connection"`
+	InviteID   *string `json:"inviteId"`
+}
+
+// MembersDTO is the users payload; Users is always an array.
+type MembersDTO struct {
+	Users []MemberUserDTO `json:"users"`
+}
+
+// MemberInviteDTO is one pending invite. bindUrl is deliberately absent.
+type MemberInviteDTO struct {
+	InviteID  string  `json:"inviteId"`
+	Label     string  `json:"label"`
+	Kind      string  `json:"kind"`
+	MemberID  *string `json:"memberId"`
+	ExpiresAt int64   `json:"expiresAt"`
+}
+
+// MemberInvitesDTO is the resumable-invite payload.
+type MemberInvitesDTO struct {
+	Invites []MemberInviteDTO `json:"invites"`
+}
+
+// MemberInviteStateDTO is one invite's stage; capability strings stay here.
+type MemberInviteStateDTO struct {
+	InviteID         string  `json:"inviteId"`
+	Label            string  `json:"label"`
+	Status           string  `json:"status"`
+	Stage            string  `json:"stage"`
+	ExpiresAt        int64   `json:"expiresAt"`
+	RealnameDeadline *int64  `json:"realnameDeadline"`
+	RealnameURL      *string `json:"realnameUrl"`
+	QRContent        *string `json:"qrContent"`
+	Failure          *string `json:"failure"`
+}

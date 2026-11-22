@@ -16,32 +16,7 @@ export const member = {
     submit: "Submit",
     qrLabel: "WeChat binding QR code",
   },
-  denied: "Only the owner can manage members.",
-  inviteLocal:
-    "Binding invite created ({inviteId}), valid until {expiresAt}. The real-name QR and your family member's binding QR arrive in this chat: scan the first with WeChat to approve, then forward the second for them to scan. The link below opens only on the machine running this deployment and is used to enter the PIN WeChat asks for:",
-  rebindLocal:
-    "Replacement invite created ({inviteId}), valid until {expiresAt}. The real-name and binding QR codes arrive in this chat; the member must scan with their existing WeChat account. The link below opens only on the machine running this deployment and is used to enter the PIN WeChat asks for:",
-  operatorAuth:
-    "WeChat requires the person who started this invite to finish real-name verification. Scan the QR code below with WeChat within {minutes} minutes; the binding code for your family member is issued only after that.",
-  bindingQr:
-    "This is the binding QR code for your family member. Have them scan it with WeChat and confirm; an expired code is replaced automatically.",
-  error: "Member management failed ({code}).",
-  inviteCreated:
-    "Binding invite created ({inviteId}), valid until {expiresAt}. Forward this link to the invitee as-is; it walks them through binding WeChat:",
-  rebindCreated:
-    "Replacement invite created ({inviteId}), valid until {expiresAt}). Forward this link to that member; they must scan with their existing WeChat account:",
-  cancelled: "Cancelled invite {inviteId}.",
-  revoked:
-    "Revoked member {memberId}. Its WeChat connection is disconnected; history is kept.",
-  list: {
-    empty: "There are no members yet, only the owner.",
-    header: "Members ({count}):",
-    line: "- {label} ({memberId}): {role}, {status}",
-    owner: "owner",
-    member: "member",
-    active: "active",
-    revoked: "revoked",
-  },
+  error: "The member operation failed ({code}).",
   share: {
     prepared:
       "Share preview ({shareId}) to {recipient}, valid until {expiresAt}.\nText: {text}\nFiles: {files}\nNothing has been sent yet. Reply 确认分享 {shareId} to confirm, or 取消分享 {shareId} to cancel.",
@@ -71,13 +46,5 @@ export const member = {
         "Delivery failed midway. This share stopped and will not be retried automatically.",
       SHARE_INTERNAL: "Sharing failed. Try again shortly.",
     },
-  },
-  errors: {
-    MEMBER_ACCESS_DENIED: "Only the owner can manage members.",
-    INVITE_NOT_FOUND: "That invite does not exist; it may be cancelled or gone.",
-    INVITE_EXPIRED: "That invite expired. Create a new one.",
-    INVITE_CANCELLED: "That invite was cancelled. Create a new one.",
-    INVITE_CONSUMED: "That invite was already used and cannot be reused.",
-    USER_ALREADY_BOUND: "That WeChat account is already bound to a member.",
   },
 } as const;

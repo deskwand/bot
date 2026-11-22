@@ -16,6 +16,7 @@ import { setup } from "./setup";
 import { shell } from "./shell";
 import { states } from "./states";
 import { updates } from "./updates";
+import { users } from "./users";
 import { wallet } from "./wallet";
 
 // Baseline dictionary. Every user-facing string the new UI adds lives here;
@@ -29,6 +30,7 @@ export const zh = {
   overview,
   diagnostics,
   updates,
+  users,
   models,
   search,
   mcp,

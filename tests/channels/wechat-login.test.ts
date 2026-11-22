@@ -158,8 +158,6 @@ function makeHarness(
     activationStatus?: () => "committed" | "pending";
     state?: MemoryStateStore;
     secrets?: MemorySecretStore;
-    onAuthUrl?: (auth: { authUrl: string; expiresAt: number }) => void | Promise<void>;
-    onQrCode?: (qr: { text: string }) => void | Promise<void>;
   } = {},
 ) {
   const requests: Recorded[] = [];
@@ -271,8 +269,6 @@ function makeHarness(
             : "pending",
       inviteLive: async () => options.inviteLive ?? true,
       localTokens: async () => options.localTokens ?? ["local-token-a"],
-      onAuthUrl: options.onAuthUrl,
-      onQrCode: options.onQrCode,
       now: () => clock,
     });
   }
@@ -558,57 +554,8 @@ describe("WeChatLogin", () => {
     expect(realnameCalls).toHaveLength(2);
   });
 
-  it("取到实名链接后立即交给操作者，且同一 ticket 不重复投递", async () => {
-    const delivered: Array<{ authUrl: string; expiresAt: number }> = [];
-    const h = makeHarness({
-      realname: ["wait", "wait"],
-      onAuthUrl: (auth) => {
-        delivered.push(auth);
-      },
-    });
-    const login = h.make();
-    await login.startOtherOwner();
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0]?.authUrl).toBe("https://weixin110.qq.com/auth/1");
-    expect(delivered[0]?.expiresAt).toBeGreaterThan(NOW);
 
-    // 同一个 ticket 的后续轮询不再重发链接。
-    await h.make().advance();
-    expect(delivered).toHaveLength(1);
-  });
 
-  it("刷新后取到的新实名链接再次投递", async () => {
-    const delivered: string[] = [];
-    const h = makeHarness({
-      realname: ["refresh", "wait"],
-      onAuthUrl: (auth) => {
-        delivered.push(auth.authUrl);
-      },
-    });
-    const login = h.make();
-    await login.startOtherOwner();
-    expect(delivered).toEqual(["https://weixin110.qq.com/auth/1"]);
-
-    await login.advance(); // 服务端要求刷新：丢掉旧 ticket
-    await login.advance(); // 重新取授权链接
-    expect(delivered).toEqual([
-      "https://weixin110.qq.com/auth/1",
-      "https://weixin110.qq.com/auth/2",
-    ]);
-  });
-
-  it("投递失败不影响邀请推进", async () => {
-    const h = makeHarness({
-      realname: ["wait"],
-      onAuthUrl: () => {
-        throw new Error("send failed");
-      },
-    });
-    const login = h.make();
-    await login.startOtherOwner();
-    expect(login.view().stage).toBe("realname");
-    expect(login.view().failure).toBeUndefined();
-  });
 
   it("实名等待最长 480 秒", async () => {
     const h = makeHarness({ realname: ["wait", "wait"] });
@@ -1132,55 +1079,5 @@ describe("WeChatLogin over the real iLink client", () => {
     expect(h.login.view().stage).toBe("scan");
     expect(h.calls.at(-1)).not.toContain("verify_code");
     expect(JSON.stringify([...h.state.rows.values()])).not.toContain("424242");
-  });
-});
-
-describe("QR delivery", () => {
-  it("取到二维码后立即交给投递方", async () => {
-    const delivered: string[] = [];
-    const h = makeHarness({
-      realname: ["ok"],
-      onQrCode: (qr) => {
-        delivered.push(qr.text);
-      },
-    });
-    const login = h.make();
-    await login.startOtherOwner();
-
-    expect(login.view().stage).toBe("scan");
-    expect(delivered).toEqual([`${QR_IMAGE}-1`]);
-  });
-
-  it("二维码过期重取后再次投递新码", async () => {
-    const delivered: string[] = [];
-    const h = makeHarness({
-      realname: ["ok"],
-      statuses: ["expired", "wait"],
-      onQrCode: (qr) => {
-        delivered.push(qr.text);
-      },
-    });
-    const login = h.make();
-    await login.startOtherOwner();
-    await login.advance(); // 旧码过期：qrPending 清掉
-    await login.advance(); // 重新取码
-
-    expect(delivered).toEqual([`${QR_IMAGE}-1`, `${QR_IMAGE}-2`]);
-    expect(login.view().stage).toBe("scan");
-  });
-
-  it("二维码投递失败不影响状态机", async () => {
-    const h = makeHarness({
-      realname: ["ok"],
-      onQrCode: () => {
-        throw new Error("send failed");
-      },
-    });
-    const login = h.make();
-    await login.startOtherOwner();
-
-    expect(login.view().stage).toBe("scan");
-    expect(login.view().failure).toBeUndefined();
-    expect(login.view().qrImage).toBeDefined();
   });
 });

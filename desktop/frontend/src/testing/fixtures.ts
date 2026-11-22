@@ -32,6 +32,11 @@ import type {
   InstallInputDTO,
   LifeSourceDTO,
   LifeVitalsDTO,
+  MemberInviteDTO,
+  MemberInviteStateDTO,
+  MemberInvitesDTO,
+  MemberUserDTO,
+  MembersDTO,
   LocalEngine,
   LocalRuntimesDTO,
   Locale,
@@ -68,6 +73,10 @@ type Scenario =
   | "bots-unreadable"
   | "bots-unsupported"
   | "bots-unsupported-container"
+  | "users-three"
+  | "users-empty"
+  | "users-unsupported"
+  | "users-wizard"
   | "cf-denied"
   | "cf-timeout"
   | "cf-slow-apply"
@@ -197,6 +206,9 @@ interface MockState {
   wallet: WalletStatusDTO;
   vitals: LifeVitalsDTO | "failed" | "unsupported";
   bots: BotDTO[] | "unsupported";
+  users: MemberUserDTO[] | "unsupported";
+  memberInvites: MemberInviteDTO[];
+  inviteStage: string;
   botDocs: BotDocDTO[];
   botRuns: BotRunDTO[];
   localeSaveFails: boolean;
@@ -432,6 +444,17 @@ const DEFAULT_VITALS: LifeVitalsDTO = {
   ],
 };
 
+/** Drives the add-user wizard through its stages, one poll at a time. */
+const WIZARD_STAGES = ["starting", "realname", "scan", "pin", "confirmed"] as const;
+
+function nextWizardStage(state: MockState): string {
+  const index = WIZARD_STAGES.indexOf(state.inviteStage as never);
+  const next =
+    WIZARD_STAGES[Math.min(index + 1, WIZARD_STAGES.length - 1)] ?? "confirmed";
+  state.inviteStage = next;
+  return next;
+}
+
 function scenarioFromLocation(): Scenario {
   const value = new URLSearchParams(window.location.search).get("fixture");
   switch (value) {
@@ -440,6 +463,10 @@ function scenarioFromLocation(): Scenario {
     case "bots-unreadable":
     case "bots-unsupported":
     case "bots-unsupported-container":
+    case "users-three":
+    case "users-empty":
+    case "users-unsupported":
+    case "users-wizard":
     case "cf-denied":
     case "cf-timeout":
     case "cf-slow-apply":
@@ -846,6 +873,39 @@ function initialState(): MockState {
                 },
               ]
             : [],
+    users:
+      scenario === "users-unsupported"
+        ? "unsupported"
+        : scenario === "users-three"
+          ? [
+              {
+                memberId: "owner",
+                label: "我",
+                role: "owner",
+                status: "active",
+                connection: "running",
+                inviteId: null,
+              },
+              {
+                memberId: "m1",
+                label: "小王",
+                role: "member",
+                status: "active",
+                connection: "running",
+                inviteId: null,
+              },
+              {
+                memberId: "m2",
+                label: "小李",
+                role: "member",
+                status: "revoked",
+                connection: "unbound",
+                inviteId: null,
+              },
+            ]
+          : [],
+    memberInvites: [],
+    inviteStage: "starting",
     botDocs: [
       { name: "守则", content: "只汇报价格变化，不下单" },
       { name: "记忆", content: "上次阈值：6 万" },
@@ -2061,6 +2121,76 @@ export function createMockClient(): ClientService {
     async walletStatus(): Promise<WalletStatusDTO> {
       record("walletStatus");
       return { ...state.wallet };
+    },
+
+    async members(): Promise<MembersDTO> {
+      record("members");
+      if (state.users === "unsupported") {
+        fail("MEMBERS_UNSUPPORTED", "当前部署还没有用户管理接口");
+      }
+      return { users: state.users };
+    },
+
+    async memberInvites(): Promise<MemberInvitesDTO> {
+      record("memberInvites");
+      return { invites: state.memberInvites };
+    },
+
+    async createMemberInvite(label: string): Promise<MemberInviteDTO> {
+      record("createMemberInvite", label);
+      state.inviteStage = "starting";
+      return {
+        inviteId: "inv-1",
+        label,
+        kind: "new",
+        memberId: null,
+        expiresAt: Date.now() + 15 * 60_000,
+      };
+    },
+
+    async memberInviteState(id: string): Promise<MemberInviteStateDTO> {
+      record("memberInviteState", id);
+      const stage = state.scenario === "users-wizard"
+        ? nextWizardStage(state)
+        : state.inviteStage;
+      return {
+        inviteId: id,
+        label: "小王",
+        status: stage === "confirmed" ? "consumed" : "pending",
+        stage,
+        expiresAt: Date.now() + 15 * 60_000,
+        realnameDeadline: Date.now() + 8 * 60_000,
+        realnameUrl:
+          stage === "realname" ? "https://liteapp.weixin.qq.com/q/fixture" : null,
+        qrContent: stage === "scan" ? "https://weixin.qq.com/qr/fixture" : null,
+        failure: null,
+      };
+    },
+
+    async submitMemberPin(id: string, pin: string): Promise<MemberInviteStateDTO> {
+      record("submitMemberPin", id, pin);
+      state.inviteStage = "saving";
+      return this.memberInviteState(id);
+    },
+
+    async cancelMemberInvite(id: string): Promise<void> {
+      record("cancelMemberInvite", id);
+    },
+
+    async rebindMember(id: string): Promise<MemberInviteDTO> {
+      record("rebindMember", id);
+      return { inviteId: "inv-rebind", label: "小王", kind: "rebind", memberId: id, expiresAt: Date.now() + 900_000 };
+    },
+
+    async revokeMember(id: string): Promise<void> {
+      record("revokeMember", id);
+      if (state.users !== "unsupported") {
+        state.users = state.users.map((user) =>
+          user.memberId === id
+            ? { ...user, status: "revoked", connection: "unbound" }
+            : user,
+        );
+      }
     },
 
     async bots(): Promise<BotsDTO> {

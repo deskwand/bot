@@ -148,7 +148,6 @@ import {
 } from "./tools";
 import { SelfStore } from "./self-store";
 import { SelfWakeStore, guardSelfTool, isSelfWake, SELF_WAKE_PREFIX, type SelfWakeState } from "./self-wake";
-import { createMemberTools } from "../members/tools";
 import { createShareTools } from "../members/shares";
 import { createSelfWakeTools } from "./self-tools";
 import { createSelfTools } from "./self-tools";
@@ -498,11 +497,7 @@ export class ButlerDO extends Agent<Env> {
           task: (id) => this.controlTask(id),
           locale: ownerLocale(this.env),
         }),
-        ...createMemberTools({
-          actor: ownerPrincipal(),
-          channel: this.channels(),
-          locale: ownerLocale(this.env),
-        }),
+
         ...createShareTools({
           resolveActor: () => ownerPrincipal(),
           channel: this.channels(),

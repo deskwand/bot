@@ -16,31 +16,7 @@ export const member = {
     submit: "提交",
     qrLabel: "微信绑定二维码",
   },
-  denied: "只有主人能管理成员。",
-  inviteLocal:
-    "绑定邀请已创建（{inviteId}），{expiresAt} 前有效。实名二维码和家人的绑定二维码会随后直接发到这个聊天里：你先用微信扫实名码完成授权，再把绑定码转发给家人扫。下面这条只在本机能打开的链接，用来输入微信要求的 PIN：",
-  rebindLocal:
-    "换绑邀请已创建（{inviteId}），{expiresAt} 前有效。实名二维码和绑定二维码会随后发到这个聊天里，对方必须用原来那个微信扫。下面这条只在本机能打开的链接，用来输入微信要求的 PIN：",
-  operatorAuth:
-    "微信要求先由发起邀请的人完成实名授权。请用微信扫下面这张二维码，在 {minutes} 分钟内完成授权；通过后才会生成给家人的绑定二维码。",
-  bindingQr:
-    "这是家人的绑定二维码，让对方用微信扫码并在手机上确认。码过期会自动补发一张新的。",
-  error: "成员管理失败（{code}）。",
-  inviteCreated:
-    "绑定邀请已创建（{inviteId}），{expiresAt} 前有效。请把下面这条链接原样转交给受邀人，对方打开后按提示绑定微信：",
-  rebindCreated:
-    "换绑邀请已创建（{inviteId}），{expiresAt} 前有效。请把下面这条链接转交给该成员，对方必须用原来那个微信完成绑定：",
-  cancelled: "已取消邀请 {inviteId}。",
-  revoked: "已撤销成员 {memberId}，其微信连接已断开，历史记录保留。",
-  list: {
-    empty: "目前只有主人，没有成员。",
-    header: "成员共 {count} 人：",
-    line: "- {label}（{memberId}）：{role}，{status}",
-    owner: "主人",
-    member: "成员",
-    active: "正常",
-    revoked: "已撤销",
-  },
+  error: "成员操作失败（{code}）。",
   share: {
     prepared:
       "分享预览（{shareId}）→ {recipient}，{expiresAt} 前有效。\n正文：{text}\n附件：{files}\n还没有发送。确认请回复「确认分享 {shareId}」，取消请回复「取消分享 {shareId}」。",
@@ -66,13 +42,5 @@ export const member = {
       SHARE_INTERRUPTED: "发送中途失败，这条分享已停止，不会自动重发。",
       SHARE_INTERNAL: "分享失败，请稍后重试。",
     },
-  },
-  errors: {
-    MEMBER_ACCESS_DENIED: "只有主人能管理成员。",
-    INVITE_NOT_FOUND: "找不到这条邀请，可能已被取消或删除。",
-    INVITE_EXPIRED: "这条邀请已过期，请重新创建。",
-    INVITE_CANCELLED: "这条邀请已取消，请重新创建。",
-    INVITE_CONSUMED: "这条邀请已经用过了，不能重复使用。",
-    USER_ALREADY_BOUND: "这个微信已经绑定了成员，不能重复绑定。",
   },
 } as const;

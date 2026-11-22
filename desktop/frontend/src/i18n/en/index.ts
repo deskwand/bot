@@ -17,6 +17,7 @@ import { setup } from "./setup";
 import { shell } from "./shell";
 import { states } from "./states";
 import { updates } from "./updates";
+import { users } from "./users";
 import { wallet } from "./wallet";
 
 export const en: Messages = {
@@ -28,6 +29,7 @@ export const en: Messages = {
   overview,
   diagnostics,
   updates,
+  users,
   models,
   search,
   mcp,

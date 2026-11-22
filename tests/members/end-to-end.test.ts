@@ -286,10 +286,15 @@ describe("invite → bind → work → revoke", () => {
   }, 30_000);
 });
 
-describe("operator link delivery", () => {
-  it("解开实名 CGI 的 data 信封，并把链接作为系统消息送进主人聊天", async () => {
+describe("admin invite state", () => {
+  it("reads the real-name link out of the data envelope", async () => {
     const authUrl = "https://liteapp.weixin.qq.com/q/e2e-realname";
+    // Close enough that min(8 minutes, expire_time) is expire_time itself.
+    const expireSeconds = Math.floor(Date.now() / 1000) + 180;
+    const expiresAt = expireSeconds * 1000;
     let qrRequests = 0;
+    // The fixture carries the real envelope and nothing flat: a parser that
+    // reads the top level cannot see auth_url here.
     setILinkFetchOverride((async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("step=get_auth_url")) {
@@ -298,19 +303,16 @@ describe("operator link delivery", () => {
           data: {
             auth_url: authUrl,
             bot_spam_ticket: "spam-ticket-e2e",
-            expire_time: 1_795_428_630,
+            expire_time: expireSeconds,
           },
         });
       }
       if (url.includes("step=query_auth_result")) {
-        return json({ ret: 0, data: { auth_status: 1 } });
+        return json({ ret: 0, data: { auth_status: 0 } });
       }
       if (url.includes("/ilink/bot/get_bot_qrcode")) {
         qrRequests += 1;
-        return json({
-          qrcode: "qr-e2e",
-          qrcode_img_content: "https://weixin.qq.com/qr/e2e",
-        });
+        return json({ qrcode: "qr-e2e", qrcode_img_content: "https://weixin.qq.com/qr/e2e" });
       }
       return json({ ret: 0 });
     }) as typeof fetch);
@@ -320,34 +322,11 @@ describe("operator link delivery", () => {
 
     const result = await runInDurableObject(hub, async (instance, store) => {
       settleInbox(store.storage.sql);
-      const sent: string[] = [];
-      const images: { name: string; bytes: Uint8Array }[] = [];
-      const sendCurrent = vi
-        .spyOn(instance, "sendCurrent")
-        .mockImplementation(async (message) => {
-          sent.push(message.text);
-          return {
-            channel: "wechat",
-            conversationId: "owner-conversation",
-            routeKey: "wechat",
-            messageId: null,
-          };
-        });
-      const sendOwnerImage = vi
-        .spyOn(
-          instance as unknown as {
-            sendOwnerImage(name: string, bytes: Uint8Array): Promise<void>;
-          },
-          "sendOwnerImage",
-        )
-        .mockImplementation(async (name, bytes) => {
-          images.push({ name, bytes });
-        });
       const link = await (instance as unknown as {
         createMemberInvite(
           actor: Principal,
           label: string,
-        ): Promise<{ inviteId: string; bindUrl: string }>;
+        ): Promise<{ inviteId: string }>;
       }).createMemberInvite(ownerPrincipal(), "小林");
       await (instance as unknown as {
         pollMemberLogin(payload: {
@@ -355,32 +334,27 @@ describe("operator link delivery", () => {
           generation: number;
         }): Promise<void>;
       }).pollMemberLogin({ inviteId: link.inviteId, generation: 1 });
-      const page = await (instance as unknown as {
-        memberBindState(
-          token: string,
-        ): Promise<{ ok: boolean; view?: { stage: string } }>;
-      }).memberBindState(link.bindUrl.split("#")[1]!);
-      sendCurrent.mockRestore();
-      sendOwnerImage.mockRestore();
-      return { sent, images, stage: page.view?.stage };
+      const state = await (instance as unknown as {
+        adminInviteState(id: string): Promise<{
+          ok: boolean;
+          view?: {
+            stage: string;
+            failure?: string;
+            realnameUrl?: string;
+            realnameDeadline?: number;
+          };
+        }>;
+      }).adminInviteState(link.inviteId);
+      return state;
     });
 
-    // 两个码都以图片送达：实名一张、绑定一张，都是可扫的 PNG。
-    expect(result.images.map((image) => image.name)).toEqual([
-      "wechat-realname.png",
-      "wechat-bind.png",
-    ]);
-    for (const image of result.images) {
-      expect([...image.bytes.subarray(0, 8)]).toEqual([
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-      ]);
-    }
-
-    // 文本只说明怎么用，不再把链接当可点地址交付。
-    expect(result.sent).toHaveLength(2);
-    expect(result.sent[0]).not.toContain("http");
-    expect(result.sent[1]).not.toContain("http");
-    expect(result.stage).toBe("scan");
-    expect(qrRequests).toBe(1);
+    // A reverted parser turns the stage into a protocol failure with no URL.
+    expect(result.ok).toBe(true);
+    expect(result.view?.stage).toBe("realname");
+    expect(result.view?.failure).toBeUndefined();
+    expect(result.view?.realnameUrl).toBe(authUrl);
+    expect(result.view?.realnameDeadline).toBe(expiresAt);
+    expect(JSON.stringify(result.view)).not.toContain("spam-ticket");
+    expect(qrRequests).toBe(0);
   }, 30_000);
 });

@@ -59,6 +59,11 @@ import type {
   ModelEntryDTO,
   ModelLoginDTO,
   ModelProviderDTO,
+  MemberInviteDTO,
+  MemberInviteStateDTO,
+  MemberInvitesDTO,
+  MemberUserDTO,
+  MembersDTO,
   MoveDTO,
   OperationDTO,
   PendingRestoreDTO,
@@ -77,6 +82,11 @@ import type {
 } from "../mygo";
 
 export type {
+  MemberInviteDTO,
+  MemberInviteStateDTO,
+  MemberInvitesDTO,
+  MemberUserDTO,
+  MembersDTO,
   AccountDTO,
   BackupFileDTO,
   BackupPreviewDTO,
@@ -276,6 +286,14 @@ export interface ClientService {
   lifeVitals(): Promise<LifeVitalsDTO>;
   bots(): Promise<BotsDTO>;
   botDetail(id: string): Promise<BotDetailDTO>;
+  members(): Promise<MembersDTO>;
+  memberInvites(): Promise<MemberInvitesDTO>;
+  createMemberInvite(label: string): Promise<MemberInviteDTO>;
+  memberInviteState(id: string): Promise<MemberInviteStateDTO>;
+  submitMemberPin(id: string, pin: string): Promise<MemberInviteStateDTO>;
+  cancelMemberInvite(id: string): Promise<void>;
+  rebindMember(id: string): Promise<MemberInviteDTO>;
+  revokeMember(id: string): Promise<void>;
   saveWallet(input: WalletEditDTO): Promise<ResultDTO>;
   mcpStatus(): Promise<McpAuthDTO[]>;
   modelAuthStatus(): Promise<ModelAuthDTO[]>;

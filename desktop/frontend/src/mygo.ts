@@ -579,6 +579,48 @@ export interface McpToolDTO {
   mode: string;
 }
 
+/** MemberInviteDTO is one pending invite. bindUrl is deliberately absent. */
+export interface MemberInviteDTO {
+  inviteId: string;
+  label: string;
+  kind: string;
+  memberId: string | null;
+  expiresAt: number;
+}
+
+/** MemberInviteStateDTO is one invite's stage; capability strings stay here. */
+export interface MemberInviteStateDTO {
+  inviteId: string;
+  label: string;
+  status: string;
+  stage: string;
+  expiresAt: number;
+  realnameDeadline: number | null;
+  realnameUrl: string | null;
+  qrContent: string | null;
+  failure: string | null;
+}
+
+/** MemberInvitesDTO is the resumable-invite payload. */
+export interface MemberInvitesDTO {
+  invites: MemberInviteDTO[];
+}
+
+/** MemberUserDTO is one row of the users page. */
+export interface MemberUserDTO {
+  memberId: string;
+  label: string;
+  role: string;
+  status: string;
+  connection: string;
+  inviteId: string | null;
+}
+
+/** MembersDTO is the users payload; Users is always an array. */
+export interface MembersDTO {
+  users: MemberUserDTO[];
+}
+
 /** ModelAuthDTO is one subscription provider's login state. */
 export interface ModelAuthDTO {
   provider: string;
@@ -918,6 +960,10 @@ export const Service = {
   cancelCloudflareLogin(opID: string): Promise<void> {
     return call("Service.CancelCloudflareLogin", opID);
   },
+  /** CancelMemberInvite closes a pending invite. */
+  cancelMemberInvite(id: string): Promise<void> {
+    return call("Service.CancelMemberInvite", id);
+  },
   /**
    * CancelModelLogin stops a login that is still waiting for the browser. It is
    * safe to call when nothing is pending.
@@ -1007,6 +1053,10 @@ export const Service = {
   /** ContainerStatus reports the host and container state for the server page. */
   containerStatus(): Promise<ContainerStatusDTO> {
     return call("Service.ContainerStatus");
+  },
+  /** CreateMemberInvite starts a new-user invite. bindUrl never reaches the UI. */
+  createMemberInvite(label: string): Promise<MemberInviteDTO> {
+    return call("Service.CreateMemberInvite", label);
   },
   /**
    * DetectLocalRuntimes reports which container runtimes this Mac has. It only
@@ -1099,6 +1149,18 @@ export const Service = {
   mcpStatus(): Promise<McpAuthDTO[]> {
     return call("Service.McpStatus");
   },
+  /** MemberInviteState reads one invite's stage. */
+  memberInviteState(id: string): Promise<MemberInviteStateDTO> {
+    return call("Service.MemberInviteState", id);
+  },
+  /** MemberInvites lists invitations the wizard can resume. */
+  memberInvites(): Promise<MemberInvitesDTO> {
+    return call("Service.MemberInvites");
+  },
+  /** Members lists the owner and every channel user with its connection state. */
+  members(): Promise<MembersDTO> {
+    return call("Service.Members");
+  },
   /** ModelAuthStatus lists the subscription providers and whether they are signed in. */
   modelAuthStatus(): Promise<ModelAuthDTO[]> {
     return call("Service.ModelAuthStatus");
@@ -1181,6 +1243,10 @@ export const Service = {
   publishConfig(input: ConfigEditDTO): Promise<ResultDTO> {
     return call("Service.PublishConfig", input);
   },
+  /** RebindMember starts a replacement invite for one existing user. */
+  rebindMember(id: string): Promise<MemberInviteDTO> {
+    return call("Service.RebindMember", id);
+  },
   /**
    * RemoveMcpServer removes one entry, clears MCP_* secrets only it referenced,
    * and asks the Worker to forget its OAuth client and tokens.
@@ -1220,6 +1286,10 @@ export const Service = {
   /** ReviveOldHouse restores the entry of an abandoned move. */
   reviveOldHouse(): Promise<void> {
     return call("Service.ReviveOldHouse");
+  },
+  /** RevokeMember removes one user's access and credentials. */
+  revokeMember(id: string): Promise<void> {
+    return call("Service.RevokeMember", id);
   },
   /** RevokeOwner clears the claim and closes the window. */
   revokeOwner(): Promise<OwnerStatusDTO> {
@@ -1336,6 +1406,10 @@ export const Service = {
   /** Status returns one evidence-based status item per kind. */
   status(): Promise<StatusItemDTO[]> {
     return call("Service.Status");
+  },
+  /** SubmitMemberPin relays the PIN WeChat showed on the invitee's phone. */
+  submitMemberPin(id: string, pin: string): Promise<MemberInviteStateDTO> {
+    return call("Service.SubmitMemberPin", id, pin);
   },
   /**
    * SyncExchange fetches one account from the local network and pushes the raw

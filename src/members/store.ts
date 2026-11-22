@@ -105,6 +105,8 @@ export const INVITE_EXPIRED = "INVITE_EXPIRED";
 export const INVITE_CANCELLED = "INVITE_CANCELLED";
 export const INVITE_CONSUMED = "INVITE_CONSUMED";
 export const USER_ALREADY_BOUND = "USER_ALREADY_BOUND";
+/** A second invite for the same label would orphan the first one's token. */
+export const INVITE_PENDING = "INVITE_PENDING";
 
 export class MemberError extends Error {
   public readonly code: string;
@@ -356,6 +358,19 @@ export class MemberStore {
         throw new MemberError(MEMBER_ACCESS_DENIED);
       }
       expectedUserId = current.user_id;
+    }
+    if (kind === "new") {
+      // This method is synchronous, so check-and-insert cannot interleave:
+      // a second invite for the same label is refused, never orphaned.
+      const clash = this.sql
+        .exec<{ id: string }>(
+          `SELECT id FROM member_invites
+            WHERE kind = 'new' AND label = ? AND status = 'pending' AND expires_at > ?`,
+          label || DEFAULT_LABEL,
+          this.now(),
+        )
+        .toArray()[0];
+      if (clash) throw new MemberError(INVITE_PENDING);
     }
     const id = crypto.randomUUID();
     const expiresAt = this.now() + (options.ttlMs ?? DEFAULT_INVITE_TTL_MS);

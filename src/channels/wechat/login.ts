@@ -71,6 +71,8 @@ export type InviteView = {
   qrImage?: string;
   /** Operator-only: where the real-name verification is completed. */
   authUrl?: string;
+  /** The shorter of the invite deadline and the real-name ticket's. */
+  realnameDeadline?: number;
   failure?: LoginFailure;
 };
 
@@ -217,17 +219,6 @@ export type WeChatLoginOptions = {
   localTokens?:
     | readonly string[]
     | (() => readonly string[] | Promise<readonly string[]>);
-  /**
-   * The operator's own real-name link, handed to its recipient outside the
-   * model. Called once per issued link; a failure never stops the invite.
-   */
-  onAuthUrl?(auth: { authUrl: string; expiresAt: number }): Promise<void> | void;
-  /**
-   * The bind QR code, handed to its recipient outside the model. Called once
-   * per issued code (a refresh issues a new one); a failure never stops the
-   * invite.
-   */
-  onQrCode?(qr: { text: string }): Promise<void> | void;
   now?: () => number;
   gate?: LoginGate;
   /** Upper bound on one upstream step. Defaults to 20 s. */
@@ -312,6 +303,9 @@ export class WeChatLogin {
       generation: state.generation,
       scanned: state.scanned,
       ...(showQr && secrets?.qrImage ? { qrImage: secrets.qrImage } : {}),
+      ...(state.stage === "realname"
+        ? { realnameDeadline: state.realnameDeadline }
+        : {}),
       ...(state.stage === "realname" && secrets?.authUrl
         ? { authUrl: secrets.authUrl }
         : {}),
@@ -547,7 +541,6 @@ export class WeChatLogin {
       const stored = await this.storeAuth(state, auth.value, expect, current);
       if (!stored) return;
       current = stored.secrets;
-      await this.announceAuthUrl(stored.secrets, stored.deadline);
     }
     const ticket = current.realnameTicket;
     if (!ticket) return void (await this.fail(state, "protocol", expect));
@@ -581,43 +574,6 @@ export class WeChatLogin {
     };
     await this.writeSecrets(merged);
     return { secrets: merged, deadline };
-  }
-
-  /**
-   * Hands the operator's real-name link to its recipient. Delivery happens
-   * outside the model and a failure here never stops the invite: the state
-   * machine keeps polling until the operator acts or the deadline passes.
-   */
-  private async announceAuthUrl(
-    secrets: LoginSecrets,
-    deadline: number,
-  ): Promise<void> {
-    const deliver = this.options.onAuthUrl;
-    const authUrl = secrets.authUrl;
-    if (deliver === undefined || authUrl === undefined) return;
-    await this.deliver("operator link", () => deliver({ authUrl, expiresAt: deadline }));
-  }
-
-  /** Hands the bind QR to its recipient; the same rules as the link above. */
-  private async announceQr(text: string): Promise<void> {
-    const deliver = this.options.onQrCode;
-    if (deliver === undefined) return;
-    await this.deliver("binding QR", () => deliver({ text }));
-  }
-
-  /** A failed delivery is reported by shape only: the payload is a capability. */
-  private async deliver(
-    what: string,
-    run: () => Promise<void> | void,
-  ): Promise<void> {
-    try {
-      await run();
-    } catch (error) {
-      console.warn(
-        `wechat login: ${what} delivery failed:`,
-        error instanceof Error ? error.constructor.name : "Error",
-      );
-    }
   }
 
   /**
@@ -712,7 +668,6 @@ export class WeChatLogin {
       qrcode: qr.value.qrcode,
       qrImage: qr.value.imageContent,
     });
-    await this.announceQr(qr.value.imageContent);
   }
 
   private async applyStatus(
