@@ -32,12 +32,19 @@ function tempDir(): string {
   return dir;
 }
 
+/** Local SHA-256 as hex, for the fake SHA256SUMS the verifier now trusts. */
+function sha256HexText(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function fakeFetch(handler: (url: string) => Response | Promise<Response>): typeof fetch {
-  const fn = async (input: unknown) => handler(String(input));
+function fakeFetch(
+  handler: (url: string, init?: RequestInit) => Response | Promise<Response>,
+): typeof fetch {
+  const fn = async (input: unknown, init?: RequestInit) => handler(String(input), init);
   return fn as unknown as typeof fetch;
 }
 
@@ -171,7 +178,7 @@ describe("checkPublishedVersion", () => {
 describe("verifyPublished", () => {
   it("accepts a manifest and archive that match the local build", async () => {
     const local = localArchive();
-    const fetchFn = fakeFetch((url) => {
+    const fetchFn = fakeFetch((url, init) => {
       if (url.includes("update-darwin-arm64.json")) {
         return new Response(
           JSON.stringify({
@@ -181,6 +188,12 @@ describe("verifyPublished", () => {
           }),
           { status: 200 },
         );
+      }
+      if (url.includes("SHA256SUMS")) {
+        return new Response(`${sha256HexText("abc")}  ${ARCHIVE}\n`, { status: 200 });
+      }
+      if (init?.method === "HEAD") {
+        return new Response(null, { status: 200, headers: { "content-length": "3" } });
       }
       return new Response("abc", { status: 200 });
     });
@@ -193,7 +206,7 @@ describe("verifyPublished", () => {
   it("uses a cache-busting query", async () => {
     const local = localArchive();
     const requested: string[] = [];
-    const fetchFn = fakeFetch((url) => {
+    const fetchFn = fakeFetch((url, init) => {
       requested.push(url);
       if (url.includes("update-darwin-arm64.json")) {
         return new Response(
@@ -204,6 +217,12 @@ describe("verifyPublished", () => {
           }),
           { status: 200 },
         );
+      }
+      if (url.includes("SHA256SUMS")) {
+        return new Response(`${sha256HexText("abc")}  ${ARCHIVE}\n`, { status: 200 });
+      }
+      if (init?.method === "HEAD") {
+        return new Response(null, { status: 200, headers: { "content-length": "3" } });
       }
       return new Response("abc", { status: 200 });
     });
@@ -379,18 +398,30 @@ function releaseFetch(options: {
   sumsStatus?: number;
   remoteOverride?: Record<string, string>;
   unavailable?: string[];
+  missingLength?: string[];
 }): { fetchFn: typeof fetch; requested: string[] } {
   const requested: string[] = [];
   const bodies = new Map(options.remote.map((artifact) => [artifact.name, artifact.content]));
-  const fetchFn = fakeFetch((url) => {
+  const fetchFn = fakeFetch((url, init) => {
     requested.push(url);
     const name = decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
+    const isHead = (init?.method ?? "GET").toUpperCase() === "HEAD";
     if (name === "SHA256SUMS") {
       return new Response(options.sums, { status: options.sumsStatus ?? 200 });
     }
     if (options.unavailable?.includes(name)) return new Response("", { status: 404 });
     const body = options.remoteOverride?.[name] ?? bodies.get(name);
     if (body === undefined) return new Response("", { status: 404 });
+    // 校验默认只读 HEAD 的 content-length，不再下载包体。
+    if (isHead) {
+      return new Response(null, {
+        status: 200,
+        headers: {
+          "content-length": String(Buffer.byteLength(body)),
+          ...(options.missingLength?.includes(name) ? { "content-length": "" } : {}),
+        },
+      });
+    }
     return new Response(body, { status: 200 });
   });
   return { fetchFn, requested };
@@ -544,9 +575,10 @@ describe("verifyPublishedAssets", () => {
     ).rejects.toThrow();
   });
 
-  it("rejects a same-length tampered remote script or installer", async () => {
-    // 远端内容被换成等长数据，SHA256SUMS 仍对应本地文件：长度检查会放行，
-    // 只有逐字节的 SHA-256 比较能发现篡改。
+  it("only catches same-length remote tampering with DESKWAND_FULL_VERIFY", async () => {
+    // 远端内容被换成等长数据时，SHA256SUMS 仍对应本地文件、长度也一致，
+    // 默认的大小 + 清单校验会放行——这是不下载包体的代价。设
+    // DESKWAND_FULL_VERIFY=1 才会整份下回来逐字节比对，那种情况下必须拒绝。
     const dir = tempDir();
     materialize(dir, DARWIN_ARTIFACTS);
     const localScript = DARWIN_ARTIFACTS.find((a) => a.name === "install.sh")!.content;
@@ -554,39 +586,37 @@ describe("verifyPublishedAssets", () => {
     expect(Buffer.byteLength(tamperedScript)).toBe(Buffer.byteLength(localScript));
     expect(tamperedScript).not.toBe(localScript);
 
+    const tampered = () =>
+      releaseFetch({
+        sums: sumsFor(DARWIN_ARTIFACTS),
+        remote: DARWIN_ARTIFACTS,
+        remoteOverride: { "install.sh": tamperedScript },
+      }).fetchFn;
+
     await expect(
       verifyPublishedAssets({
         target: "darwin-arm64",
         version: "0.1.6",
         buildDir: dir,
         env: {},
-        fetchFn: releaseFetch({
-          sums: sumsFor(DARWIN_ARTIFACTS),
-          remote: DARWIN_ARTIFACTS,
-          remoteOverride: { "install.sh": tamperedScript },
-        }).fetchFn,
+        fetchFn: tampered(),
       }),
-    ).rejects.toThrow("公网 install.sh 的 SHA-256 与本地不一致");
+    ).resolves.toBeUndefined();
 
-    const windowsDir = tempDir();
-    materialize(windowsDir, WINDOWS_ARTIFACTS);
-    const localInstaller = WINDOWS_ARTIFACTS.find((a) => a.name === WINDOWS_INSTALLER)!.content;
-    const tamperedInstaller = "WINDOWS EXE";
-    expect(Buffer.byteLength(tamperedInstaller)).toBe(Buffer.byteLength(localInstaller));
-
-    await expect(
-      verifyPublishedAssets({
-        target: "windows-amd64",
-        version: "0.1.6",
-        buildDir: windowsDir,
-        env: {},
-        fetchFn: releaseFetch({
-          sums: sumsFor(WINDOWS_ARTIFACTS),
-          remote: WINDOWS_ARTIFACTS,
-          remoteOverride: { [WINDOWS_INSTALLER]: tamperedInstaller },
-        }).fetchFn,
-      }),
-    ).rejects.toThrow(`公网 ${WINDOWS_INSTALLER} 的 SHA-256 与本地不一致`);
+    process.env.DESKWAND_FULL_VERIFY = "1";
+    try {
+      await expect(
+        verifyPublishedAssets({
+          target: "darwin-arm64",
+          version: "0.1.6",
+          buildDir: dir,
+          env: {},
+          fetchFn: tampered(),
+        }),
+      ).rejects.toThrow("公网 install.sh 的 SHA-256 与本地不一致");
+    } finally {
+      delete process.env.DESKWAND_FULL_VERIFY;
+    }
   });
 
   it("rejects a missing or duplicate checksum line", async () => {

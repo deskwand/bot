@@ -189,6 +189,52 @@ export async function checkPublishedVersion(
   return { firstRelease: false, published };
 }
 
+/**
+ * 校验默认不下载包体：用 `HEAD` 的 content-length 核对大小，再用公网
+ * `SHA256SUMS` 里的哈希核对本地文件。慢网络下这能把每次发布省下约 40 MB。
+ * 代价是「远端内容被换成等长数据」这类篡改变得不可见——需要那一层时设
+ * DESKWAND_FULL_VERIFY=1，就会把包体整份下回来逐字节比对。
+ */
+function fullVerifyEnabled(): boolean {
+  return (process.env.DESKWAND_FULL_VERIFY ?? "").trim() === "1";
+}
+
+/** 远端对象的字节数，来自 HEAD 的 content-length；没有这个头就无法核对大小。 */
+async function remoteLength(
+  url: string,
+  name: string,
+  fetchFn: typeof fetch,
+): Promise<number> {
+  let response: Response;
+  try {
+    response = await fetchFn(url, { method: "HEAD" });
+  } catch (error) {
+    throw new Error(`无法读取公网 ${name} 的大小：${errorMessage(error)}`);
+  }
+  if (response.status !== 200) {
+    throw new Error(`公网 ${name} 不可读：HTTP ${response.status}`);
+  }
+  const header = response.headers.get("content-length");
+  const length = header === null ? Number.NaN : Number(header);
+  if (Number.isInteger(length) && length >= 0) return length;
+
+  // Cloudflare/R2 对小对象走 HEAD 时可能不给 content-length（本机实测
+  // install.ps1 就是这样）。取一个字节，读 content-range 里的总长度。
+  let ranged: Response;
+  try {
+    ranged = await fetchFn(url, { headers: { Range: "bytes=0-0" } });
+  } catch (error) {
+    throw new Error(`无法读取公网 ${name} 的大小：${errorMessage(error)}`);
+  }
+  const range = ranged.headers.get("content-range");
+  const total = range === null ? Number.NaN : Number(range.split("/").pop());
+  await ranged.body?.cancel();
+  if (!Number.isInteger(total) || total <= 0) {
+    throw new Error(`公网 ${name} 既没有 content-length 也没有可用的 content-range，无法核对大小`);
+  }
+  return total;
+}
+
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -256,6 +302,30 @@ export async function verifyPublished(options: {
     throw new Error(`manifest 归档文件名 ${remoteName} 与本地 ${localName} 不一致`);
   }
 
+  // 公网 SHA256SUMS 里的这一行必须就是本地这份归档：哈希由 CDN 上的清单提供，
+  // 不再把 11 MB 的包体下载回来重算。
+  const sumsUrl = new URL("SHA256SUMS", options.manifestUrl).href;
+  let sumsResponse: Response;
+  try {
+    sumsResponse = await fetchFn(cacheBusted(sumsUrl, now()));
+  } catch (error) {
+    throw new Error(`无法读取公网 SHA256SUMS：${errorMessage(error)}`);
+  }
+  if (sumsResponse.status !== 200) {
+    throw new Error(`公网 SHA256SUMS 不可读：HTTP ${sumsResponse.status}`);
+  }
+  const listedHash = parseSha256Sums(await sumsResponse.text()).get(localName);
+  if (listedHash === undefined) throw new Error(`公网 SHA256SUMS 缺少 ${localName}`);
+  if (listedHash !== localHash) {
+    throw new Error(`公网 SHA256SUMS 中 ${localName} 的校验和与本地不一致`);
+  }
+
+  const remoteSize = await remoteLength(remoteUrl.href, localName, fetchFn);
+  if (remoteSize !== localBytes.byteLength) {
+    throw new Error(`公网归档大小 ${remoteSize} 与本地 ${localBytes.byteLength} 不一致`);
+  }
+  if (!fullVerifyEnabled()) return;
+
   let archiveResponse: Response;
   try {
     archiveResponse = await fetchFn(remoteUrl.href);
@@ -265,7 +335,6 @@ export async function verifyPublished(options: {
   if (archiveResponse.status !== 200) {
     throw new Error(`公网归档不可读：HTTP ${archiveResponse.status}`);
   }
-
   const archiveBytes = Buffer.from(await archiveResponse.arrayBuffer());
   if (archiveBytes.byteLength !== localBytes.byteLength) {
     throw new Error(
@@ -312,7 +381,8 @@ function installArtifacts(target: Target, version: string): string[] {
  * Verifies the first-install artifacts of `target` against the public
  * `SHA256SUMS`, which MyGo writes to `desktop/build/SHA256SUMS` (the shared
  * parent of the per-target build directories). Every local file must be
- * listed with its own SHA-256 and must download byte-identical.
+ * listed with its own SHA-256, and the remote object must report the same
+ * byte length. The body itself is only downloaded when DESKWAND_FULL_VERIFY=1.
  *
  * `otherTarget` is only passed for the second job of a both-platform publish:
  * the shared checksum file must still carry the first platform's archive.
@@ -362,6 +432,16 @@ export async function verifyPublishedAssets(options: {
     }
 
     const artifactUrl = `${base}/${name}`;
+    const remoteSize = await remoteLength(artifactUrl, name, fetchFn);
+    if (remoteSize !== localBytes.byteLength) {
+      throw new Error(
+        `公网 ${name} 大小 ${remoteSize} 与本地 ${localBytes.byteLength} 不一致`,
+      );
+    }
+
+    // 默认到此为止：大小对上了、清单里的哈希也等于本地那份，就不下载包体。
+    if (!fullVerifyEnabled()) continue;
+
     let artifactResponse: Response;
     try {
       artifactResponse = await fetchFn(artifactUrl);
