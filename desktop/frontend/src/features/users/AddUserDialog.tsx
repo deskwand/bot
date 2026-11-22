@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { useApp } from "@/components/app-context";
 import { tryT, useT } from "@/i18n";
@@ -30,22 +30,6 @@ export function AddUserDialog({
   const [inviteId, setInviteId] = useState<string | null>(resumeInviteId ?? null);
   const [pin, setPin] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
-  const resumed = useRef(false);
-
-  // One unfinished invite at a time: reopening the dialog picks it up again.
-  const pending = useQuery({
-    queryKey: ["member-invites"],
-    queryFn: () => client.memberInvites(),
-    enabled: !resumed.current,
-  });
-  useEffect(() => {
-    if (resumed.current || inviteId !== null) return;
-    const invite = pending.data?.invites[0];
-    if (invite === undefined) return;
-    resumed.current = true;
-    setInviteId(invite.inviteId);
-    setLabel(invite.label);
-  }, [pending.data, inviteId]);
 
   const create = useMutation({
     mutationFn: () => client.createMemberInvite(label.trim()),
@@ -208,15 +192,14 @@ export function AddUserDialog({
               type="button"
               className="rounded border px-3 py-1.5 text-sm"
               onClick={() => {
-                const pendingId = inviteId;
+                const staleId = inviteId;
                 setInviteId(null);
                 setFailure(null);
                 setLabel("");
-                resumed.current = false;
-                // The server keeps a pending invite for the same label, so a
-                // retry has to retire it first.
-                if (pendingId !== null) {
-                  void client.cancelMemberInvite(pendingId).catch(() => undefined);
+                // An expired invite cannot be cancelled (the server answers
+                // INVITE_CLOSED); dropping it locally is enough to start over.
+                if (staleId !== null) {
+                  void client.cancelMemberInvite(staleId).catch(() => undefined);
                 }
               }}
             >

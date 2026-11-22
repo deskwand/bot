@@ -51,3 +51,16 @@ test("walks the wizard from the real-name code to the done state", async ({
   await page.clock.runFor(2_100);
   await expect(page.getByTestId("wizard-done")).toBeVisible();
 });
+
+test("a dead invite can be restarted from the label step", async ({ page }) => {
+  await openUsers(page, "users-wizard-expired");
+  await page.getByRole("button", { name: "添加用户" }).click();
+  await page.getByTestId("label-input").fill("小宝");
+  await page.getByTestId("create-invite").click();
+  await expect(page.getByTestId("wizard-dead")).toBeVisible();
+
+  await page.getByRole("button", { name: "重新发起" }).click();
+  // The trap this guards: the dialog used to re-adopt the same dead invite.
+  await expect(page.getByTestId("label-input")).toBeVisible();
+  await expect(page.getByTestId("wizard-dead")).toHaveCount(0);
+});

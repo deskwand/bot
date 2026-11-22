@@ -3,6 +3,7 @@ export const users = {
   unsupported: "这个部署还没有用户管理接口，请先升级部署。",
   maintenance: "正在备份或恢复，暂时不能修改用户，稍后再试。",
   add: "添加用户",
+  resume: "继续",
   pending: "待绑定邀请",
   columns: { label: "名称", role: "角色", connection: "连接", actions: "操作" },
   role: { owner: "主人", member: "用户" },

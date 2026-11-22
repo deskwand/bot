@@ -3,6 +3,7 @@ export const users = {
   unsupported: "This deployment has no member API yet; upgrade it first.",
   maintenance: "A backup or restore is running; users cannot change right now.",
   add: "Add user",
+  resume: "Resume",
   pending: "Pending invitations",
   columns: { label: "Name", role: "Role", connection: "Connection", actions: "Actions" },
   role: { owner: "Owner", member: "User" },

@@ -77,6 +77,7 @@ type Scenario =
   | "users-empty"
   | "users-unsupported"
   | "users-wizard"
+  | "users-wizard-expired"
   | "cf-denied"
   | "cf-timeout"
   | "cf-slow-apply"
@@ -467,6 +468,7 @@ function scenarioFromLocation(): Scenario {
     case "users-empty":
     case "users-unsupported":
     case "users-wizard":
+    case "users-wizard-expired":
     case "cf-denied":
     case "cf-timeout":
     case "cf-slow-apply":
@@ -2150,9 +2152,12 @@ export function createMockClient(): ClientService {
 
     async memberInviteState(id: string): Promise<MemberInviteStateDTO> {
       record("memberInviteState", id);
-      const stage = state.scenario === "users-wizard"
-        ? nextWizardStage(state)
-        : state.inviteStage;
+      const stage =
+        state.scenario === "users-wizard"
+          ? nextWizardStage(state)
+          : state.scenario === "users-wizard-expired"
+            ? "expired"
+            : state.inviteStage;
       return {
         inviteId: id,
         label: "小王",

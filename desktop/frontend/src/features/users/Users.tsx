@@ -92,11 +92,14 @@ export function Users() {
       ) : null}
       {actionError === null ? null : <ErrorAlert error={actionError} />}
 
-      {pending.data?.invites.length ? (
+      {(pending.data?.invites ?? []).filter((invite) => invite.expiresAt > Date.now())
+        .length ? (
         <section data-testid="users-pending" className="rounded border p-3">
           <h2 className="mb-2 text-sm font-medium">{t("users.pending")}</h2>
           <ul className="flex flex-col gap-1 text-sm">
-            {pending.data.invites.map((invite) => (
+            {(pending.data?.invites ?? [])
+              .filter((invite) => invite.expiresAt > Date.now())
+              .map((invite) => (
               <li key={invite.inviteId} className="flex items-center justify-between gap-3">
                 <span>{invite.label}</span>
                 <button
@@ -104,10 +107,10 @@ export function Users() {
                   className="rounded border px-2 py-0.5 text-xs"
                   onClick={() => setWizard(invite.inviteId)}
                 >
-                  {t("users.wizard.title")}
+                  {t("users.resume")}
                 </button>
               </li>
-            ))}
+              ))}
           </ul>
         </section>
       ) : null}
