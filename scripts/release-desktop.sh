@@ -29,7 +29,16 @@ client_key_file="${DESKWAND_CLIENT_UPDATE_KEY_FILE:-$HOME/.deskwand-bot/client-u
 
 # 合并/还原维护者的发布配置（desktop/mygo.release.json → desktop/mygo.json）。
 merge_config() { node --experimental-strip-types "$root/scripts/lib/mygo-release-config.ts" merge; }
-restore_config() { node --experimental-strip-types "$root/scripts/lib/mygo-release-config.ts" restore >/dev/null 2>&1 || true; }
+# 还原后再用 git 兜一次底：.orig 备份可能被同一工作区里的其它操作弄丢，
+# 那样 restore 会静默什么都不做，合并后的桌面配置（真实域名、桶名、账号 ID）
+# 就留在工作区里，下一次 git add -A 就会把它提交进开源仓库。
+restore_config() {
+  node --experimental-strip-types "$root/scripts/lib/mygo-release-config.ts" restore >/dev/null 2>&1 || true
+  if ! git -C "$root" diff --quiet -- desktop/mygo.json 2>/dev/null; then
+    git -C "$root" checkout -- desktop/mygo.json 2>/dev/null &&
+      echo "警告：发布配置的备份丢失，已用 git 还原 desktop/mygo.json" >&2
+  fi
+}
 # EXIT trap 不会因 SIGTERM/SIGINT 触发，而合并后的 mygo.json 里是真实域名与账号 ID：
 # 被打断也要先还原，所以把这两个信号转成一次正常退出。
 # 上一次被 SIGKILL 或断电打断时会留下合并态，这里先还原，避免把真值留在工作区。
