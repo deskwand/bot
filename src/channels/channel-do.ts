@@ -98,6 +98,7 @@ import {
 import { parseTextAction, textHint, type TextAction } from "./text-action";
 import { ChannelError, type ChannelAdapter, type OutboundArtifact } from "./types";
 import { withRetry } from "./retry";
+import { renderQrPng } from "../members/qr-image";
 import { ConnectionStore, contextKey } from "./wechat/connections";
 import { PRIVATE_WECHAT_PREFIX } from "../members/credentials";
 import { toWeChatText } from "./wechat/markdown";
@@ -888,16 +889,26 @@ export class ChannelDO extends Agent<Env> {
         store.getInvite(inviteId)?.status === "consumed"
           ? "committed"
           : "pending",
-      // The operator's real-name link goes to the owner's own chat as a
-      // system message: the invitee page never sees it, and the model never
-      // reads it.
+      // Both codes go to the owner's own chat as images: the invitee page never
+      // sees the real-name link, the model never reads either of them, and
+      // WeChat only opens its own links when they are scanned.
       onAuthUrl: async ({ authUrl, expiresAt: deadline }) => {
         const locale = ownerLocale(this.env);
         const minutes = Math.max(1, Math.ceil((deadline - Date.now()) / 60_000));
-        await this.sendCurrent({
-          text: t(locale, "member.operatorAuth", { minutes, url: authUrl }),
-          priority: "alert",
-        });
+        await this.sendOwnerQr(
+          "wechat-realname.png",
+          authUrl,
+          t(locale, "member.operatorAuth", { minutes }),
+        );
+      },
+      // Without a public address the invitee page is not reachable from
+      // another phone, while a forwarded image can be scanned anywhere.
+      onQrCode: async ({ text }) => {
+        await this.sendOwnerQr(
+          "wechat-bind.png",
+          text,
+          t(ownerLocale(this.env), "member.bindingQr"),
+        );
       },
       onConfirmed: async (credentials: WeChatCredentials) => {
         const raw = JSON.stringify(credentials);
@@ -2077,6 +2088,48 @@ export class ChannelDO extends Agent<Env> {
       bytes: await object.arrayBuffer(),
     };
 
+    await this.sendOwnerFile(channel, file);
+  }
+
+  /**
+   * Sends one generated PNG to the owner's current chat. It is deliberately
+   * not an artifact: nothing has to be addressable later, and the text queue
+   * cannot carry bytes.
+   */
+  private async sendOwnerImage(
+    name: string,
+    bytes: Uint8Array,
+  ): Promise<void> {
+    const route = await this.currentRoute();
+    if (route.channel === null) {
+      throw new ChannelError("channel selection disabled", 0);
+    }
+    await this.sendOwnerFile(route.channel, {
+      name,
+      contentType: "image/png",
+      bytes: bytes.slice().buffer as ArrayBuffer,
+    });
+  }
+
+  /**
+   * The image is the message: the caption goes out only after the image
+   * reached the channel, so the chat never says "scan this" with nothing to
+   * scan. A failed image speaks through the `send_error` event instead.
+   */
+  private async sendOwnerQr(
+    name: string,
+    qrText: string,
+    caption: string,
+  ): Promise<void> {
+    await this.sendOwnerImage(name, await renderQrPng(qrText));
+    await this.sendCurrent({ text: caption, priority: "alert" });
+  }
+
+  /** One sender for owner bytes, so artifacts and images fail the same way. */
+  private async sendOwnerFile(
+    channel: ChannelId,
+    file: OutboundArtifact,
+  ): Promise<void> {
     try {
       await withRetry(async () => {
         await this.adapter(channel).sendArtifact(

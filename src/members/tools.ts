@@ -111,10 +111,17 @@ export function createMemberTools(deps: MemberToolDeps): ToolRegistration[] {
     }
   };
 
-  const invitation = (link: MemberInviteLink, lead: string): string =>
-    isLoopback(link.bindUrl)
-      ? `${lead}\n${link.bindUrl}\n${t(locale, "member.localOnly")}`
-      : `${lead}\n${link.bindUrl}`;
+  /**
+   * A loopback deployment cannot hand out a page, so its lead points at the
+   * QR images instead of asking the owner to forward a link that cannot open.
+   * The URL stays for one purpose only: typing the PIN on the host machine.
+   */
+  const invitation = (
+    link: MemberInviteLink,
+    lead: string,
+    localLead: string,
+  ): string =>
+    `${isLoopback(link.bindUrl) ? localLead : lead}\n${link.bindUrl}`;
 
   return [
     {
@@ -128,6 +135,10 @@ export function createMemberTools(deps: MemberToolDeps): ToolRegistration[] {
           return invitation(
             link,
             t(locale, "member.inviteCreated", {
+              inviteId: link.inviteId,
+              expiresAt: deadline(link.expiresAt),
+            }),
+            t(locale, "member.inviteLocal", {
               inviteId: link.inviteId,
               expiresAt: deadline(link.expiresAt),
             }),
@@ -145,6 +156,10 @@ export function createMemberTools(deps: MemberToolDeps): ToolRegistration[] {
           return invitation(
             link,
             t(locale, "member.rebindCreated", {
+              inviteId: link.inviteId,
+              expiresAt: deadline(link.expiresAt),
+            }),
+            t(locale, "member.rebindLocal", {
               inviteId: link.inviteId,
               expiresAt: deadline(link.expiresAt),
             }),

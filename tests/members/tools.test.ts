@@ -426,8 +426,9 @@ describe("member management tools", () => {
       expect(await h.vault.get<string>(`invite:${rows[0]!.id}`)).toBe(token);
       expect(text.toLowerCase()).not.toContain("qrcode");
       expect(text).not.toContain("ticket");
-      // 测试部署有真域名，不附本机专用说明。
-      expect(text).not.toContain(t("zh", "member.localOnly"));
+      // 测试部署有真域名：用“转交链接”的主文案，不用本机专用文案。
+      expect(text).toContain("原样转交");
+      expect(text).not.toContain("实名二维码和家人的绑定二维码会随后直接发到这个聊天里");
     });
   });
 
@@ -446,7 +447,9 @@ describe("member management tools", () => {
       { label: "小王" },
     );
     expect(text).toContain(link.bindUrl);
-    expect(text).toContain(t("zh", "member.localOnly"));
+    expect(text).toContain("实名二维码和家人的绑定二维码会随后直接发到这个聊天里");
+    // 不再出现“把链接转交给受邀人”的矛盾指令。
+    expect(text).not.toContain("原样转交");
   });
 
   it("成员对象的管理注册表里没有这些工具，主人对象有", async () => {

@@ -159,6 +159,7 @@ function makeHarness(
     state?: MemoryStateStore;
     secrets?: MemorySecretStore;
     onAuthUrl?: (auth: { authUrl: string; expiresAt: number }) => void | Promise<void>;
+    onQrCode?: (qr: { text: string }) => void | Promise<void>;
   } = {},
 ) {
   const requests: Recorded[] = [];
@@ -271,6 +272,7 @@ function makeHarness(
       inviteLive: async () => options.inviteLive ?? true,
       localTokens: async () => options.localTokens ?? ["local-token-a"],
       onAuthUrl: options.onAuthUrl,
+      onQrCode: options.onQrCode,
       now: () => clock,
     });
   }
@@ -1130,5 +1132,55 @@ describe("WeChatLogin over the real iLink client", () => {
     expect(h.login.view().stage).toBe("scan");
     expect(h.calls.at(-1)).not.toContain("verify_code");
     expect(JSON.stringify([...h.state.rows.values()])).not.toContain("424242");
+  });
+});
+
+describe("QR delivery", () => {
+  it("取到二维码后立即交给投递方", async () => {
+    const delivered: string[] = [];
+    const h = makeHarness({
+      realname: ["ok"],
+      onQrCode: (qr) => {
+        delivered.push(qr.text);
+      },
+    });
+    const login = h.make();
+    await login.startOtherOwner();
+
+    expect(login.view().stage).toBe("scan");
+    expect(delivered).toEqual([`${QR_IMAGE}-1`]);
+  });
+
+  it("二维码过期重取后再次投递新码", async () => {
+    const delivered: string[] = [];
+    const h = makeHarness({
+      realname: ["ok"],
+      statuses: ["expired", "wait"],
+      onQrCode: (qr) => {
+        delivered.push(qr.text);
+      },
+    });
+    const login = h.make();
+    await login.startOtherOwner();
+    await login.advance(); // 旧码过期：qrPending 清掉
+    await login.advance(); // 重新取码
+
+    expect(delivered).toEqual([`${QR_IMAGE}-1`, `${QR_IMAGE}-2`]);
+    expect(login.view().stage).toBe("scan");
+  });
+
+  it("二维码投递失败不影响状态机", async () => {
+    const h = makeHarness({
+      realname: ["ok"],
+      onQrCode: () => {
+        throw new Error("send failed");
+      },
+    });
+    const login = h.make();
+    await login.startOtherOwner();
+
+    expect(login.view().stage).toBe("scan");
+    expect(login.view().failure).toBeUndefined();
+    expect(login.view().qrImage).toBeDefined();
   });
 });

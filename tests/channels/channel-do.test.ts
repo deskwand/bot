@@ -853,3 +853,79 @@ describe("sendArtifact retries and missing prerequisites", () => {
     expect(outcome).toBe("wechat context missing/0");
   });
 });
+
+describe("sendOwnerImage", () => {
+  function seedOwnerAddress(hub: ReturnType<typeof freshChannels>) {
+    return runInDurableObject(hub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO owner_addresses (channel, conversation_id, updated_at)
+         VALUES ('wechat', 'wx-owner', ?)`,
+        Date.now(),
+      );
+    });
+  }
+
+  function capturingAdapter(sent: { to: string; name: string; type: string }[]) {
+    return {
+      parseInbound: async () => null,
+      async send() {
+        return { messageId: "" };
+      },
+      async sendArtifact(chatId: string, file: { name: string; contentType: string }) {
+        sent.push({ to: chatId, name: file.name, type: file.contentType });
+      },
+      async edit() {},
+      async answerAction() {},
+    };
+  }
+
+  it("sends the png bytes to the owner's chat", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("owner-image");
+    await seedOwnerAddress(hub);
+    const sent: { to: string; name: string; type: string }[] = [];
+    setChannelOverride("wechat", capturingAdapter(sent));
+
+    await runInDurableObject(hub, async (instance) => {
+      await (
+        instance as unknown as {
+          sendOwnerImage(name: string, bytes: Uint8Array): Promise<void>;
+        }
+      ).sendOwnerImage("wechat-bind.png", new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    });
+
+    expect(sent).toEqual([
+      { to: "wx-owner", name: "wechat-bind.png", type: "image/png" },
+    ]);
+  });
+
+  it("propagates a 4xx rejection without retrying", async () => {
+    setEnv({ ACTIVE_CHANNEL: "wechat" });
+    const hub = freshChannels("owner-image-4xx");
+    await seedOwnerAddress(hub);
+    let calls = 0;
+    setChannelOverride("wechat", {
+      parseInbound: async () => null,
+      async send() {
+        return { messageId: "" };
+      },
+      async sendArtifact() {
+        calls += 1;
+        throw new ILinkError("rejected", -2, 403);
+      },
+      async edit() {},
+      async answerAction() {},
+    });
+
+    await runInDurableObject(hub, async (instance) => {
+      await expect(
+        (
+          instance as unknown as {
+            sendOwnerImage(name: string, bytes: Uint8Array): Promise<void>;
+          }
+        ).sendOwnerImage("wechat-bind.png", new Uint8Array([0x89])),
+      ).rejects.toBeInstanceOf(ILinkError);
+    });
+    expect(calls).toBe(1);
+  });
+});

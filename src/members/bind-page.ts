@@ -45,6 +45,7 @@ export function renderQrSvg(text: string, label: string): string {
   ].join("");
 }
 
+
 /**
  * The page shell. Everything is rendered after the bearer token is read from
  * the URL fragment, so the token never reaches a server log or referrer.

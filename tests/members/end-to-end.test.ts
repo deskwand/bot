@@ -321,6 +321,7 @@ describe("operator link delivery", () => {
     const result = await runInDurableObject(hub, async (instance, store) => {
       settleInbox(store.storage.sql);
       const sent: string[] = [];
+      const images: { name: string; bytes: Uint8Array }[] = [];
       const sendCurrent = vi
         .spyOn(instance, "sendCurrent")
         .mockImplementation(async (message) => {
@@ -331,6 +332,16 @@ describe("operator link delivery", () => {
             routeKey: "wechat",
             messageId: null,
           };
+        });
+      const sendOwnerImage = vi
+        .spyOn(
+          instance as unknown as {
+            sendOwnerImage(name: string, bytes: Uint8Array): Promise<void>;
+          },
+          "sendOwnerImage",
+        )
+        .mockImplementation(async (name, bytes) => {
+          images.push({ name, bytes });
         });
       const link = await (instance as unknown as {
         createMemberInvite(
@@ -350,12 +361,25 @@ describe("operator link delivery", () => {
         ): Promise<{ ok: boolean; view?: { stage: string } }>;
       }).memberBindState(link.bindUrl.split("#")[1]!);
       sendCurrent.mockRestore();
-      return { sent, stage: page.view?.stage };
+      sendOwnerImage.mockRestore();
+      return { sent, images, stage: page.view?.stage };
     });
 
-    // 链接只送一次、送到主人聊天，并且实名通过后同一次轮询就取到绑定码。
-    expect(result.sent).toHaveLength(1);
-    expect(result.sent[0]).toContain(authUrl);
+    // 两个码都以图片送达：实名一张、绑定一张，都是可扫的 PNG。
+    expect(result.images.map((image) => image.name)).toEqual([
+      "wechat-realname.png",
+      "wechat-bind.png",
+    ]);
+    for (const image of result.images) {
+      expect([...image.bytes.subarray(0, 8)]).toEqual([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      ]);
+    }
+
+    // 文本只说明怎么用，不再把链接当可点地址交付。
+    expect(result.sent).toHaveLength(2);
+    expect(result.sent[0]).not.toContain("http");
+    expect(result.sent[1]).not.toContain("http");
     expect(result.stage).toBe("scan");
     expect(qrRequests).toBe(1);
   }, 30_000);

@@ -5,7 +5,13 @@ import {
   createMemberBindRoutes,
   type BindStateReply,
 } from "../../src/members/bind-routes";
-import { bindPageHtml, renderQrSvg, type BindPageCopy } from "../../src/members/bind-page";
+import {
+  bindPageHtml,
+  renderQrSvg,
+  type BindPageCopy,
+} from "../../src/members/bind-page";
+import { renderQrPng } from "../../src/members/qr-image";
+import { create as createQr } from "qrcode";
 import { zh } from "../../src/i18n/zh";
 
 const COPY = zh.member.bindPage as BindPageCopy;
@@ -136,5 +142,49 @@ describe("member bind routes", () => {
       }),
     );
     expect(gone.status).toBe(410);
+  });
+});
+
+describe("QR png", () => {
+  const TEXT = "https://liteapp.weixin.qq.com/q/example?bot_spam_ticket=abc";
+
+  it("encodes a grayscale PNG whose geometry matches the QR matrix", async () => {
+    const bytes = await renderQrPng(TEXT);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    expect([...bytes.subarray(0, 8)]).toEqual([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
+
+    const modules = createQr(TEXT, { errorCorrectionLevel: "M" }).modules.size;
+    const side = (modules + 8) * 8;
+    // IHDR is always the first chunk: length(4) type(4) then 13 bytes of header.
+    expect(bytes.subarray(12, 16)).toEqual(new Uint8Array([0x49, 0x48, 0x44, 0x52]));
+    expect(view.getUint32(16)).toBe(side);
+    expect(view.getUint32(20)).toBe(side);
+    expect(bytes[24]).toBe(8); // bit depth
+    expect(bytes[25]).toBe(0); // grayscale
+
+    // IDAT must inflate to one filter byte plus `side` pixels per row.
+    const chunks = new Map<string, Uint8Array>();
+    for (let at = 8; at < bytes.length; ) {
+      const length = view.getUint32(at);
+      const type = new TextDecoder().decode(bytes.subarray(at + 4, at + 8));
+      chunks.set(type, bytes.subarray(at + 8, at + 8 + length));
+      at += 12 + length;
+    }
+    expect([...chunks.keys()]).toEqual(["IHDR", "IDAT", "IEND"]);
+    const idat = chunks.get("IDAT")!;
+    const raw = new Uint8Array(
+      await new Response(
+        new Response(idat).body!.pipeThrough(new DecompressionStream("deflate")),
+      ).arrayBuffer(),
+    );
+    expect(raw.length).toBe((side + 1) * side);
+  });
+
+  it("becomes a larger symbol when the payload grows", async () => {
+    const small = await renderQrPng("a");
+    const large = await renderQrPng("a".repeat(200));
+    expect(large.length).toBeGreaterThan(small.length);
   });
 });

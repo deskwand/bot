@@ -222,6 +222,12 @@ export type WeChatLoginOptions = {
    * model. Called once per issued link; a failure never stops the invite.
    */
   onAuthUrl?(auth: { authUrl: string; expiresAt: number }): Promise<void> | void;
+  /**
+   * The bind QR code, handed to its recipient outside the model. Called once
+   * per issued code (a refresh issues a new one); a failure never stops the
+   * invite.
+   */
+  onQrCode?(qr: { text: string }): Promise<void> | void;
   now?: () => number;
   gate?: LoginGate;
   /** Upper bound on one upstream step. Defaults to 20 s. */
@@ -589,12 +595,26 @@ export class WeChatLogin {
     const deliver = this.options.onAuthUrl;
     const authUrl = secrets.authUrl;
     if (deliver === undefined || authUrl === undefined) return;
+    await this.deliver("operator link", () => deliver({ authUrl, expiresAt: deadline }));
+  }
+
+  /** Hands the bind QR to its recipient; the same rules as the link above. */
+  private async announceQr(text: string): Promise<void> {
+    const deliver = this.options.onQrCode;
+    if (deliver === undefined) return;
+    await this.deliver("binding QR", () => deliver({ text }));
+  }
+
+  /** A failed delivery is reported by shape only: the payload is a capability. */
+  private async deliver(
+    what: string,
+    run: () => Promise<void> | void,
+  ): Promise<void> {
     try {
-      await deliver({ authUrl, expiresAt: deadline });
+      await run();
     } catch (error) {
-      // The link is a capability: only the error's shape may be logged.
       console.warn(
-        "wechat login: operator link delivery failed:",
+        `wechat login: ${what} delivery failed:`,
         error instanceof Error ? error.constructor.name : "Error",
       );
     }
@@ -692,6 +712,7 @@ export class WeChatLogin {
       qrcode: qr.value.qrcode,
       qrImage: qr.value.imageContent,
     });
+    await this.announceQr(qr.value.imageContent);
   }
 
   private async applyStatus(

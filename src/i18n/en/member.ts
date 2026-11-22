@@ -17,10 +17,14 @@ export const member = {
     qrLabel: "WeChat binding QR code",
   },
   denied: "Only the owner can manage members.",
-  localOnly:
-    "Note: this deployment has no public address, so this localhost link opens only on the machine running it. Open it yourself and show the QR code on screen; a remote invitee needs a public address configured first.",
+  inviteLocal:
+    "Binding invite created ({inviteId}), valid until {expiresAt}. The real-name QR and your family member's binding QR arrive in this chat: scan the first with WeChat to approve, then forward the second for them to scan. The link below opens only on the machine running this deployment and is used to enter the PIN WeChat asks for:",
+  rebindLocal:
+    "Replacement invite created ({inviteId}), valid until {expiresAt}. The real-name and binding QR codes arrive in this chat; the member must scan with their existing WeChat account. The link below opens only on the machine running this deployment and is used to enter the PIN WeChat asks for:",
   operatorAuth:
-    "WeChat requires the person who started this invite to finish real-name verification. Open the link below in WeChat and approve it within {minutes} minutes; the binding QR code is issued only after that:\n{url}",
+    "WeChat requires the person who started this invite to finish real-name verification. Scan the QR code below with WeChat within {minutes} minutes; the binding code for your family member is issued only after that.",
+  bindingQr:
+    "This is the binding QR code for your family member. Have them scan it with WeChat and confirm; an expired code is replaced automatically.",
   error: "Member management failed ({code}).",
   inviteCreated:
     "Binding invite created ({inviteId}), valid until {expiresAt}. Forward this link to the invitee as-is; it walks them through binding WeChat:",
