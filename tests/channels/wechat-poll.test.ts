@@ -5,6 +5,7 @@ import { MAX_ARTIFACT_BYTES } from "../../src/artifact";
 import {
   setChannelOverride,
   setILinkFetchOverride,
+  setPollRetirementOverride,
   setPollTimingOverride,
   setWeChatCredentialsOverride,
 } from "../../src/channels/override";
@@ -328,6 +329,9 @@ function textActionUpdate(text: string, from = OWNER) {
 }
 
 beforeEach(async () => {
+  // This suite exercises the deployment-key engine, which the boot path now
+  // retires; keep that fallback under test.
+  setPollRetirementOverride(false);
   hubName = `wechat-poll-${++hubCounter}`;
   setEnv({ ACTIVE_CHANNEL: "wechat" });
   // Install the test-only overrides before the DO is first constructed: its
@@ -342,10 +346,15 @@ beforeEach(async () => {
     state.storage.sql.exec("DELETE FROM owner_addresses");
     state.storage.sql.exec("DELETE FROM wechat_state");
     state.storage.sql.exec("DELETE FROM wechat_contexts");
+    // This suite exercises the deployment-key engine, which the boot path now
+    // retires once the first channel is imported. Clear the switch to keep the
+    // fallback under test.
+
   });
 });
 
 afterEach(async () => {
+  setPollRetirementOverride(null);
   for (const restore of restores.splice(0)) await restore();
   await cancelSchedules();
   setChannelOverride("telegram", null);

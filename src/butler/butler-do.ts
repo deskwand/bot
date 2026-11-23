@@ -781,11 +781,29 @@ export class ButlerDO extends Agent<Env> {
    * The route this instance delivers on: the owner's deployment-wide route, or
    * the member's own connection route.
    */
+  /**
+   * Whether the channel object can serve this actor. Older/faked channel stubs
+   * do not answer; a deployment that cannot answer is treated as having no
+   * channel connection, which keeps the deployment-level fallback working.
+   */
+  private async channelHasConnection(actor: Principal): Promise<boolean> {
+    const channels = this.channels() as unknown as {
+      hasChannelConnection?: (actor: Principal) => Promise<boolean>;
+    };
+    if (typeof channels.hasChannelConnection !== "function") return false;
+    return await channels.hasChannelConnection(actor);
+  }
+
   private async deliveryRoute(): Promise<RouteSnapshot> {
     const actor = this.deliveryActor();
-    return actor.memberId === OWNER_ID
-      ? await this.channels().currentRoute()
-      : await this.channels().routeForMember(actor);
+    if (await this.channelHasConnection(actor)) {
+      return await this.channels().routeForMember(actor);
+    }
+    // Only a deployment without a channel connection for this actor (Telegram,
+    // or WeChat before the first credential was imported) keeps the old route;
+    // a real failure from the channel path is not hidden behind the fallback.
+    if (actor.memberId === OWNER_ID) return await this.channels().currentRoute();
+    throw new MemberError(MEMBER_ACCESS_DENIED);
   }
 
   /** Refuses an actor that is not this object's own principal. */
@@ -2572,10 +2590,15 @@ export class ButlerDO extends Agent<Env> {
   ): Promise<ChannelMessageRef | null> {
     try {
       const actor = this.deliveryActor();
+      if (await this.channelHasConnection(actor)) {
+        return await this.channels().sendToMember(actor, message);
+      }
+      // Same rule as the route: no channel connection means the deployment
+      // chain still owns this actor; anything else is a real failure.
       if (actor.memberId === OWNER_ID) {
         return await this.channels().sendCurrent(message);
       }
-      return await this.channels().sendToMember(actor, message);
+      throw new MemberError(MEMBER_ACCESS_DENIED);
     } catch (error) {
       // Fixed codes only: the payload may carry text or a capability.
       console.error(

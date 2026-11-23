@@ -29,6 +29,7 @@ import {
   getChannelOverride,
   getILinkFetchOverride,
   getMemberButlerOverride,
+  getPollRetirementOverride,
   getPollTimingOverride,
   getTelegramFetchOverride,
   getWeChatCredentialsOverride,
@@ -1169,10 +1170,13 @@ export class ChannelDO extends Agent<Env> {
    * generation under its own domain separator, so it never equals the owner's
    * key and an owner route cached at boot cannot keep a member out.
    */
+  /** True when this actor has a channel connection (i.e. a chain of its own). */
+  async hasChannelConnection(actor: Principal): Promise<boolean> {
+    return this.members.getConnection(actor.memberId) !== null;
+  }
+
   async routeForMember(actor: Principal): Promise<RouteSnapshot> {
     this.members.assertActive(actor);
-    // Owner compatibility: the owner keeps the deployment-wide route.
-    if (actor.memberId === OWNER_ID) return this.currentRoute();
 
     const connection = this.members.getConnection(actor.memberId);
     if (!connection) throw new MemberError(MEMBER_ACCESS_DENIED);
@@ -1238,8 +1242,6 @@ export class ChannelDO extends Agent<Env> {
     message: OutboundMessage,
   ): Promise<ChannelMessageRef> {
     this.members.assertActive(actor);
-    // Owner compatibility: the legacy path is unchanged for the owner actor.
-    if (actor.memberId === OWNER_ID) return this.sendCurrent(message);
 
     const connection = this.members.getConnection(actor.memberId);
     if (!connection) throw new MemberError(MEMBER_ACCESS_DENIED);
@@ -1291,7 +1293,6 @@ export class ChannelDO extends Agent<Env> {
   /** Sends an artifact to the member's own conversation and credential only. */
   async sendArtifactToMember(actor: Principal, key: string): Promise<void> {
     this.members.assertActive(actor);
-    if (actor.memberId === OWNER_ID) return this.sendArtifact(key);
 
     if (artifactKeySegments(key) === null) {
       throw new ChannelError("invalid artifact key", 400);
@@ -1436,10 +1437,13 @@ export class ChannelDO extends Agent<Env> {
     if (
       state === null ||
       state.status !== "active" ||
-      state.generation !== target.generation ||
-      // The owner connection has its own chain, keyed by the deployed secret.
-      state.memberId === OWNER_ID
+      state.generation !== target.generation
     ) {
+      return;
+    }
+    if (state.memberId === OWNER_ID && !this.legacyPollRetired()) {
+      // The deployment chain still owns this credential; polling here as well
+      // would fetch every message twice.
       return;
     }
     if (this.activeMemberWeChatRuns.has(target.connectionId)) {
@@ -1452,7 +1456,7 @@ export class ChannelDO extends Agent<Env> {
     if (known?.pollStatus === "needs_reset") return;
 
     const actor = this.members.principal(state.memberId);
-    if (actor === null || actor.role !== "member") return;
+    if (actor === null) return;
     const ref: ConnectionRef = {
       memberId: state.memberId,
       connectionId: state.connectionId,
@@ -1663,8 +1667,10 @@ export class ChannelDO extends Agent<Env> {
     const now = Date.now();
     const pending = await this.listSchedules();
 
+    const retired = this.legacyPollRetired();
     for (const connection of this.connections.listActive()) {
-      if (connection.memberId === OWNER_ID) continue;
+      // The first channel keeps the deployment chain until the switch is set.
+      if (connection.memberId === OWNER_ID && !retired) continue;
       // Liveness is "the chain re-armed", not "a poll started": a chain that
       // wrote its heartbeat and then died must still be repaired.
       const alive =
@@ -2022,8 +2028,8 @@ export class ChannelDO extends Agent<Env> {
     }
 
     const actor = this.members.principal(state.memberId);
-    if (actor === null || actor.role !== "member") {
-      await this.deferMemberFlush(queue, connectionId, generation, "member not active");
+    if (actor === null) {
+      await this.deferMemberFlush(queue, connectionId, generation, "channel not active");
       return;
     }
     const ref: ConnectionRef = {
@@ -2596,16 +2602,38 @@ export class ChannelDO extends Agent<Env> {
 
     if (route.channel === "wechat") {
       await this.stopTelegramPolling();
+      // The boot path imports the first channel, then retires the deployment
+      // chain it came from. The switch is written before the channel chain
+      // starts, so the two can never overlap.
       await this.startWeChatPolling();
-      // Each member connection polls on its own chain; the owner chain above
-      // stays keyed by the deployed secret.
+      // The first channel is imported here; afterwards the deployment chain has
+      // nothing left to do and is stopped last, so a schedule created during the
+      // import cannot survive the hand-over.
+      if (this.members.getConnection(OWNER_ID) === null) {
+        await this.startWeChatPolling();
+      }
       await this.startMemberWeChatPolling();
+      if (this.legacyPollRetired()) {
+        await this.stopWeChatPolling();
+      }
       return;
     }
 
     await this.stopWeChatPolling();
     await this.stopMemberWeChatPolling();
     await this.stopTelegramPolling();
+  }
+
+  /**
+   * The deployment-key chain serves a deployment whose first channel has no
+   * connection yet. Derived, never latched: a rebind, a pause or a restore that
+   * drops the connection brings the fallback back instead of leaving the owner
+   * with no chain at all.
+   */
+  private legacyPollRetired(): boolean {
+    const override = getPollRetirementOverride();
+    if (override !== null) return override;
+    return this.members.getConnection(OWNER_ID) !== null;
   }
 
   /** Stops the WeChat chain without discarding the selected credential. */
@@ -2666,8 +2694,16 @@ export class ChannelDO extends Agent<Env> {
     credentials: WeChatCredentials,
     hash: string,
   ): Promise<void> {
-    // Same credential after a redeploy: nothing to stage, nothing to advance.
-    if (this.members.credentialHashOf(OWNER_ID) === hash) return;
+    // Same credential after a redeploy: nothing to stage, nothing to advance —
+    // unless a restore wiped the vault, in which case the pointer is stale and
+    // the credential has to be written again.
+    if (
+      this.members.credentialHashOf(OWNER_ID) === hash &&
+      (await this.vault.get(this.members.credentialKeyOf(OWNER_ID) ?? "")) !==
+        undefined
+    ) {
+      return;
+    }
     const previousKey = this.members.credentialKeyOf(OWNER_ID);
     const candidate = await stageCredentialAndActivate(
       this.staging,
@@ -3014,6 +3050,8 @@ export class ChannelDO extends Agent<Env> {
     _schedule?: Schedule<unknown>,
   ): Promise<void> {
     if (this.lease.current() !== null) return;
+    // Retired once the first channel became a connection of its own.
+    if (this.legacyPollRetired()) return;
 
     const route = await this.currentRoute();
     if (route.channel !== "wechat") return;

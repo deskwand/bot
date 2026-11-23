@@ -104,6 +104,21 @@ export function getPollTimingOverride(): PollTiming | null {
   return pollTimingOverride;
 }
 
+let pollRetirementOverride: boolean | null = null;
+
+/**
+ * Test-only: the deployment-key engine is retired at boot once the first
+ * channel is imported. Suites that exercise that fallback engine turn the
+ * switch off explicitly instead of depending on boot order.
+ */
+export function setPollRetirementOverride(value: boolean | null): void {
+  pollRetirementOverride = value;
+}
+
+export function getPollRetirementOverride(): boolean | null {
+  return pollRetirementOverride;
+}
+
 /** Test-only credential JSON injection. */
 let weChatCredentialsOverride: string | null = null;
 

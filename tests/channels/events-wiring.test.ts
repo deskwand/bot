@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   setChannelOverride,
   setILinkFetchOverride,
+  setPollRetirementOverride,
   setPollTimingOverride,
   setWeChatCredentialsOverride,
 } from "../../src/channels/override";
@@ -129,6 +130,9 @@ function channelEvents(lines: string[]): ChannelEvent[] {
 }
 
 beforeEach(async () => {
+  // This suite exercises the deployment-key engine, which the boot path now
+  // retires; keep that fallback under test.
+  setPollRetirementOverride(false);
   hubName = `channel-events-${++hubCounter}`;
   setEnv({ ACTIVE_CHANNEL: "wechat" });
   setChannelOverride("telegram", null);
@@ -144,6 +148,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  setPollRetirementOverride(null);
   await cancelSchedules();
   setChannelOverride("telegram", null);
   setChannelOverride("wechat", null);

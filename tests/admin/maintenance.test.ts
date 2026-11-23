@@ -9,6 +9,7 @@ import {
   setChannelOverride,
   setILinkFetchOverride,
   setPollTimingOverride,
+  setPollRetirementOverride,
   setWeChatCredentialsOverride,
 } from "../../src/channels/override";
 import type { MessageEvent } from "../../src/protocol";
@@ -141,6 +142,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setPollRetirementOverride(null);
   setChannelOverride("telegram", null);
   setChannelOverride("wechat", null);
   setILinkFetchOverride(null);
@@ -402,6 +404,9 @@ describe("maintenance lease pauses", () => {
   });
 
   it("does not poll WeChat while a lease is live", async () => {
+    // The deployment-key engine is the fallback the boot path retires; keep it
+    // under test here and cover the channel chain's lease guard separately.
+    setPollRetirementOverride(false);
     setEnv({ ACTIVE_CHANNEL: "wechat" });
     setWeChatCredentialsOverride(JSON.stringify(CREDS));
     setPollTimingOverride({ runMs: 0, baseBackoffMs: 1, manualStart: true });
@@ -454,6 +459,7 @@ describe("maintenance lease pauses", () => {
   });
 
   it("stops a running WeChat poll loop once a lease is acquired", async () => {
+    setPollRetirementOverride(false);
     setEnv({ ACTIVE_CHANNEL: "wechat" });
     setWeChatCredentialsOverride(JSON.stringify(CREDS));
     setPollTimingOverride({ runMs: 1000, baseBackoffMs: 1, manualStart: true });

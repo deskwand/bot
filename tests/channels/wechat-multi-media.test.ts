@@ -7,6 +7,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   setILinkFetchOverride,
+  setPollRetirementOverride,
   setPollTimingOverride,
   setWeChatCredentialsOverride,
 } from "../../src/channels/override";
@@ -128,6 +129,9 @@ function fileItem(param: string, name: string) {
 }
 
 beforeEach(async () => {
+  // This suite exercises the deployment-key engine, which the boot path now
+  // retires; keep that fallback under test.
+  setPollRetirementOverride(false);
   events.length = 0;
   await cancelSchedules();
   hubName = `wechat-multi-media-${++hubCounter}`;
@@ -145,6 +149,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  setPollRetirementOverride(null);
   setILinkFetchOverride(null);
   setPollTimingOverride(null);
   setWeChatCredentialsOverride(null);
