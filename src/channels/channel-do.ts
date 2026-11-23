@@ -297,6 +297,24 @@ function replaceTaskId(text: string, taskId: string, label: string): string {
  * Single channel hub: the only place that talks to a channel API, and the only
  * place inbound channel events enter the control plane.
  */
+/**
+ * The admitted message for input that arrived on a channel connection. The ref
+ * travels with it because admission is checked against that connection, the
+ * first channel's included.
+ */
+export function admittedOnConnection(
+  event: MessageEvent,
+  routeKey: string,
+  context: { actor: Principal; ref: ConnectionRef },
+): AdmittedMessage {
+  return {
+    ...event,
+    routeKey,
+    actor: context.actor,
+    connectionRef: context.ref,
+  };
+}
+
 export class ChannelDO extends Agent<Env> {
   private readonly db: SqlStorage;
 
@@ -3740,6 +3758,37 @@ export class ChannelDO extends Agent<Env> {
 
     if (context !== undefined && context.actor.memberId !== OWNER_ID) {
       return this.dispatchMemberMessage(event, routeKey, context);
+    }
+
+    // The first channel has a connection of its own, so its input is admitted
+    // against that connection even though its Butler is still the owner object.
+    // Sending it without the ref made every message look like an old route.
+    if (context !== undefined) {
+      const { actor, ref } = context;
+      const admitted = admittedOnConnection(event, routeKey, context);
+      const butler = this.env.BUTLER.get(this.env.BUTLER.idFromName("owner"));
+      this.ctx.waitUntil(
+        (async () => {
+          try {
+            if (
+              !(await this.isMemberAdmissionCurrent(
+                actor,
+                "wechat",
+                ref,
+                routeKey,
+              ))
+            ) {
+              return;
+            }
+            await butler.handleMessage(admitted);
+          } catch (error) {
+            console.error(
+              `channel: message dispatch failed: ${errorMessage(error)}`,
+            );
+          }
+        })(),
+      );
+      return true;
     }
 
     try {
