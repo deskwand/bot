@@ -60,7 +60,7 @@ import type {
   ModelLoginDTO,
   ModelProviderDTO,
   MemberInviteDTO,
-  MemberInviteStateDTO,
+  ChannelBindingDTO,
   MemberInvitesDTO,
   MemberUserDTO,
   MembersDTO,
@@ -83,7 +83,7 @@ import type {
 
 export type {
   MemberInviteDTO,
-  MemberInviteStateDTO,
+  ChannelBindingDTO,
   MemberInvitesDTO,
   MemberUserDTO,
   MembersDTO,
@@ -289,8 +289,8 @@ export interface ClientService {
   members(): Promise<MembersDTO>;
   memberInvites(): Promise<MemberInvitesDTO>;
   createMemberInvite(label: string): Promise<MemberInviteDTO>;
-  memberInviteState(id: string): Promise<MemberInviteStateDTO>;
-  submitMemberPin(id: string, pin: string): Promise<MemberInviteStateDTO>;
+  memberInviteState(id: string): Promise<ChannelBindingDTO>;
+  submitMemberPin(id: string, pin: string): Promise<ChannelBindingDTO>;
   cancelMemberInvite(id: string): Promise<void>;
   rebindMember(id: string): Promise<MemberInviteDTO>;
   revokeMember(id: string): Promise<void>;

@@ -558,37 +558,36 @@ type BotDetailDTO struct {
 	Runs []BotRunDTO `json:"runs"`
 }
 
-// MemberUserDTO is one row of the users page.
-type MemberUserDTO struct {
-	MemberID   string  `json:"memberId"`
-	Label      string  `json:"label"`
-	Role       string  `json:"role"`
-	Status     string  `json:"status"`
-	Connection string  `json:"connection"`
-	InviteID   *string `json:"inviteId"`
+// ChannelDTO is one row of the channels page.
+type ChannelDTO struct {
+	ChannelID     string  `json:"channelId"`
+	Label         string  `json:"label"`
+	Account       *string `json:"account"`
+	State         string  `json:"state"`
+	LastErrorCode *string `json:"lastErrorCode"`
 }
 
-// MembersDTO is the users payload; Users is always an array.
-type MembersDTO struct {
-	Users []MemberUserDTO `json:"users"`
+// ChannelsDTO is the channels payload; Channels is always an array.
+type ChannelsDTO struct {
+	Channels []ChannelDTO `json:"channels"`
 }
 
-// MemberInviteDTO is one pending invite. bindUrl is deliberately absent.
-type MemberInviteDTO struct {
+// ChannelInviteDTO is one pending binding.
+type ChannelInviteDTO struct {
 	InviteID  string  `json:"inviteId"`
 	Label     string  `json:"label"`
 	Kind      string  `json:"kind"`
-	MemberID  *string `json:"memberId"`
+	ChannelID *string `json:"channelId"`
 	ExpiresAt int64   `json:"expiresAt"`
 }
 
-// MemberInvitesDTO is the resumable-invite payload.
-type MemberInvitesDTO struct {
-	Invites []MemberInviteDTO `json:"invites"`
+// ChannelInvitesDTO is the resumable-binding payload.
+type ChannelInvitesDTO struct {
+	Bindings []ChannelInviteDTO `json:"bindings"`
 }
 
-// MemberInviteStateDTO is one invite's stage; capability strings stay here.
-type MemberInviteStateDTO struct {
+// ChannelBindingDTO is one binding's stage; capability strings stay here.
+type ChannelBindingDTO struct {
 	InviteID         string  `json:"inviteId"`
 	Label            string  `json:"label"`
 	Status           string  `json:"status"`
@@ -598,4 +597,31 @@ type MemberInviteStateDTO struct {
 	RealnameURL      *string `json:"realnameUrl"`
 	QRContent        *string `json:"qrContent"`
 	Failure          *string `json:"failure"`
+}
+
+// Deprecated: the shapes the shipped desktop client still binds to. They are
+// derived from the channel API and removed once the client switches.
+type MemberUserDTO struct {
+	MemberID   string  `json:"memberId"`
+	Label      string  `json:"label"`
+	Role       string  `json:"role"`
+	Status     string  `json:"status"`
+	Connection string  `json:"connection"`
+	InviteID   *string `json:"inviteId"`
+}
+
+type MembersDTO struct {
+	Users []MemberUserDTO `json:"users"`
+}
+
+type MemberInviteDTO struct {
+	InviteID  string  `json:"inviteId"`
+	Label     string  `json:"label"`
+	Kind      string  `json:"kind"`
+	MemberID  *string `json:"memberId"`
+	ExpiresAt int64   `json:"expiresAt"`
+}
+
+type MemberInvitesDTO struct {
+	Invites []MemberInviteDTO `json:"invites"`
 }

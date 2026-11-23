@@ -214,6 +214,47 @@ export interface CachedStatusDTO {
   savedAt: string;
 }
 
+/** ChannelBindingDTO is one binding's stage; capability strings stay here. */
+export interface ChannelBindingDTO {
+  inviteId: string;
+  label: string;
+  status: string;
+  stage: string;
+  expiresAt: number;
+  realnameDeadline: number | null;
+  realnameUrl: string | null;
+  qrContent: string | null;
+  failure: string | null;
+}
+
+/** ChannelDTO is one row of the channels page. */
+export interface ChannelDTO {
+  channelId: string;
+  label: string;
+  account: string | null;
+  state: string;
+  lastErrorCode: string | null;
+}
+
+/** ChannelInviteDTO is one pending binding. */
+export interface ChannelInviteDTO {
+  inviteId: string;
+  label: string;
+  kind: string;
+  channelId: string | null;
+  expiresAt: number;
+}
+
+/** ChannelInvitesDTO is the resumable-binding payload. */
+export interface ChannelInvitesDTO {
+  bindings: ChannelInviteDTO[];
+}
+
+/** ChannelsDTO is the channels payload; Channels is always an array. */
+export interface ChannelsDTO {
+  channels: ChannelDTO[];
+}
+
 /**
  * CloudflareLoginDTO is the only OAuth login state sent to the frontend. It
  * carries no token, authorization code or PKCE verifier.
@@ -579,7 +620,6 @@ export interface McpToolDTO {
   mode: string;
 }
 
-/** MemberInviteDTO is one pending invite. bindUrl is deliberately absent. */
 export interface MemberInviteDTO {
   inviteId: string;
   label: string;
@@ -588,25 +628,14 @@ export interface MemberInviteDTO {
   expiresAt: number;
 }
 
-/** MemberInviteStateDTO is one invite's stage; capability strings stay here. */
-export interface MemberInviteStateDTO {
-  inviteId: string;
-  label: string;
-  status: string;
-  stage: string;
-  expiresAt: number;
-  realnameDeadline: number | null;
-  realnameUrl: string | null;
-  qrContent: string | null;
-  failure: string | null;
-}
-
-/** MemberInvitesDTO is the resumable-invite payload. */
 export interface MemberInvitesDTO {
   invites: MemberInviteDTO[];
 }
 
-/** MemberUserDTO is one row of the users page. */
+/**
+ * Deprecated: the shapes the shipped desktop client still binds to. They are
+ * derived from the channel API and removed once the client switches.
+ */
 export interface MemberUserDTO {
   memberId: string;
   label: string;
@@ -616,7 +645,6 @@ export interface MemberUserDTO {
   inviteId: string | null;
 }
 
-/** MembersDTO is the users payload; Users is always an array. */
 export interface MembersDTO {
   users: MemberUserDTO[];
 }
@@ -956,11 +984,14 @@ export const Service = {
   cachedStatus(): Promise<CachedStatusDTO> {
     return call("Service.CachedStatus");
   },
+  /** CancelMemberInvite closes a pending invite. */
+  cancelChannelBinding(id: string): Promise<void> {
+    return call("Service.CancelChannelBinding", id);
+  },
   /** CancelCloudflareLogin stops an unfinished OAuth login. */
   cancelCloudflareLogin(opID: string): Promise<void> {
     return call("Service.CancelCloudflareLogin", opID);
   },
-  /** CancelMemberInvite closes a pending invite. */
   cancelMemberInvite(id: string): Promise<void> {
     return call("Service.CancelMemberInvite", id);
   },
@@ -974,6 +1005,18 @@ export const Service = {
   /** CancelWeChatLogin cancels a running QR login by operation id. */
   cancelWeChatLogin(opID: string): Promise<void> {
     return call("Service.CancelWeChatLogin", opID);
+  },
+  /** MemberInviteState reads one invite's stage. */
+  channelBindingState(id: string): Promise<ChannelBindingDTO> {
+    return call("Service.ChannelBindingState", id);
+  },
+  /** MemberInvites lists invitations the wizard can resume. */
+  channelBindings(): Promise<ChannelInvitesDTO> {
+    return call("Service.ChannelBindings");
+  },
+  /** Members lists the owner and every channel user with its connection state. */
+  channels(): Promise<ChannelsDTO> {
+    return call("Service.Channels");
   },
   /**
    * CheckClientUpdates opens the MyGo updater window. The window, its background
@@ -1055,6 +1098,9 @@ export const Service = {
     return call("Service.ContainerStatus");
   },
   /** CreateMemberInvite starts a new-user invite. bindUrl never reaches the UI. */
+  createChannel(label: string): Promise<ChannelInviteDTO> {
+    return call("Service.CreateChannel", label);
+  },
   createMemberInvite(label: string): Promise<MemberInviteDTO> {
     return call("Service.CreateMemberInvite", label);
   },
@@ -1149,15 +1195,12 @@ export const Service = {
   mcpStatus(): Promise<McpAuthDTO[]> {
     return call("Service.McpStatus");
   },
-  /** MemberInviteState reads one invite's stage. */
-  memberInviteState(id: string): Promise<MemberInviteStateDTO> {
+  memberInviteState(id: string): Promise<ChannelBindingDTO> {
     return call("Service.MemberInviteState", id);
   },
-  /** MemberInvites lists invitations the wizard can resume. */
   memberInvites(): Promise<MemberInvitesDTO> {
     return call("Service.MemberInvites");
   },
-  /** Members lists the owner and every channel user with its connection state. */
   members(): Promise<MembersDTO> {
     return call("Service.Members");
   },
@@ -1244,8 +1287,15 @@ export const Service = {
     return call("Service.PublishConfig", input);
   },
   /** RebindMember starts a replacement invite for one existing user. */
+  rebindChannel(id: string): Promise<ChannelInviteDTO> {
+    return call("Service.RebindChannel", id);
+  },
   rebindMember(id: string): Promise<MemberInviteDTO> {
     return call("Service.RebindMember", id);
+  },
+  /** RevokeMember removes one user's access and credentials. */
+  removeChannel(id: string): Promise<void> {
+    return call("Service.RemoveChannel", id);
   },
   /**
    * RemoveMcpServer removes one entry, clears MCP_* secrets only it referenced,
@@ -1253,6 +1303,10 @@ export const Service = {
    */
   removeMcpServer(name: string): Promise<ResultDTO> {
     return call("Service.RemoveMcpServer", name);
+  },
+  /** RestartChannel re-arms one channel's chains without touching its identity. */
+  restartChannel(id: string): Promise<void> {
+    return call("Service.RestartChannel", id);
   },
   /**
    * RestoreContainerConfig puts the previous .env back and restarts the
@@ -1287,7 +1341,6 @@ export const Service = {
   reviveOldHouse(): Promise<void> {
     return call("Service.ReviveOldHouse");
   },
-  /** RevokeMember removes one user's access and credentials. */
   revokeMember(id: string): Promise<void> {
     return call("Service.RevokeMember", id);
   },
@@ -1408,7 +1461,10 @@ export const Service = {
     return call("Service.Status");
   },
   /** SubmitMemberPin relays the PIN WeChat showed on the invitee's phone. */
-  submitMemberPin(id: string, pin: string): Promise<MemberInviteStateDTO> {
+  submitChannelPin(id: string, pin: string): Promise<ChannelBindingDTO> {
+    return call("Service.SubmitChannelPin", id, pin);
+  },
+  submitMemberPin(id: string, pin: string): Promise<ChannelBindingDTO> {
     return call("Service.SubmitMemberPin", id, pin);
   },
   /**

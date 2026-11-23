@@ -4,7 +4,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useApp } from "@/components/app-context";
 import { tryT, useT } from "@/i18n";
 import { toClientError } from "@/services/errors";
-import type { MemberInviteStateDTO } from "@/services/types";
+import type { ChannelBindingDTO } from "@/services/types";
 
 const TERMINAL = new Set(["confirmed", "cancelled", "expired", "failed", "denied"]);
 
@@ -52,7 +52,7 @@ export function AddUserDialog({
     queryFn: () => client.memberInviteState(inviteId as string),
     enabled: inviteId !== null,
     refetchInterval: (query) => {
-      const stage = (query.state.data as MemberInviteStateDTO | undefined)?.stage;
+      const stage = (query.state.data as ChannelBindingDTO | undefined)?.stage;
       return stage !== undefined && TERMINAL.has(stage) ? false : 2_000;
     },
   });
@@ -72,7 +72,7 @@ export function AddUserDialog({
     onError: (error: unknown) => setFailure(toClientError(error).message),
   });
 
-  const current: MemberInviteStateDTO | undefined = state.data;
+  const current: ChannelBindingDTO | undefined = state.data;
   const stage = current?.stage ?? (inviteId === null ? "label" : "starting");
   const code = current?.failure ?? "unknown";
 

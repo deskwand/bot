@@ -106,6 +106,15 @@ async function handle(req: Request, url: URL, channel: ChannelStub): Promise<Res
       const reply = await channel.adminInviteState(id);
       return reply.ok ? json(reply.view) : json({ code: "CHANNEL_NOT_FOUND" }, 404);
     }
+    if (binding[2] === undefined && req.method === "DELETE") {
+      // A pending binding can be abandoned before it is consumed.
+      try {
+        await channel.cancelMemberInvite(ownerPrincipal(), id);
+        return noContent();
+      } catch (error) {
+        return writeError(error);
+      }
+    }
     return json({ code: "METHOD" }, 405);
   }
 

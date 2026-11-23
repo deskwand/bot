@@ -12,4 +12,6 @@ var zhMemberAdmin = map[string]string{
 	"memberadmin.invitePending":   "这个名称已经有一条待绑定邀请，先取消它或等它过期",
 	"memberadmin.invalidLabel":    "名称不能为空，也不能超过 64 个字符",
 	"memberadmin.wrongStage":      "邀请的阶段已经变化，请刷新后重试",
+	"memberadmin.immutable": "第一条通道不能移除",
+	"memberadmin.rebindNeeded": "凭据已失效，请重新绑定",
 }

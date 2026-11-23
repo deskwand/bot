@@ -33,7 +33,7 @@ import type {
   LifeSourceDTO,
   LifeVitalsDTO,
   MemberInviteDTO,
-  MemberInviteStateDTO,
+  ChannelBindingDTO,
   MemberInvitesDTO,
   MemberUserDTO,
   MembersDTO,
@@ -2150,7 +2150,7 @@ export function createMockClient(): ClientService {
       };
     },
 
-    async memberInviteState(id: string): Promise<MemberInviteStateDTO> {
+    async memberInviteState(id: string): Promise<ChannelBindingDTO> {
       record("memberInviteState", id);
       const stage =
         state.scenario === "users-wizard"
@@ -2172,7 +2172,7 @@ export function createMockClient(): ClientService {
       };
     },
 
-    async submitMemberPin(id: string, pin: string): Promise<MemberInviteStateDTO> {
+    async submitMemberPin(id: string, pin: string): Promise<ChannelBindingDTO> {
       record("submitMemberPin", id, pin);
       state.inviteStage = "saving";
       return this.memberInviteState(id);

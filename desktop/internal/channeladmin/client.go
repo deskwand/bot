@@ -1,6 +1,6 @@
-// Package memberadmin calls the Worker's /admin/members routes. It reuses the
-// backup flow's ADMIN_TOKEN, like botadmin and owneradmin do.
-package memberadmin
+// Package channeladmin calls the Worker's /admin/channels routes. Authority is
+// the deployment's ADMIN_TOKEN, the same one the backup flow uses.
+package channeladmin
 
 import (
 	"bytes"
@@ -19,57 +19,56 @@ import (
 
 // Error codes returned in domain.Error.Code by this package.
 const (
-	CodeUnsupported   = "MEMBERS_UNSUPPORTED"
-	CodeNotFound      = "MEMBERS_NOT_FOUND"
-	CodeMaintenance   = "MEMBERS_MAINTENANCE"
-	CodePinExhausted  = "MEMBERS_PIN_EXHAUSTED"
-	CodeInvitePending = "MEMBERS_INVITE_PENDING"
-	CodeWrongStage    = "MEMBERS_WRONG_STAGE"
-	CodeInvalidLabel  = "MEMBERS_INVALID_LABEL"
-	CodeRequestFailed = "MEMBERS_REQUEST_FAILED"
+	CodeUnsupported   = "CHANNELS_UNSUPPORTED"
+	CodeNotFound      = "CHANNELS_NOT_FOUND"
+	CodeMaintenance   = "CHANNELS_MAINTENANCE"
+	CodePinExhausted  = "CHANNELS_PIN_EXHAUSTED"
+	CodeInvitePending = "CHANNELS_INVITE_PENDING"
+	CodeInvalidLabel  = "CHANNELS_INVALID_LABEL"
+	CodeImmutable     = "CHANNELS_IMMUTABLE"
+	CodeRebindNeeded  = "CHANNELS_REBIND_REQUIRED"
+	CodeRequestFailed = "CHANNELS_REQUEST_FAILED"
 )
 
 const (
-	membersPath     = "/admin/members"
-	invitesPath     = "/admin/members/invites"
-	defaultTimeout  = 20 * time.Second
-	maxResponseSize = 1 << 20
+	channelsPath = "/admin/channels"
+	bindingsPath = "/admin/channels/bindings"
+	requestTime  = 20 * time.Second
+	maxResponse  = 1 << 20
 )
 
-// User is one row of the directory as the console shows it.
-type User struct {
-	MemberID   string  `json:"memberId"`
-	Label      string  `json:"label"`
-	Role       string  `json:"role"`
-	Status     string  `json:"status"`
-	Connection string  `json:"connection"`
-	InviteID   *string `json:"inviteId"`
+// Channel is one channel row as the console shows it.
+type Channel struct {
+	ChannelID     string  `json:"channelId"`
+	Label         string  `json:"label"`
+	Account       *string `json:"account"`
+	State         string  `json:"state"`
+	LastErrorCode *string `json:"lastErrorCode"`
 }
 
-// Invite is a created or pending invitation. BindURL is never shown.
+// Invite is a created or pending binding.
 type Invite struct {
-	InviteID  string `json:"inviteId"`
-	Label     string `json:"label,omitempty"`
-	Kind      string `json:"kind,omitempty"`
+	InviteID  string  `json:"inviteId"`
+	Label     string  `json:"label,omitempty"`
+	Kind      string  `json:"kind,omitempty"`
 	MemberID  *string `json:"memberId,omitempty"`
-	ExpiresAt int64  `json:"expiresAt"`
-	BindURL   string `json:"bindUrl,omitempty"`
+	ExpiresAt int64   `json:"expiresAt"`
 }
 
-// InviteState is one invitation's stage; capability strings stay in memory.
+// InviteState is one binding's stage; capability strings stay in memory.
 type InviteState struct {
 	InviteID         string  `json:"inviteId"`
 	Label            string  `json:"label"`
 	Status           string  `json:"status"`
 	Stage            string  `json:"stage"`
 	ExpiresAt        int64   `json:"expiresAt"`
-	RealnameDeadline *int64  `json:"realnameDeadline,omitempty"`
-	RealnameURL      *string `json:"realnameUrl,omitempty"`
-	QRContent        *string `json:"qrContent,omitempty"`
-	Failure          *string `json:"failure,omitempty"`
+	RealnameDeadline *int64  `json:"realnameDeadline"`
+	RealnameURL      *string `json:"realnameUrl"`
+	QRContent        *string `json:"qrContent"`
+	Failure          *string `json:"failure"`
 }
 
-// Client talks to one deployment's member routes.
+// Client talks to one deployment's channel routes.
 type Client struct {
 	baseURL string
 	token   string
@@ -81,7 +80,7 @@ type Client struct {
 // NewClient builds a client for one deployment endpoint.
 func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultTimeout}
+		httpClient = &http.Client{Timeout: requestTime}
 	}
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -90,9 +89,9 @@ func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 	}
 }
 
-// List reads every user, the owner included.
-func (c *Client) List(ctx context.Context) ([]User, error) {
-	raw, status, err := c.do(ctx, http.MethodGet, membersPath, nil)
+// Channels lists every channel, the first one included.
+func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
+	raw, status, err := c.do(ctx, http.MethodGet, channelsPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -100,41 +99,20 @@ func (c *Client) List(ctx context.Context) ([]User, error) {
 		return nil, err
 	}
 	var payload struct {
-		Users []User `json:"users"`
+		Channels []Channel `json:"channels"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, c.invalid()
 	}
-	if payload.Users == nil {
-		payload.Users = []User{}
+	if payload.Channels == nil {
+		payload.Channels = []Channel{}
 	}
-	return payload.Users, nil
+	return payload.Channels, nil
 }
 
-// PendingInvites reads the invitations the wizard can resume.
-func (c *Client) PendingInvites(ctx context.Context) ([]Invite, error) {
-	raw, status, err := c.do(ctx, http.MethodGet, invitesPath, nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.check(status, raw); err != nil {
-		return nil, err
-	}
-	var payload struct {
-		Invites []Invite `json:"invites"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, c.invalid()
-	}
-	if payload.Invites == nil {
-		payload.Invites = []Invite{}
-	}
-	return payload.Invites, nil
-}
-
-// CreateInvite starts a new-user invitation.
+// CreateInvite starts a binding for a new channel.
 func (c *Client) CreateInvite(ctx context.Context, label string) (Invite, error) {
-	raw, status, err := c.do(ctx, http.MethodPost, invitesPath, map[string]string{"label": label})
+	raw, status, err := c.do(ctx, http.MethodPost, channelsPath, map[string]string{"label": label})
 	if err != nil {
 		return Invite{}, err
 	}
@@ -148,9 +126,9 @@ func (c *Client) CreateInvite(ctx context.Context, label string) (Invite, error)
 	return invite, nil
 }
 
-// InviteState reads one invitation's stage.
+// InviteState reads one binding's stage.
 func (c *Client) InviteState(ctx context.Context, id string) (InviteState, error) {
-	raw, status, err := c.do(ctx, http.MethodGet, invitesPath+"/"+id, nil)
+	raw, status, err := c.do(ctx, http.MethodGet, bindingsPath+"/"+id, nil)
 	if err != nil {
 		return InviteState{}, err
 	}
@@ -160,9 +138,9 @@ func (c *Client) InviteState(ctx context.Context, id string) (InviteState, error
 	return decodeState(raw, c.invalid())
 }
 
-// SubmitPin hands the PIN WeChat showed on the invitee's phone.
+// SubmitPin relays the PIN WeChat showed on the invitee's phone.
 func (c *Client) SubmitPin(ctx context.Context, id, pin string) (InviteState, error) {
-	raw, status, err := c.do(ctx, http.MethodPost, invitesPath+"/"+id+"/pin", map[string]string{"pin": pin})
+	raw, status, err := c.do(ctx, http.MethodPost, bindingsPath+"/"+id+"/pin", map[string]string{"pin": pin})
 	if err != nil {
 		return InviteState{}, err
 	}
@@ -172,18 +150,18 @@ func (c *Client) SubmitPin(ctx context.Context, id, pin string) (InviteState, er
 	return decodeState(raw, c.invalid())
 }
 
-// CancelInvite closes a pending invitation.
+// CancelInvite abandons a pending binding.
 func (c *Client) CancelInvite(ctx context.Context, id string) error {
-	raw, status, err := c.do(ctx, http.MethodDelete, invitesPath+"/"+id, nil)
+	raw, status, err := c.do(ctx, http.MethodDelete, bindingsPath+"/"+id, nil)
 	if err != nil {
 		return err
 	}
 	return c.check(status, raw)
 }
 
-// Rebind starts a replacement invitation for one existing user.
-func (c *Client) Rebind(ctx context.Context, memberID string) (Invite, error) {
-	raw, status, err := c.do(ctx, http.MethodPost, membersPath+"/"+memberID+"/rebind", nil)
+// Rebind starts a replacement binding for one existing channel (same account).
+func (c *Client) Rebind(ctx context.Context, channelID string) (Invite, error) {
+	raw, status, err := c.do(ctx, http.MethodPost, channelsPath+"/"+channelID+"/rebind", nil)
 	if err != nil {
 		return Invite{}, err
 	}
@@ -197,9 +175,18 @@ func (c *Client) Rebind(ctx context.Context, memberID string) (Invite, error) {
 	return invite, nil
 }
 
-// Revoke removes one user's access and credentials.
-func (c *Client) Revoke(ctx context.Context, memberID string) error {
-	raw, status, err := c.do(ctx, http.MethodDelete, membersPath+"/"+memberID, nil)
+// Restart re-arms one channel's chains. An expired session is refused.
+func (c *Client) Restart(ctx context.Context, channelID string) error {
+	raw, status, err := c.do(ctx, http.MethodPost, channelsPath+"/"+channelID+"/restart", nil)
+	if err != nil {
+		return err
+	}
+	return c.check(status, raw)
+}
+
+// Remove deletes one channel and frees its WeChat account.
+func (c *Client) Remove(ctx context.Context, channelID string) error {
+	raw, status, err := c.do(ctx, http.MethodDelete, channelsPath+"/"+channelID, nil)
 	if err != nil {
 		return err
 	}
@@ -215,7 +202,7 @@ func decodeState(raw []byte, invalid error) (InviteState, error) {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte, int, error) {
-	requestCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	requestCtx, cancel := context.WithTimeout(ctx, requestTime)
 	defer cancel()
 	var payload io.Reader
 	if body != nil {
@@ -241,15 +228,15 @@ func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte,
 		return nil, 0, domain.Error{Code: CodeRequestFailed, Message: c.t("memberadmin.unreachable")}
 	}
 	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize))
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponse))
 	if err != nil {
 		return nil, 0, domain.Error{Code: CodeRequestFailed, Message: c.t("memberadmin.unreachable")}
 	}
 	return raw, response.StatusCode, nil
 }
 
-// check turns one response status into a fixed error. A 404 without a code is
-// a missing route (older deployment), not missing data.
+// check turns one response status into a fixed error. A 404 without a code is a
+// missing route (older deployment), not missing data.
 func (c *Client) check(status int, raw []byte) error {
 	switch status {
 	case http.StatusOK, http.StatusCreated, http.StatusNoContent:
@@ -269,11 +256,13 @@ func (c *Client) check(status int, raw []byte) error {
 		return domain.Error{Code: CodeInvitePending, Message: c.t("memberadmin.invitePending")}
 	case "PIN_ATTEMPTS_EXHAUSTED":
 		return domain.Error{Code: CodePinExhausted, Message: c.t("memberadmin.pinExhausted")}
-	case "WRONG_STAGE":
-		return domain.Error{Code: CodeWrongStage, Message: c.t("memberadmin.wrongStage")}
 	case "INVALID_LABEL":
 		return domain.Error{Code: CodeInvalidLabel, Message: c.t("memberadmin.invalidLabel")}
-	case "INVITE_NOT_FOUND", "MEMBER_NOT_FOUND", "NOT_REBINDABLE", "OWNER_IMMUTABLE", "INVITE_CLOSED":
+	case "CHANNEL_IMMUTABLE":
+		return domain.Error{Code: CodeImmutable, Message: c.t("memberadmin.immutable")}
+	case "REBIND_REQUIRED":
+		return domain.Error{Code: CodeRebindNeeded, Message: c.t("memberadmin.rebindNeeded")}
+	case "CHANNEL_NOT_FOUND", "INVITE_NOT_FOUND", "NOT_REBINDABLE", "INVITE_CLOSED":
 		return domain.Error{Code: CodeNotFound, Message: c.t("memberadmin.notFound")}
 	}
 	return domain.Error{

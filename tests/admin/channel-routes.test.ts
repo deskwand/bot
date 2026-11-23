@@ -105,6 +105,13 @@ describe("channel routes", () => {
     expect(await res.json()).toEqual({ code: "CHANNEL_IMMUTABLE" });
   });
 
+  it("cancels a pending binding", async () => {
+    const res = await routes().fetch(
+      req(`${CHANNELS_PATH}/bindings/inv-1`, { method: "DELETE" }),
+    );
+    expect(res.status).toBe(204);
+  });
+
   it("keeps the old path alive with a deprecation header", async () => {
     const res = await routes().fetch(req("/admin/members"));
     expect(res.status).toBe(200);

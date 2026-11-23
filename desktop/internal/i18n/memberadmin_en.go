@@ -12,4 +12,6 @@ var enMemberAdmin = map[string]string{
 	"memberadmin.invitePending":   "That name already has a pending invitation; cancel it or wait for it to expire",
 	"memberadmin.invalidLabel":    "The name cannot be empty or longer than 64 characters",
 	"memberadmin.wrongStage":      "The invitation moved to another stage; refresh and retry",
+	"memberadmin.immutable": "The first channel cannot be removed",
+	"memberadmin.rebindNeeded": "The session expired; rebind this channel",
 }
