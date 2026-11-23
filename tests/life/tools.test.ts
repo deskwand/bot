@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setClockOverride } from "../../src/butler/notifier";
 import { t } from "../../src/i18n";
 import { createLifeTools, type LifeToolDeps } from "../../src/life/tools";
 import type { Vitals } from "../../src/life/vitals";
 import type { QuotaSnapshot } from "../../src/llm/quota";
+import type { HostRead } from "../../src/sandbox/host";
 
 function vitals(overrides: Partial<Vitals> = {}): Vitals {
   return {
@@ -379,5 +380,107 @@ describe("life_vitals quota", () => {
   it("keeps the current output when the dep is absent", async () => {
     const result = await run(createLifeTools(deps()), "life_vitals");
     expect(text(result)).not.toContain("订阅额度");
+  });
+});
+
+const HOST_NOW = 1_763_000_000_000;
+const HOST_GIB = 1024 ** 3;
+
+const HOST_OK: HostRead = {
+  status: "ok",
+  snapshot: {
+    sampledAt: HOST_NOW,
+    cpu: { cores: 4, load1: 1.24 },
+    mem: {
+      totalBytes: 8 * HOST_GIB,
+      availableBytes: 3.1 * HOST_GIB,
+      cgroup: { limitBytes: 2 * HOST_GIB, usedBytes: 1.1 * HOST_GIB },
+    },
+    disk: [{ path: "/", totalBytes: 265 * HOST_GIB, freeBytes: 119 * HOST_GIB }],
+  },
+};
+
+describe("life_vitals host section", () => {
+  beforeEach(() => {
+    setClockOverride({
+      now: () => HOST_NOW,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    });
+  });
+
+  afterEach(() => {
+    setClockOverride(null);
+  });
+
+  it("stays out of the output when no host reader is wired", async () => {
+    const plain = text(await run(createLifeTools(deps()), "life_vitals"));
+
+    expect(plain).not.toContain("宿主机");
+  });
+
+  it("prints exact numbers with their age", async () => {
+    const output = text(
+      await run(createLifeTools(deps({ host: async () => HOST_OK })), "life_vitals"),
+    );
+
+    expect(output).toContain("宿主机（容器所在的机器，刚刚）");
+    expect(output).toContain("CPU：4 核，负载 1.24");
+    expect(output).toContain("内存：3.1 / 8.0 GiB 可用（39%）");
+    expect(output).toContain("自身内存上限 2.0 GiB（用了 1.1，55%）");
+    expect(output).toContain("磁盘 /：119.0 / 265.0 GiB 可用（45%）");
+  });
+
+  it.each([
+    [{ status: "absent" } as HostRead, "这个部署没有宿主机视角"],
+    [{ status: "unsupported" } as HostRead, "沙箱镜像过旧，升级后可读"],
+    [
+      { status: "unavailable", reason: "unreachable" } as HostRead,
+      "读不到（沙箱不可达）",
+    ],
+  ])("names why %o is unavailable", async (read, expected) => {
+    const output = text(
+      await run(createLifeTools(deps({ host: async () => read })), "life_vitals"),
+    );
+
+    expect(output).toContain(expected);
+  });
+
+  it("shows the cgroup ceiling even without meminfo", async () => {
+    const output = text(
+      await run(
+        createLifeTools(
+          deps({
+            host: async () => ({
+              status: "ok",
+              snapshot: {
+                sampledAt: HOST_NOW,
+                mem: { cgroup: { limitBytes: 2 * HOST_GIB, usedBytes: HOST_GIB } },
+              },
+            }),
+          }),
+        ),
+        "life_vitals",
+      ),
+    );
+
+    expect(output).toContain("自身内存上限 2.0 GiB（用了 1.0，50%）");
+  });
+
+  it("survives a host reader that throws", async () => {
+    const output = text(
+      await run(
+        createLifeTools(
+          deps({
+            host: async () => {
+              throw new Error("boom");
+            },
+          }),
+        ),
+        "life_vitals",
+      ),
+    );
+
+    expect(output).toContain("读不到（沙箱不可达）");
   });
 });

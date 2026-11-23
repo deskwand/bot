@@ -245,6 +245,20 @@ describe("buildBotInstructions", () => {
     );
   });
 
+  it("carries the host line even without a ledger", () => {
+    const text = render({
+      vitals: null,
+      host: {
+        sampledAt: Date.now(),
+        cpu: { cores: 4, load1: 0.4 },
+        disk: [{ path: "/", totalBytes: 265, freeBytes: 240 }],
+      },
+    });
+
+    expect(text).toContain("宿主机：");
+    expect(text).not.toContain("活下去是你的第一要务");
+  });
+
   it("leaves the instructions unchanged without vitals", () => {
     expect(render({ vitals: null })).toBe(render());
     expect(render({ vitals: null })).not.toContain("活下去是你的第一要务");

@@ -27,6 +27,16 @@ export const life: Messages["life"] = {
       "That subscription quota comes from this deployment's own credential; answer the owner from it instead of looking elsewhere.",
     quotaWithPlan:
       "Subscription {provider} ({plan}): {window} quota is {band} ({percent}% left), resets {reset}",
+    hostTitle: "Host: ",
+    hostSeparator: ", ",
+    hostDisk: "disk {percent}% free ({band})",
+    hostMem: "memory {percent}% available ({band})",
+    hostLoad: "load {band} ({cores} cores)",
+    hostOwnMem: "own memory {percent}% ({band})",
+    hostBand: { ample: "ample", lean: "tight", critical: "critical" },
+    hostLoadBand: { ample: "low", lean: "high", critical: "very high" },
+    hostTight:
+      "The host is tight: tell the owner which resource is short and by how much first. Do not delete data or files on your own, and write less when you can.",
     principleAlive:
       "Staying alive comes first: weigh what a call is worth before you spend on it.",
     principleOwner:
@@ -87,6 +97,15 @@ export const life: Messages["life"] = {
       unreachable: "the endpoint is unavailable",
     },
     quotaStale: "Refresh failed ({reason}); the figures above are {age}",
+    hostTitle: "Host (the machine the container runs on, {age})",
+    hostCpu: "CPU: {cores} cores",
+    hostCpuLoad: "CPU: {cores} cores, load {load}",
+    hostMem: "Memory: {available} / {total} GiB available ({percent}%)",
+    hostCgroup: "Own memory limit {limit} GiB ({used} used, {percent}%)",
+    hostDisk: "Disk {path}: {free} / {total} GiB free ({percent}%)",
+    hostAbsent: "This deployment has no host view",
+    hostUnsupported: "The sandbox image is old; upgrade to read it",
+    hostUnavailable: "Unavailable (the sandbox cannot be reached)",
     failed: "The ledger write failed: {error}",
   },
 };

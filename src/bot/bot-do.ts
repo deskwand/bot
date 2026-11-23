@@ -10,6 +10,8 @@ import type {
 import { getClock } from "../butler/notifier";
 import { ownerLocale } from "../i18n";
 import { readTier, readVitals } from "../life/client";
+import { readHost } from "../sandbox/host";
+import { sandboxFetch } from "../sandbox/install";
 import { isQuotaExhaustedSummary } from "../llm/model-errors";
 import { readWalletValue } from "../wallet/client";
 import { MIN_VALUE_USD } from "../wallet/guard";
@@ -606,7 +608,10 @@ export class BotDO extends DurableObject<Env> {
       } catch (error) {
         console.warn("bot owner profile failed:", error);
       }
-      const vitals = await readVitals(this.env);
+      const [vitals, host] = await Promise.all([
+        readVitals(this.env),
+        readHost(this.env, sandboxFetch(this.env) ?? fetch),
+      ]);
 
       const instructions = buildBotInstructions({
         name: meta.name,
@@ -618,6 +623,7 @@ export class BotDO extends DurableObject<Env> {
         manualWake:
           meta.manualWakeAt != null && meta.manualWakeAt === meta.nextWakeAt,
         vitals,
+        host: host.status === "ok" ? host.snapshot : null,
       });
       const authorization = buildBotAuthorization({
         name: meta.name,

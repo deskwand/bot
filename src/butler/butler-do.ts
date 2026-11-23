@@ -25,6 +25,8 @@ import { ensureEarnerBot, type EnsureEarnerResult } from "./earner";
 import { STALL_AFTER_MS } from "../task/stall";
 import { ownerLocale, t, type Locale } from "../i18n";
 import { lifeStub, readQuota, readVitals } from "../life/client";
+import { readHost } from "../sandbox/host";
+import { sandboxFetch } from "../sandbox/install";
 import { effectiveModelRef } from "../life/diet";
 import type { Meter } from "../life/meter";
 import { lifeBlock } from "../life/prompt";
@@ -561,21 +563,24 @@ export class ButlerDO extends Agent<Env> {
           key: "life",
           tag: false,
           render: async () => {
-            const vitals = await readVitals(this.env);
+            // Independent reads, one deadline: the host probe waits at most two
+            // seconds and must not stack on top of the ledger and quota.
+            const [vitals, quota, host] = await Promise.all([
+              readVitals(this.env),
+              // A $0 deployment still has a subscription ceiling worth telling
+              // the model about, so this runs whatever the ledger says.
+              readQuota(this.env, inUseQuotaProviders(this.env)),
+              readHost(this.env, sandboxFetch(this.env) ?? fetch),
+            ]);
             const walletValue = vitals?.metabolismStarted
               ? await readWalletValue(this.env)
               : null;
-            // Independent of the ledger: a $0 deployment still has a
-            // subscription ceiling worth telling the model about.
-            const quota = await readQuota(
-              this.env,
-              inUseQuotaProviders(this.env),
-            );
             const block = lifeBlock(
               ownerLocale(this.env),
               vitals,
               walletValue,
               quota,
+              host.status === "ok" ? host.snapshot : null,
             );
             return block.length > 0 ? block : undefined;
           },
@@ -590,6 +595,7 @@ export class ButlerDO extends Agent<Env> {
         credit: (usd, note, source) =>
           lifeStub(this.env).recordCredit(usd, note, source),
         quota: () => readQuota(this.env, inUseQuotaProviders(this.env)),
+        host: () => readHost(this.env, sandboxFetch(this.env) ?? fetch),
         settleRemittance: walletConfigured(this.env)
           ? (id) => walletStub(this.env).settleRemittance(id)
           : undefined,

@@ -4,8 +4,10 @@ import { getClock } from "../butler/notifier";
 import { t, type Locale, type MessageKey } from "../i18n";
 import type { QuotaSnapshot } from "../llm/quota";
 import type { ModelRef, Role } from "../llm/models";
+import type { HostRead } from "../sandbox/host";
 import { walletStatusLines } from "../wallet/tools";
 import type { WalletStatus } from "../wallet/wallet-do";
+import { gib } from "./host";
 import { formatUsd, tierName } from "./prompt";
 import {
   formatPercent,
@@ -61,6 +63,8 @@ export type LifeToolDeps = {
   wallet?(): Promise<WalletStatus | null>;
   /** Subscription quota, when the deployment uses a provider that reports it. */
   quota?(): Promise<QuotaSnapshot>;
+  /** The machine this deployment runs on, or why it cannot be read. */
+  host?(): Promise<HostRead>;
   /** The model each role would use right now. */
   effectiveModels(): Promise<Record<Role, ModelRef>>;
   locale: Locale;
@@ -161,6 +165,74 @@ function quotaLines(locale: Locale, snapshot: QuotaSnapshot): string[] {
   return lines;
 }
 
+/** The exact numbers behind the prompt's coarse bands, or why there are none. */
+function hostToolLines(locale: Locale, read: HostRead | null): string[] {
+  // The distinction that matters to the model is absent / old image / broken;
+  // the underlying reason stays in HostRead for tests, not in the text.
+  if (read === null) return [t(locale, "life.tool.hostUnavailable")];
+  if (read.status === "absent") return [t(locale, "life.tool.hostAbsent")];
+  if (read.status === "unsupported") {
+    return [t(locale, "life.tool.hostUnsupported")];
+  }
+  if (read.status === "unavailable") {
+    return [t(locale, "life.tool.hostUnavailable")];
+  }
+
+  const snapshot = read.snapshot;
+  const lines = [
+    t(locale, "life.tool.hostTitle", {
+      age: ageText(locale, snapshot.sampledAt, getClock().now()),
+    }),
+  ];
+
+  const cpu = snapshot.cpu;
+  if (cpu !== undefined) {
+    lines.push(
+      cpu.load1 === undefined
+        ? t(locale, "life.tool.hostCpu", { cores: cpu.cores })
+        : t(locale, "life.tool.hostCpuLoad", {
+            cores: cpu.cores,
+            load: cpu.load1.toFixed(2),
+          }),
+    );
+  }
+
+  const mem = snapshot.mem;
+  if (mem?.totalBytes !== undefined && mem.availableBytes !== undefined) {
+    lines.push(
+      t(locale, "life.tool.hostMem", {
+        available: gib(mem.availableBytes),
+        total: gib(mem.totalBytes),
+        percent: Math.round((mem.availableBytes / mem.totalBytes) * 100),
+      }),
+    );
+  }
+  if (mem?.cgroup !== undefined) {
+    lines.push(
+      t(locale, "life.tool.hostCgroup", {
+        limit: gib(mem.cgroup.limitBytes),
+        used: gib(mem.cgroup.usedBytes),
+        percent: Math.round(
+          (mem.cgroup.usedBytes / mem.cgroup.limitBytes) * 100,
+        ),
+      }),
+    );
+  }
+
+  for (const disk of snapshot.disk ?? []) {
+    lines.push(
+      t(locale, "life.tool.hostDisk", {
+        path: disk.path,
+        free: gib(disk.freeBytes),
+        total: gib(disk.totalBytes),
+        percent: Math.round((disk.freeBytes / disk.totalBytes) * 100),
+      }),
+    );
+  }
+
+  return lines;
+}
+
 function modelLabel(ref: ModelRef): string {
   return `${ref.provider}/${ref.id}`;
 }
@@ -177,7 +249,7 @@ export function createLifeTools(deps: LifeToolDeps): ToolRegistration[] {
   const vitalsTool: ToolRegistration<typeof LifeVitals> = {
     name: "life_vitals",
     description:
-      "Show the life ledger: balance, daily spend, runway, tier, the model each role is using right now, and how much subscription quota is left (each window with its reset time).",
+      "Show the life ledger: balance, daily spend, runway, tier, the model each role is using right now, how much subscription quota is left (each window with its reset time), and the host machine's CPU, memory and disk.",
     parameters: LifeVitals,
     replay: "safe",
     async execute() {
@@ -209,6 +281,15 @@ export function createLifeTools(deps: LifeToolDeps): ToolRegistration[] {
             quota = null;
           }
           if (quota !== null) lines.push(...quotaLines(locale, quota));
+        }
+        if (deps.host !== undefined) {
+          let read: HostRead | null = null;
+          try {
+            read = await deps.host();
+          } catch {
+            read = null;
+          }
+          lines.push(...hostToolLines(locale, read));
         }
         if (deps.wallet !== undefined) {
           let wallet: WalletStatus | null = null;

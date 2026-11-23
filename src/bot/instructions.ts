@@ -2,6 +2,7 @@ import { t, type Locale } from "../i18n";
 import { lifeBlock } from "../life/prompt";
 import type { Vitals } from "../life/vitals";
 import { phoneRules } from "../phone/style";
+import type { HostSnapshot } from "../sandbox/host";
 import { MEMORY_DOC, RULES_DOC, isMethodDoc, type BotDoc } from "./docs";
 import type { RunRow } from "./bot-store";
 import type { BotSnapshot } from "./bot-do";
@@ -97,6 +98,7 @@ export function buildBotInstructions(input: {
   steer: string[];
   manualWake: boolean;
   vitals: Vitals | null;
+  host?: HostSnapshot | null;
 }): string {
   const blocks = [
     `你是机器人 ${input.name}。\n\n你的使命：\n${input.mission}`,
@@ -130,8 +132,9 @@ export function buildBotInstructions(input: {
     blocks.push(`${RECORDS_NOTICE}\n<<<\n${records.join("\n\n")}\n>>>`);
   }
 
-  const life =
-    input.vitals === null ? "" : lifeBlock("zh", input.vitals);
+  // No `vitals === null` gate: the host line belongs to the survival context
+  // whether or not the books have started. An empty block still yields "".
+  const life = lifeBlock("zh", input.vitals, undefined, undefined, input.host ?? null);
   if (life.length > 0) blocks.push(life);
 
   blocks.push(

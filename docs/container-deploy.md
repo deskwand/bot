@@ -63,6 +63,7 @@ docker build -f container/Dockerfile -t ghcr.io/deskwand/bot:latest .
 - 容器内是 root，整个根文件系统可写（不然 `apt-get` 装不了东西）。隔离边界就是这个容器：不挂宿主目录、不挂 docker socket、不 `privileged`。
 - `/sandbox` 跨任务、跨重启保留；`/tmp`、`apt-get` 装的东西随容器重建消失。
 - 磁盘占用只是观测：`SANDBOX_DISK_MB`（默认 10240）到点会在工具里提示，但不是配额，shell 照样写得进去。真正的上限是宿主机磁盘。
+- 沙箱的 `GET /host` 报的磁盘是宿主机上 `/` 与 `/sandbox` 两个挂载点的余量，给 Bot 判断「房子快满了」，不是沙箱配额，也不等于 `/data` 的精确剩余；真正的上限仍然是宿主机磁盘。这些数字来自容器能看到的 `/proc`：在 Linux 主机上就是那台机器，在 macOS 的 Docker Desktop 上是它背后的 Linux 虚拟机，不是 Mac 本身。
 - 沙箱里的任何东西都可能被模型发到网上。它本来就拿不到 bot 的密钥，别往里放你自己的。
 - 备份**不含**沙箱卷。要清空沙箱：`docker compose down --volumes` 后重新 `up -d`——注意这会把 bot 的数据卷一起删掉，先备份。
 - 只在 Docker Compose（本机或 SSH 主机）部署里可用；桌面客户端用 Apple `container` 运行时这一版没有沙箱。

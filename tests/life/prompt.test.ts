@@ -4,6 +4,7 @@ import { t } from "../../src/i18n";
 import { formatUsd, lifeBlock } from "../../src/life/prompt";
 import type { Vitals } from "../../src/life/vitals";
 import type { QuotaSnapshot } from "../../src/llm/quota";
+import type { HostSnapshot } from "../../src/sandbox/host";
 
 function vitals(overrides: Partial<Vitals> = {}): Vitals {
   return {
@@ -239,5 +240,146 @@ describe("lifeBlock quota", () => {
 
     expect(text).toContain("Subscription Codex");
     expect(text).toContain("ample");
+  });
+});
+
+const HOST_NOW = 1_763_000_000_000;
+const GIB = 1024 ** 3;
+const HOST_NOW_HALF_GIB = 1024 ** 3;
+
+function host(overrides: Partial<HostSnapshot> = {}): HostSnapshot {
+  return {
+    sampledAt: HOST_NOW,
+    cpu: { cores: 4, load1: 0.4 },
+    mem: { totalBytes: 8 * GIB, availableBytes: 3.2 * GIB },
+    disk: [{ path: "/", totalBytes: 265 * GIB, freeBytes: 120 * GIB }],
+    ...overrides,
+  };
+}
+
+describe("lifeBlock host line", () => {
+  beforeEach(() => {
+    setClockOverride({
+      now: () => HOST_NOW,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+    });
+  });
+
+  afterEach(() => {
+    setClockOverride(null);
+  });
+
+  it("changes nothing when no host snapshot is passed", () => {
+    expect(lifeBlock("zh", vitals(), undefined, undefined, null)).toBe(
+      lifeBlock("zh", vitals()),
+    );
+  });
+
+  it("renders bands in Chinese", () => {
+    const text = lifeBlock("zh", vitals(), undefined, undefined, host());
+
+    expect(text).toContain(
+      "宿主机：磁盘剩 45%（充足），内存可用 40%（充足），负载低（4 核）",
+    );
+    expect(text).not.toContain("宿主机紧了");
+  });
+
+  it("adds the warning sentence when a resource is tight", () => {
+    const text = lifeBlock(
+      "zh",
+      vitals(),
+      undefined,
+      undefined,
+      host({ disk: [{ path: "/", totalBytes: 265 * GIB, freeBytes: 8 * GIB }] }),
+    );
+
+    expect(text).toContain("（见底）");
+    expect(text).toContain("宿主机紧了：先告诉主人是哪一项、剩多少");
+  });
+
+  it("drops a resource it has no data for", () => {
+    const text = lifeBlock(
+      "zh",
+      vitals(),
+      undefined,
+      undefined,
+      host({ cpu: undefined }),
+    );
+
+    expect(text).toContain("磁盘剩 45%");
+    expect(text).not.toContain("负载");
+  });
+
+  it("adds her own memory ceiling once it is tight", async () => {
+    const text = lifeBlock(
+      "zh",
+      vitals(),
+      undefined,
+      undefined,
+      host({
+        mem: {
+          totalBytes: 8 * GIB,
+          availableBytes: 3.2 * GIB,
+          cgroup: { limitBytes: 2 * GIB, usedBytes: 1.85 * GIB },
+        },
+      }),
+    );
+
+    expect(text).toContain("自身内存 90%（见底）");
+    expect(text).toContain("宿主机紧了");
+  });
+
+  it("keeps the ceiling out of the line while it is roomy", () => {
+    const text = lifeBlock(
+      "zh",
+      vitals(),
+      undefined,
+      undefined,
+      host({
+        mem: {
+          totalBytes: 8 * GIB,
+          availableBytes: 3.2 * GIB,
+          cgroup: { limitBytes: 2 * GIB, usedBytes: HOST_NOW_HALF_GIB },
+        },
+      }),
+    );
+
+    expect(text).not.toContain("自身内存");
+  });
+
+  it("ignores a snapshot older than ten minutes", () => {
+    const stale = host({ sampledAt: HOST_NOW - 11 * 60_000 });
+
+    expect(lifeBlock("zh", vitals(), undefined, undefined, stale)).not.toContain(
+      "宿主机",
+    );
+  });
+
+  it("still shows a snapshot exactly ten minutes old", () => {
+    const edge = host({ sampledAt: HOST_NOW - 10 * 60_000 });
+
+    expect(lifeBlock("zh", vitals(), undefined, undefined, edge)).toContain(
+      "宿主机",
+    );
+  });
+
+  it("reports the host even when the books never started", () => {
+    const text = lifeBlock(
+      "zh",
+      vitals({ metabolismStarted: false }),
+      undefined,
+      undefined,
+      host(),
+    );
+
+    expect(text).toContain("宿主机：");
+    expect(text).not.toContain("档位");
+  });
+
+  it("renders in English for the English locale", () => {
+    const text = lifeBlock("en", vitals(), undefined, undefined, host());
+
+    expect(text).toContain("Host: disk 45% free (ample)");
   });
 });

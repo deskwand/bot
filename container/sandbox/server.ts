@@ -9,6 +9,7 @@ import {
 import type { ActAction, BrowserManager, MirrorInput } from "./browser.js";
 import { createDiskProbe, type DiskUsage } from "./disk.js";
 import { runCommand, type ExecLimits } from "./exec.js";
+import { createHostProbe, type HostProbe } from "./host.js";
 import {
   readSandboxFile,
   SandboxFileError,
@@ -32,6 +33,8 @@ export type SandboxdConfig = ExecLimits & {
   token: string;
   version: string;
   diskLimitBytes: number;
+  /** Absent in production: createSandboxdHandler builds the real probe. */
+  host?: HostProbe;
   /** Absent when the image has no browser; every /browser/* call then 503s. */
   browser?: BrowserManager;
 };
@@ -121,6 +124,7 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 
 export function createSandboxdHandler(config: SandboxdConfig) {
   const disk = createDiskProbe(config.sandboxDir, config.diskLimitBytes);
+  const host = config.host ?? createHostProbe(config.sandboxDir);
 
   return async function handle(
     req: IncomingMessage,
@@ -145,6 +149,14 @@ export function createSandboxdHandler(config: SandboxdConfig) {
             ? []
             : ["browser", "browser-mirror", "browser-upload", "browser-download"],
       });
+    }
+
+    if (req.method === "GET" && url.pathname === "/host") {
+      const snapshot = await host();
+      if (snapshot === null) {
+        return fail(res, 503, "HOST_UNAVAILABLE", "host metrics are unreadable");
+      }
+      return json(res, 200, snapshot);
     }
 
     if (url.pathname === "/browser/mirror" && req.method === "GET") {
