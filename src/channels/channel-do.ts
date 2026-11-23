@@ -173,7 +173,7 @@ type TelegramWebhookRetry = {
  * object is unauthenticated, so what the download needs is exactly this —
  * whose admission decides whether the bytes may be stored or dispatched.
  */
-type MediaTrust = { actor: Principal; ref: ConnectionRef };
+type MediaTrust = { actor: Principal; ref: ConnectionRef; pollIsCurrent?: () => boolean };
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -385,6 +385,8 @@ export class ChannelDO extends Agent<Env> {
     string,
     { generation: number }
   >();
+
+  private readonly memberPollTransitions = new Map<string, Promise<void>>();
 
   private readonly memberWeChatBackoffMs = new Map<string, number>();
 
@@ -881,14 +883,16 @@ export class ChannelDO extends Agent<Env> {
       connectionId: connection.connectionId,
       generation: connection.generation,
     };
-    await this.cancelConnectionSchedules(ref.connectionId);
-    this.activeMemberWeChatRuns.delete(ref.connectionId);
-    this.memberWeChatBackoffMs.delete(ref.connectionId);
-    await this.ctx.storage.delete(`poll:defer:${ref.connectionId}:${ref.generation}`);
-    await this.ctx.storage.delete(`flush:defer:${ref.connectionId}:${ref.generation}`);
-    await this.ctx.storage.delete(`channel:error:${ref.connectionId}`);
-    this.connections.update(ref.connectionId, { pollStatus: "polling" }, ref.generation);
-    await this.scheduleMemberPoll(ref);
+    await this.withMemberPollTransition(ref.connectionId, async () => {
+      this.activeMemberWeChatRuns.delete(ref.connectionId);
+      await this.cancelConnectionSchedules(ref.connectionId);
+      this.memberWeChatBackoffMs.delete(ref.connectionId);
+      await this.ctx.storage.delete(`poll:defer:${ref.connectionId}:${ref.generation}`);
+      await this.ctx.storage.delete(`flush:defer:${ref.connectionId}:${ref.generation}`);
+      await this.ctx.storage.delete(`channel:error:${ref.connectionId}`);
+      this.connections.update(ref.connectionId, { pollStatus: "polling" }, ref.generation);
+      await this.scheduleMemberPoll(ref);
+    });
   }
 
   /** Mints the token, records only its digest, then files it in the vault. */
@@ -1472,84 +1476,75 @@ export class ChannelDO extends Agent<Env> {
    */
   async pollMemberWeChat(
     payload?: unknown,
-    _schedule?: Schedule<unknown>,
+    schedule?: Schedule<unknown>,
   ): Promise<void> {
     const target = connectionPayload(payload);
     if (target === null) return;
     if (parseActiveChannel(this.env.ACTIVE_CHANNEL) !== "wechat") return;
-    if (this.lease.current() !== null) {
-      await this.deferMemberPoll(target, "maintenance");
-      return;
-    }
-
-    const state = this.connections.read(target.connectionId);
-    if (
-      state === null ||
-      state.status !== "active" ||
-      state.generation !== target.generation
-    ) {
-      return;
-    }
-    if (state.memberId === OWNER_ID && !this.legacyPollRetired()) {
-      // The deployment chain still owns this credential; polling here as well
-      // would fetch every message twice.
-      return;
-    }
-    if (this.activeMemberWeChatRuns.has(target.connectionId)) {
-      // The 40-second fetch in flight will re-arm this chain on its own only if
-      // it still owns the run; a restart that replaced the run needs this one.
-      await this.deferMemberPoll(target, "run in flight");
-      return;
-    }
-    const known = this.connections.read(target.connectionId);
-    if (known?.pollStatus === "needs_reset") return;
-
-    const actor = this.members.principal(state.memberId);
-    if (actor === null) return;
-    const ref: ConnectionRef = {
-      memberId: state.memberId,
-      connectionId: state.connectionId,
-      generation: state.generation,
+    const run = { generation: target.generation };
+    const claim: { ref?: ConnectionRef; actor?: Principal } = {};
+    await this.withMemberPollTransition(target.connectionId, async () => {
+      if (!(await this.memberPollJobCurrent(schedule?.id))) return;
+      const state = this.connections.read(target.connectionId);
+      if (
+        state?.status !== "active" || state.generation !== target.generation ||
+        state.pollStatus === "needs_reset" ||
+        (state.memberId === OWNER_ID && !this.legacyPollRetired())
+      ) return;
+      if (this.lease.current() !== null) {
+        await this.deferMemberPoll(target, "maintenance", schedule?.id);
+        return;
+      }
+      if (this.activeMemberWeChatRuns.has(target.connectionId)) {
+        await this.deferMemberPoll(target, "run in flight", schedule?.id);
+        return;
+      }
+      const actor = this.members.principal(state.memberId);
+      if (actor === null) return;
+      claim.ref = { memberId: state.memberId, ...target };
+      claim.actor = actor;
+      this.activeMemberWeChatRuns.set(target.connectionId, run);
+    });
+    const { ref, actor } = claim;
+    if (ref === undefined || actor === undefined) return;
+    const current = () => {
+      const connection = this.connections.read(ref.connectionId);
+      return this.activeMemberWeChatRuns.get(ref.connectionId) === run &&
+        connection?.status === "active" && connection.generation === ref.generation;
     };
-
-    let route: RouteSnapshot;
-    let credentials: WeChatCredentials | null;
-    try {
-      route = await this.routeForMember(actor);
-      credentials = await this.loadMemberCredentials(
-        ref.connectionId,
-        ref.generation,
-      );
-    } catch (error) {
-      console.warn(`channel: member poll skipped: ${errorMessage(error)}`);
-      await this.deferMemberPoll(ref, "admission");
-      return;
-    }
-    if (route.channel !== "wechat" || credentials === null) {
-      await this.deferMemberPoll(ref, "credentials unavailable");
-      return;
-    }
-
-    const run = { generation: ref.generation };
-    this.activeMemberWeChatRuns.set(ref.connectionId, run);
-    const ownsRun = async () => {
-      const current = this.connections.read(ref.connectionId);
-      return (
-        this.activeMemberWeChatRuns.get(ref.connectionId) === run &&
-        this.lease.current() === null &&
-        current !== null &&
-        current.status === "active" &&
-        current.generation === ref.generation &&
-        (await this.isMemberAdmissionCurrent(
-          actor,
-          "wechat",
-          ref,
-          route.routeKey,
-        ))
-      );
-    };
+    const transition = (work: () => Promise<void>) =>
+      this.withMemberPollTransition(ref.connectionId, async () => {
+        if (await this.memberPollJobCurrent(schedule?.id) && current()) await work();
+      });
+    const deferRun = (reason: string) => transition(() =>
+      this.deferMemberPoll(ref, reason, schedule?.id),
+    );
 
     try {
+      if (!current()) return;
+      let route: RouteSnapshot;
+      let credentials: WeChatCredentials | null;
+      try {
+        route = await this.routeForMember(actor);
+        credentials = await this.loadMemberCredentials(ref.connectionId, ref.generation);
+      } catch (error) {
+        console.warn(`channel: member poll skipped: ${errorMessage(error)}`);
+        await deferRun("admission");
+        return;
+      }
+      if (route.channel !== "wechat" || credentials === null) {
+        await deferRun("credentials unavailable");
+        return;
+      }
+      const ownsRun = async () => {
+        return current() && this.lease.current() === null &&
+          await this.isMemberAdmissionCurrent(actor, "wechat", ref, route.routeKey) &&
+          current() && this.lease.current() === null;
+      };
+      if (!(await ownsRun())) {
+        await deferRun("lost run before fetch");
+        return;
+      }
       const timing = getPollTimingOverride() ?? {
         runMs: WECHAT_POLL_RUN_MS,
         baseBackoffMs: WECHAT_POLL_BACKOFF_MS,
@@ -1576,7 +1571,7 @@ export class ChannelDO extends Agent<Env> {
         );
       } catch (error) {
         if (!(await ownsRun())) {
-          await this.deferMemberPoll(ref, "lost run");
+          await deferRun("lost run");
           return;
         }
         if (isSessionExpired(error)) {
@@ -1606,16 +1601,22 @@ export class ChannelDO extends Agent<Env> {
           this.memberWeChatBackoffMs.get(ref.connectionId) ??
           timing.baseBackoffMs;
         await sleep(backoffMs);
-        this.memberWeChatBackoffMs.set(
-          ref.connectionId,
-          Math.min(backoffMs * 2, WECHAT_POLL_MAX_BACKOFF_MS),
-        );
-        await this.rearmMemberPoll(ref);
+        await transition(async () => {
+          if (!(await ownsRun())) {
+            await this.deferMemberPoll(ref, "lost run after backoff", schedule?.id);
+            return;
+          }
+          this.memberWeChatBackoffMs.set(
+            ref.connectionId,
+            Math.min(backoffMs * 2, WECHAT_POLL_MAX_BACKOFF_MS),
+          );
+          await this.scheduleMemberPoll(ref, 0, schedule?.id);
+        });
         return;
       }
 
       if (!(await ownsRun())) {
-        await this.deferMemberPoll(ref, "lost run after fetch");
+        await deferRun("lost run after fetch");
         return;
       }
       emitChannelEvent(this.env, { channel: "wechat", event: "poll_ok" });
@@ -1631,20 +1632,20 @@ export class ChannelDO extends Agent<Env> {
         ref,
         actor,
         route.routeKey,
+        current,
       );
-      if (outcome === "maintenance") {
-        await this.deferMemberPoll(ref, "maintenance during dispatch");
-        return;
-      }
-      // Cursor last: a crash mid-batch makes iLink resend it rather than lose
-      // everything this connection already received.
-      this.updateMemberCursor(ref.connectionId, ref.generation, batch.cursor);
-      this.memberWeChatBackoffMs.delete(ref.connectionId);
-      if (!(await ownsRun())) {
-        await this.deferMemberPoll(ref, "lost run before rearm");
-        return;
-      }
-      await this.rearmMemberPoll(ref);
+      await transition(async () => {
+        if (outcome === "maintenance" || !(await ownsRun())) {
+          await this.deferMemberPoll(ref, "lost run during dispatch", schedule?.id);
+          return;
+        }
+        // Commit only after dispatch and while this run still owns the chain.
+        this.updateMemberCursor(ref.connectionId, ref.generation, batch.cursor);
+        this.memberWeChatBackoffMs.delete(ref.connectionId);
+        await this.scheduleMemberPoll(ref, 0, schedule?.id);
+        await this.ctx.storage.delete(this.memberPollKey(ref));
+        await this.ctx.storage.put(`poll:alive:${ref.connectionId}`, Date.now());
+      });
     } finally {
       if (this.activeMemberWeChatRuns.get(ref.connectionId) === run) {
         this.activeMemberWeChatRuns.delete(ref.connectionId);
@@ -1652,10 +1653,6 @@ export class ChannelDO extends Agent<Env> {
     }
   }
 
-  /**
-   * A poll chain that hit a transient condition resumes on its own; ending it
-   * here is what left a member silent until the next restart.
-   */
   /**
    * Exponential backoff for one channel, persisted in KV so a restart does not
    * reset it. Zero-delay re-arms are reserved for a completed poll; every early
@@ -1665,83 +1662,79 @@ export class ChannelDO extends Agent<Env> {
     return `poll:defer:${ref.connectionId}:${ref.generation}`;
   }
 
+  /** Serializes only queue/ownership changes, never a WeChat request. */
+  private async withMemberPollTransition(
+    connectionId: string,
+    work: () => Promise<void>,
+  ): Promise<void> {
+    const previous = this.memberPollTransitions.get(connectionId);
+    const next = (previous ?? Promise.resolve()).then(work);
+    const tail = next.catch(() => {});
+    this.memberPollTransitions.set(connectionId, tail);
+    try {
+      await next;
+    } finally {
+      if (this.memberPollTransitions.get(connectionId) === tail) {
+        this.memberPollTransitions.delete(connectionId);
+      }
+    }
+  }
+
+  private async memberPollJobCurrent(id?: string): Promise<boolean> {
+    return id === undefined || (await this.getScheduleById(id)) !== undefined;
+  }
+
   private async deferMemberPoll(
     ref: { connectionId: string; generation: number },
     reason: string,
+    runningId?: string,
   ): Promise<void> {
     const key = this.memberPollKey(ref);
-    const attempts =
-      ((await this.ctx.storage.get<number>(key)) ?? 0) + 1;
+    const attempts = ((await this.ctx.storage.get<number>(key)) ?? 0) + 1;
     await this.ctx.storage.put(key, attempts);
     console.warn(`channel: member poll deferred (${reason})`);
-    await this.schedule(
-      MemberPollBackoff.delaySeconds(attempts),
-      "pollMemberWeChat",
-      { connectionId: ref.connectionId, generation: ref.generation },
-      { idempotent: true },
-    );
+    await this.scheduleMemberPoll(ref, MemberPollBackoff.delaySeconds(attempts), runningId);
   }
 
-  /** A completed poll: clear the backoff, mark the chain alive, re-arm at once. */
-  private async rearmMemberPoll(ref: {
-    connectionId: string;
-    generation: number;
-  }): Promise<void> {
-    await this.ctx.storage.delete(this.memberPollKey(ref));
-    await this.ctx.storage.put(
-      `poll:alive:${ref.connectionId}`,
-      Date.now(),
-    );
-    await this.scheduleMemberPoll(ref);
-  }
-
-  private async scheduleMemberPoll(ref: {
-    connectionId: string;
-    generation: number;
-  }): Promise<void> {
-    // Tests drive pollMemberWeChat explicitly. Scheduling here would start a
-    // live chain that fires before the test installs its scripted fetch.
-    if (getPollTimingOverride()?.manualStart) return;
-    await this.schedule(
-      0,
-      "pollMemberWeChat",
-      { connectionId: ref.connectionId, generation: ref.generation },
-      { idempotent: true },
-    );
+  private async scheduleMemberPoll(
+    ref: { connectionId: string; generation: number },
+    delay = 0,
+    runningId?: string,
+  ): Promise<void> {
+    // Tests may drive message handling without running a live poll chain.
+    if (delay === 0 && getPollTimingOverride()?.manualStart) return;
+    if (runningId !== undefined) {
+      // The scheduler's idempotent lookup includes the current one-shot row,
+      // which is deleted on return. Only other rows can be successors.
+      const hasSuccessor = (await this.listSchedules()).some((job) => {
+        if (job.id === runningId || job.callback !== "pollMemberWeChat") return false;
+        const pending = connectionPayload(job.payload);
+        return pending?.connectionId === ref.connectionId && pending.generation === ref.generation;
+      });
+      if (hasSuccessor) return;
+    }
+    await this.schedule(delay, "pollMemberWeChat", {
+      connectionId: ref.connectionId,
+      generation: ref.generation,
+    }, { idempotent: runningId === undefined });
   }
 
   /** Schedules every live member connection that has no pending poll. */
   private async startMemberWeChatPolling(): Promise<void> {
     if (getPollTimingOverride()?.manualStart) return;
-    const now = Date.now();
-    const pending = await this.listSchedules();
-
     const retired = this.legacyPollRetired();
     for (const connection of this.connections.listActive()) {
-      // The first channel keeps the deployment chain until the switch is set.
       if (connection.memberId === OWNER_ID && !retired) continue;
-      // Liveness is "the chain re-armed", not "a poll started": a chain that
-      // wrote its heartbeat and then died must still be repaired.
-      const alive =
-        (await this.ctx.storage.get<number>(`poll:alive:${connection.connectionId}`)) ??
-        connection.lastPollAt ??
-        0;
-      if (alive !== 0 && now - alive < WECHAT_HEARTBEAT_MAX_AGE_MS) {
-        continue;
-      }
-      const scheduled = pending.some(
-        (schedule) =>
-          schedule.callback === "pollMemberWeChat" &&
-          connectionPayload(schedule.payload)?.connectionId ===
-            connection.connectionId,
-      );
-      if (scheduled) continue;
-      await this.schedule(
-        0,
-        "pollMemberWeChat",
-        { connectionId: connection.connectionId, generation: connection.generation },
-        { idempotent: true },
-      );
+      const ref = { connectionId: connection.connectionId, generation: connection.generation };
+      await this.withMemberPollTransition(ref.connectionId, async () => {
+        const current = this.connections.read(ref.connectionId);
+        if (current?.status !== "active" || current.generation !== ref.generation) return;
+        const alive =
+          (await this.ctx.storage.get<number>(`poll:alive:${ref.connectionId}`)) ??
+          current.lastPollAt ?? 0;
+        if (alive !== 0 && Date.now() - alive < WECHAT_HEARTBEAT_MAX_AGE_MS) return;
+        await this.scheduleMemberPoll(ref);
+      });
     }
   }
 
@@ -1761,12 +1754,14 @@ export class ChannelDO extends Agent<Env> {
     ref: ConnectionRef,
     actor: Principal,
     routeKey: string,
+    pollIsCurrent: () => boolean,
   ): Promise<"accepted" | "maintenance"> {
     return (async () => {
       // A lease can land while getUpdates is in flight: do not admit the batch
       // or write connection state into a database that is being restored.
       if (this.lease.current() !== null) return "maintenance" as const;
 
+      const live = () => pollIsCurrent() && this.lease.current() === null;
       for (let index = 0; index < batch.updates.length; index += 1) {
         const update = batch.updates[index];
         if (update.messageType !== 1) continue;
@@ -1780,7 +1775,7 @@ export class ChannelDO extends Agent<Env> {
           update.messageId ?? `${batch.cursor}:${index}`
         }`;
 
-        if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey))) {
+        if (!live() || !(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey)) || !live()) {
           return "accepted" as const;
         }
 
@@ -1791,6 +1786,7 @@ export class ChannelDO extends Agent<Env> {
             ref.generation,
             update.contextToken,
           );
+          if (!live()) return "accepted" as const;
           if (written) {
             this.ctx.waitUntil(
               this.flushMemberOutbound(ref.connectionId, ref.generation).catch(
@@ -1824,7 +1820,7 @@ export class ChannelDO extends Agent<Env> {
           // item 走，其余 item 只带附件，与主人路径一致。存储与派发都在这个
           // 成员的受信上下文里进行：附件归属成员的 member id，事件 id 也在
           // 连接命名空间内，A 的字节永远到不了 B 或主人。
-          const trust: MediaTrust = { actor, ref };
+          const trust: MediaTrust = { actor, ref, pollIsCurrent };
           for (let i = 0; i < update.media.length; i += 1) {
             const item = update.media[i];
             const itemEvent: MessageEvent = {
@@ -1834,7 +1830,7 @@ export class ChannelDO extends Agent<Env> {
             };
             // The previous item's download may have spanned a revoke or a
             // rebind: re-admit before touching the next one.
-            if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey))) {
+            if (!live() || !(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey)) || !live()) {
               return "accepted" as const;
             }
             if (item.kind === "image") {
@@ -1864,9 +1860,11 @@ export class ChannelDO extends Agent<Env> {
             routeKey,
             actor,
             ref,
+            live,
           );
           if (handled) continue;
         }
+        if (!live()) return "accepted" as const;
         this.dispatchMessage(event, routeKey, { actor, ref });
       }
       return "accepted" as const;
@@ -1889,16 +1887,17 @@ export class ChannelDO extends Agent<Env> {
     routeKey: string,
     actor: Principal,
     ref: ConnectionRef,
+    pollIsLive: () => boolean,
   ): Promise<boolean> {
     const parsed = event.text === null ? null : parseTextAction(event.text);
     if (parsed === null) return false;
     const deny = async (text: string): Promise<boolean> => {
-      if (await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey)) {
+      if (pollIsLive() && await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey) && pollIsLive()) {
         await this.sendToMember(actor, { text });
       }
       return true;
     };
-    if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey))) {
+    if (!pollIsLive() || !(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey)) || !pollIsLive()) {
       return true;
     }
     const butler = this.env.BUTLER.get(
@@ -1957,6 +1956,7 @@ export class ChannelDO extends Agent<Env> {
       return deny(t(ownerLocale(this.env), "task.control.denied"));
     }
 
+    if (!pollIsLive()) return true;
     const action: ActionEvent = {
       type: "action",
       channel: "wechat",
@@ -3401,12 +3401,13 @@ export class ChannelDO extends Agent<Env> {
     routeKey: string,
   ): Promise<boolean> {
     if (trust === undefined) return true;
+    if (trust.pollIsCurrent?.() === false) return false;
     return await this.isMemberAdmissionCurrent(
       trust.actor,
       "wechat",
       trust.ref,
       routeKey,
-    );
+    ) && trust.pollIsCurrent?.() !== false;
   }
 
   /** Dispatches with the member's own actor/ref, or on the legacy owner path. */
@@ -3419,6 +3420,7 @@ export class ChannelDO extends Agent<Env> {
       this.dispatchMessage(event, routeKey);
       return;
     }
+    if (trust.pollIsCurrent?.() === false) return;
     this.dispatchMessage(event, routeKey, {
       actor: trust.actor,
       ref: trust.ref,

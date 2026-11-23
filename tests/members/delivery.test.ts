@@ -153,6 +153,7 @@ type Hub = {
     routeKey: string,
     actor: Principal,
     ref: { memberId: string; connectionId: string; generation: number },
+    pollIsLive: () => boolean,
   ): Promise<boolean>;
   routeForMember(actor: Principal): Promise<{ routeKey: string }>;
 };
@@ -251,6 +252,7 @@ describe("member text actions and delivery", () => {
         routeA.routeKey,
         actorA,
         { memberId: actorA.memberId, connectionId: connectionA, generation: 1 },
+        () => true,
       );
       const stateOf = async (id: string): Promise<string> =>
         runInDurableObject(env.TASK.get(env.TASK.idFromName(id)), (_i, s) =>
@@ -308,6 +310,7 @@ describe("member text actions and delivery", () => {
         routeB.routeKey,
         actorB,
         { memberId: actorB.memberId, connectionId: connectionB, generation: 1 },
+        () => true,
       );
       const stateA = await runInDurableObject(
         env.TASK.get(env.TASK.idFromName(taskA)),
