@@ -50,10 +50,23 @@ func (s *Service) Channels() (ChannelsDTO, error) {
 
 // MemberInvites lists invitations the wizard can resume.
 func (s *Service) ChannelBindings() (ChannelInvitesDTO, error) {
-	// The channel list carries no invite ids; a pending binding is resumed from
-	// the wizard's own state, so this payload stays empty until Phase 3 wires a
-	// dedicated bindings query. Keeping the method avoids a broken UI call.
-	out := ChannelInvitesDTO{Bindings: []ChannelInviteDTO{}}
+	ctx := context.Background()
+	target, err := s.managedTarget(ctx)
+	if err != nil {
+		return ChannelInvitesDTO{}, err
+	}
+	client, err := s.channelClient(ctx, target)
+	if err != nil {
+		return ChannelInvitesDTO{}, err
+	}
+	invites, err := client.PendingBindings(ctx)
+	if err != nil {
+		return ChannelInvitesDTO{}, s.adminFailure(err)
+	}
+	out := ChannelInvitesDTO{Bindings: make([]ChannelInviteDTO, 0, len(invites))}
+	for _, invite := range invites {
+		out.Bindings = append(out.Bindings, channelInviteDTO(invite))
+	}
 	return out, nil
 }
 

@@ -38,6 +38,7 @@ import type {
   MembersDTO,
   ChannelsDTO,
   ChannelInviteDTO,
+  ChannelInvitesDTO,
   ChannelBindingDTO,
   LocalEngine,
   LocalRuntimesDTO,
@@ -2143,6 +2144,19 @@ export function createMockClient(): ClientService {
     async createChannel(label: string): Promise<ChannelInviteDTO> {
       const invite = await this.createMemberInvite(label);
       return { ...invite, channelId: null };
+    },
+
+    async channelBindings(): Promise<ChannelInvitesDTO> {
+      const invites = await this.memberInvites();
+      return {
+        bindings: invites.invites.map((invite) => ({
+          inviteId: invite.inviteId,
+          label: invite.label,
+          kind: invite.kind,
+          channelId: invite.memberId,
+          expiresAt: invite.expiresAt,
+        })),
+      };
     },
 
     async channelBindingState(id: string): Promise<ChannelBindingDTO> {

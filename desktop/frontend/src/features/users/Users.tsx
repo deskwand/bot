@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { useT } from "@/i18n";
 import { toClientError } from "@/services/errors";
-import type { ChannelDTO } from "@/services/types";
+import type { ChannelDTO, ChannelInviteDTO } from "@/services/types";
 import { AddUserDialog } from "./AddUserDialog";
 
 const UNSUPPORTED = "MEMBERS_UNSUPPORTED";
@@ -27,7 +27,7 @@ export function Users() {
 
   const pending = useQuery({
     queryKey: ["member-invites"],
-    queryFn: () => client.memberInvites(),
+    queryFn: () => client.channelBindings(),
     refetchInterval: 30_000,
   });
 
@@ -91,14 +91,14 @@ export function Users() {
       ) : null}
       {actionError === null ? null : <ErrorAlert error={actionError} />}
 
-      {(pending.data?.invites ?? []).filter((invite) => invite.expiresAt > Date.now())
+      {(pending.data?.bindings ?? []).filter((invite: ChannelInviteDTO) => invite.expiresAt > Date.now())
         .length ? (
         <section data-testid="users-pending" className="rounded border p-3">
           <h2 className="mb-2 text-sm font-medium">{t("users.pending")}</h2>
           <ul className="flex flex-col gap-1 text-sm">
-            {(pending.data?.invites ?? [])
-              .filter((invite) => invite.expiresAt > Date.now())
-              .map((invite) => (
+            {(pending.data?.bindings ?? [])
+              .filter((invite: ChannelInviteDTO) => invite.expiresAt > Date.now())
+              .map((invite: ChannelInviteDTO) => (
               <li key={invite.inviteId} className="flex items-center justify-between gap-3">
                 <span>{invite.label}</span>
                 <button

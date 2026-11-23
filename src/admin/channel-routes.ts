@@ -88,6 +88,19 @@ async function handle(req: Request, url: URL, channel: ChannelStub): Promise<Res
     }
   }
 
+  if (req.method === "GET" && path === `${CHANNELS_PATH}/bindings`) {
+    const invites = await channel.adminPendingInvites();
+    return json({
+      bindings: invites.map((invite) => ({
+        inviteId: invite.inviteId,
+        label: invite.label,
+        kind: invite.kind,
+        channelId: invite.memberId,
+        expiresAt: invite.expiresAt,
+      })),
+    });
+  }
+
   const binding = /^\/admin\/channels\/bindings\/([^/]+)(\/pin)?$/.exec(path);
   if (binding !== null) {
     const id = safeDecode(binding[1] as string);

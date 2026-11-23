@@ -76,6 +76,7 @@ export function createProductionClient(): ClientService {
     botDetail: (id) => Service.botDetail(id),
     channels: () => Service.channels(),
     createChannel: (label) => Service.createChannel(label),
+    channelBindings: () => Service.channelBindings(),
     channelBindingState: (id) => Service.channelBindingState(id),
     submitChannelPin: (id, pin) => Service.submitChannelPin(id, pin),
     cancelChannelBinding: (id) => Service.cancelChannelBinding(id),

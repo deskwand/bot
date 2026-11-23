@@ -105,6 +105,11 @@ describe("channel routes", () => {
     expect(await res.json()).toEqual({ code: "CHANNEL_IMMUTABLE" });
   });
 
+  it("lists pending bindings so a wizard can resume", async () => {
+    const res = await routes().fetch(req(`${CHANNELS_PATH}/bindings`));
+    expect(await res.json()).toEqual({ bindings: [] });
+  });
+
   it("cancels a pending binding", async () => {
     const res = await routes().fetch(
       req(`${CHANNELS_PATH}/bindings/inv-1`, { method: "DELETE" }),

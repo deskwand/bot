@@ -51,7 +51,7 @@ type Invite struct {
 	InviteID  string  `json:"inviteId"`
 	Label     string  `json:"label,omitempty"`
 	Kind      string  `json:"kind,omitempty"`
-	MemberID  *string `json:"memberId,omitempty"`
+	MemberID  *string `json:"channelId,omitempty"`
 	ExpiresAt int64   `json:"expiresAt"`
 }
 
@@ -124,6 +124,27 @@ func (c *Client) CreateInvite(ctx context.Context, label string) (Invite, error)
 		return Invite{}, c.invalid()
 	}
 	return invite, nil
+}
+
+// PendingBindings lists bindings a wizard can resume.
+func (c *Client) PendingBindings(ctx context.Context) ([]Invite, error) {
+	raw, status, err := c.do(ctx, http.MethodGet, bindingsPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.check(status, raw); err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Bindings []Invite `json:"bindings"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, c.invalid()
+	}
+	if payload.Bindings == nil {
+		payload.Bindings = []Invite{}
+	}
+	return payload.Bindings, nil
 }
 
 // InviteState reads one binding's stage.

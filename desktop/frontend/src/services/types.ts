@@ -66,6 +66,7 @@ import type {
   ChannelDTO,
   ChannelsDTO,
   ChannelInviteDTO,
+  ChannelInvitesDTO,
   MoveDTO,
   OperationDTO,
   PendingRestoreDTO,
@@ -93,6 +94,7 @@ export type {
   ChannelDTO,
   ChannelsDTO,
   ChannelInviteDTO,
+  ChannelInvitesDTO,
   AccountDTO,
   BackupFileDTO,
   BackupPreviewDTO,
@@ -294,6 +296,7 @@ export interface ClientService {
   botDetail(id: string): Promise<BotDetailDTO>;
   channels(): Promise<ChannelsDTO>;
   createChannel(label: string): Promise<ChannelInviteDTO>;
+  channelBindings(): Promise<ChannelInvitesDTO>;
   channelBindingState(id: string): Promise<ChannelBindingDTO>;
   submitChannelPin(id: string, pin: string): Promise<ChannelBindingDTO>;
   cancelChannelBinding(id: string): Promise<void>;
