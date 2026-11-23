@@ -2781,21 +2781,23 @@ export class ButlerDO extends Agent<Env> {
   }
 
   private async admissionHolds(evt: AdmittedMessage): Promise<boolean> {
-    // A member's route key is namespaced by its connection; the owner's
-    // deployment-wide key can never match it. Each side is checked with the
-    // authority that describes it.
-    const actor = this.memberId === null ? null : await this.ensurePrincipal();
+    // The authority follows the chain that admitted the message, not the shape
+    // of this object: once the first channel runs on a connection, its input
+    // carries a connection ref and must be checked against that connection.
+    // Reading "owner object => deployment route" here dropped every message the
+    // first channel admitted.
+    const ref = evt.connectionRef ?? null;
+    const actor =
+      this.memberId === null ? ownerPrincipal() : await this.ensurePrincipal();
     const current =
-      actor === null
+      ref === null
         ? await this.channels().isAdmissionCurrent(evt.channel, evt.routeKey)
-        : evt.connectionRef === undefined || evt.connectionRef === null
-          ? false
-          : await this.channels().isMemberAdmissionCurrent(
-              actor,
-              evt.channel,
-              evt.connectionRef,
-              evt.routeKey,
-            );
+        : await this.channels().isMemberAdmissionCurrent(
+            actor,
+            evt.channel,
+            ref,
+            evt.routeKey,
+          );
     if (current) return true;
     console.warn("butler: dropped input from an old channel route");
     return false;
