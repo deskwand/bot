@@ -39,9 +39,31 @@ async function readJson(req: Request): Promise<Record<string, unknown>> {
   }
 }
 
+/**
+ * The class does not survive the Durable Object RPC boundary, so a denial
+ * arrives as a plain Error carrying `name` and `code`. Classifying on the code
+ * is what keeps a refusal from being reported as a 503.
+ */
+function memberErrorCode(error: unknown): string | null {
+  if (error instanceof MemberError) return error.code;
+  if (typeof error !== "object" || error === null) return null;
+  const candidate = error as { name?: unknown; code?: unknown };
+  if (candidate.name !== "MemberError") return null;
+  return typeof candidate.code === "string" ? candidate.code : null;
+}
+
 function writeError(error: unknown): Response {
-  if (!(error instanceof MemberError)) return json({ code: "CHANNELS_FAILED" }, 503);
-  switch (error.code) {
+  const code = memberErrorCode(error);
+  if (code === null) {
+    // A fixed code plus the error's own name is enough to diagnose it in the
+    // container log; the response stays opaque.
+    console.error(
+      "admin: channel route failed",
+      error instanceof Error ? `${error.name}: ${error.message}` : "unknown error",
+    );
+    return json({ code: "CHANNELS_FAILED" }, 503);
+  }
+  switch (code) {
     case "MAINTENANCE_ACTIVE":
       return json({ code: "MAINTENANCE_ACTIVE" }, 409);
     case "INVITE_PENDING":

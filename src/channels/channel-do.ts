@@ -788,16 +788,37 @@ export class ChannelDO extends Agent<Env> {
     // 4-6. Rows: connection (real delete), then its invite/login/attempt rows,
     // then the directory row.
     this.db.exec("DELETE FROM member_connections WHERE member_id = ?", channelId);
+    // `wechat_login` and `member_bind_attempts` are created on first use, so a
+    // channel that was bound by scan has neither. Deleting from a missing table
+    // is an SQLITE error, not a missing row: check before deleting.
+    const hasLogin = this.tableExists("wechat_login");
+    const hasAttempts = this.tableExists("member_bind_attempts");
     for (const invite of invites) {
-      this.db.exec("DELETE FROM wechat_login WHERE invite_id = ?", invite.inviteId);
-      this.db.exec(
-        "DELETE FROM member_bind_attempts WHERE invite_id = ?",
-        invite.inviteId,
-      );
+      if (hasLogin) {
+        this.db.exec("DELETE FROM wechat_login WHERE invite_id = ?", invite.inviteId);
+      }
+      if (hasAttempts) {
+        this.db.exec(
+          "DELETE FROM member_bind_attempts WHERE invite_id = ?",
+          invite.inviteId,
+        );
+      }
       this.db.exec("DELETE FROM member_invites WHERE id = ?", invite.inviteId);
     }
     this.db.exec("DELETE FROM members WHERE id = ?", channelId);
     await this.ctx.storage.delete(`channel:error:${connection.connectionId}`);
+  }
+
+  /** Lazily created tables are absent on a deployment that never used them. */
+  private tableExists(name: string): boolean {
+    return (
+      this.db
+        .exec(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+          name,
+        )
+        .toArray().length > 0
+    );
   }
 
   /** One channel's chains, so a restart never touches a neighbour's. */
