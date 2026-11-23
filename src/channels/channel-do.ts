@@ -822,6 +822,98 @@ export class ChannelDO extends Agent<Env> {
     if (credentialKey !== null) await this.vault.delete(credentialKey);
   }
 
+  /**
+   * Removes one channel for good. Side effects first, directory row last, and
+   * every step idempotent: a half-finished removal must never leave an active
+   * connection behind (the unique account/user indexes would block re-adding).
+   */
+  async removeChannel(actor: Principal, channelId: string): Promise<void> {
+    this.assertOwnerActor(actor);
+    await this.assertWritable();
+    if (channelId === OWNER_ID) throw new MemberError("OWNER_IMMUTABLE");
+    const connection = this.members.getConnection(channelId);
+    if (connection === null) throw new MemberError(INVITE_NOT_FOUND);
+
+    // 1. Stop every chain that could still write for this channel.
+    await this.cancelConnectionSchedules(connection.connectionId);
+    this.activeMemberWeChatRuns.delete(connection.connectionId);
+    this.memberWeChatBackoffMs.delete(connection.connectionId);
+
+    // 2. Credentials, context and pending invite tokens.
+    const invites = this.members
+      .listInvites()
+      .filter(
+        (invite) =>
+          invite.memberId === channelId || invite.targetMemberId === channelId,
+      );
+    for (const invite of invites) {
+      this.members.cancelInvite(invite.inviteId);
+      await this.vault.delete(inviteTokenKey(invite.inviteId));
+    }
+    const credentialKey = this.members.credentialKeyOf(channelId);
+    if (credentialKey !== null) await this.vault.delete(credentialKey);
+    await this.vault.delete(contextKey(connection.connectionId, connection.generation));
+
+    // 3. Anything queued for it.
+    this.memberQueue(connection.connectionId, connection.generation).clear();
+
+    // 4-6. Rows: connection (real delete), then its invite/login/attempt rows,
+    // then the directory row.
+    this.db.exec("DELETE FROM member_connections WHERE member_id = ?", channelId);
+    for (const invite of invites) {
+      this.db.exec("DELETE FROM wechat_login WHERE invite_id = ?", invite.inviteId);
+      this.db.exec(
+        "DELETE FROM member_bind_attempts WHERE invite_id = ?",
+        invite.inviteId,
+      );
+      this.db.exec("DELETE FROM member_invites WHERE id = ?", invite.inviteId);
+    }
+    this.db.exec("DELETE FROM members WHERE id = ?", channelId);
+    await this.ctx.storage.delete(`channel:error:${connection.connectionId}`);
+  }
+
+  /** One channel's chains, so a restart never touches a neighbour's. */
+  private async cancelConnectionSchedules(connectionId: string): Promise<void> {
+    for (const schedule of await this.listSchedules()) {
+      if (
+        schedule.callback !== "pollMemberWeChat" &&
+        schedule.callback !== "retryMemberFlush"
+      ) {
+        continue;
+      }
+      if (connectionPayload(schedule.payload)?.connectionId === connectionId) {
+        await this.cancelSchedule(schedule.id);
+      }
+    }
+  }
+
+  /**
+   * Restarts one channel's chain without touching the directory or credentials.
+   * An expired session cannot be restarted (only rebound), and a spent send
+   * budget is cleared so the drain starts fresh.
+   */
+  async restartChannel(actor: Principal, channelId: string): Promise<void> {
+    this.assertOwnerActor(actor);
+    await this.assertWritable();
+    const connection = this.members.getConnection(channelId);
+    if (connection === null) throw new MemberError(INVITE_NOT_FOUND);
+    if (this.connections.read(connection.connectionId)?.pollStatus === "expired") {
+      throw new MemberError("REBIND_REQUIRED");
+    }
+    const ref = {
+      connectionId: connection.connectionId,
+      generation: connection.generation,
+    };
+    await this.cancelConnectionSchedules(ref.connectionId);
+    this.activeMemberWeChatRuns.delete(ref.connectionId);
+    this.memberWeChatBackoffMs.delete(ref.connectionId);
+    await this.ctx.storage.delete(`poll:defer:${ref.connectionId}:${ref.generation}`);
+    await this.ctx.storage.delete(`flush:defer:${ref.connectionId}:${ref.generation}`);
+    await this.ctx.storage.delete(`channel:error:${ref.connectionId}`);
+    this.connections.update(ref.connectionId, { pollStatus: "polling" }, ref.generation);
+    await this.scheduleMemberPoll(ref);
+  }
+
   /** Mints the token, records only its digest, then files it in the vault. */
   private async issueInvite(
     label: string,
@@ -1381,7 +1473,12 @@ export class ChannelDO extends Agent<Env> {
     ) {
       return;
     }
-    if (this.activeMemberWeChatRuns.has(target.connectionId)) return;
+    if (this.activeMemberWeChatRuns.has(target.connectionId)) {
+      // The 40-second fetch in flight will re-arm this chain on its own only if
+      // it still owns the run; a restart that replaced the run needs this one.
+      await this.deferMemberPoll(target, "run in flight");
+      return;
+    }
     const known = this.connections.read(target.connectionId);
     if (known?.pollStatus === "needs_reset") return;
 
