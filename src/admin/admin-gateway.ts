@@ -39,6 +39,7 @@ import { BOTS_PATH, createBotRoutes } from "./bot-routes";
 import { createMcpAdminRoutes } from "./mcp-routes";
 import { createOwnerRoutes, OWNER_STATUS_PATH } from "./owner-routes";
 import { createMemberAdminRoutes, MEMBERS_PATH } from "./member-routes";
+import { createChannelAdminRoutes, CHANNELS_PATH } from "./channel-routes";
 import { createR2Routes } from "./r2-routes";
 import type {
   DbSchema,
@@ -269,7 +270,7 @@ export function createAdminGateway(deps: AdminDeps): {
     open: () => deps.channel().openOwnerClaim(),
     revoke: () => deps.channel().revokeOwner(),
   });
-  const members = createMemberAdminRoutes({ channel: () => deps.channel() });
+  const members = createChannelAdminRoutes({ channel: () => deps.channel() });
   const bots = createBotRoutes({
     overview: () => deps.butler(undefined).botsOverview(),
     snapshot: (id) => deps.bot(id).snapshot(),
@@ -283,7 +284,12 @@ export function createAdminGateway(deps: AdminDeps): {
       return release(deps, req);
     }
 
-    if (url.pathname === MEMBERS_PATH || url.pathname.startsWith(`${MEMBERS_PATH}/`)) {
+    if (
+      url.pathname === MEMBERS_PATH ||
+      url.pathname.startsWith(`${MEMBERS_PATH}/`) ||
+      url.pathname === CHANNELS_PATH ||
+      url.pathname.startsWith(`${CHANNELS_PATH}/`)
+    ) {
       return members.fetch(req);
     }
 

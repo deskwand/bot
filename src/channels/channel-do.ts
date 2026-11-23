@@ -1101,6 +1101,48 @@ export class ChannelDO extends Agent<Env> {
     return { ok: true, view: login.view() };
   }
 
+  /**
+   * Owner-only: every channel with the one state word the console shows and the
+   * last fixed error code, if any. Reads the vault-free part of the directory.
+   */
+  async adminChannels(): Promise<
+    Array<{
+      channelId: string;
+      label: string;
+      account: string | null;
+      state: string;
+      lastErrorCode: string | null;
+    }>
+  > {
+    this.assertOwnerActor(ownerPrincipal());
+    const rows = this.members.list();
+    const out = [];
+    for (const row of rows) {
+      const connection = this.members.getConnection(row.memberId);
+      const live =
+        connection === null ? null : this.connections.read(connection.connectionId);
+      const state =
+        row.status === "revoked"
+          ? "unbound"
+          : live?.pollStatus === "needs_reset"
+            ? "needs_reset"
+            : row.connectionStatus;
+      out.push({
+        channelId: row.memberId,
+        label: row.label,
+        account: connection?.accountId ?? null,
+        state,
+        lastErrorCode:
+          connection === null
+            ? null
+            : ((await this.ctx.storage.get<string>(
+                `channel:error:${connection.connectionId}`,
+              )) ?? null),
+      });
+    }
+    return out;
+  }
+
   /** Owner-only: pending invites, both kinds, for the desktop console. */
   async adminPendingInvites(): Promise<
     Array<{
