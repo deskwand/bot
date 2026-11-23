@@ -54,6 +54,20 @@ describe("removing a channel through the route", () => {
     expect(res.status).toBe(204);
   });
 
+  it("finishes a removal that a previous attempt left half-done", async () => {
+    const stub = env.CHANNELS.get(env.CHANNELS.idFromName(`remove-half-${crypto.randomUUID()}`));
+    await runInDurableObject(stub, (_instance, state) => {
+      // The connection is already gone: an earlier attempt deleted it before it
+      // failed. The channel row is what remains, and it must still be removable.
+      state.storage.sql.exec(
+        `INSERT INTO members (id, label, role, status, epoch) VALUES ('m-half','小宝','member','active',1)`,
+      );
+    });
+    const routes = createChannelAdminRoutes({ channel: () => stub as never });
+    const res = await del(routes, "m-half");
+    expect(res.status).toBe(204);
+  });
+
   it("refuses to remove the first channel", async () => {
     const { routes } = await seeded("m-scan2", false);
     const res = await del(routes, "owner");

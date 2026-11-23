@@ -759,13 +759,17 @@ export class ChannelDO extends Agent<Env> {
     this.assertOwnerActor(actor);
     await this.assertWritable();
     if (channelId === OWNER_ID) throw new MemberError("OWNER_IMMUTABLE");
+    // Resumable on purpose: an earlier attempt may have deleted the connection
+    // and then failed. Refusing now would leave a channel that cannot even be
+    // removed, so the connection is optional and the rest always runs.
     const connection = this.members.getConnection(channelId);
-    if (connection === null) throw new MemberError(INVITE_NOT_FOUND);
 
     // 1. Stop every chain that could still write for this channel.
-    await this.cancelConnectionSchedules(connection.connectionId);
-    this.activeMemberWeChatRuns.delete(connection.connectionId);
-    this.memberWeChatBackoffMs.delete(connection.connectionId);
+    if (connection !== null) {
+      await this.cancelConnectionSchedules(connection.connectionId);
+      this.activeMemberWeChatRuns.delete(connection.connectionId);
+      this.memberWeChatBackoffMs.delete(connection.connectionId);
+    }
 
     // 2. Credentials, context and pending invite tokens.
     const invites = this.members
@@ -780,10 +784,14 @@ export class ChannelDO extends Agent<Env> {
     }
     const credentialKey = this.members.credentialKeyOf(channelId);
     if (credentialKey !== null) await this.vault.delete(credentialKey);
-    await this.vault.delete(contextKey(connection.connectionId, connection.generation));
+    if (connection !== null) {
+      await this.vault.delete(contextKey(connection.connectionId, connection.generation));
+    }
 
     // 3. Anything queued for it.
-    this.memberQueue(connection.connectionId, connection.generation).clear();
+    if (connection !== null) {
+      this.memberQueue(connection.connectionId, connection.generation).clear();
+    }
 
     // 4-6. Rows: connection (real delete), then its invite/login/attempt rows,
     // then the directory row.
@@ -806,7 +814,9 @@ export class ChannelDO extends Agent<Env> {
       this.db.exec("DELETE FROM member_invites WHERE id = ?", invite.inviteId);
     }
     this.db.exec("DELETE FROM members WHERE id = ?", channelId);
-    await this.ctx.storage.delete(`channel:error:${connection.connectionId}`);
+    if (connection !== null) {
+      await this.ctx.storage.delete(`channel:error:${connection.connectionId}`);
+    }
   }
 
   /** Lazily created tables are absent on a deployment that never used them. */
