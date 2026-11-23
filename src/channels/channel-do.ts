@@ -64,14 +64,6 @@ import {
 } from "../members/credentials";
 import { MemberAccessClient } from "../members/client";
 import {
-  ShareService,
-  parseShareCommand,
-  shareErrorText,
-  type ShareCommand,
-  type SharePreview,
-  type ShareResult,
-} from "../members/shares";
-import {
   OWNER_ID,
   butlerName,
   ownerPrincipal,
@@ -346,7 +338,6 @@ export class ChannelDO extends Agent<Env> {
 
   private accessClientCache: MemberAccessClient | null = null;
 
-  private shareServiceCache: ShareService | null = null;
 
   private readonly outbound: OutboundQueue;
 
@@ -594,70 +585,6 @@ export class ChannelDO extends Agent<Env> {
     key: string,
   ): Promise<void> {
     return this.accessClient().registerTaskArtifact(actor, taskId, key);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Sharing (Task 9). Both the owner's Butler and a member's Butler call these
-  // with an actor built by trusted code; the label is resolved here, and the
-  // attachments are only ever the sender's own ACL rows.
-  // ---------------------------------------------------------------------------
-
-  async prepareShare(
-    actor: Principal,
-    recipientLabel: string,
-    text: string,
-    attachmentKeys: string[],
-  ): Promise<SharePreview> {
-    return this.shares().prepareByLabel(
-      actor,
-      recipientLabel,
-      text,
-      attachmentKeys,
-    );
-  }
-
-  async confirmShare(actor: Principal, shareId: string): Promise<ShareResult> {
-    return this.shares().confirm(actor, shareId);
-  }
-
-  async cancelShare(actor: Principal, shareId: string): Promise<boolean> {
-    return this.shares().cancel(actor, shareId);
-  }
-
-  /**
-   * Sharing reads and writes the same artifact store the channels use, and
-   * delivers through this object's own member send paths: a member copy is
-   * sent on that member's connection and credential only.
-   */
-  private shares(): ShareService {
-    this.shareServiceCache ??= new ShareService({
-      sql: this.db,
-      members: this.members,
-      access: this.attachments,
-      read: async (key) => {
-        const object = await artifactStore(this.env).get(key);
-        if (!object) return null;
-        return {
-          bytes: new Uint8Array(await object.arrayBuffer()),
-          mime:
-            object.httpMetadata?.contentType ?? "application/octet-stream",
-        };
-      },
-      write: async (key, bytes, mime) => {
-        await artifactStore(this.env).put(key, bytes, {
-          httpMetadata: { contentType: mime },
-        });
-      },
-      deliver: {
-        text: async (actor, text) => {
-          await this.sendToMember(actor, { text });
-        },
-        file: async (actor, key) => {
-          await this.sendArtifactToMember(actor, key);
-        },
-      },
-    });
-    return this.shareServiceCache;
   }
 
   private accessClient(): MemberAccessClient {
@@ -1874,20 +1801,7 @@ export class ChannelDO extends Agent<Env> {
           continue;
         }
 
-        // A member's text command is resolved by the member's own Butler and
-        // answered on the member's own connection; anything that is not a
-        // command stays an ordinary message.
-        const shareCommand =
-          update.text === null ? null : parseShareCommand(update.text);
-        if (shareCommand !== null) {
-          await this.handleMemberShareCommand(
-            shareCommand,
-            actor,
-            ref,
-            routeKey,
-          );
-          continue;
-        }
+        // Anything that is not a task action stays an ordinary message.
         if (update.text !== null && parseTextAction(update.text) !== null) {
           const handled = await this.handleMemberTextAction(
             event,
@@ -1914,45 +1828,6 @@ export class ChannelDO extends Agent<Env> {
    * against the sending member, so one member can never confirm or cancel
    * another member's share; the answer goes to the same connection.
    */
-  private async handleMemberShareCommand(
-    command: ShareCommand,
-    actor: Principal,
-    ref: ConnectionRef,
-    routeKey: string,
-  ): Promise<void> {
-    if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey))) {
-      return;
-    }
-    const text = await this.shareReplyText(actor, command);
-    if (!(await this.isMemberAdmissionCurrent(actor, "wechat", ref, routeKey))) {
-      return;
-    }
-    await this.sendToMember(actor, { text });
-  }
-
-  /** Runs one share command for its own sender and returns the reply copy. */
-  private async shareReplyText(
-    actor: Principal,
-    command: ShareCommand,
-  ): Promise<string> {
-    const locale = ownerLocale(this.env);
-    try {
-      if (command.action === "confirm") {
-        const result = await this.confirmShare(actor, command.shareId);
-        return t(locale, "member.share.confirmed", {
-          shareId: result.shareId,
-          count: result.delivered,
-        });
-      }
-      const cancelled = await this.cancelShare(actor, command.shareId);
-      return cancelled
-        ? t(locale, "member.share.cancelled", { shareId: command.shareId })
-        : t(locale, "member.share.notFound");
-    } catch (error) {
-      return shareErrorText(locale, error);
-    }
-  }
-
   private async handleMemberTextAction(
     event: MessageEvent,
     eventId: string,
@@ -3306,12 +3181,6 @@ export class ChannelDO extends Agent<Env> {
       this.rememberOwner(event, ownerPrincipal());
 
       // Deterministic owner commands replace the missing WeChat buttons.
-      const shareCommand =
-        update.text === null ? null : parseShareCommand(update.text);
-      if (shareCommand !== null) {
-        this.ctx.waitUntil(this.handleOwnerShareCommand(shareCommand, routeKey));
-        return;
-      }
       const textAction =
         update.text === null ? null : parseTextAction(update.text);
       if (textAction !== null) {
@@ -3534,20 +3403,6 @@ export class ChannelDO extends Agent<Env> {
         },
       ),
     );
-  }
-
-  /**
-   * The owner confirms a share from its own WeChat session. The same code path
-   * as a member's, with the owner actor and the owner's own send.
-   */
-  private async handleOwnerShareCommand(
-    command: ShareCommand,
-    routeKey: string,
-  ): Promise<void> {
-    if (!(await this.isAdmissionCurrent("wechat", routeKey))) return;
-    const text = await this.shareReplyText(ownerPrincipal(), command);
-    if (!(await this.isAdmissionCurrent("wechat", routeKey))) return;
-    await this.sendCurrent({ text });
   }
 
   private async handleWeChatAction(

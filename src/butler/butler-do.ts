@@ -159,7 +159,6 @@ import {
 } from "./tools";
 import { SelfStore } from "./self-store";
 import { SelfWakeStore, guardSelfTool, isSelfWake, SELF_WAKE_PREFIX, type SelfWakeState } from "./self-wake";
-import { createShareTools } from "../members/shares";
 import { createSelfWakeTools } from "./self-tools";
 import { createSelfTools } from "./self-tools";
 import { boundedSelfData, createSelfSourceReader } from "./self-sources";
@@ -508,12 +507,6 @@ export class ButlerDO extends Agent<Env> {
           task: (id) => this.controlTask(id),
           locale: ownerLocale(this.env),
         }),
-
-        ...createShareTools({
-          resolveActor: () => ownerPrincipal(),
-          channel: this.channels(),
-          locale: ownerLocale(this.env),
-        }),
         ...createSelfWakeTools({
           locale: ownerLocale(this.env),
           now: () => getClock().now(),
@@ -665,11 +658,6 @@ export class ButlerDO extends Agent<Env> {
         ...createButlerTools(this.butlerToolDeps()),
         // A member may share its own files with the owner or another member;
         // the ACL row, not the role, decides which files those are.
-        ...createShareTools({
-          resolveActor: () => this.ensurePrincipal(),
-          channel: this.channels(),
-          locale,
-        }),
         nowTool(() => new Date(getClock().now())),
       ],
       sections: [

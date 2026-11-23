@@ -16,31 +16,4 @@ export const member = {
     submit: "提交",
     qrLabel: "微信绑定二维码",
   },
-  error: "成员操作失败（{code}）。",
-  share: {
-    prepared:
-      "分享预览（{shareId}）→ {recipient}，{expiresAt} 前有效。\n正文：{text}\n附件：{files}\n还没有发送。确认请回复「确认分享 {shareId}」，取消请回复「取消分享 {shareId}」。",
-    noFiles: "无",
-    noText: "无",
-    confirmed: "已把 {shareId} 送达接收人：{count} 条内容。",
-    cancelled: "已取消分享 {shareId}。",
-    notFound: "找不到这条分享，或它已经确认、取消、过期。",
-    errors: {
-      MEMBER_ACCESS_DENIED: "这些附件不属于你，无法分享。",
-      SHARE_NOT_FOUND: "找不到这条分享，或它已经确认、取消、过期。",
-      SHARE_RECIPIENT_UNKNOWN: "找不到这个接收人，请核对名字。",
-      SHARE_RECIPIENT_AMBIGUOUS:
-        "有多个成员都叫这个名字，请说明是哪一位（用微信名全称或成员编号）。",
-      SHARE_EMPTY: "分享至少要有一句话或一个附件。",
-      SHARE_TOO_MANY_FILES: "一次最多分享 5 个附件。",
-      SHARE_TOO_LARGE: "附件总大小超过 15MB，请分几次分享。",
-      SHARE_ATTACHMENT_MISSING: "有一个附件已经不存在了，请重新准备。",
-      SHARE_DIGEST_MISMATCH:
-        "附件内容在确认前被改动过，这次分享已作废，请重新准备。",
-      SHARE_EXPIRED: "这次分享已超过 10 分钟有效期，请重新准备。",
-      SHARE_INVALID: "这次分享已失效（发送人或接收人有变化），请重新准备。",
-      SHARE_INTERRUPTED: "发送中途失败，这条分享已停止，不会自动重发。",
-      SHARE_INTERNAL: "分享失败，请稍后重试。",
-    },
-  },
 } as const;

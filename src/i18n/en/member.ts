@@ -16,35 +16,4 @@ export const member = {
     submit: "Submit",
     qrLabel: "WeChat binding QR code",
   },
-  error: "The member operation failed ({code}).",
-  share: {
-    prepared:
-      "Share preview ({shareId}) to {recipient}, valid until {expiresAt}.\nText: {text}\nFiles: {files}\nNothing has been sent yet. Reply 确认分享 {shareId} to confirm, or 取消分享 {shareId} to cancel.",
-    noFiles: "none",
-    noText: "none",
-    confirmed: "Delivered {shareId} to the recipient: {count} items.",
-    cancelled: "Cancelled share {shareId}.",
-    notFound:
-      "That share does not exist, or it was already confirmed, cancelled or expired.",
-    errors: {
-      MEMBER_ACCESS_DENIED: "These attachments are not yours, so they cannot be shared.",
-      SHARE_NOT_FOUND:
-        "That share does not exist, or it was already confirmed, cancelled or expired.",
-      SHARE_RECIPIENT_UNKNOWN: "No such recipient. Check the name.",
-      SHARE_RECIPIENT_AMBIGUOUS:
-        "More than one member has that name. Say which one (full WeChat name or member id).",
-      SHARE_EMPTY: "A share needs at least a message or one attachment.",
-      SHARE_TOO_MANY_FILES: "At most 5 attachments per share.",
-      SHARE_TOO_LARGE: "The attachments total more than 15MB. Share them in parts.",
-      SHARE_ATTACHMENT_MISSING: "One attachment no longer exists. Prepare it again.",
-      SHARE_DIGEST_MISMATCH:
-        "An attachment changed after the preview, so this share was voided. Prepare it again.",
-      SHARE_EXPIRED: "This share is past its 10-minute window. Prepare it again.",
-      SHARE_INVALID:
-        "This share is no longer valid (the sender or recipient changed). Prepare it again.",
-      SHARE_INTERRUPTED:
-        "Delivery failed midway. This share stopped and will not be retried automatically.",
-      SHARE_INTERNAL: "Sharing failed. Try again shortly.",
-    },
-  },
 } as const;
