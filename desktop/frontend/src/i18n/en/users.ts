@@ -5,7 +5,7 @@ export const users = {
   add: "Add user",
   resume: "Resume",
   pending: "Pending invitations",
-  columns: { label: "Name", role: "Role", connection: "Connection", actions: "Actions" },
+  columns: { label: "Name", account: "WeChat account", connection: "Connection", actions: "Actions" },
   role: { owner: "Owner", member: "User" },
   status: { revoked: "Revoked" },
   connection: {
@@ -13,8 +13,9 @@ export const users = {
     unbound: "Not bound",
     expired: "Needs rebinding",
     paused: "Paused",
+    needs_reset: "Needs restart",
   },
-  actions: { rebind: "Rebind", revoke: "Revoke" },
+  actions: { rebind: "Rebind", revoke: "Remove", restart: "Restart" },
   wizard: {
     title: "Add user",
     label: "Name",

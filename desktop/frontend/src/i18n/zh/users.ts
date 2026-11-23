@@ -5,7 +5,7 @@ export const users = {
   add: "添加用户",
   resume: "继续",
   pending: "待绑定邀请",
-  columns: { label: "名称", role: "角色", connection: "连接", actions: "操作" },
+  columns: { label: "名称", account: "微信账号", connection: "连接", actions: "操作" },
   role: { owner: "主人", member: "用户" },
   status: { revoked: "已撤销" },
   connection: {
@@ -13,8 +13,9 @@ export const users = {
     unbound: "未绑定",
     expired: "需换绑",
     paused: "已暂停",
+    needs_reset: "需重启",
   },
-  actions: { rebind: "换绑", revoke: "撤销" },
+  actions: { rebind: "换绑", revoke: "移除", restart: "重启" },
   wizard: {
     title: "添加用户",
     label: "名称",

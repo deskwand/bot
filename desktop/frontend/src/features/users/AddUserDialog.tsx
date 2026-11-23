@@ -32,7 +32,7 @@ export function AddUserDialog({
   const [failure, setFailure] = useState<string | null>(null);
 
   const create = useMutation({
-    mutationFn: () => client.createMemberInvite(label.trim()),
+    mutationFn: () => client.createChannel(label.trim()),
     onSuccess: (invite) => setInviteId(invite.inviteId),
     onError: (error: unknown) => {
       const failure = toClientError(error);
@@ -49,7 +49,7 @@ export function AddUserDialog({
 
   const state = useQuery({
     queryKey: ["member-invite", inviteId],
-    queryFn: () => client.memberInviteState(inviteId as string),
+    queryFn: () => client.channelBindingState(inviteId as string),
     enabled: inviteId !== null,
     refetchInterval: (query) => {
       const stage = (query.state.data as ChannelBindingDTO | undefined)?.stage;
@@ -58,7 +58,7 @@ export function AddUserDialog({
   });
 
   const submitPin = useMutation({
-    mutationFn: () => client.submitMemberPin(inviteId as string, pin),
+    mutationFn: () => client.submitChannelPin(inviteId as string, pin),
     onSuccess: () => {
       setPin("");
       void state.refetch();
@@ -67,7 +67,7 @@ export function AddUserDialog({
   });
 
   const cancel = useMutation({
-    mutationFn: () => client.cancelMemberInvite(inviteId as string),
+    mutationFn: () => client.cancelChannelBinding(inviteId as string),
     onSuccess: () => onClose(),
     onError: (error: unknown) => setFailure(toClientError(error).message),
   });
@@ -199,7 +199,7 @@ export function AddUserDialog({
                 // An expired invite cannot be cancelled (the server answers
                 // INVITE_CLOSED); dropping it locally is enough to start over.
                 if (staleId !== null) {
-                  void client.cancelMemberInvite(staleId).catch(() => undefined);
+                  void client.cancelChannelBinding(staleId).catch(() => undefined);
                 }
               }}
             >

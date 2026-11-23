@@ -33,10 +33,12 @@ import type {
   LifeSourceDTO,
   LifeVitalsDTO,
   MemberInviteDTO,
-  ChannelBindingDTO,
   MemberInvitesDTO,
   MemberUserDTO,
   MembersDTO,
+  ChannelsDTO,
+  ChannelInviteDTO,
+  ChannelBindingDTO,
   LocalEngine,
   LocalRuntimesDTO,
   Locale,
@@ -2123,6 +2125,49 @@ export function createMockClient(): ClientService {
     async walletStatus(): Promise<WalletStatusDTO> {
       record("walletStatus");
       return { ...state.wallet };
+    },
+
+    async channels(): Promise<ChannelsDTO> {
+      const rows = await this.members();
+      return {
+        channels: rows.users.map((user) => ({
+          channelId: user.memberId,
+          label: user.label,
+          account: null,
+          state: user.connection,
+          lastErrorCode: null,
+        })),
+      };
+    },
+
+    async createChannel(label: string): Promise<ChannelInviteDTO> {
+      const invite = await this.createMemberInvite(label);
+      return { ...invite, channelId: null };
+    },
+
+    async channelBindingState(id: string): Promise<ChannelBindingDTO> {
+      return this.memberInviteState(id);
+    },
+
+    async submitChannelPin(id: string, pin: string): Promise<ChannelBindingDTO> {
+      return this.submitMemberPin(id, pin);
+    },
+
+    async cancelChannelBinding(id: string): Promise<void> {
+      return this.cancelMemberInvite(id);
+    },
+
+    async rebindChannel(id: string): Promise<ChannelInviteDTO> {
+      const invite = await this.rebindMember(id);
+      return { ...invite, channelId: id };
+    },
+
+    async restartChannel(id: string): Promise<void> {
+      record("restartChannel", id);
+    },
+
+    async removeChannel(id: string): Promise<void> {
+      await this.revokeMember(id);
     },
 
     async members(): Promise<MembersDTO> {

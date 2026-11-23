@@ -6,17 +6,11 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { useT } from "@/i18n";
 import { toClientError } from "@/services/errors";
-import type { MemberUserDTO } from "@/services/types";
+import type { ChannelDTO } from "@/services/types";
 import { AddUserDialog } from "./AddUserDialog";
 
 const UNSUPPORTED = "MEMBERS_UNSUPPORTED";
 const MAINTENANCE = "MEMBERS_MAINTENANCE";
-
-function connectionLabel(t: ReturnType<typeof useT>, user: MemberUserDTO): string {
-  const key = `users.connection.${user.connection}` as const;
-  const label = t(key as never);
-  return label === key ? user.connection : label;
-}
 
 export function Users() {
   const t = useT();
@@ -26,8 +20,8 @@ export function Users() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const users = useQuery({
-    queryKey: ["members"],
-    queryFn: () => client.members(),
+    queryKey: ["channels"],
+    queryFn: () => client.channels(),
     refetchInterval: 30_000,
   });
 
@@ -38,18 +32,23 @@ export function Users() {
   });
 
   const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ["members"] });
+    void queryClient.invalidateQueries({ queryKey: ["channels"] });
     void queryClient.invalidateQueries({ queryKey: ["member-invites"] });
   };
 
-  const revoke = useMutation({
-    mutationFn: (id: string) => client.revokeMember(id),
+  const remove = useMutation({
+    mutationFn: (id: string) => client.removeChannel(id),
+    onSuccess: refresh,
+    onError: (error: unknown) => setActionError(toClientError(error).message),
+  });
+  const restart = useMutation({
+    mutationFn: (id: string) => client.restartChannel(id),
     onSuccess: refresh,
     onError: (error: unknown) => setActionError(toClientError(error).message),
   });
   const [wizard, setWizard] = useState<string | null>(null);
   const rebind = useMutation({
-    mutationFn: (id: string) => client.rebindMember(id),
+    mutationFn: (id: string) => client.rebindChannel(id),
     onSuccess: (invite) => {
       setWizard(invite.inviteId);
       void refresh();
@@ -58,7 +57,7 @@ export function Users() {
   });
 
   const code = users.error === null ? "" : toClientError(users.error).code;
-  const rows = users.data?.users ?? [];
+  const rows = users.data?.channels ?? [];
 
   return (
     <div data-testid="users-page" className="flex flex-col gap-6">
@@ -124,48 +123,59 @@ export function Users() {
           <thead>
             <tr className="text-left text-muted-foreground">
               <th className="py-2">{t("users.columns.label")}</th>
-              <th className="py-2">{t("users.columns.role")}</th>
+              <th className="py-2">{t("users.columns.account")}</th>
               <th className="py-2">{t("users.columns.connection")}</th>
               <th className="py-2" />
             </tr>
           </thead>
           <tbody>
-            {rows.map((user) => {
-              const revoked = user.status === "revoked";
+            {rows.map((user: ChannelDTO) => {
+              const needsReset = user.state === "needs_reset";
               return (
-                <tr key={user.memberId} data-testid={`user-row-${user.memberId}`} className="border-t">
+                <tr key={user.channelId} data-testid={`user-row-${user.channelId}`} className="border-t">
                   <td className="py-2">{user.label}</td>
+                  <td className="py-2">{user.account ?? "—"}</td>
                   <td className="py-2">
-                    {user.role === "owner" ? t("users.role.owner") : t("users.role.member")}
-                  </td>
-                  <td className="py-2">
-                    {revoked ? (
-                      <Badge variant="outline">{t("users.status.revoked")}</Badge>
+                    {needsReset ? (
+                      <Badge variant="outline">{t("users.connection.needs_reset")}</Badge>
                     ) : (
-                      <span>{connectionLabel(t, user)}</span>
+                      <span>{user.state}</span>
+                    )}
+                    {user.lastErrorCode === null ? null : (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {user.lastErrorCode}
+                      </span>
                     )}
                   </td>
                   <td className="py-2 text-right">
-                    {user.role === "owner" || revoked ? null : (
-                      <div className="flex justify-end gap-2">
+                    <div className="flex justify-end gap-2">
+                      {needsReset ? (
                         <button
                           type="button"
-                          data-testid={`rebind-${user.memberId}`}
+                          data-testid={`restart-${user.channelId}`}
                           className="rounded border px-2 py-0.5 text-xs"
-                          onClick={() => rebind.mutate(user.memberId)}
+                          onClick={() => restart.mutate(user.channelId)}
                         >
-                          {t("users.actions.rebind")}
+                          {t("users.actions.restart")}
                         </button>
-                        <button
-                          type="button"
-                          data-testid={`revoke-${user.memberId}`}
-                          className="rounded border px-2 py-0.5 text-xs"
-                          onClick={() => revoke.mutate(user.memberId)}
-                        >
-                          {t("users.actions.revoke")}
-                        </button>
-                      </div>
-                    )}
+                      ) : null}
+                      <button
+                        type="button"
+                        data-testid={`rebind-${user.channelId}`}
+                        className="rounded border px-2 py-0.5 text-xs"
+                        onClick={() => rebind.mutate(user.channelId)}
+                      >
+                        {t("users.actions.rebind")}
+                      </button>
+                      <button
+                        type="button"
+                        data-testid={`revoke-${user.channelId}`}
+                        className="rounded border px-2 py-0.5 text-xs"
+                        onClick={() => remove.mutate(user.channelId)}
+                      >
+                        {t("users.actions.revoke")}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );

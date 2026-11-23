@@ -4,7 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
  * The users page is not the default route: every case clicks the sidebar entry
  * first, the way bots.spec.ts and friends reach other pages.
  */
-async function openUsers(page: Page, fixture: string, label = "用户") {
+async function openChannels(page: Page, fixture: string, label = "通道") {
   await page.goto(`/test.html?fixture=${fixture}`);
   await page.getByRole("button", { name: label, exact: true }).click();
   await expect(page.getByTestId("users-page")).toBeVisible();
@@ -13,7 +13,7 @@ async function openUsers(page: Page, fixture: string, label = "用户") {
 test("lists the owner next to its users and leaves revoked rows read-only", async ({
   page,
 }) => {
-  await openUsers(page, "users-three");
+  await openChannels(page, "users-three");
   await expect(page.getByTestId("user-row-owner")).toContainText("运行中");
   await expect(page.getByTestId("user-row-m1")).toContainText("运行中");
   await expect(page.getByTestId("user-row-m2")).toContainText("已撤销");
@@ -22,19 +22,19 @@ test("lists the owner next to its users and leaves revoked rows read-only", asyn
 });
 
 test("explains an empty directory", async ({ page }) => {
-  await openUsers(page, "users-empty");
+  await openChannels(page, "users-empty");
   await expect(page.getByTestId("user-row-owner")).toHaveCount(0);
 });
 
 test("asks to upgrade a deployment without the member API", async ({ page }) => {
-  await openUsers(page, "users-unsupported");
+  await openChannels(page, "users-unsupported");
   await expect(page.getByTestId("users-unsupported")).toBeVisible();
 });
 
 test("walks the wizard from the real-name code to the done state", async ({
   page,
 }) => {
-  await openUsers(page, "users-wizard");
+  await openChannels(page, "users-wizard");
   await page.getByRole("button", { name: "添加用户" }).click();
   await page.getByTestId("label-input").fill("小王");
   await page.getByTestId("create-invite").click();
@@ -53,7 +53,7 @@ test("walks the wizard from the real-name code to the done state", async ({
 });
 
 test("a dead invite can be restarted from the label step", async ({ page }) => {
-  await openUsers(page, "users-wizard-expired");
+  await openChannels(page, "users-wizard-expired");
   await page.getByRole("button", { name: "添加用户" }).click();
   await page.getByTestId("label-input").fill("小宝");
   await page.getByTestId("create-invite").click();

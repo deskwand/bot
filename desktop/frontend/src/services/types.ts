@@ -62,8 +62,10 @@ import type {
   MemberInviteDTO,
   ChannelBindingDTO,
   MemberInvitesDTO,
-  MemberUserDTO,
   MembersDTO,
+  ChannelDTO,
+  ChannelsDTO,
+  ChannelInviteDTO,
   MoveDTO,
   OperationDTO,
   PendingRestoreDTO,
@@ -79,14 +81,18 @@ import type {
   UpgradeDTO,
   WalletStatusDTO,
   WorkerDTO,
+  MemberUserDTO,
 } from "../mygo";
 
 export type {
+  MemberUserDTO,
   MemberInviteDTO,
   ChannelBindingDTO,
   MemberInvitesDTO,
-  MemberUserDTO,
   MembersDTO,
+  ChannelDTO,
+  ChannelsDTO,
+  ChannelInviteDTO,
   AccountDTO,
   BackupFileDTO,
   BackupPreviewDTO,
@@ -286,6 +292,14 @@ export interface ClientService {
   lifeVitals(): Promise<LifeVitalsDTO>;
   bots(): Promise<BotsDTO>;
   botDetail(id: string): Promise<BotDetailDTO>;
+  channels(): Promise<ChannelsDTO>;
+  createChannel(label: string): Promise<ChannelInviteDTO>;
+  channelBindingState(id: string): Promise<ChannelBindingDTO>;
+  submitChannelPin(id: string, pin: string): Promise<ChannelBindingDTO>;
+  cancelChannelBinding(id: string): Promise<void>;
+  rebindChannel(id: string): Promise<ChannelInviteDTO>;
+  restartChannel(id: string): Promise<void>;
+  removeChannel(id: string): Promise<void>;
   members(): Promise<MembersDTO>;
   memberInvites(): Promise<MemberInvitesDTO>;
   createMemberInvite(label: string): Promise<MemberInviteDTO>;
