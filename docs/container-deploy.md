@@ -90,6 +90,13 @@ docker compose up -d
 
 数据卷原样沿用。不支持降级：新版本写过的数据，旧镜像不保证能读。把清单改成 `latest` 后客户端无法比较版本，升级按钮会禁用。
 
+客户端升级成功后还会顺手清一次镜像：主机上不再被任何容器引用的 `ghcr.io/deskwand/bot` 与 `ghcr.io/deskwand/sandbox` 镜像会被删掉，正在跑的那两个留着。清理失败不影响升级结果。手工升级不会自动清，自己删即可：
+
+```bash
+docker images 'ghcr.io/deskwand/bot'
+docker rmi ghcr.io/deskwand/bot:0.1.52
+```
+
 镜像里烤着 workerd 的配置模板，`entrypoint.sh` 只在启动时把环境变量填进去（包括沙箱那条出站绑定）。所以改 `.env` 里的 `SANDBOX_URL` 之类重启即生效，而网络路径、绑定这类改动必须换镜像：旧镜像里沙箱报 `connecting to sandbox:8080 is not allowed` 的，那是拓扑问题，光改 `.env` 不会好。
 
 ## 备份

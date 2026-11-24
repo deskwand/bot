@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/deskwand/bot/desktop/internal/domain"
@@ -76,4 +77,16 @@ func containerTarget() domain.Target {
 			Dir:     "~/deskwand",
 		},
 	}
+}
+
+// pruneCommands filters the recorded commands down to the image cleanup, so a
+// test can assert on the deploy commands and the janitor step separately.
+func pruneCommands(commands []string) []string {
+	var pruned []string
+	for _, command := range commands {
+		if strings.Contains(command, `docker images --format '{{.Repository}}:{{.Tag}}'`) {
+			pruned = append(pruned, command)
+		}
+	}
+	return pruned
 }

@@ -228,6 +228,9 @@ func (s *Service) Upgrade(ctx context.Context, target domain.Target, onStep func
 		return s.rollback(ctx, target, host, dir, engine, current, messageOf(err), onStep)
 	}
 	s.endStep(onStep, "healthy", "completed")
+	// The version that was running minutes ago is unreferenced now; the cleanup
+	// keeps whatever is running and drops the rest.
+	s.pruneImages(ctx, target, host)
 	return domain.Result{State: "published", VersionID: "container:" + newVersion}, nil
 }
 
@@ -273,5 +276,8 @@ func (s *Service) rollback(ctx context.Context, target domain.Target, host Host,
 		return fail(err)
 	}
 	s.endStep(onStep, "rollback", "completed")
+	// The version that failed to become healthy is garbage now, and the one the
+	// rollback restarted is what the cleanup keeps.
+	s.pruneImages(ctx, target, host)
 	return domain.Result{}, domain.Error{Code: domain.UPGRADE_ROLLED_BACK, Message: failedLogs}
 }

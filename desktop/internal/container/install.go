@@ -233,6 +233,11 @@ func (s *Service) Install(ctx context.Context, target domain.Target, request Ins
 	}
 	s.endStep(onStep, "healthy", "completed")
 
+	// Everything the earlier deploys left behind is garbage now, so drop it here:
+	// a host that keeps upgrading should not fill up with one image pair per
+	// version. Cleanup failures are dropped inside pruneImages.
+	s.pruneImages(ctx, target, host)
+
 	return domain.Result{State: "published", VersionID: "container:" + s.options.Version}, nil
 }
 
