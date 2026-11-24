@@ -384,3 +384,99 @@ describe("web_search model wiring", () => {
     expect(JSON.stringify(result)).toContain("订阅搜索的结果");
   });
 });
+
+describe("teen member task prompt", () => {
+  it("carries the minor boundary into the running task", async () => {
+    const actor = await activeMember("teen-task");
+    await runInDurableObject(channels(), (_instance, state) => {
+      new MemberStore(state.storage.sql).setTeen(actor.memberId, true);
+    });
+
+    let seen = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+          observe: (context) => {
+            seen = JSON.stringify(context.messages);
+          },
+        },
+      ]),
+    );
+    const taskId = `${actor.memberId}-t1`;
+    const stub = taskStub(taskId);
+    await stub.start(memberSpec(taskId, actor));
+
+    // The run continues after start(); wait for the request it makes, then
+    // for the run to settle so nothing logs after the file ends.
+    await vi.waitFor(() => {
+      expect(seen).toContain(
+        "The person behind this task is a minor (under 18).",
+      );
+    });
+    await vi.waitFor(async () => {
+      expect((await stub.status()).state).toBe("completed");
+    });
+  });
+
+  it("leaves an unflagged member's task alone", async () => {
+    const actor = await activeMember("plain-task");
+    let seen = "";
+    setModelOverride(
+      scriptedModel([
+        {
+          toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+          observe: (context) => {
+            seen = JSON.stringify(context.messages);
+          },
+        },
+      ]),
+    );
+    const taskId = `${actor.memberId}-t1`;
+    const stub = taskStub(taskId);
+    await stub.start(memberSpec(taskId, actor));
+
+    await vi.waitFor(() => {
+      expect(seen).not.toBe("");
+    });
+    expect(seen).not.toContain("minor (under 18)");
+    await vi.waitFor(async () => {
+      expect((await stub.status()).state).toBe("completed");
+    });
+  });
+});
+
+describe("minor flag across rounds", () => {
+  it("re-reads the directory before a follow-up round", async () => {
+    const actor = await activeMember("teen-followup");
+    const taskId = `${actor.memberId}-t1`;
+    const turn = {
+      toolCalls: [{ name: "finish_task", args: { summary: "ok" } }],
+    };
+    setModelOverride(scriptedModel([turn, turn, turn]));
+    const stub = taskStub(taskId);
+    await stub.start(memberSpec(taskId, actor));
+    await vi.waitFor(async () => {
+      expect((await stub.status()).state).toBe("completed");
+    });
+
+    await runInDurableObject(channels(), (_instance, state) => {
+      new MemberStore(state.storage.sql).setTeen(actor.memberId, true);
+    });
+
+    const followed = await stub.continueTask("再来一次", actor);
+    expect(followed.ok).toBe(true);
+
+    // The prompt the next round will send, rendered from the live registry.
+    const section = await runInDurableObject(stub, async (instance) => {
+      const extension = instance.registry.snapshot().extension("task");
+      const found = extension?.sections?.find((entry) => entry.key === "task");
+      if (!found) throw new Error("fixture: task section missing");
+      return (await found.render({} as never, {} as never)) ?? "";
+    });
+    expect(section).toContain("The person behind this task is a minor");
+    await vi.waitFor(async () => {
+      expect((await stub.status()).state).toBe("completed");
+    });
+  });
+});

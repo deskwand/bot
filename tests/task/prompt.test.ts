@@ -132,3 +132,17 @@ describe("taskSystemPrompt delivery destination", () => {
     );
   });
 });
+
+describe("taskSystemPrompt minor mode", () => {
+  it("states the boundary before the user's instructions", () => {
+    const prompt = taskSystemPrompt("zh", spec(), "telegram", true);
+    expect(prompt).toContain("The person behind this task is a minor (under 18).");
+    expect(prompt.indexOf("The person behind this task is a minor")).toBeLessThan(
+      prompt.indexOf("Instructions from the user:"),
+    );
+  });
+
+  it("says nothing about minors for an ordinary task", () => {
+    expect(taskSystemPrompt("zh", spec(), "telegram")).not.toContain("minor");
+  });
+});

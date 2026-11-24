@@ -41,6 +41,12 @@ export function Users() {
     onSuccess: refresh,
     onError: (error: unknown) => setActionError(toClientError(error).message),
   });
+  const teen = useMutation({
+    mutationFn: (input: { id: string; teen: boolean }) =>
+      client.setChannelTeen(input.id, input.teen),
+    onSuccess: refresh,
+    onError: (error: unknown) => setActionError(toClientError(error).message),
+  });
   const restart = useMutation({
     mutationFn: (id: string) => client.restartChannel(id),
     onSuccess: refresh,
@@ -125,12 +131,18 @@ export function Users() {
               <th className="py-2">{t("users.columns.label")}</th>
               <th className="py-2">{t("users.columns.account")}</th>
               <th className="py-2">{t("users.columns.connection")}</th>
+              <th className="py-2">{t("users.columns.mode")}</th>
               <th className="py-2" />
             </tr>
           </thead>
           <tbody>
             {rows.map((user: ChannelDTO) => {
               const needsReset = user.state === "needs_reset";
+              // The owner channel is immutable, and a channel with no live
+              // binding (revoked or retired) cannot chat, so a flag there
+              // would promise a restriction nothing enforces.
+              const modeSettable =
+                user.channelId !== "owner" && user.state !== "unbound";
               return (
                 <tr key={user.channelId} data-testid={`user-row-${user.channelId}`} className="border-t">
                   <td className="py-2">{user.label}</td>
@@ -144,6 +156,28 @@ export function Users() {
                     {user.lastErrorCode === null ? null : (
                       <span className="ml-2 text-xs text-muted-foreground">
                         {user.lastErrorCode}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2">
+                    {modeSettable ? (
+                      <button
+                        type="button"
+                        data-testid={`teen-${user.channelId}`}
+                        aria-pressed={user.teen}
+                        className="rounded border px-2 py-0.5 text-xs"
+                        onClick={() =>
+                          teen.mutate({
+                            id: user.channelId,
+                            teen: !user.teen,
+                          })
+                        }
+                      >
+                        {user.teen ? t("users.mode.on") : t("users.mode.off")}
+                      </button>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        {t("users.mode.none")}
                       </span>
                     )}
                   </td>

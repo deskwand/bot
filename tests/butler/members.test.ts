@@ -154,6 +154,7 @@ let bindingSeq = 0;
 async function activeMember(
   label: string,
   binding = memberBinding,
+  teen = false,
 ): Promise<{ memberId: string; actor: { memberId: string; role: "member"; epoch: number } }> {
   const stub = channels();
   return runInDurableObject(stub, (instance, state) => {
@@ -178,6 +179,7 @@ async function activeMember(
       userId: `user-${label}-${bindingSeq}`,
     };
     const member = store.completeInvite(invite.inviteId, unique);
+    if (teen) store.setTeen(member.memberId, true);
     const principal = store.principal(member.memberId);
     if (!principal) throw new Error("member missing");
     void instance;
@@ -445,5 +447,43 @@ describe("per-member butler isolation", () => {
       expect(principal.memberId).toBe(OWNER_ID);
     });
     expect(ownerPrincipal().role).toBe("owner");
+  });
+});
+
+describe("minor mode prompt", () => {
+  it("states the minor boundary only for a flagged member", async () => {
+    const { ref, seen } = scripted([{ text: "好" }, { text: "好" }]);
+    setModelOverride(ref);
+    const flagged = await activeMember("未成年", memberBinding, true);
+    const plain = await activeMember("成年", memberBinding, false);
+
+    for (const [actor, eventId] of [
+      [flagged.actor, "teen-msg"],
+      [plain.actor, "adult-msg"],
+    ] as const) {
+      const stub = butler(butlerName(actor.memberId));
+      await stub.initializeMember(actor);
+      await stub.handleMessage(await memberMessage(actor, eventId));
+    }
+
+    expect(promptFor(seen, "teen-msg")).toContain("你的主人是未成年人");
+    expect(promptFor(seen, "adult-msg")).not.toContain("你的主人是未成年人");
+  });
+
+  it("drops the boundary on the next message once the owner turns it off", async () => {
+    const { ref, seen } = scripted([{ text: "好" }, { text: "好" }]);
+    setModelOverride(ref);
+    const { memberId, actor } = await activeMember("先未成年", memberBinding, true);
+    const stub = butler(butlerName(memberId));
+    await stub.initializeMember(actor);
+    await stub.handleMessage(await memberMessage(actor, "teen-on"));
+
+    await runInDurableObject(channels(), (_instance, state) => {
+      new MemberStore(state.storage.sql).setTeen(memberId, false);
+    });
+    await stub.handleMessage(await memberMessage(actor, "teen-off"));
+
+    expect(promptFor(seen, "teen-on")).toContain("你的主人是未成年人");
+    expect(promptFor(seen, "teen-off")).not.toContain("你的主人是未成年人");
   });
 });

@@ -321,6 +321,9 @@ export class ButlerDO extends Agent<Env> {
   /** The principal proven by `initializeMember` / `ensurePrincipal`. */
   private principalValue: Principal | null = null;
 
+  /** The directory's minor flag, refreshed by every proven actor. */
+  private memberTeen: boolean | null = null;
+
   /** Single-flight guard for reconciling pending approvals on this instance. */
   private reconcilePromise: Promise<void> | null = null;
 
@@ -486,6 +489,7 @@ export class ButlerDO extends Agent<Env> {
             search: (query, signal) => searchWeb(this.env, query, 5, signal),
             complete: this.completeLookup,
             locale: ownerLocale(this.env),
+            teen: this.memberTeen === true,
           },
         ),
       locale: ownerLocale(this.env),
@@ -676,6 +680,13 @@ export class ButlerDO extends Agent<Env> {
             ),
         },
         {
+          key: "teen",
+          render: () =>
+            this.memberTeen === true
+              ? t(locale, "prompt.teen.butler")
+              : undefined,
+        },
+        {
           key: "memory",
           render: () => renderMemorySection(this.memory.all()),
         },
@@ -745,7 +756,8 @@ export class ButlerDO extends Agent<Env> {
       epoch: binding.epoch,
     };
     try {
-      await this.channels().assertMemberActive(actor);
+      const presence = await this.channels().assertMemberActive(actor);
+      this.memberTeen = presence.teen;
     } catch (error) {
       // The class does not survive the DO RPC boundary, so classify by name and
       // by the fixed code. A denial is terminal; anything else is transport.
@@ -1696,6 +1708,7 @@ export class ButlerDO extends Agent<Env> {
         channelName: channelName(parseActiveChannel(this.env.ACTIVE_CHANNEL)),
         recent,
         identity: renderSelfVoice(this.self, locale),
+        teen: this.memberTeen === true,
       });
       const ref = await this.sendBestEffort({
         text: clampMessage(text),

@@ -565,6 +565,7 @@ type ChannelDTO struct {
 	Account       *string `json:"account"`
 	State         string  `json:"state"`
 	LastErrorCode *string `json:"lastErrorCode"`
+	Teen          bool    `json:"teen"`
 }
 
 // ChannelsDTO is the channels payload; Channels is always an array.

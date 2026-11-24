@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { quickLookup } from "../../src/butler/quick-lookup";
+import { NO_ANSWER, quickLookup } from "../../src/butler/quick-lookup";
 
 const hit = async (q: string) => ({ ok: true, text: `结果:${q}` });
 const base = { locale: "zh" as const };
@@ -97,5 +97,41 @@ describe("quickLookup", () => {
       { ...base, search: hit, complete: async () => "答".repeat(400) },
     );
     expect(out.ok && [...out.answer].length).toBe(300);
+  });
+});
+
+describe("quickLookup minor mode", () => {
+  it("tells the lookup the asker is a minor", async () => {
+    let system = "";
+    const out = await quickLookup(
+      { question: "查一个不适合未成年人的问题", queries: ["q"] },
+      {
+        ...base,
+        search: hit,
+        teen: true,
+        complete: async (prompt) => {
+          system = prompt;
+          return NO_ANSWER;
+        },
+      },
+    );
+    expect(out).toEqual({ ok: false });
+    expect(system).toContain("提问的人是未成年人");
+  });
+
+  it("says nothing about minors by default", async () => {
+    let system = "";
+    await quickLookup(
+      { question: "上海天气", queries: ["q"] },
+      {
+        ...base,
+        search: hit,
+        complete: async (prompt) => {
+          system = prompt;
+          return "晴";
+        },
+      },
+    );
+    expect(system).not.toContain("提问的人是未成年人");
   });
 });

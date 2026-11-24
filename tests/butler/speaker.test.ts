@@ -233,3 +233,28 @@ describe("wallet remittance notices", () => {
     expect(complete).not.toHaveBeenCalled();
   });
 });
+
+describe("speak minor mode", () => {
+  it("tells the speaker the recipient is a minor", async () => {
+    let system = "";
+    await speak(done("查到了"), {
+      ...deps(async (prompt) => {
+        system = prompt;
+        return "查到了";
+      }),
+      teen: true,
+    });
+    expect(system).toContain("收信人是未成年人");
+  });
+
+  it("says nothing about minors by default", async () => {
+    let system = "";
+    await speak(done("查到了"), {
+      ...deps(async (prompt) => {
+        system = prompt;
+        return "查到了";
+      }),
+    });
+    expect(system).not.toContain("收信人是未成年人");
+  });
+});

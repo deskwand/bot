@@ -211,6 +211,7 @@ interface MockState {
   vitals: LifeVitalsDTO | "failed" | "unsupported";
   bots: BotDTO[] | "unsupported";
   users: MemberUserDTO[] | "unsupported";
+  channelTeen: Record<string, boolean>;
   memberInvites: MemberInviteDTO[];
   inviteStage: string;
   botDocs: BotDocDTO[];
@@ -909,6 +910,7 @@ function initialState(): MockState {
               },
             ]
           : [],
+    channelTeen: {},
     memberInvites: [],
     inviteStage: "starting",
     botDocs: [
@@ -2137,11 +2139,13 @@ export function createMockClient(): ClientService {
           account: null,
           state: user.connection,
           lastErrorCode: null,
+          teen: state.channelTeen[user.memberId] === true,
         })),
       };
     },
 
-    async createChannel(label: string): Promise<ChannelInviteDTO> {
+    async createChannel(label: string, teen: boolean): Promise<ChannelInviteDTO> {
+      record("createChannel", label, String(teen));
       const invite = await this.createMemberInvite(label);
       return { ...invite, channelId: null };
     },
@@ -2182,6 +2186,11 @@ export function createMockClient(): ClientService {
 
     async removeChannel(id: string): Promise<void> {
       await this.revokeMember(id);
+    },
+
+    async setChannelTeen(id: string, teen: boolean): Promise<void> {
+      record("setChannelTeen", id, String(teen));
+      state.channelTeen[id] = teen;
     },
 
     async members(): Promise<MembersDTO> {

@@ -5,7 +5,14 @@ export const users = {
   add: "添加用户",
   resume: "继续",
   pending: "待绑定邀请",
-  columns: { label: "名称", account: "微信账号", connection: "连接", actions: "操作" },
+  columns: {
+    label: "名称",
+    account: "微信账号",
+    connection: "连接",
+    mode: "模式",
+    actions: "操作",
+  },
+  mode: { on: "青少年模式：已开", off: "青少年模式：关", none: "—" },
   role: { owner: "主人", member: "用户" },
   status: { revoked: "已撤销" },
   connection: {
@@ -19,6 +26,7 @@ export const users = {
   wizard: {
     title: "添加用户",
     label: "名称",
+    teen: "这个用户是未成年人（青少年模式）",
     create: "生成邀请",
     realname: "用你自己的手机微信扫这张码，完成实名授权。",
     realnameCountdown: "实名授权剩余 {minutes} 分钟",

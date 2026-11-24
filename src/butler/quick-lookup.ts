@@ -36,6 +36,8 @@ export async function quickLookup(
     search: (query: string, signal: AbortSignal) => Promise<{ ok: boolean; text: string }>;
     complete: SpeakComplete;
     locale: Locale;
+    /** The asker is a minor; the lookup must decline unsuitable answers. */
+    teen?: boolean;
     timeoutMs?: number;
   },
 ): Promise<{ ok: true; answer: string } | { ok: false }> {
@@ -64,15 +66,18 @@ export async function quickLookup(
       ...hits.map((result) => result.text),
     ].join("\n");
 
+    const system = [
+      t(deps.locale, "butler.quickLookup.system", {
+        limit: answerLimit(deps.locale),
+      }),
+      ...(deps.teen === true
+        ? [t(deps.locale, "butler.quickLookup.teen")]
+        : []),
+    ].join("\n");
+
     const answer = (
       await Promise.race([
-        deps.complete(
-          t(deps.locale, "butler.quickLookup.system", {
-            limit: answerLimit(deps.locale),
-          }),
-          user,
-          signal,
-        ),
+        deps.complete(system, user, signal),
         aborted.promise,
       ])
     ).trim();

@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 
-	"github.com/deskwand/bot/desktop/internal/domain"
 	"github.com/deskwand/bot/desktop/internal/channeladmin"
+	"github.com/deskwand/bot/desktop/internal/domain"
 )
 
 func (s *Service) channelClient(ctx context.Context, target domain.Target) (*channeladmin.Client, error) {
@@ -43,6 +43,7 @@ func (s *Service) Channels() (ChannelsDTO, error) {
 			Account:       row.Account,
 			State:         row.State,
 			LastErrorCode: row.LastErrorCode,
+			Teen:          row.Teen,
 		})
 	}
 	return out, nil
@@ -71,7 +72,7 @@ func (s *Service) ChannelBindings() (ChannelInvitesDTO, error) {
 }
 
 // CreateMemberInvite starts a new-user invite. bindUrl never reaches the UI.
-func (s *Service) CreateChannel(label string) (ChannelInviteDTO, error) {
+func (s *Service) CreateChannel(label string, teen bool) (ChannelInviteDTO, error) {
 	ctx := context.Background()
 	target, err := s.managedTarget(ctx)
 	if err != nil {
@@ -81,11 +82,28 @@ func (s *Service) CreateChannel(label string) (ChannelInviteDTO, error) {
 	if err != nil {
 		return ChannelInviteDTO{}, err
 	}
-	invite, err := client.CreateInvite(ctx, label)
+	invite, err := client.CreateInvite(ctx, label, teen)
 	if err != nil {
 		return ChannelInviteDTO{}, s.adminFailure(err)
 	}
 	return channelInviteDTO(invite), nil
+}
+
+// SetChannelTeen flips one channel's minor-mode flag.
+func (s *Service) SetChannelTeen(id string, teen bool) error {
+	ctx := context.Background()
+	target, err := s.managedTarget(ctx)
+	if err != nil {
+		return err
+	}
+	client, err := s.channelClient(ctx, target)
+	if err != nil {
+		return err
+	}
+	if err := client.SetTeen(ctx, id, teen); err != nil {
+		return s.adminFailure(err)
+	}
+	return nil
 }
 
 // MemberInviteState reads one invite's stage.
@@ -243,7 +261,7 @@ func (s *Service) MemberInvites() (MemberInvitesDTO, error) {
 }
 
 func (s *Service) CreateMemberInvite(label string) (MemberInviteDTO, error) {
-	invite, err := s.CreateChannel(label)
+	invite, err := s.CreateChannel(label, false)
 	if err != nil {
 		return MemberInviteDTO{}, err
 	}

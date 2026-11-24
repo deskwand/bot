@@ -9,8 +9,10 @@ type Fake = {
     account: string | null;
     state: string;
     lastErrorCode: string | null;
+    teen: boolean;
   }>;
   fail?: string;
+  calls?: { invite?: Array<[string, boolean]>; teen?: Array<[string, boolean]> };
 };
 
 function routes(model: Fake = { channels: [] }) {
@@ -21,7 +23,8 @@ function routes(model: Fake = { channels: [] }) {
     channel: () =>
       ({
         adminChannels: async () => model.channels,
-        createMemberInvite: async () => {
+        createMemberInvite: async (_actor: unknown, label: string, teen: boolean) => {
+          model.calls?.invite?.push([label, teen]);
           fail();
           return { inviteId: "inv-1", expiresAt: 1, bindUrl: "http://x/members/bind/#t" };
         },
@@ -38,6 +41,10 @@ function routes(model: Fake = { channels: [] }) {
           fail();
         },
         removeChannel: async () => {
+          fail();
+        },
+        setMemberTeen: async (_actor: unknown, id: string, teen: boolean) => {
+          model.calls?.teen?.push([id, teen]);
           fail();
         },
         listMembers: async () => [],
@@ -62,6 +69,7 @@ describe("channel routes", () => {
           account: "e8d1@im.bot",
           state: "needs_reset",
           lastErrorCode: "SEND_EXHAUSTED",
+          teen: false,
         },
       ],
     }).fetch(req(CHANNELS_PATH));
@@ -73,6 +81,7 @@ describe("channel routes", () => {
           account: "e8d1@im.bot",
           state: "needs_reset",
           lastErrorCode: "SEND_EXHAUSTED",
+          teen: false,
         },
       ],
     });
@@ -121,5 +130,84 @@ describe("channel routes", () => {
     const res = await routes().fetch(req("/admin/members"));
     expect(res.status).toBe(200);
     expect(res.headers.get("deprecation")).toBe("true");
+  });
+});
+
+describe("channel minor flag", () => {
+  it("carries teen on a new channel and defaults it to false", async () => {
+    const model: Fake = { channels: [], calls: { invite: [] } };
+    const flagged = await routes(model).fetch(
+      req(CHANNELS_PATH, {
+        method: "POST",
+        body: JSON.stringify({ label: "小王", teen: true }),
+      }),
+    );
+    expect(flagged.status).toBe(201);
+    const plain = await routes(model).fetch(
+      req(CHANNELS_PATH, {
+        method: "POST",
+        body: JSON.stringify({ label: "小张" }),
+      }),
+    );
+    expect(plain.status).toBe(201);
+    expect(model.calls?.invite).toEqual([
+      ["小王", true],
+      ["小张", false],
+    ]);
+  });
+
+  it("toggles the flag and rejects a non-boolean", async () => {
+    const model: Fake = { channels: [], calls: { teen: [] } };
+    const ok = await routes(model).fetch(
+      req(`${CHANNELS_PATH}/m1/teen`, {
+        method: "POST",
+        body: JSON.stringify({ teen: true }),
+      }),
+    );
+    expect(ok.status).toBe(204);
+    expect(model.calls?.teen).toEqual([["m1", true]]);
+
+    const bad = await routes(model).fetch(
+      req(`${CHANNELS_PATH}/m1/teen`, {
+        method: "POST",
+        body: JSON.stringify({ teen: "yes" }),
+      }),
+    );
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ code: "INVALID_MODE" });
+  });
+
+  it("keeps the owner channel immutable and reports a missing one as 404", async () => {
+    const owner = await routes({ channels: [], fail: "OWNER_IMMUTABLE" }).fetch(
+      req(`${CHANNELS_PATH}/owner/teen`, {
+        method: "POST",
+        body: JSON.stringify({ teen: true }),
+      }),
+    );
+    expect(owner.status).toBe(409);
+    expect(await owner.json()).toEqual({ code: "CHANNEL_IMMUTABLE" });
+
+    const missing = await routes({
+      channels: [],
+      fail: "MEMBER_ACCESS_DENIED",
+    }).fetch(
+      req(`${CHANNELS_PATH}/m2/teen`, {
+        method: "POST",
+        body: JSON.stringify({ teen: true }),
+      }),
+    );
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ code: "CHANNEL_NOT_FOUND" });
+  });
+
+  it("refuses the flag while a maintenance lease is held", async () => {
+    const res = await routes({ channels: [], fail: "MAINTENANCE_ACTIVE" }).fetch(
+      req(`${CHANNELS_PATH}/m1/teen`, {
+        method: "POST",
+        body: JSON.stringify({ teen: false }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ code: "MAINTENANCE_ACTIVE" });
   });
 });

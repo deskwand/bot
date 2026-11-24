@@ -2,7 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { ChannelDO } from "../../src/channels/channel-do";
 import { migrateLegacyInbox, migrationReady } from "../../src/members/artifact-access";
-import type { VerifiedBinding } from "../../src/members/store";
+import { MemberStore, type VerifiedBinding } from "../../src/members/store";
 import {
   MEMBER_NOW,
   memberBinding,
@@ -447,5 +447,128 @@ describe("legacy inbox decision gates activation", () => {
         .toArray();
     });
     expect(rows).toEqual([{ id: "owner", role: "owner", status: "active" }]);
+  });
+});
+
+describe("member teen flag", () => {
+  it("defaults to off and keeps what the invite carried", async () => {
+    await withMemberStore((store) => {
+      const plain = store.createInvite("普通");
+      const plainMember = store.completeInvite(plain.inviteId, {
+        ...memberBinding,
+        connectionId: "c-plain",
+        credentialKey: "credential-plain-op1",
+        accountId: "wx-plain",
+        userId: "user-plain",
+        credentialHash: "fake-plain-hash",
+      });
+      expect(
+        store.list().find((entry) => entry.memberId === plainMember.memberId)
+          ?.teen,
+      ).toBe(false);
+
+      const teen = store.createInvite("未成年", { teen: true });
+      const teenMember = store.completeInvite(teen.inviteId, {
+        ...memberBinding,
+        connectionId: "c-teen",
+        credentialKey: "credential-teen-op1",
+        accountId: "wx-teen",
+        userId: "user-teen",
+        credentialHash: "fake-teen-hash",
+      });
+      expect(
+        store.list().find((entry) => entry.memberId === teenMember.memberId)
+          ?.teen,
+      ).toBe(true);
+    });
+  });
+
+  it("only flips the flag for a live member, never for the owner", async () => {
+    await withMemberStore((store) => {
+      store.ensureOwner();
+      const invite = store.createInvite("小王");
+      const member = store.completeInvite(invite.inviteId, memberBinding);
+      const actor = store.principal(member.memberId);
+      if (actor === null) throw new Error("fixture: member missing");
+
+      store.setTeen(member.memberId, true);
+      expect(store.assertActive(actor)).toEqual({ teen: true });
+      store.setTeen(member.memberId, false);
+      expect(store.assertActive(actor)).toEqual({ teen: false });
+
+      expect(() => store.setTeen("owner", true)).toThrow("MEMBER_ACCESS_DENIED");
+      expect(() => store.setTeen("mdeadbeef", true)).toThrow(
+        "MEMBER_ACCESS_DENIED",
+      );
+
+      store.revoke(member.memberId);
+      expect(() => store.setTeen(member.memberId, true)).toThrow(
+        "MEMBER_ACCESS_DENIED",
+      );
+    });
+  });
+
+  it("keeps the flag across a rebind", async () => {
+    await withMemberStore((store) => {
+      const invite = store.createInvite("小王", { teen: true });
+      const member = store.completeInvite(invite.inviteId, memberBinding);
+      const rebind = store.createInvite("小王", {
+        kind: "rebind",
+        targetMemberId: member.memberId,
+      });
+      store.completeInvite(rebind.inviteId, {
+        ...memberBinding,
+        connectionId: "c-rebound",
+        credentialKey: "credential-rebound-op2",
+        credentialHash: "fake-rebound-hash",
+      });
+      expect(
+        store.list().find((entry) => entry.memberId === member.memberId)?.teen,
+      ).toBe(true);
+    });
+  });
+
+  it("adds the column to a directory that predates it", async () => {
+    await withMemberStoreSql((_store, sql) => {
+      sql.exec(`DROP TABLE members`);
+      sql.exec(`DROP TABLE member_invites`);
+      sql.exec(
+        `CREATE TABLE members (
+          id TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          role TEXT NOT NULL,
+          status TEXT NOT NULL,
+          epoch INTEGER NOT NULL DEFAULT 1
+        )`,
+      );
+      sql.exec(
+        `CREATE TABLE member_invites (
+          id TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          target_member_id TEXT,
+          expected_user_id TEXT,
+          status TEXT NOT NULL,
+          expires_at INTEGER NOT NULL,
+          member_id TEXT,
+          token_hash TEXT,
+          created_at INTEGER NOT NULL
+        )`,
+      );
+      sql.exec(
+        `INSERT INTO members (id, label, role, status, epoch)
+         VALUES ('mold', '旧成员', 'member', 'active', 1)`,
+      );
+
+      const reopened = new MemberStore(sql, () => MEMBER_NOW);
+      expect(
+        reopened.list().find((entry) => entry.memberId === "mold")?.teen,
+      ).toBe(false);
+      const invite = reopened.createInvite("新成员", { teen: true });
+      expect(
+        reopened.getInvite(invite.inviteId)?.teen,
+      ).toBe(true);
+      expect(() => new MemberStore(sql, () => MEMBER_NOW)).not.toThrow();
+    });
   });
 });

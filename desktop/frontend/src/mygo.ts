@@ -234,6 +234,7 @@ export interface ChannelDTO {
   account: string | null;
   state: string;
   lastErrorCode: string | null;
+  teen: boolean;
 }
 
 /** ChannelInviteDTO is one pending binding. */
@@ -1098,8 +1099,8 @@ export const Service = {
     return call("Service.ContainerStatus");
   },
   /** CreateMemberInvite starts a new-user invite. bindUrl never reaches the UI. */
-  createChannel(label: string): Promise<ChannelInviteDTO> {
-    return call("Service.CreateChannel", label);
+  createChannel(label: string, teen: boolean): Promise<ChannelInviteDTO> {
+    return call("Service.CreateChannel", label, teen);
   },
   createMemberInvite(label: string): Promise<MemberInviteDTO> {
     return call("Service.CreateMemberInvite", label);
@@ -1372,6 +1373,10 @@ export const Service = {
    */
   selectEntry(channel: string): Promise<EntryResultDTO> {
     return call("Service.SelectEntry", channel);
+  },
+  /** SetChannelTeen flips one channel's minor-mode flag. */
+  setChannelTeen(id: string, teen: boolean): Promise<void> {
+    return call("Service.SetChannelTeen", id, teen);
   },
   /**
    * SetLocale stores the language and switches this run to it. A store that

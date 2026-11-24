@@ -109,7 +109,7 @@ func TestBoundServiceMethodSetAndResultFieldNames(t *testing.T) {
 		"Members": true, "MemberInvites": true, "CreateMemberInvite": true,
 		"MemberInviteState": true, "SubmitMemberPin": true,
 		"CancelMemberInvite": true, "RebindMember": true, "RevokeMember": true,
-		"ChannelBindingState": true, "SubmitChannelPin": true,
+		"ChannelBindingState": true, "SubmitChannelPin": true, "SetChannelTeen": true,
 		"CancelChannelBinding": true, "RebindChannel": true,
 		"RestartChannel": true, "RemoveChannel": true,
 		"OwnerStatus": true, "OpenOwnerClaim": true, "RevokeOwner": true,

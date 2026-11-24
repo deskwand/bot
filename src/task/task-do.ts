@@ -399,6 +399,7 @@ export class TaskDO extends Agent<Env> {
                   ownerLocale(this.env),
                   this.spec,
                   parseActiveChannel(this.env.ACTIVE_CHANNEL),
+                  this.memberTeen,
                 )
               : undefined,
         },
@@ -457,6 +458,8 @@ export class TaskDO extends Agent<Env> {
 
   /** Which execution surface this object installed: owner, member, or nothing. */
   private executionProfile: ExecutionProfile | null = null;
+  /** The directory's minor flag, captured with the execution profile. */
+  private memberTeen = false;
   private executionProfilePromise?: Promise<ExecutionProfile>;
   private executionInstalled = false;
   private finishTaskTool: ToolRegistration | null = null;
@@ -503,6 +506,23 @@ export class TaskDO extends Agent<Env> {
    * An actor-less row is a legacy owner task, unless its id is namespaced for a
    * member: that shape without an actor is never owner work.
    */
+  /**
+   * The directory is authoritative for the minor flag, and the execution
+   * profile is memoized for this object's lifetime: a new round must re-read
+   * it or a flag set between rounds would never reach the next prompt.
+   * A failed re-read keeps the last known value, so the restriction can only
+   * stay on, never loosen by accident.
+   */
+  private async refreshMinorFlag(): Promise<void> {
+    const actor = this.spec?.actor;
+    if (actor === undefined || actor.role !== "member") return;
+    try {
+      this.memberTeen = (await this.channels().assertMemberActive(actor)).teen;
+    } catch {
+      // A revoked member is already refused by controlDenied above.
+    }
+  }
+
   private async verifyExecutionProfile(): Promise<ExecutionProfile> {
     const spec = this.spec;
     if (spec === null) return "denied";
@@ -518,7 +538,8 @@ export class TaskDO extends Agent<Env> {
     // stored row that was tampered with or moved.
     if (!spec.taskId.startsWith(`${actor.memberId}-t`)) return "denied";
     try {
-      await this.channels().assertMemberActive(actor);
+      const presence = await this.channels().assertMemberActive(actor);
+      this.memberTeen = presence.teen;
       return "member";
     } catch (error) {
       console.warn(
@@ -1097,6 +1118,7 @@ export class TaskDO extends Agent<Env> {
   async retryTask(actor?: Principal): Promise<ControlResult> {
     await this.flushOutbox();
     if (await this.controlDenied(actor)) return this.controlDeniedResult();
+    await this.refreshMinorFlag();
     await this.ensureExecutionProfile();
     const taskId = this.currentTaskId();
     const state = this.currentState();
@@ -1376,6 +1398,7 @@ export class TaskDO extends Agent<Env> {
   async continueTask(text: string, actor?: Principal): Promise<ControlResult> {
     await this.flushOutbox();
     if (await this.controlDenied(actor)) return this.controlDeniedResult();
+    await this.refreshMinorFlag();
     await this.ensureExecutionProfile();
     const taskId = this.currentTaskId();
     const state = this.currentState();

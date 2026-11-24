@@ -10,6 +10,7 @@ const invite = (over: Partial<InviteRecord> = {}): InviteRecord => ({
   status: "pending",
   expiresAt: 1_700_000_000_000,
   memberId: null,
+  teen: false,
   targetMemberId: null,
   expectedUserId: null,
   tokenHash: "digest",

@@ -295,7 +295,8 @@ export interface ClientService {
   bots(): Promise<BotsDTO>;
   botDetail(id: string): Promise<BotDetailDTO>;
   channels(): Promise<ChannelsDTO>;
-  createChannel(label: string): Promise<ChannelInviteDTO>;
+  createChannel(label: string, teen: boolean): Promise<ChannelInviteDTO>;
+  setChannelTeen(id: string, teen: boolean): Promise<void>;
   channelBindings(): Promise<ChannelInvitesDTO>;
   channelBindingState(id: string): Promise<ChannelBindingDTO>;
   submitChannelPin(id: string, pin: string): Promise<ChannelBindingDTO>;

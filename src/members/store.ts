@@ -10,6 +10,7 @@
 import {
   MEMBER_ID_PATTERN,
   OWNER_ID,
+  type MemberPresence,
   type Principal,
 } from "./principal";
 import {
@@ -42,6 +43,8 @@ export type MemberView = {
   epoch: number;
   /** What the owner needs to know about the member's WeChat link. */
   connectionStatus: MemberConnectionView;
+  /** True when the owner marked this member as a minor. */
+  teen: boolean;
 };
 
 /** A live WeChat connection. Metadata only: the token lives in the vault. */
@@ -73,6 +76,8 @@ export type InviteView = {
  * one-time binding token; the token itself only ever lives in the vault.
  */
 export type InviteRecord = InviteView & {
+  /** New-user invites only: the member starts in minor mode. */
+  teen: boolean;
   targetMemberId: string | null;
   expectedUserId: string | null;
   tokenHash: string | null;
@@ -97,6 +102,8 @@ export type CreateInviteOptions = {
   expectedUserId?: string;
   ttlMs?: number;
   tokenHash?: string;
+  /** New-user invites only: the member starts in minor mode. */
+  teen?: boolean;
 };
 
 export const MEMBER_ACCESS_DENIED = "MEMBER_ACCESS_DENIED";
@@ -128,6 +135,7 @@ type MemberRow = {
   role: string;
   status: string;
   epoch: number;
+  teen: number;
 };
 
 type ConnectionRow = {
@@ -154,7 +162,16 @@ type InviteRow = {
   member_id: string | null;
   token_hash: string | null;
   created_at: number;
+  teen: number;
 };
+
+/** SQLite has no ADD COLUMN IF NOT EXISTS; PRAGMA is the portable guard. */
+function hasColumn(sql: SqlStorage, table: string, column: string): boolean {
+  return sql
+    .exec<{ name: string }>(`PRAGMA table_info(${table})`)
+    .toArray()
+    .some((entry) => entry.name === column);
+}
 
 function newMemberId(): string {
   const id = `m${crypto.randomUUID().replace(/-/g, "")}`;
@@ -179,6 +196,7 @@ function viewOf(row: MemberRow, connection: ConnectionRow | null): MemberView {
           : connection.poll_status === "expired"
             ? "expired"
             : "running",
+    teen: row.teen === 1,
   };
 }
 
@@ -195,6 +213,7 @@ function inviteRecord(row: InviteRow): InviteRecord {
           : "pending",
     expiresAt: row.expires_at,
     memberId: row.member_id,
+    teen: row.teen === 1,
     targetMemberId: row.target_member_id,
     expectedUserId: row.expected_user_id,
     tokenHash: row.token_hash,
@@ -283,6 +302,19 @@ export class MemberStore {
         created_at INTEGER NOT NULL
       )`,
     );
+    // A directory written before this feature has no mode column. Adding it
+    // here keeps old databases, old archives and upgraded containers on one
+    // schema without a migration version.
+    if (!hasColumn(this.sql, "members", "teen")) {
+      this.sql.exec(
+        `ALTER TABLE members ADD COLUMN teen INTEGER NOT NULL DEFAULT 0`,
+      );
+    }
+    if (!hasColumn(this.sql, "member_invites", "teen")) {
+      this.sql.exec(
+        `ALTER TABLE member_invites ADD COLUMN teen INTEGER NOT NULL DEFAULT 0`,
+      );
+    }
   }
 
   /**
@@ -300,12 +332,13 @@ export class MemberStore {
   }
 
   /** Liveness gate for any Principal built by trusted code. */
-  assertActive(actor: Principal): void {
+  assertActive(actor: Principal): MemberPresence {
     const row = this.memberRow(actor.memberId);
     if (!row) throw new MemberError(MEMBER_ACCESS_DENIED);
     if (row.status !== "active") throw new MemberError(MEMBER_ACCESS_DENIED);
     if (row.role !== actor.role) throw new MemberError(MEMBER_ACCESS_DENIED);
     if (row.epoch !== actor.epoch) throw new MemberError(MEMBER_ACCESS_DENIED);
+    return { teen: row.teen === 1 };
   }
 
   /** Every invite row, for owner sweeps. Contains no raw token, only its hash. */
@@ -319,7 +352,7 @@ export class MemberStore {
   list(): MemberView[] {
     return this.sql
       .exec<MemberRow>(
-        `SELECT id, label, role, status, epoch FROM members
+        `SELECT id, label, role, status, epoch, teen FROM members
          ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, id`,
       )
       .toArray()
@@ -376,8 +409,8 @@ export class MemberStore {
     const expiresAt = this.now() + (options.ttlMs ?? DEFAULT_INVITE_TTL_MS);
     this.sql.exec(
       `INSERT INTO member_invites
-        (id, label, kind, target_member_id, expected_user_id, status, expires_at, member_id, token_hash, created_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?)`,
+        (id, label, kind, target_member_id, expected_user_id, status, expires_at, member_id, token_hash, created_at, teen)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?, ?)`,
       id,
       label || DEFAULT_LABEL,
       kind,
@@ -386,6 +419,7 @@ export class MemberStore {
       expiresAt,
       options.tokenHash ?? null,
       this.now(),
+      kind === "new" && options.teen === true ? 1 : 0,
     );
     return {
       inviteId: id,
@@ -515,10 +549,11 @@ export class MemberStore {
 
     const memberId = newMemberId();
     this.sql.exec(
-      `INSERT INTO members (id, label, role, status, epoch)
-       VALUES (?, ?, 'member', 'active', 1)`,
+      `INSERT INTO members (id, label, role, status, epoch, teen)
+       VALUES (?, ?, 'member', 'active', 1, ?)`,
       memberId,
       invite.label,
+      invite.teen === 1 ? 1 : 0,
     );
     this.sql.exec(
       `INSERT INTO member_connections
@@ -580,6 +615,23 @@ export class MemberStore {
     );
     this.sql.exec(
       `UPDATE member_connections SET status = 'retired' WHERE member_id = ?`,
+      memberId,
+    );
+  }
+
+  /**
+   * The owner's minor-mode flag. Only a live member can carry it: a revoked
+   * row keeps its value but nothing may set it again, and changing it never
+   * touches identity (no epoch bump, no connection change).
+   */
+  setTeen(memberId: string, teen: boolean): void {
+    const row = this.memberRow(memberId);
+    if (!row || row.role !== "member" || row.status !== "active") {
+      throw new MemberError(MEMBER_ACCESS_DENIED);
+    }
+    this.sql.exec(
+      `UPDATE members SET teen = ? WHERE id = ?`,
+      teen ? 1 : 0,
       memberId,
     );
   }
@@ -662,7 +714,7 @@ export class MemberStore {
     return (
       this.sql
         .exec<MemberRow>(
-          `SELECT id, label, role, status, epoch FROM members WHERE id = ?`,
+          `SELECT id, label, role, status, epoch, teen FROM members WHERE id = ?`,
           memberId,
         )
         .toArray()[0] ?? null

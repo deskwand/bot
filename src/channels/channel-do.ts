@@ -69,6 +69,7 @@ import {
   butlerName,
   ownerPrincipal,
   type ConnectionRef,
+  type MemberPresence,
   type Principal,
 } from "../members/principal";
 import {
@@ -633,8 +634,8 @@ export class ChannelDO extends Agent<Env> {
   // ---------------------------------------------------------------------------
 
   /** Liveness gate: stored role, status and epoch, checked at call time. */
-  async assertMemberActive(actor: Principal): Promise<void> {
-    this.members.assertActive(actor);
+  async assertMemberActive(actor: Principal): Promise<MemberPresence> {
+    return this.members.assertActive(actor);
   }
 
   async memberPrincipal(memberId: string): Promise<Principal | null> {
@@ -681,10 +682,23 @@ export class ChannelDO extends Agent<Env> {
   async createMemberInvite(
     actor: Principal,
     label: string,
+    teen = false,
   ): Promise<MemberInviteLink> {
     this.assertOwnerActor(actor);
     await this.assertWritable();
-    return await this.issueInvite(label, {});
+    return await this.issueInvite(label, { teen });
+  }
+
+  /** Owner-only: flip one member's minor flag. Identity is untouched. */
+  async setMemberTeen(
+    actor: Principal,
+    memberId: string,
+    teen: boolean,
+  ): Promise<void> {
+    this.assertOwnerActor(actor);
+    await this.assertWritable();
+    if (memberId === OWNER_ID) throw new MemberError("OWNER_IMMUTABLE");
+    this.members.setTeen(memberId, teen);
   }
 
   /**
@@ -1093,6 +1107,7 @@ export class ChannelDO extends Agent<Env> {
       account: string | null;
       state: string;
       lastErrorCode: string | null;
+      teen: boolean;
     }>
   > {
     this.assertOwnerActor(ownerPrincipal());
@@ -1112,6 +1127,7 @@ export class ChannelDO extends Agent<Env> {
         channelId: row.memberId,
         label: row.label,
         account: connection?.accountId ?? null,
+        teen: row.teen,
         state,
         lastErrorCode:
           connection === null

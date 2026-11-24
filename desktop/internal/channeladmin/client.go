@@ -44,6 +44,7 @@ type Channel struct {
 	Account       *string `json:"account"`
 	State         string  `json:"state"`
 	LastErrorCode *string `json:"lastErrorCode"`
+	Teen          bool    `json:"teen"`
 }
 
 // Invite is a created or pending binding.
@@ -111,8 +112,9 @@ func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
 }
 
 // CreateInvite starts a binding for a new channel.
-func (c *Client) CreateInvite(ctx context.Context, label string) (Invite, error) {
-	raw, status, err := c.do(ctx, http.MethodPost, channelsPath, map[string]string{"label": label})
+func (c *Client) CreateInvite(ctx context.Context, label string, teen bool) (Invite, error) {
+	raw, status, err := c.do(ctx, http.MethodPost, channelsPath,
+		map[string]any{"label": label, "teen": teen})
 	if err != nil {
 		return Invite{}, err
 	}
@@ -174,6 +176,16 @@ func (c *Client) SubmitPin(ctx context.Context, id, pin string) (InviteState, er
 // CancelInvite abandons a pending binding.
 func (c *Client) CancelInvite(ctx context.Context, id string) error {
 	raw, status, err := c.do(ctx, http.MethodDelete, bindingsPath+"/"+id, nil)
+	if err != nil {
+		return err
+	}
+	return c.check(status, raw)
+}
+
+// SetTeen flips one channel's minor-mode flag.
+func (c *Client) SetTeen(ctx context.Context, channelID string, teen bool) error {
+	raw, status, err := c.do(ctx, http.MethodPost, channelsPath+"/"+channelID+"/teen",
+		map[string]bool{"teen": teen})
 	if err != nil {
 		return err
 	}

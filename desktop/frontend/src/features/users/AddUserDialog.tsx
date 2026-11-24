@@ -27,12 +27,13 @@ export function AddUserDialog({
   const t = useT();
   const { client } = useApp();
   const [label, setLabel] = useState("");
+  const [teen, setTeen] = useState(false);
   const [inviteId, setInviteId] = useState<string | null>(resumeInviteId ?? null);
   const [pin, setPin] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
 
   const create = useMutation({
-    mutationFn: () => client.createChannel(label.trim()),
+    mutationFn: () => client.createChannel(label.trim(), teen),
     onSuccess: (invite) => setInviteId(invite.inviteId),
     onError: (error: unknown) => {
       const failure = toClientError(error);
@@ -95,6 +96,15 @@ export function AddUserDialog({
               value={label}
               onChange={(event) => setLabel(event.target.value)}
             />
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                data-testid="teen-checkbox"
+                type="checkbox"
+                checked={teen}
+                onChange={(event) => setTeen(event.target.checked)}
+              />
+              <span>{t("users.wizard.teen")}</span>
+            </label>
             <button
               type="button"
               data-testid="create-invite"

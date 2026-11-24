@@ -4,10 +4,11 @@ import {
   LEGACY_INBOX_MIGRATION,
   ensureMigrationTable,
 } from "../../src/members/artifact-access";
-import { MemberError } from "../../src/members/store";
+import { MemberError, MemberStore } from "../../src/members/store";
 import { ownerPrincipal } from "../../src/members/principal";
 import { setILinkFetchOverride } from "../../src/channels/override";
 import type { AdminInviteView } from "../../src/members/admin-view";
+import { memberBinding } from "../helpers/members";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
@@ -28,6 +29,12 @@ type AdminRpc = {
   ): Promise<{ ok: boolean; status?: number; view?: AdminInviteView }>;
   acquireMaintenance(op: string, opId: string): Promise<unknown>;
   releaseMaintenance(opId: string): Promise<void>;
+  setMemberTeen(
+    actor: unknown,
+    memberId: string,
+    teen: boolean,
+  ): Promise<void>;
+  listMembers(actor: unknown): Promise<Array<{ memberId: string; teen: boolean }>>;
 };
 
 function channel(name: string) {
@@ -290,4 +297,60 @@ describe("PIN budget and scheduler recovery", () => {
       fake.restore();
     }
   }, 30_000);
+});
+
+describe("member admin minor flag", () => {
+  it("flips the flag on a live member only", async () => {
+    const hub = channel("admin-teen");
+    const result = await runInDurableObject(hub, async (instance, state) => {
+      settle(state.storage.sql);
+      const store = new MemberStore(state.storage.sql);
+      store.ensureOwner();
+      const invite = store.createInvite("小王");
+      const member = store.completeInvite(invite.inviteId, memberBinding);
+
+      const api = asAdmin(instance);
+      await api.setMemberTeen(ownerPrincipal(), member.memberId, true);
+      const listed = await api.listMembers(ownerPrincipal());
+      const ownerDenied = await api
+        .setMemberTeen(ownerPrincipal(), "owner", true)
+        .catch((caught: unknown) => caught);
+      const unknownDenied = await api
+        .setMemberTeen(ownerPrincipal(), "mdeadbeef", true)
+        .catch((caught: unknown) => caught);
+      return { member, listed, ownerDenied, unknownDenied };
+    });
+
+    expect(
+      result.listed.find((entry) => entry.memberId === result.member.memberId)
+        ?.teen,
+    ).toBe(true);
+    expect((result.ownerDenied as MemberError).code).toBe("OWNER_IMMUTABLE");
+    expect((result.unknownDenied as MemberError).code).toBe(
+      "MEMBER_ACCESS_DENIED",
+    );
+  });
+
+  it("refuses the flag while a maintenance lease is held", async () => {
+    const hub = channel("admin-teen-maintenance");
+    const error = await runInDurableObject(hub, async (instance, state) => {
+      settle(state.storage.sql);
+      const store = new MemberStore(state.storage.sql);
+      store.ensureOwner();
+      const invite = store.createInvite("小王");
+      const member = store.completeInvite(invite.inviteId, memberBinding);
+
+      const api = asAdmin(instance);
+      await api.acquireMaintenance("backup", "op-teen");
+      try {
+        return await api
+          .setMemberTeen(ownerPrincipal(), member.memberId, true)
+          .catch((caught: unknown) => caught);
+      } finally {
+        await api.releaseMaintenance("op-teen");
+      }
+    });
+    expect(error).toBeInstanceOf(MemberError);
+    expect((error as MemberError).code).toBe("MAINTENANCE_ACTIVE");
+  });
 });

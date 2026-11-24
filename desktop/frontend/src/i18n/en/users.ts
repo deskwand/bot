@@ -5,7 +5,14 @@ export const users = {
   add: "Add user",
   resume: "Resume",
   pending: "Pending invitations",
-  columns: { label: "Name", account: "WeChat account", connection: "Connection", actions: "Actions" },
+  columns: {
+    label: "Name",
+    account: "WeChat account",
+    connection: "Connection",
+    mode: "Mode",
+    actions: "Actions",
+  },
+  mode: { on: "Minor mode: on", off: "Minor mode: off", none: "—" },
   role: { owner: "Owner", member: "User" },
   status: { revoked: "Revoked" },
   connection: {
@@ -19,6 +26,7 @@ export const users = {
   wizard: {
     title: "Add user",
     label: "Name",
+    teen: "This user is a minor (minor mode)",
     create: "Create invitation",
     realname: "Scan this with your own phone in WeChat to finish the real-name approval.",
     realnameCountdown: "{minutes} minutes left to approve",

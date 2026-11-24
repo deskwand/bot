@@ -21,6 +21,19 @@ test("lists the owner next to its users and leaves revoked rows read-only", asyn
   await expect(page.getByTestId("revoke-owner")).toHaveCount(0);
 });
 
+test("toggles minor mode for a channel and never for the owner", async ({
+  page,
+}) => {
+  await openChannels(page, "users-three");
+  await expect(page.getByTestId("teen-owner")).toHaveCount(0);
+  await expect(page.getByTestId("teen-m2")).toHaveCount(0);
+
+  const toggle = page.getByTestId("teen-m1");
+  await expect(toggle).toHaveText("青少年模式：关");
+  await toggle.click();
+  await expect(page.getByTestId("teen-m1")).toHaveText("青少年模式：已开");
+});
+
 test("explains an empty directory", async ({ page }) => {
   await openChannels(page, "users-empty");
   await expect(page.getByTestId("user-row-owner")).toHaveCount(0);

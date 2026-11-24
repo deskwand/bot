@@ -180,6 +180,7 @@ function systemPrompt(
   channelName: string | null,
   leadMode: boolean,
   identity?: string,
+  teen = false,
 ): string {
   const instruction = t(locale, "butler.speaker.instruction");
   const lines = leadMode
@@ -195,6 +196,7 @@ function systemPrompt(
       ];
   return [
     persona(locale, channelName),
+    ...(teen ? [t(locale, "butler.speaker.teen")] : []),
     identity ?? "",
     "",
     lines.filter((line) => line !== "").join("\n"),
@@ -272,6 +274,8 @@ export async function speak(
     channelName: string | null;
     recent: string[];
     identity?: string;
+    /** The recipient is a minor; the rewrite must suit that. */
+    teen?: boolean;
     timeoutMs?: number;
   },
 ): Promise<string> {
@@ -286,7 +290,14 @@ export async function speak(
     const text = (
       await Promise.race([
         deps.complete(
-          systemPrompt(event, deps.locale, deps.channelName, leadMode, deps.identity),
+          systemPrompt(
+            event,
+            deps.locale,
+            deps.channelName,
+            leadMode,
+            deps.identity,
+            deps.teen === true,
+          ),
           userMessage(event, deps.locale, deps.recent),
           signal,
         ),

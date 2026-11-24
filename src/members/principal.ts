@@ -11,6 +11,9 @@ export type Principal = {
   epoch: number;
 };
 
+/** What the directory must tell a member's code before it may act. */
+export type MemberPresence = { teen: boolean };
+
 export const OWNER_ID = "owner";
 
 /**

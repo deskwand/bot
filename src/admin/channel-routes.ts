@@ -103,8 +103,12 @@ async function handle(req: Request, url: URL, channel: ChannelStub): Promise<Res
     const body = await readJson(req);
     const label = typeof body.label === "string" ? body.label.trim() : "";
     if (label === "" || label.length > 64) return json({ code: "INVALID_LABEL" }, 400);
+    const teen = body.teen === true;
     try {
-      return json(await channel.createMemberInvite(ownerPrincipal(), label), 201);
+      return json(
+        await channel.createMemberInvite(ownerPrincipal(), label, teen),
+        201,
+      );
     } catch (error) {
       return writeError(error);
     }
@@ -153,9 +157,21 @@ async function handle(req: Request, url: URL, channel: ChannelStub): Promise<Res
     return json({ code: "METHOD" }, 405);
   }
 
-  const target = /^\/admin\/channels\/([^/]+)(\/rebind|\/restart)?$/.exec(path);
+  const target = /^\/admin\/channels\/([^/]+)(\/rebind|\/restart|\/teen)?$/.exec(path);
   if (target !== null) {
     const id = safeDecode(target[1] as string);
+    if (target[2] === "/teen" && req.method === "POST") {
+      const body = await readJson(req);
+      if (typeof body.teen !== "boolean") {
+        return json({ code: "INVALID_MODE" }, 400);
+      }
+      try {
+        await channel.setMemberTeen(ownerPrincipal(), id, body.teen);
+        return noContent();
+      } catch (error) {
+        return writeError(error);
+      }
+    }
     if (target[2] === "/rebind" && req.method === "POST") {
       try {
         return json(await channel.rebindMember(ownerPrincipal(), id), 201);

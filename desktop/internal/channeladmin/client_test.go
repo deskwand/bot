@@ -3,6 +3,7 @@ package channeladmin
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,8 +34,8 @@ func TestChannelsListsAndSendsTheToken(t *testing.T) {
 			return
 		}
 		_, _ = w.Write([]byte(`{"channels":[
-			{"channelId":"owner","label":"我","account":"05d5@im.bot","state":"running","lastErrorCode":null},
-			{"channelId":"m1","label":"小宝","account":"e8d1@im.bot","state":"needs_reset","lastErrorCode":"SEND_EXHAUSTED"}]}`))
+			{"channelId":"owner","label":"我","account":"05d5@im.bot","state":"running","lastErrorCode":null,"teen":false},
+			{"channelId":"m1","label":"小宝","account":"e8d1@im.bot","state":"needs_reset","lastErrorCode":"SEND_EXHAUSTED","teen":true}]}`))
 	}, "tok")
 
 	rows, err := c.Channels(context.Background())
@@ -43,6 +44,9 @@ func TestChannelsListsAndSendsTheToken(t *testing.T) {
 	}
 	if len(rows) != 2 || rows[1].State != "needs_reset" {
 		t.Fatalf("rows = %#v", rows)
+	}
+	if rows[0].Teen || !rows[1].Teen {
+		t.Fatalf("teen = %v/%v", rows[0].Teen, rows[1].Teen)
 	}
 	if rows[1].LastErrorCode == nil || *rows[1].LastErrorCode != "SEND_EXHAUSTED" {
 		t.Fatalf("lastErrorCode = %#v", rows[1].LastErrorCode)
@@ -106,5 +110,52 @@ func TestSubmitPinMapsAnExhaustedBudget(t *testing.T) {
 	_, err := c.SubmitPin(context.Background(), "inv-1", "123456")
 	if got := codeOf(t, err); got != CodePinExhausted {
 		t.Fatalf("code = %s", got)
+	}
+}
+
+func TestCreateInviteCarriesTheFlag(t *testing.T) {
+	var body string
+	c := client(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		body = string(raw)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"inviteId":"inv-1","expiresAt":1893456000000}`))
+	}, "tok")
+
+	if _, err := c.CreateInvite(context.Background(), "小宝", true); err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+	if body != `{"label":"小宝","teen":true}` {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestSetTeenPostsTheFlag(t *testing.T) {
+	var method, path, body string
+	c := client(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		method, path, body = r.Method, r.URL.Path, string(raw)
+		w.WriteHeader(http.StatusNoContent)
+	}, "tok")
+
+	if err := c.SetTeen(context.Background(), "m1", true); err != nil {
+		t.Fatalf("SetTeen: %v", err)
+	}
+	if method != http.MethodPost || path != "/admin/channels/m1/teen" {
+		t.Fatalf("request = %s %s", method, path)
+	}
+	if body != `{"teen":true}` {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestSetTeenMapsFixedCodes(t *testing.T) {
+	c := client(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"code":"CHANNEL_IMMUTABLE"}`))
+	}, "tok")
+
+	if code := codeOf(t, c.SetTeen(context.Background(), "owner", true)); code != CodeImmutable {
+		t.Fatalf("code = %s", code)
 	}
 }
