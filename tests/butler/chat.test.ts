@@ -71,8 +71,6 @@ let route: RouteSnapshot;
 
 const ENV = env as unknown as Record<string, unknown>;
 const savedEnv = new Map<string, unknown>();
-/** The receipt every accepted message earns before its answer. */
-const RECEIPT = { chatId: "42", text: "收到，正在处理" };
 
 /** Mutates the env seen by Durable Objects created after this call. */
 function setEnv(patch: Record<string, unknown>): void {
@@ -363,7 +361,6 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: "你好！" },
     ]);
   });
@@ -565,7 +562,6 @@ describe("butler chat", () => {
     expect(userText(seen)).toBe("@盯盘 现在什么情况");
     expect(ask).not.toHaveBeenCalled();
     expect(channel.sent.map((sent) => sent.text)).toEqual([
-      RECEIPT.text,
       "盯盘那边说价格回落了。",
     ]);
   });
@@ -669,7 +665,6 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: QUOTA_EXHAUSTED_TEXT },
     ]);
   });
@@ -684,7 +679,6 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: PAID_PLAN_REQUIRED_TEXT },
     ]);
   });
@@ -699,7 +693,6 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: "出错了，稍后再试" },
     ]);
   });
@@ -718,7 +711,6 @@ describe("butler chat", () => {
     );
 
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: "出错了，稍后再试" },
     ]);
   });
@@ -834,7 +826,6 @@ describe("butler chat", () => {
     await butler("chat-102").handleMessage(evt);
 
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: "只回一次" },
     ]);
   });
@@ -893,7 +884,6 @@ describe("butler chat", () => {
       { type: "image", data: PNG_B64, mimeType: "image/png" },
     ]);
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: "看到了" },
     ]);
   });
@@ -938,7 +928,6 @@ describe("butler chat", () => {
       { type: "image", data: PNG_B64, mimeType: "image/png" },
     ]);
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: "看到了" },
     ]);
   });
@@ -978,7 +967,6 @@ describe("butler chat", () => {
       "[附件] a.pdf · application/pdf · 2.0 KB · key: inbox/tg:1/a.pdf",
     );
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: "收到文件" },
     ]);
   });
@@ -1019,7 +1007,6 @@ describe("butler chat", () => {
       "[附件] a.pdf · application/pdf · 2.0 KB · key: inbox/tg:1/a.pdf",
     );
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: "收到附件" },
     ]);
   });
@@ -1058,7 +1045,7 @@ describe("butler chat", () => {
     expect(last?.content).toBe(
       "总结一下\n[附件] a.pdf · application/pdf · 2.0 KB · key: inbox/tg:1/a.pdf",
     );
-    expect(channel.sent).toEqual([RECEIPT, { chatId: "42", text: "好的" }]);
+    expect(channel.sent).toEqual([{ chatId: "42", text: "好的" }]);
   });
 
   it("tells the owner a file was too large", async () => {
@@ -1151,7 +1138,6 @@ describe("butler chat", () => {
       { type: "image", data: PNG_B64, mimeType: "image/png" },
     ]);
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: "是一张纯色图" },
     ]);
   });
@@ -1184,7 +1170,6 @@ describe("butler chat", () => {
       { type: "image", data: PNG_B64, mimeType: "image/png" },
     ]);
     expect(channel.sent).toEqual([
-      RECEIPT,
       { chatId: "42", text: "是一张纯色图" },
     ]);
   });

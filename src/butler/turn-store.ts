@@ -161,15 +161,7 @@ export class TurnStore {
     );
   }
 
-  ack(operationId: string, now: number): void {
-    this.sql.exec(
-      `UPDATE butler_turns SET ack_at = ? WHERE operation_id = ? AND ack_at IS NULL`,
-      now,
-      operationId,
-    );
-  }
-
-  /** A stall notice also settles the ack: one message is enough. */
+  /** Keep the legacy ack timestamp for stall notices. */
   notice(operationId: string, now: number): void {
     this.sql.exec(
       `UPDATE butler_turns

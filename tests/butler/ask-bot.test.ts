@@ -142,7 +142,6 @@ describe("ask_bot", () => {
     );
 
     expect(channel.sent.map((sent) => sent.text)).toEqual([
-      "收到，正在处理",
       "盯着那只股票的机器人说价格回落了",
     ]);
   });

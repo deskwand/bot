@@ -194,9 +194,7 @@ describe("supersede a thinking turn", () => {
     await Promise.all([first, second]);
 
     const texts = sent.map((msg) => msg.text);
-    expect(texts).not.toContain("半句话的答案");
-    expect(texts).not.toContain("刚才那条没能答完，再发一次就行");
-    expect(texts.filter((text) => text === "完整答案")).toHaveLength(1);
+    expect(texts).toEqual(["完整答案"]);
     expect(seen).toContain("明天");
     expect(seen).toContain("上午提醒我开会");
     expect(await turnRows(stub)).toEqual([]);
@@ -227,30 +225,6 @@ describe("supersede a thinking turn", () => {
     const texts = sent.map((msg) => msg.text);
     expect(texts.filter((text) => text === "第一条答案")).toHaveLength(1);
     expect(texts.filter((text) => text === "第二条答案")).toHaveLength(1);
-  });
-
-  it("acknowledges both the replaced message and its replacement", async () => {
-    const stub = butler("supersede-receipt");
-    const sent = await captureSends(stub);
-    const held = gate();
-    setModelOverride(
-      scriptedModel([
-        { text: "半句话的答案", gate: held.wait },
-        { text: "完整答案" },
-      ]),
-    );
-
-    const first = stub.handleMessage(message("tg:one", "一"));
-    await vi.waitFor(() =>
-      expect(sent.filter((msg) => msg.text === "收到，正在处理")).toHaveLength(1),
-    );
-    const second = stub.handleMessage(message("tg:two", "二"));
-    await waitSuperseded(stub);
-    held.open();
-    await Promise.all([first, second]);
-
-    expect(sent.filter((msg) => msg.text === "收到，正在处理")).toHaveLength(2);
-    expect(sent.map((msg) => msg.text)).toContain("完整答案");
   });
 
   it("still delivers a done result for a superseded turn", async () => {

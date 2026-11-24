@@ -328,7 +328,7 @@ describe("silent self wake integration", () => {
       eventId: "tg:owner-after-self",
       routeKey: "test",
     });
-    expect(sent.map((m) => m.text)).toEqual(["收到，正在处理", "owner answer"]);
+    expect(sent.map((m) => m.text)).toEqual(["owner answer"]);
   });
   it("serializes duplicate callbacks without double reservation or notification", async () => {
     const held = gate();
@@ -564,7 +564,6 @@ describe("self wake recovery windows", () => {
     held.open();
     await Promise.all([thinking, owner]);
     expect(sent.map((m) => m.text)).toEqual([
-      "收到，正在处理",
       "owner is answered",
     ]);
     expect(await stateOf(target)).toMatchObject({

@@ -85,11 +85,6 @@ export function decisionSuffix(
   return `\n→ ${t(locale, DECISION_KEYS[decision])}`;
 }
 
-/** The one-line receipt for a turn that has not answered yet. */
-export function turnAckText(locale: Locale): string {
-  return t(locale, "butler.turn.ack");
-}
-
 export function turnInterruptedText(locale: Locale): string {
   return t(locale, "butler.turn.interrupted");
 }

@@ -84,7 +84,6 @@ import {
   maintenanceText,
   noChannelText,
   taskMissingText,
-  turnAckText,
   turnEmptyAnswerText,
   turnInterruptedText,
   turnStalledText,
@@ -2558,7 +2557,7 @@ export class ButlerDO extends Agent<Env> {
       (store.list().length === 0 ? null : now + 60_000);
   }
 
-  /** Scheduled callback: acknowledge, report a stall, and rescue lost waits. */
+  /** Scheduled callback: report a stall and rescue lost waits. */
   async checkTurn(
     _payload?: unknown,
     schedule?: Schedule<unknown>,
@@ -2754,21 +2753,11 @@ export class ButlerDO extends Agent<Env> {
     const receipt = await admitted;
     // Telegram redelivered an update we already accepted: never answer twice.
     if (!receipt.accepted) return;
-    // A receipt is about the queue, not the model: send it as soon as pi
-    // accepts the input, so a slow or failing model still tells the owner the
-    // message arrived. It goes out before the row exists, so not even a sweep
-    // that resolves the turn meanwhile can deliver the answer ahead of it.
-    const receiptRef = await this.sendBestEffort({
-      text: turnAckText(locale),
-      priority: "normal",
-    });
     // Only an accepted turn gets a row: a row always has a submission behind it.
     this.turns().insertIfAbsent({
       operationId,
       submittedAt: getClock().now(),
     });
-    // `ack_at` is informational now: nothing gates on it.
-    if (receiptRef !== null) this.turns().ack(operationId, getClock().now());
 
     await this.ensureTurnCheck();
     try {

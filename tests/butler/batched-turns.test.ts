@@ -182,10 +182,8 @@ describe("batched turns", () => {
     await Promise.all([first, ...queued]);
 
     const texts = sent.map((msg) => msg.text);
-    expect(texts.filter((text) => text === "第一条答案")).toHaveLength(1);
-    expect(texts.filter((text) => text === "合并答案")).toHaveLength(1);
-    // Each accepted message says it arrived, even though one run answers them.
-    expect(texts.filter((text) => text === "收到，正在处理")).toHaveLength(4);
+    expect(texts).toHaveLength(2);
+    expect(texts).toEqual(expect.arrayContaining(["第一条答案", "合并答案"]));
     for (const text of ["二", "三", "四"]) expect(seen).toContain(text);
     expect(await turnRows(stub)).toEqual([]);
   });

@@ -34,7 +34,6 @@ export const butler = {
     artifactFailed: "产物「{name}」未能送达（{reason}）",
   },
   turn: {
-    ack: "收到，正在处理",
     stalledModel: "已经 {minutes} 分钟没有进展，还在等模型响应",
     stalledTool: "最后一步「{tool}」已经 {minutes} 分钟没有返回",
     interrupted: "刚才那条没能答完，再发一次就行",

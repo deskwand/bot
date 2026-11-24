@@ -4,6 +4,7 @@ import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setClockOverride } from "../../src/butler/notifier";
 import { turnInterruptedText } from "../../src/butler/owner-copy";
+import { TURN_STALL_MS } from "../../src/butler/turn";
 import { mapSettledFailureToRestartLimit } from "../helpers/task-recovery";
 import { setModelOverride } from "../../src/llm/models";
 import { setChannelOverride } from "../../src/channels/override";
@@ -111,13 +112,13 @@ async function releaseSlow(stub: ReturnType<typeof butler>): Promise<void> {
   });
 }
 
-/** Blocks the turn after the ack retry, so the test can inspect the ledger. */
+/** Blocks the follow-up turn until the test releases it. */
 async function installHold(stub: ReturnType<typeof butler>): Promise<void> {
   await runInDurableObject(stub, (instance) => {
     const control: HoldControl = { started: false, released: false };
     (instance as { holdControl?: HoldControl }).holdControl = control;
     const tool: ToolRegistration<typeof SlowWait> = {
-      name: "hold_after_ack",
+      name: "hold_follow_up",
       description: "Hold the turn until the test releases it.",
       parameters: SlowWait,
       async execute() {
@@ -165,8 +166,8 @@ afterEach(() => {
 });
 
 describe("turn alerts", () => {
-  it("acknowledges as soon as the message is accepted", async () => {
-    const stub = butler("turn-ack");
+  it("stays silent until the answer is ready", async () => {
+    const stub = butler("turn-quiet");
     const sent = await captureSends(stub);
     let openModel = () => {};
     const modelGate = new Promise<void>((resolve) => {
@@ -174,26 +175,23 @@ describe("turn alerts", () => {
     });
     setModelOverride(scriptedModel([{ text: "查完了", gate: modelGate }]));
 
-    const running = stub.handleMessage(message("tg:ack"));
-    // The receipt does not wait for the model: it is out while the model is
-    // still held at its gate.
-    await vi.waitFor(() =>
-      expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理"]),
-    );
-    expect(sent[0]?.priority).toBe("normal");
-    const waiting = await runInDurableObject(stub, (instance) =>
-      (instance as unknown as TurnInternals).turns().get("tg:ack"),
-    );
-    expect(waiting?.ackAt).not.toBeNull();
+    const running = stub.handleMessage(message("tg:quiet"));
+    await vi.waitFor(async () => {
+      const waiting = await runInDurableObject(stub, (instance) =>
+        (instance as unknown as TurnInternals).turns().get("tg:quiet"),
+      );
+      expect(waiting).toBeDefined();
+    });
+    expect(sent).toEqual([]);
 
     openModel();
     await running;
-    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理", "查完了"]);
-    expect(sent[1]?.priority).toBe("critical");
+    expect(sent.map((msg) => msg.text)).toEqual(["查完了"]);
+    expect(sent[0]?.priority).toBe("critical");
   });
 
-  it("acknowledges once for a message across a tool loop", async () => {
-    const stub = butler("turn-ack-loop");
+  it("sends one stall alert for a stuck tool and still delivers the answer", async () => {
+    const stub = butler("turn-quiet-loop");
     const sent = await captureSends(stub);
     await installSlowWait(stub);
     setModelOverride(
@@ -204,15 +202,28 @@ describe("turn alerts", () => {
     );
 
     const running = stub.handleMessage(message("tg:loop"));
-    await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
-    await releaseSlow(stub);
-    await running;
+    try {
+      await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
+      await runInDurableObject(stub, (instance) => instance.checkTurn());
+      expect(sent).toEqual([]);
 
-    expect(sent.filter((msg) => msg.text === "收到，正在处理")).toHaveLength(1);
-    expect(sent.map((msg) => msg.text)).toEqual(["收到，正在处理", "查完了"]);
+      now += TURN_STALL_MS;
+      await runInDurableObject(stub, async (instance) => {
+        await instance.checkTurn();
+        await instance.checkTurn();
+      });
+      expect(sent).toEqual([
+        { text: "最后一步「slow_wait」已经 5 分钟没有返回", priority: "alert" },
+      ]);
+    } finally {
+      await releaseSlow(stub);
+      await running;
+    }
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({ text: "查完了", priority: "critical" });
   });
 
-  it("acknowledges each message while the previous turn still runs", async () => {
+  it("sends only the answers for queued messages", async () => {
     const stub = butler("turn-follow-up");
     const sent = await captureSends(stub);
     await installSlowWait(stub);
@@ -221,7 +232,7 @@ describe("turn alerts", () => {
       scriptedModel([
         { toolCalls: [{ name: "slow_wait", args: {} }] },
         { text: "第一条答案" },
-        { toolCalls: [{ name: "hold_after_ack", args: {} }] },
+        { toolCalls: [{ name: "hold_follow_up", args: {} }] },
         { text: "第二条答案" },
       ]),
     );
@@ -229,20 +240,18 @@ describe("turn alerts", () => {
     const first = stub.handleMessage(message("tg:one"));
     await vi.waitFor(async () => expect(await slowStarted(stub)).toBe(true));
     const second = stub.handleMessage(message("tg:two"));
-    // Each accepted message says so at once, before either answer.
-    await vi.waitFor(() =>
-      expect(sent.map((msg) => msg.text)).toEqual([
-        "收到，正在处理",
-        "收到，正在处理",
-      ]),
-    );
+    await vi.waitFor(async () => {
+      const queued = await runInDurableObject(stub, (instance) =>
+        (instance as unknown as TurnInternals).turns().get("tg:two"),
+      );
+      expect(queued).toBeDefined();
+    });
+    expect(sent).toEqual([]);
 
     await releaseSlow(stub);
     await vi.waitFor(async () => expect(await holdStarted(stub)).toBe(true));
     await vi.waitFor(() =>
       expect(sent.map((msg) => msg.text)).toEqual([
-        "收到，正在处理",
-        "收到，正在处理",
         "第一条答案",
       ]),
     );
@@ -251,61 +260,9 @@ describe("turn alerts", () => {
     await first;
     await second;
     expect(sent.map((msg) => msg.text)).toEqual([
-      "收到，正在处理",
-      "收到，正在处理",
       "第一条答案",
       "第二条答案",
     ]);
-  });
-
-  it("does not retry a failed receipt", async () => {
-    const stub = butler("turn-ack-fail");
-    const sent: OutboundMessage[] = [];
-    let ackAttempts = 0;
-    let openModel = () => {};
-    const modelGate = new Promise<void>((resolve) => {
-      openModel = resolve;
-    });
-    await runInDurableObject(stub, (instance) => {
-      (instance as unknown as { channels(): unknown }).channels = () => ({
-        currentRoute: async () => ({ channel: "telegram", routeKey: "test" }),
-        isAdmissionCurrent: async () => true,
-        editCurrent: async () => true,
-        sendCurrent: async (msg: OutboundMessage) => {
-          if (msg.text === "收到，正在处理") {
-            ackAttempts += 1;
-            return null;
-          }
-          sent.push(msg);
-          return {
-            channel: "telegram",
-            conversationId: "42",
-            routeKey: "test",
-            messageId: String(sent.length),
-          };
-        },
-      });
-    });
-    setModelOverride(scriptedModel([{ text: "查完了", gate: modelGate }]));
-
-    const running = stub.handleMessage(message("tg:ack-fail"));
-    await vi.waitFor(() => expect(ackAttempts).toBe(1));
-    await vi.waitFor(async () => {
-      const row = await runInDurableObject(stub, (instance) =>
-        (instance as unknown as TurnInternals).turns().get("tg:ack-fail"),
-      );
-      expect(row).toBeDefined();
-    });
-    // One attempt, no retry: the failed receipt leaves the ledger untouched.
-    const waiting = await runInDurableObject(stub, (instance) =>
-      (instance as unknown as TurnInternals).turns().get("tg:ack-fail"),
-    );
-    expect(waiting?.ackAt).toBeNull();
-
-    openModel();
-    await running;
-    expect(ackAttempts).toBe(1);
-    expect(sent.map((msg) => msg.text)).toEqual(["查完了"]);
   });
 
   it("stays silent and keeps the ledger untouched while the lease is held", async () => {
